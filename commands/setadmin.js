@@ -1,4 +1,4 @@
-const { EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ChannelType } = require('discord.js');
+const { EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, RoleSelectMenuBuilder, ChannelType } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const colorManager = require('../utils/colorManager');
@@ -11,9 +11,9 @@ function loadAdminApplicationSettings() {
     try {
         if (fs.existsSync(adminApplicationsPath)) {
             const data = fs.readFileSync(adminApplicationsPath, 'utf8');
-            return JSON.parse(data);
+            return ensureAdminApplicationSettingsShape(JSON.parse(data));
         }
-        return {
+        return ensureAdminApplicationSettingsShape({
             settings: {
                 applicationChannel: null,
                 approvers: { type: "roles", list: [] },
@@ -50,10 +50,10 @@ function loadAdminApplicationSettings() {
             },
             pendingApplications: {},
             rejectedCooldowns: {}
-        };
+        });
     } catch (error) {
         console.error('خطأ في قراءة إعدادات التقديم الإداري:', error);
-        return {
+        return ensureAdminApplicationSettingsShape({
             settings: {
                 applicationChannel: null,
                 approvers: { type: "roles", list: [] },
@@ -90,7 +90,7 @@ function loadAdminApplicationSettings() {
             },
             pendingApplications: {},
             rejectedCooldowns: {}
-        };
+        });
     }
 }
 
@@ -100,6 +100,38 @@ function normalizeSelectLabel(value, fallback) {
     const text = String(value || '').trim();
     if (!text) return fallback;
     return text.slice(0, 100);
+}
+
+
+function ensureAdminApplicationSettingsShape(data) {
+    const base = data && typeof data === 'object' ? data : {};
+    if (!base.settings || typeof base.settings !== 'object') {
+        base.settings = {};
+    }
+
+    const settings = base.settings;
+    if (!settings.applicationChannel) settings.applicationChannel = null;
+    if (!settings.approvers || typeof settings.approvers !== 'object') {
+        settings.approvers = { type: 'roles', list: [] };
+    }
+    if (!Array.isArray(settings.approvers.list)) settings.approvers.list = [];
+    if (!settings.approvers.type) settings.approvers.type = 'roles';
+
+    if (typeof settings.maxPendingPerAdmin !== 'number') settings.maxPendingPerAdmin = 3;
+    if (typeof settings.rejectCooldownHours !== 'number') settings.rejectCooldownHours = 24;
+
+    if (!settings.evaluation || typeof settings.evaluation !== 'object') {
+        settings.evaluation = {};
+    }
+
+    if (!base.pendingApplications || typeof base.pendingApplications !== 'object' || Array.isArray(base.pendingApplications)) {
+        base.pendingApplications = {};
+    }
+    if (!base.rejectedCooldowns || typeof base.rejectedCooldowns !== 'object' || Array.isArray(base.rejectedCooldowns)) {
+        base.rejectedCooldowns = {};
+    }
+
+    return base;
 }
 
 // دالة لحفظ إعدادات التقديم الإداري
@@ -175,7 +207,7 @@ module.exports = {
             return;
         }
 
-        const settings = loadAdminApplicationSettings();
+        const settings = ensureAdminApplicationSettingsShape(loadAdminApplicationSettings());
 
         // إنشاء قائمة الخيارات
         const selectMenu = new StringSelectMenuBuilder()
@@ -430,194 +462,22 @@ async function handleSetApprovers(interaction, settings) {
 
 // معالج اختيار الأدوار مع pagination
 async function handleSelectRoles(interaction, settings) {
-    const allRoles = interaction.guild.roles.cache
-        .filter(role => !role.managed && role.id !== interaction.guild.id)
-        .sort((a, b) => b.position - a.position);
+    ensureAdminApplicationSettingsShape(settings);
 
-    if (allRoles.size === 0) {
-        return interaction.update({
-            content: 'لا توجد رولات متاحة في السيرفر',
-            components: []
-        });
-    }
+    const roleSelectMenu = new RoleSelectMenuBuilder()
+        .setCustomId('select_approver_roles')
+        .setPlaceholder('اختر الرولات المسموح لها بالموافقة (بحث)')
+        .setMinValues(1)
+        .setMaxValues(25);
 
-    let currentPage = 0;
-    const rolesPerPage = 25;
-    const totalPages = Math.ceil(allRoles.size / rolesPerPage);
-
-    const getRolePage = (page) => {
-        const start = page * rolesPerPage;
-        const end = start + rolesPerPage;
-        return Array.from(allRoles.values()).slice(start, end);
-    };
-
-    const createComponents = (page) => {
-        const roles = getRolePage(page);
-        const selectMenu = new StringSelectMenuBuilder()
-            .setCustomId('select_approver_roles')
-            .setPlaceholder('اختر الرولات التي يمكنها الموافقة على الطلبات')
-            .setMaxValues(Math.min(roles.length, 25))
-            .addOptions(
-                roles.map((role, index) => ({
-                    label: normalizeSelectLabel(role.name, `Role ${index + 1}`),
-                    description: normalizeSelectLabel(`أعضاء: ${role.members.size}`, 'أعضاء: 0'),
-                    value: role.id
-                }))
-            );
-
-        const components = [new ActionRowBuilder().addComponents(selectMenu)];
-
-        // أزرار التنقل
-        const navigationButtons = [];
-        
-        if (totalPages > 1) {
-            navigationButtons.push(
-                new ButtonBuilder()
-                    .setCustomId('roles_page_prev')
-                    .setLabel('◀ السابق')
-                    .setStyle(ButtonStyle.Primary)
-                    .setDisabled(page === 0),
-                new ButtonBuilder()
-                    .setCustomId('roles_page_info')
-                    .setLabel(`صفحة ${page + 1}/${totalPages}`)
-                    .setStyle(ButtonStyle.Secondary)
-                    .setDisabled(true),
-                new ButtonBuilder()
-                    .setCustomId('roles_page_next')
-                    .setLabel('التالي ▶')
-                    .setStyle(ButtonStyle.Primary)
-                    .setDisabled(page === totalPages - 1)
-            );
-        }
-        
-        // زر العودة
-        navigationButtons.push(
-            new ButtonBuilder()
-                .setCustomId('back_to_setadmin_menu')
-                .setLabel('🔙 عودة')
-                .setStyle(ButtonStyle.Secondary)
-        );
-
-        if (navigationButtons.length > 0) {
-            components.push(new ActionRowBuilder().addComponents(navigationButtons));
-        }
-
-        return components;
-    };
+    const row = new ActionRowBuilder().addComponents(roleSelectMenu);
 
     await interaction.update({
-        content: `**اختر الرولات التي يمكنها الموافقة على طلبات التقديم:**\n(إجمالي: ${allRoles.size} رول)`,
-        components: createComponents(currentPage)
-    });
-
-    const collector = interaction.channel.createMessageComponentCollector({
-        filter: i => i.user.id === interaction.user.id,
-        time: 120000
-    });
-
-    collector.on('collect', async (i) => {
-        if (i.customId === 'roles_page_prev') {
-            currentPage = Math.max(0, currentPage - 1);
-            await i.update({
-                content: `**اختر الرولات التي يمكنها الموافقة على طلبات التقديم:**\n(إجمالي: ${allRoles.size} رول)`,
-                components: createComponents(currentPage)
-            });
-        } else if (i.customId === 'roles_page_next') {
-            currentPage = Math.min(totalPages - 1, currentPage + 1);
-            await i.update({
-                content: `**اختر الرولات التي يمكنها الموافقة على طلبات التقديم:**\n(إجمالي: ${allRoles.size} رول)`,
-                components: createComponents(currentPage)
-            });
-        } else if (i.customId === 'back_to_setadmin_menu') {
-            // العودة للقائمة الرئيسية
-            const mainMenu = new StringSelectMenuBuilder()
-                .setCustomId('setadmin_menu')
-                .setPlaceholder('اختر الإعداد المراد تعديله')
-                .addOptions([
-                    {
-                        label: 'Application Channel',
-                        description: 'تحديد الروم التي ستظهر بها طلبات التقديم الإداري',
-                        value: 'set_channel'
-                    },
-                    {
-                        label: 'Approvers',
-                        description: 'تحديد من يستطيع الموافقة على طلبات التقديم',
-                        value: 'set_approvers'
-                    },
-                    {
-                        label: 'Acceptance Role',
-                        description: 'تحديد الرول الذي يُعطى للمرشح عند قبوله',
-                        value: 'set_acceptance_role'
-                    },
-                    {
-                        label: 'Pending Limit',
-                        description: 'تحديد عدد الطلبات المعلقة المسموح لكل إداري',
-                        value: 'set_pending_limit'
-                    },
-                    {
-                        label: 'Cooldown Duration',
-                        description: 'تحديد مدة منع التقديم بعد الرفض (بالساعات)',
-                        value: 'set_cooldown'
-                    },
-                    {
-                        label: 'Evaluation Settings',
-                        description: 'تعديل معايير التقييم (الرسائل، النشاط، الوقت في السيرفر، الوقت الصوتي)',
-                        value: 'set_evaluation'
-                    },
-                    {
-                        label: 'Current Settings',
-                        description: 'عرض جميع الإعدادات الحالية للنظام',
-                        value: 'show_settings'
-                    }
-                ]);
-
-            const row = new ActionRowBuilder().addComponents(mainMenu);
-            
-            const embed = colorManager.createEmbed()
-                .setTitle('Admin system')
-                .setDescription('** اختار ماذا تريد ان تعدل فالنظام الاداري **')
-                .setTimestamp();
-
-            await i.update({
-                embeds: [embed],
-                components: [row]
-            });
-            collector.stop();
-        } else if (i.customId === 'select_approver_roles') {
-            const selectedRoles = i.values;
-            const roleNames = selectedRoles.map(roleId => 
-                interaction.guild.roles.cache.get(roleId)?.name || 'رول غير معروف'
-            );
-
-            settings.settings.approvers = { type: 'roles', list: selectedRoles };
-
-            if (saveAdminApplicationSettings(settings)) {
-                await i.update({
-                    content: `**تم تحديد الرولات المعتمدة إلى: ${roleNames.join(', ')}**`,
-                    components: []
-                });
-                collector.stop();
-            } else {
-                await i.update({
-                    content: 'فشل في حفظ الإعدادات',
-                    components: []
-                });
-                collector.stop();
-            }
-        }
-    });
-
-    collector.on('end', async (collected, reason) => {
-        if (reason === 'time') {
-            await interaction.editReply({
-                content: '**انتهت مهلة الانتظار.**',
-                components: []
-            }).catch(() => {});
-        }
+        content: '**اختر الرولات المسموح لها بالموافقة على الطلبات (عن طريق البحث):**',
+        components: [row]
     });
 }
 
-// معالج اختيار المسؤولية مع pagination
 async function handleSelectResponsibility(interaction, settings) {
     const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
 
@@ -1086,7 +946,7 @@ async function handleAdminApplicationInteraction(interaction) {
         const isApproval = customId.startsWith('admin_approve_');
 
         // تحميل الإعدادات
-        const settings = loadAdminApplicationSettings();
+        const settings = ensureAdminApplicationSettingsShape(loadAdminApplicationSettings());
 
         // التحقق من وجود الطلب
         const application = settings.pendingApplications[applicationId];
@@ -1403,7 +1263,7 @@ async function handleInteraction(interaction) {
             });
         }
 
-        const settings = loadAdminApplicationSettings();
+        const settings = ensureAdminApplicationSettingsShape(loadAdminApplicationSettings());
 
         // معالجة القائمة الرئيسية
         if (customId === 'setadmin_menu') {
