@@ -1,0 +1,498 @@
+[
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1329394551504240671",
+      "roleIds": [
+        "1446953932026023958"
+      ],
+      "roleNames": [
+        "arche"
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "كيفي",
+      "byUserId": "636930315503534110",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1329394551504240671_1767902659360",
+      "removedRoles": [
+        "e.",
+        "feint"
+      ],
+      "timestamp": 1767902664176
+    },
+    "timestamp": 1767902664177
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1401981621581905987",
+      "roleIds": [
+        "1446955800596840511"
+      ],
+      "roleNames": [
+        "oracle"
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "كانت رول تجريبي",
+      "byUserId": "636930315503534110",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1401981621581905987_1767935920781",
+      "removedRoles": [],
+      "timestamp": 1767935922157
+    },
+    "timestamp": 1767935922157
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1401981621581905987",
+      "roleIds": [
+        "1446952742169083995"
+      ],
+      "roleNames": [
+        "r."
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "اول رول اداري",
+      "byUserId": "636930315503534110",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1401981621581905987_1767935947165",
+      "removedRoles": [],
+      "timestamp": 1767935947847
+    },
+    "timestamp": 1767935947847
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1289911973533712475",
+      "roleIds": [
+        "1446955784171684067"
+      ],
+      "roleNames": [
+        "arcan"
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "مستحقه",
+      "byUserId": "1257560892271362130",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1289911973533712475_1767936472681",
+      "removedRoles": [],
+      "timestamp": 1767936473797
+    },
+    "timestamp": 1767936473797
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1405570190535823505",
+      "roleIds": [
+        "1446955789272219919"
+      ],
+      "roleNames": [
+        "oaths"
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "مستحقه",
+      "byUserId": "1257560892271362130",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1405570190535823505_1767936599249",
+      "removedRoles": [],
+      "timestamp": 1767936600360
+    },
+    "timestamp": 1767936600360
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1343157782236500003",
+      "roleIds": [
+        "1446955466730246215"
+      ],
+      "roleNames": [
+        "mystic"
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "مستحقه",
+      "byUserId": "1257560892271362130",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1343157782236500003_1767936777228",
+      "removedRoles": [],
+      "timestamp": 1767936779215
+    },
+    "timestamp": 1767936779215
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1434174310075072616",
+      "roleIds": [
+        "1446952667413872650"
+      ],
+      "roleNames": [
+        "e."
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "مستحقه",
+      "byUserId": "1257560892271362130",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1434174310075072616_1767936901644",
+      "removedRoles": [],
+      "timestamp": 1767936902874
+    },
+    "timestamp": 1767936902874
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1434174310075072616",
+      "roleIds": [
+        "1446955075384770640"
+      ],
+      "roleNames": [
+        "plume"
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "مستحقه",
+      "byUserId": "1257560892271362130",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1434174310075072616_1767936924973",
+      "removedRoles": [],
+      "timestamp": 1767936926149
+    },
+    "timestamp": 1767936926149
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1000189862529466448",
+      "roleIds": [
+        "1446955460904353812"
+      ],
+      "roleNames": [
+        "dagon"
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "مستحقه",
+      "byUserId": "1257560892271362130",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1000189862529466448_1767937012884",
+      "removedRoles": [],
+      "timestamp": 1767937014320
+    },
+    "timestamp": 1767937014320
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1331988748472291483",
+      "roleIds": [
+        "1446955069353230496"
+      ],
+      "roleNames": [
+        "pearl"
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "مستحقه",
+      "byUserId": "1257560892271362130",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1331988748472291483_1767937167551",
+      "removedRoles": [],
+      "timestamp": 1767937168780
+    },
+    "timestamp": 1767937168780
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1238153083838795876",
+      "roleIds": [
+        "1446952650020094035"
+      ],
+      "roleNames": [
+        "s."
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "مستحقه",
+      "byUserId": "1257560892271362130",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1238153083838795876_1767937226006",
+      "removedRoles": [],
+      "timestamp": 1767937227224
+    },
+    "timestamp": 1767937227225
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1238153083838795876",
+      "roleIds": [
+        "1446953283804729385"
+      ],
+      "roleNames": [
+        "moral"
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "مستحقه",
+      "byUserId": "1257560892271362130",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1238153083838795876_1767937245511",
+      "removedRoles": [],
+      "timestamp": 1767937246561
+    },
+    "timestamp": 1767937246561
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1327070916659908709",
+      "roleIds": [
+        "1446952650020094035"
+      ],
+      "roleNames": [
+        "s."
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "مستحقه",
+      "byUserId": "1257560892271362130",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1327070916659908709_1767937328568",
+      "removedRoles": [],
+      "timestamp": 1767937329865
+    },
+    "timestamp": 1767937329865
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1327070916659908709",
+      "roleIds": [
+        "1446953323470262331"
+      ],
+      "roleNames": [
+        "royal"
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "مستحقه",
+      "byUserId": "1257560892271362130",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1327070916659908709_1767937352145",
+      "removedRoles": [],
+      "timestamp": 1767937354868
+    },
+    "timestamp": 1767937354868
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1258792362801500267",
+      "roleIds": [
+        "1446954512026959954"
+      ],
+      "roleNames": [
+        "petal"
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "مستحقه",
+      "byUserId": "1257560892271362130",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1258792362801500267_1767937772371",
+      "removedRoles": [],
+      "timestamp": 1767937775004
+    },
+    "timestamp": 1767937775004
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1422961374635495481",
+      "roleIds": [
+        "1446955472161734686"
+      ],
+      "roleNames": [
+        "faith"
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "مستحقه",
+      "byUserId": "1257560892271362130",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1422961374635495481_1767956014445",
+      "removedRoles": [],
+      "timestamp": 1767956025223
+    },
+    "timestamp": 1767956025224
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1422961374635495481",
+      "roleIds": [
+        "1446955472161734686"
+      ],
+      "roleNames": [
+        "faith"
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "مستحقه",
+      "byUserId": "1257560892271362130",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1422961374635495481_1767956018536",
+      "removedRoles": [],
+      "timestamp": 1767956026625
+    },
+    "timestamp": 1767956026626
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1411165166384578706",
+      "roleIds": [
+        "1446953335759572992"
+      ],
+      "roleNames": [
+        "risen"
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "ترقية ظاهريتين ( استثنائية ) \nوالسبب التفاعل المستمر",
+      "byUserId": "279655640195006464",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1411165166384578706_1768262246954",
+      "removedRoles": [],
+      "timestamp": 1768262248784
+    },
+    "timestamp": 1768262248785
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1170437484161798296",
+      "roleIds": [
+        "1446953283804729385"
+      ],
+      "roleNames": [
+        "moral"
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "مستحقه ( تفاعله جميل ) لكن ركز عالصوت شوي",
+      "byUserId": "279655640195006464",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1170437484161798296_1768262341750",
+      "removedRoles": [],
+      "timestamp": 1768262345181
+    },
+    "timestamp": 1768262345182
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "1275442996204146826",
+      "roleIds": [
+        "1446953335759572992"
+      ],
+      "roleNames": [
+        "risen"
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "ترقية استثنائية ( امساك المسؤولية  بشكل رهيب) وتفاعلك جميل لكن ركزي على الصوت",
+      "byUserId": "279655640195006464",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_1275442996204146826_1768262540542",
+      "removedRoles": [],
+      "timestamp": 1768262544079
+    },
+    "timestamp": 1768262544080
+  },
+  {
+    "type": "MULTI_PROMOTION_APPLIED",
+    "data": {
+      "targetUserId": "923481182707023894",
+      "roleIds": [
+        "1446953283804729385"
+      ],
+      "roleNames": [
+        "moral"
+      ],
+      "guildId": "1283078116188749888",
+      "duration": "نهائي",
+      "reason": "مستحقه + شد حيلك بالتفاعل تراك مرتخي شويتين وركز على الصوت",
+      "byUserId": "279655640195006464",
+      "successCount": 1,
+      "failedCount": 0,
+      "transactionId": "multi_923481182707023894_1768262814055",
+      "removedRoles": [],
+      "timestamp": 1768262815546
+    },
+    "timestamp": 1768262815547
+  },
+  {
+    "type": "BULK_PROMOTION",
+    "data": {
+      "sourceRoleId": "1446953930537042090",
+      "sourceRoleName": "coral",
+      "targetRoleId": "1446953932026023958",
+      "targetRoleName": "arche",
+      "moderatorId": "279655640195006464",
+      "duration": "نهائي",
+      "reason": "مستحقه لكن ركزو على التفاعل الصوتي",
+      "successCount": 9,
+      "failedCount": 0,
+      "bannedCount": 0,
+      "excludedCount": 2,
+      "totalMembers": 11,
+      "guildId": "1283078116188749888",
+      "successfulMembers": [
+        "604465054800412713",
+        "326831881012379648",
+        "848241603712778250",
+        "1439624169309474927",
+        "1381889294909702205",
+        "962433005807362159",
+        "1413866169026478100",
+        "831566106253852693",
+        "1128154439556026428"
+      ],
+      "timestamp": 1768263805580
+    },
+    "timestamp": 1768263805581
+  }
+]

@@ -1,0 +1,42 @@
+{
+  "guilds": {
+    "1465209976183193755": {
+      "settings": {
+        "applyChannelId": "1465209977378439264",
+        "requestChannelId": "1465209977378439262",
+        "publicChannelId": "1465209977378439264",
+        "adminChannelId": "1465209977378439267",
+        "topChannelId": "1465209977378439264",
+        "approvalRoleIds": [],
+        "font": "https://cdn.discordapp.com/attachments/1465209977378439262/1476489268917698751/139_20260225213203.png?ex=69a14f49&is=699ffdc9&hm=012defd6f29aae2251b007adce1c1e1b221a4cbce99ce36feb18e2903e788ff4&",
+        "emoji": "✅",
+        "imageUrl": "https://cdn.discordapp.com/attachments/1465209977378439262/1476489268917698751/139_20260225213203.png?ex=69a14f49&is=699ffdc9&hm=012defd6f29aae2251b007adce1c1e1b221a4cbce99ce36feb18e2903e788ff4&",
+        "mentionHere": false,
+        "mentionMembers": false,
+        "embedEnabled": false,
+        "lineText": "",
+        "topImageUrl": "https://cdn.discordapp.com/attachments/1465209977378439262/1476489268917698751/139_20260225213203.png?ex=69a14f49&is=699ffdc9&hm=012defd6f29aae2251b007adce1c1e1b221a4cbce99ce36feb18e2903e788ff4&",
+        "publicText": ""
+      },
+      "activeEvent": null,
+      "pendingEvent": null,
+      "history": [
+        {
+          "id": "ev_1772261410488",
+          "name": "Kk",
+          "type": "مم",
+          "creatorId": "636930315503534110",
+          "organizerId": null,
+          "startAt": 1772262000000,
+          "endAt": 1772262600000,
+          "winnerId": null,
+          "status": "ended",
+          "rejectReason": null
+        }
+      ]
+    }
+  },
+  "top": {
+    "1465209976183193755": {}
+  }
+}

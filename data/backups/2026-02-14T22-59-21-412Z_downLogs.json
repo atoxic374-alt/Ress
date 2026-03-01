@@ -1,0 +1,761 @@
+[
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "1434174310075072616",
+      "roleId": "1446952667413872650",
+      "duration": "6h",
+      "reason": "اسباب خاصه",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768496798009
+    },
+    "timestamp": 1768496798010
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "1422961374635495481",
+      "roleId": "1446952716189569054",
+      "duration": "6h",
+      "reason": "ميوت غلط",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768497623245
+    },
+    "timestamp": 1768497623245
+  },
+  {
+    "type": "DOWN_ENDED",
+    "data": {
+      "targetUserId": "1434174310075072616",
+      "roleId": "1446952667413872650",
+      "reason": "تحول شفوي",
+      "originalReason": "اسباب خاصه",
+      "duration": "6h",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768504571117
+    },
+    "timestamp": 1768504571117
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "1434174310075072616",
+      "roleId": "1446952667413872650",
+      "duration": "6h",
+      "reason": "اسلوب سيء بالشات العام",
+      "byUserId": "1262736181825765376",
+      "timestamp": 1768591001183
+    },
+    "timestamp": 1768591001184
+  },
+  {
+    "type": "DOWN_MODIFIED",
+    "data": {
+      "targetUserId": "1434174310075072616",
+      "roleId": "1446952667413872650",
+      "oldDuration": "6h",
+      "newDuration": "12h",
+      "modifiedBy": "1262736181825765376",
+      "timestamp": 1768598956100
+    },
+    "timestamp": 1768598956100
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "923481182707023894",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "الفاظ سيئة بالشات العام",
+      "byUserId": "279655640195006464",
+      "timestamp": 1768653218462
+    },
+    "timestamp": 1768653218463
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1239622242753581178",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "لعب بالخواص",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768661183431
+    },
+    "timestamp": 1768661183431
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1289911973533712475",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسباب خاصه",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768663248832
+    },
+    "timestamp": 1768663248832
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "1289911973533712475",
+      "roleId": "1446952697503809576",
+      "duration": "48h",
+      "reason": "اسباب خاصة",
+      "byUserId": "1262736181825765376",
+      "timestamp": 1768663635912
+    },
+    "timestamp": 1768663635913
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1334286524174303244",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "تحيز",
+      "byUserId": "279655640195006464",
+      "timestamp": 1768674626998
+    },
+    "timestamp": 1768674626999
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "1327070916659908709",
+      "roleId": "1446952667413872650",
+      "duration": "6h",
+      "reason": "تصرف غلط بالتكت",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768686833066
+    },
+    "timestamp": 1768686833067
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1428498940462104656",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "سبام",
+      "byUserId": "833676398459748352",
+      "timestamp": 1768696521949
+    },
+    "timestamp": 1768696521950
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1000189862529466448",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "سبام",
+      "byUserId": "833676398459748352",
+      "timestamp": 1768696571858
+    },
+    "timestamp": 1768696571859
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "828025978651148359",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "سبام",
+      "byUserId": "833676398459748352",
+      "timestamp": 1768697198035
+    },
+    "timestamp": 1768697198036
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "688040980787625994",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "ميوت غلط",
+      "byUserId": "279655640195006464",
+      "timestamp": 1768704737484
+    },
+    "timestamp": 1768704737485
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1439624169309474927",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "فك ميوت خاطئ وعدم شرح السبب",
+      "byUserId": "279655640195006464",
+      "timestamp": 1768705099437
+    },
+    "timestamp": 1768705099438
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1414995922001334404",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "هواش ف شات الادمن",
+      "byUserId": "1049761930665005198",
+      "timestamp": 1768777713899
+    },
+    "timestamp": 1768777713900
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1331988748472291483",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "هواش ف شات الادمن",
+      "byUserId": "1049761930665005198",
+      "timestamp": 1768777765330
+    },
+    "timestamp": 1768777765331
+  },
+  {
+    "type": "DOWN_ENDED",
+    "data": {
+      "targetUserId": "1289911973533712475",
+      "roleId": "1446952697503809576",
+      "reason": "-",
+      "originalReason": "اسباب خاصة",
+      "duration": "48h",
+      "byUserId": "1262736181825765376",
+      "timestamp": 1768782603060
+    },
+    "timestamp": 1768782603061
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1428498940462104656",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "سوالف بشات الادمن",
+      "byUserId": "1049761930665005198",
+      "timestamp": 1768790093987
+    },
+    "timestamp": 1768790093988
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1428498940462104656",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "سوالف بشات الادمن",
+      "byUserId": "1049761930665005198",
+      "timestamp": 1768790097502
+    },
+    "timestamp": 1768790097502
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "929724237231583323",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "سوالف بشات الادمن",
+      "byUserId": "1049761930665005198",
+      "timestamp": 1768790606983
+    },
+    "timestamp": 1768790606984
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "929724237231583323",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "سوالف بشات الادمن",
+      "byUserId": "1049761930665005198",
+      "timestamp": 1768790613990
+    },
+    "timestamp": 1768790613991
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "929724237231583323",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "سوالف بشات الادمن",
+      "byUserId": "1049761930665005198",
+      "timestamp": 1768790621662
+    },
+    "timestamp": 1768790621663
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "929724237231583323",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "سوالف بشات الادمن",
+      "byUserId": "1049761930665005198",
+      "timestamp": 1768790626255
+    },
+    "timestamp": 1768790626255
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1434174310075072616",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "سوالف بشات الادمن\nيتكرر الموضوع بتاخذ 24",
+      "byUserId": "1049761930665005198",
+      "timestamp": 1768790731566
+    },
+    "timestamp": 1768790731567
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1289911973533712475",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "سوالف بشات الادمن",
+      "byUserId": "1049761930665005198",
+      "timestamp": 1768790835875
+    },
+    "timestamp": 1768790835876
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1000189862529466448",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "سوالف بشات الادمن",
+      "byUserId": "1049761930665005198",
+      "timestamp": 1768790896352
+    },
+    "timestamp": 1768790896355
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "1422961374635495481",
+      "roleId": "1446952697503809576",
+      "duration": "6",
+      "reason": "استخدام خصائص بشكل خاطئ+ استلام تكت شكوى عليه",
+      "byUserId": "1049761930665005198",
+      "timestamp": 1768812540503
+    },
+    "timestamp": 1768812540504
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1319168553156476940",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسباب خاصه",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768837648180
+    },
+    "timestamp": 1768837648181
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1319168553156476940",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسباب خاصه",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768837652987
+    },
+    "timestamp": 1768837652988
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "768204981282275368",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسباب خاصه",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768837698699
+    },
+    "timestamp": 1768837698700
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "768204981282275368",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسباب خاصه",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768837714655
+    },
+    "timestamp": 1768837714656
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "768204981282275368",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسباب خاصه",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768837723592
+    },
+    "timestamp": 1768837723593
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "768204981282275368",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسباب خاصه",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768837725997
+    },
+    "timestamp": 1768837725998
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "768204981282275368",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسباب خاصه",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768837732030
+    },
+    "timestamp": 1768837732030
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1278595963044495414",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسكات غلط",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768923849185
+    },
+    "timestamp": 1768923849185
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1278595963044495414",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسكات غلط",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768923852478
+    },
+    "timestamp": 1768923852479
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1278595963044495414",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسكات غلط",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768923857246
+    },
+    "timestamp": 1768923857246
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1278595963044495414",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسكات غلط",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768923862175
+    },
+    "timestamp": 1768923862175
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1278595963044495414",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسكات غلط",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1768923876904
+    },
+    "timestamp": 1768923876905
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1271349459581669459",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسكات غلط",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1769205133407
+    },
+    "timestamp": 1769205133408
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "768204981282275368",
+      "roleId": "1446941795715125359",
+      "duration": "6h",
+      "reason": "ايحائات بالشات العام",
+      "byUserId": "279655640195006464",
+      "timestamp": 1769224470653
+    },
+    "timestamp": 1769224470654
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "1428498940462104656",
+      "roleId": "1446952697503809576",
+      "duration": "6h",
+      "reason": "اسلوب سيء بشات الادمن",
+      "byUserId": "279655640195006464",
+      "timestamp": 1769227194278
+    },
+    "timestamp": 1769227194279
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "1128154439556026428",
+      "roleId": "1464223165357232159",
+      "duration": "6h",
+      "reason": "اسباب خاصة",
+      "byUserId": "279655640195006464",
+      "timestamp": 1769267128446
+    },
+    "timestamp": 1769267128446
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "1428498940462104656",
+      "roleId": "1446952697503809576",
+      "duration": "12",
+      "reason": "اسباب خاصة",
+      "byUserId": "279655640195006464",
+      "timestamp": 1769267602520
+    },
+    "timestamp": 1769267602520
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "1428498940462104656",
+      "roleId": "1446952697503809576",
+      "duration": "6h",
+      "reason": "اسباب خاصة",
+      "byUserId": "279655640195006464",
+      "timestamp": 1769268090599
+    },
+    "timestamp": 1769268090599
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "1319168553156476940",
+      "roleId": "1446944018209443870",
+      "duration": "12h",
+      "reason": "اسباب خاصة",
+      "byUserId": "279655640195006464",
+      "timestamp": 1769372804169
+    },
+    "timestamp": 1769372804171
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "768204981282275368",
+      "roleId": "1446941795715125359",
+      "duration": "12h",
+      "reason": "اسباب خاصة",
+      "byUserId": "279655640195006464",
+      "timestamp": 1769372839140
+    },
+    "timestamp": 1769372839141
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "768204981282275368",
+      "roleId": "1446941795715125359",
+      "duration": "24h",
+      "reason": "فك ميوت صحيح",
+      "byUserId": "279655640195006464",
+      "timestamp": 1769551989918
+    },
+    "timestamp": 1769551989924
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "1319168553156476940",
+      "roleId": "1446944018209443870",
+      "duration": "24h",
+      "reason": "اسلوب سيء",
+      "byUserId": "279655640195006464",
+      "timestamp": 1769595245749
+    },
+    "timestamp": 1769595245749
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1269248803429417001",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسباب خاصه",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1769698985016
+    },
+    "timestamp": 1769698985017
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1422961374635495481",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسكات غلط",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1769881805786
+    },
+    "timestamp": 1769881805786
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1230829652390580245",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسباب خاصه",
+      "byUserId": "636930315503534110",
+      "timestamp": 1769999063660
+    },
+    "timestamp": 1769999063660
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "326831881012379648",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسباب خاصه",
+      "byUserId": "636930315503534110",
+      "timestamp": 1770033833453
+    },
+    "timestamp": 1770033833453
+  },
+  {
+    "type": "DOWN_VERBAL",
+    "data": {
+      "targetUserId": "1185096992372822056",
+      "roleId": null,
+      "duration": "شفوي",
+      "reason": "اسلوب سيء بالشات العام",
+      "byUserId": "1262736181825765376",
+      "timestamp": 1770042649048
+    },
+    "timestamp": 1770042649049
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "1128154439556026428",
+      "roleId": "1464223165357232159",
+      "duration": "12h",
+      "reason": "اسكات خاطئ",
+      "byUserId": "1262736181825765376",
+      "timestamp": 1770050506481
+    },
+    "timestamp": 1770050506482
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "848241603712778250",
+      "roleId": "1464223165357232159",
+      "duration": "6h",
+      "reason": "ميوت غلط",
+      "byUserId": "279655640195006464",
+      "timestamp": 1770328200120
+    },
+    "timestamp": 1770328200121
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "848241603712778250",
+      "roleId": "1464223165357232159",
+      "duration": "6h",
+      "reason": "لعب بالخواص",
+      "byUserId": "1257560892271362130",
+      "timestamp": 1770898952911
+    },
+    "timestamp": 1770898952912
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "1289911973533712475",
+      "roleId": "1446952650020094035",
+      "duration": "6h",
+      "reason": "اسباب خاصة",
+      "byUserId": "279655640195006464",
+      "timestamp": 1770999041922
+    },
+    "timestamp": 1770999041922
+  },
+  {
+    "type": "DOWN_MODIFIED",
+    "data": {
+      "targetUserId": "1289911973533712475",
+      "roleId": "1446952650020094035",
+      "oldDuration": "6h",
+      "newDuration": "12h",
+      "modifiedBy": "1257560892271362130",
+      "timestamp": 1771000723463
+    },
+    "timestamp": 1771000723464
+  },
+  {
+    "type": "DOWN_APPLIED",
+    "data": {
+      "targetUserId": "688040980787625994",
+      "roleId": "1446952650020094035",
+      "duration": "6h",
+      "reason": "اسباب خاصة",
+      "byUserId": "1262736181825765376",
+      "timestamp": 1771017915635
+    },
+    "timestamp": 1771017915636
+  },
+  {
+    "type": "DOWN_ENDED",
+    "data": {
+      "targetUserId": "688040980787625994",
+      "roleId": "1446952650020094035",
+      "reason": "انحلت المشكلة",
+      "originalReason": "اسباب خاصة",
+      "duration": "6h",
+      "byUserId": "1262736181825765376",
+      "timestamp": 1771018969280
+    },
+    "timestamp": 1771018969281
+  }
+]

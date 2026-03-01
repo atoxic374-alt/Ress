@@ -1,0 +1,10 @@
+{
+  "logsChannelId": "1446965997817958430",
+  "muteRoleId": "1464646138953990307",
+  "muteDuration": 600000,
+  "responsibleRoleIds": [
+    "1447163112850718820"
+  ],
+  "separatorEnabled": true,
+  "separatorImage": "/home/container/assets/custom_separator.png"
+}

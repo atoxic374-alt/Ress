@@ -1,0 +1,248 @@
+{
+  "1283078116188749888": {
+    "managerRoleIds": [
+      "1446960791306764318"
+    ],
+    "managerUserIds": [],
+    "logChannelId": "1465399948202737879",
+    "requestsChannelId": "1465398315830214719",
+    "requestInboxChannelId": "1465398441235714160",
+    "adminControlChannelId": "1465398580855439563",
+    "memberControlChannelId": "1465398386491392212",
+    "requestImage": "https://cdn.discordapp.com/attachments/1462053630722052137/1465397485961871391/info-1.png?ex=6978f542&is=6977a3c2&hm=40fd8293d5707dfbd8300d968f9ef2d0abff5fa60526ec9a6e13c124785019ce&",
+    "adminImage": "https://cdn.discordapp.com/attachments/1462053630722052137/1465397485961871391/info-1.png?ex=6978f542&is=6977a3c2&hm=40fd8293d5707dfbd8300d968f9ef2d0abff5fa60526ec9a6e13c124785019ce&",
+    "memberImage": "https://cdn.discordapp.com/attachments/1462053630722052137/1465397485961871391/info-1.png?ex=6978f542&is=6977a3c2&hm=40fd8293d5707dfbd8300d968f9ef2d0abff5fa60526ec9a6e13c124785019ce&",
+    "topChannelId": "1465399647584391369",
+    "topImage": "https://cdn.discordapp.com/attachments/1462053630722052137/1465399278443696289/line-3-1.png?ex=6978f6ed&is=6977a56d&hm=d467ba44622663df5b654ce3c5f7916480446e0ebef0e99ec7b4732d49582f6d&",
+    "topMessageId": "1465410778935984260",
+    "topEnabled": true,
+    "activityResetAt": 1769934464019,
+    "roleCategoryId": "1446963454811312301",
+    "roleIconBackups": {
+      "923481182707023894": {
+        "roleIds": [
+          "1465461192691683351"
+        ],
+        "removedAt": 1769517440004
+      },
+      "1428498940462104656": {
+        "roleIds": [
+          "1446955075384770640",
+          "1447353108945440919"
+        ],
+        "removedAt": 1769978018622
+      },
+      "1128154439556026428": {
+        "roleIds": [
+          "1458693817904529421",
+          "1465732100492890197",
+          "1464280168649719990"
+        ],
+        "removedAt": 1770141407456
+      },
+      "1129110138196865146": {
+        "roleIds": [
+          "1446960768095621262"
+        ],
+        "removedAt": 1770809967258
+      },
+      "1314705633466912840": {
+        "roleIds": [
+          "1467573420513427618",
+          "1450837018643923115",
+          "1452752069420253325",
+          "1447160036857090161",
+          "1452493034083323934"
+        ],
+        "removedAt": 1771072774560
+      },
+      "1170437484161798296": {
+        "roleIds": [
+          "1474892177615098009"
+        ],
+        "removedAt": 1772147957409
+      }
+    },
+    "memberPanelMessageId": "1468090744198664385",
+    "adminPanelMessageId": "1468091450750271625",
+    "requestPanelMessageId": "1465399484140748974",
+    "pendingRoleRequests": {
+      "1069983945778790430": {
+        "createdAt": 1770379598784,
+        "messageId": "1469303267409264740",
+        "channelId": "1465398441235714160",
+        "roleName": "Ravellore"
+      },
+      "1428498940462104656": {
+        "createdAt": 1770390917814,
+        "messageId": "1469350748503543818",
+        "channelId": "1465398441235714160",
+        "roleName": "702"
+      },
+      "1199807379466891376": {
+        "createdAt": 1771259303065,
+        "messageId": "1472993020281360444",
+        "channelId": "1465398441235714160",
+        "roleName": "Under Methak's protection"
+      },
+      "225081396417396736": {
+        "createdAt": 1771264649996,
+        "messageId": "1473015446570795101",
+        "channelId": "1465398441235714160",
+        "roleName": "Nighthel"
+      }
+    },
+    "allowedChannels": [
+      "1446948795744256042",
+      "1465398580855439563",
+      "1465398386491392212",
+      "1465398315830214719",
+      "1465398441235714160",
+      "1447161886838882334",
+      "1447209109416968232",
+      "1448940364546179164",
+      "1462053630722052137"
+    ],
+    "requestCooldowns": {}
+  },
+  "1465209976183193755": {
+    "managerRoleIds": [],
+    "managerUserIds": [],
+    "logChannelId": null,
+    "requestsChannelId": null,
+    "requestInboxChannelId": null,
+    "adminControlChannelId": null,
+    "memberControlChannelId": null,
+    "requestImage": null,
+    "adminImage": null,
+    "memberImage": null,
+    "topChannelId": null,
+    "topImage": null,
+    "topMessageId": null,
+    "topEnabled": false,
+    "activityResetAt": null,
+    "roleCategoryId": null,
+    "roleIconBackups": {}
+  },
+  "1466210237097971961": {
+    "managerRoleIds": [],
+    "managerUserIds": [],
+    "logChannelId": null,
+    "requestsChannelId": "1466228515006316727",
+    "requestInboxChannelId": "1466228514796736617",
+    "adminControlChannelId": "1466228515006316727",
+    "memberControlChannelId": "1466228515006316727",
+    "requestImage": "https://cdn.discordapp.com/attachments/1466228515006316727/1466229991695057062/ca85c7d7b8e4d4d37f62fe1a26494a12.jpg?ex=697bfc97&is=697aab17&hm=8c494ad23e6ccd00ac53ae61b5beb3d127c42d789935d9167f0d4318892c5ae0&",
+    "adminImage": "https://cdn.discordapp.com/attachments/1466228515006316727/1466229991695057062/ca85c7d7b8e4d4d37f62fe1a26494a12.jpg?ex=697bfc97&is=697aab17&hm=8c494ad23e6ccd00ac53ae61b5beb3d127c42d789935d9167f0d4318892c5ae0&",
+    "memberImage": "https://cdn.discordapp.com/attachments/1466228515006316727/1466229991695057062/ca85c7d7b8e4d4d37f62fe1a26494a12.jpg?ex=697bfc97&is=697aab17&hm=8c494ad23e6ccd00ac53ae61b5beb3d127c42d789935d9167f0d4318892c5ae0&",
+    "topChannelId": "1466228515006316727",
+    "topImage": "https://cdn.discordapp.com/attachments/1466228515006316727/1466229991695057062/ca85c7d7b8e4d4d37f62fe1a26494a12.jpg?ex=697bfc97&is=697aab17&hm=8c494ad23e6ccd00ac53ae61b5beb3d127c42d789935d9167f0d4318892c5ae0&",
+    "topMessageId": "1466231729957372069",
+    "topEnabled": true,
+    "activityResetAt": 1769646913314,
+    "roleCategoryId": "1466210237588574348",
+    "roleIconBackups": {},
+    "requestPanelMessageId": "1466230206879760656",
+    "adminPanelMessageId": "1466230259350245446",
+    "memberPanelMessageId": "1466230317948862547"
+  },
+  "1455672811321561225": {
+    "managerRoleIds": [],
+    "managerUserIds": [
+      "1196202894186266675"
+    ],
+    "logChannelId": null,
+    "requestsChannelId": null,
+    "requestInboxChannelId": null,
+    "adminControlChannelId": "1466720037862641674",
+    "memberControlChannelId": "1466720037862641674",
+    "requestImage": null,
+    "adminImage": null,
+    "memberImage": null,
+    "topChannelId": null,
+    "topImage": null,
+    "topMessageId": null,
+    "topEnabled": false,
+    "activityResetAt": null,
+    "roleCategoryId": null,
+    "roleIconBackups": {},
+    "memberPanelMessageId": "1466721228520951809",
+    "adminPanelMessageId": "1466721277388652544"
+  },
+  "1398085506247692298": {
+    "managerRoleIds": [],
+    "managerUserIds": [],
+    "logChannelId": null,
+    "requestsChannelId": null,
+    "requestInboxChannelId": null,
+    "adminControlChannelId": null,
+    "memberControlChannelId": null,
+    "requestImage": null,
+    "adminImage": null,
+    "memberImage": null,
+    "topChannelId": null,
+    "topImage": null,
+    "topMessageId": null,
+    "topEnabled": false,
+    "activityResetAt": null,
+    "roleCategoryId": null,
+    "roleIconBackups": {}
+  },
+  "1367884747061334078": {
+    "managerRoleIds": [],
+    "managerUserIds": [],
+    "logChannelId": null,
+    "requestsChannelId": null,
+    "requestInboxChannelId": null,
+    "adminControlChannelId": null,
+    "memberControlChannelId": null,
+    "requestImage": null,
+    "adminImage": null,
+    "memberImage": null,
+    "topChannelId": null,
+    "topImage": null,
+    "topMessageId": null,
+    "topEnabled": false,
+    "activityResetAt": null,
+    "roleCategoryId": null,
+    "roleIconBackups": {}
+  },
+  "1446177418346762374": {
+    "managerRoleIds": [],
+    "managerUserIds": [],
+    "logChannelId": null,
+    "requestsChannelId": null,
+    "requestInboxChannelId": null,
+    "adminControlChannelId": null,
+    "memberControlChannelId": null,
+    "requestImage": null,
+    "adminImage": null,
+    "memberImage": null,
+    "topChannelId": null,
+    "topImage": null,
+    "topMessageId": null,
+    "topEnabled": false,
+    "activityResetAt": null,
+    "roleCategoryId": null,
+    "roleIconBackups": {}
+  },
+  "1461135263068717180": {
+    "managerRoleIds": [],
+    "managerUserIds": [],
+    "logChannelId": null,
+    "requestsChannelId": null,
+    "requestInboxChannelId": null,
+    "adminControlChannelId": null,
+    "memberControlChannelId": null,
+    "requestImage": null,
+    "adminImage": null,
+    "memberImage": null,
+    "topChannelId": null,
+    "topImage": null,
+    "topMessageId": null,
+    "topEnabled": false,
+    "activityResetAt": null,
+    "roleCategoryId": null,
+    "roleIconBackups": {}
+  }
+}

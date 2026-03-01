@@ -1,0 +1,8 @@
+{
+  "menuChannel": null,
+  "logChannel": null,
+  "allowedUsers": {
+    "type": "roles",
+    "targets": []
+  }
+}

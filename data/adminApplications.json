@@ -1,0 +1,333 @@
+{
+  "settings": {
+    "applicationChannel": "1449440829516021902",
+    "approvers": {
+      "type": "roles",
+      "list": [
+        "1447369760324063374"
+      ]
+    },
+    "maxPendingPerAdmin": 3,
+    "rejectCooldownHours": 24,
+    "evaluation": {
+      "minMessages": {
+        "weak": 20,
+        "good": 50,
+        "excellent": 100,
+        "resetWeekly": false
+      },
+      "minVoiceTime": {
+        "weak": 7200000,
+        "good": 18000000,
+        "excellent": 36000000,
+        "resetWeekly": false
+      },
+      "minReactions": {
+        "weak": 10,
+        "good": 25,
+        "excellent": 50,
+        "resetWeekly": false
+      },
+      "activeDaysPerWeek": {
+        "minimum": 3,
+        "resetWeekly": true
+      },
+      "timeInServerDays": {
+        "minimum": 7,
+        "excellent": 30
+      }
+    },
+    "adminRolesToGrant": [
+      "1447160036857090161",
+      "1460949089616265281"
+    ]
+  },
+  "pendingApplications": {
+    "1768340191137_986404614775648266_1289911973533712475": {
+      "candidateId": "986404614775648266",
+      "candidateMention": "<@986404614775648266>",
+      "requesterId": "1289911973533712475",
+      "requesterMention": "<@1289911973533712475>",
+      "createdAt": "2026-01-13T21:36:45.597Z",
+      "userStats": {
+        "userId": "986404614775648266",
+        "username": "bf.i",
+        "mention": "<@986404614775648266>",
+        "displayName": "!Abo snow",
+        "avatar": "https://cdn.discordapp.com/avatars/986404614775648266/04025b66a17f9e93489cee4f87b357d7.webp",
+        "realMessages": 69,
+        "realVoiceTime": 210563719,
+        "formattedVoiceTime": "**2**d and **10**h and **29**m and **23**s and **719**ms",
+        "joinedChannels": 19,
+        "reactionsGiven": 0,
+        "activeDays": 0,
+        "weeklyMessages": 69,
+        "weeklyVoiceTime": 210626133,
+        "formattedWeeklyVoiceTime": "**2**d and **10**h and **30**m and **26**s and **133**ms",
+        "weeklyReactions": 0,
+        "weeklyVoiceJoins": 19,
+        "joinedServer": 1766711111393,
+        "joinedServerFormatted": "Friday, December 26, 2025",
+        "accountCreated": 1655247586674,
+        "accountCreatedFormatted": "Wednesday, June 15, 2022",
+        "timeInServerMs": 1629079589,
+        "timeInServerFormatted": "**18d** , **20h** , **31m**",
+        "accountAgeMs": 113092604308,
+        "accountAgeFormatted": "**1308d** , **22h** , **36m**",
+        "lastActivity": "Dnd",
+        "accountStatus": "Human",
+        "statusDetails": "",
+        "roleCount": 7,
+        "roles": [
+          {
+            "id": "1459675883722903654",
+            "name": "العفوي"
+          },
+          {
+            "id": "1446962508714737704",
+            "name": "viora."
+          },
+          {
+            "id": "1446962793377959976",
+            "name": "live."
+          },
+          {
+            "id": "1460336058687422474",
+            "name": "ty5fpz&rnij"
+          },
+          {
+            "id": "1460335022526697483",
+            "name": "brando"
+          },
+          {
+            "id": "1450963046527930380",
+            "name": "Livy"
+          },
+          {
+            "id": "1446962188320374966",
+            "name": "violet."
+          }
+        ],
+        "isBot": false,
+        "hasAdminRoles": false,
+        "collectedAt": 1768340190982
+      }
+    },
+    "1770198633774_1089617681080127578_1439624169309474927": {
+      "candidateId": "1089617681080127578",
+      "candidateMention": "<@1089617681080127578>",
+      "requesterId": "1439624169309474927",
+      "requesterMention": "<@1439624169309474927>",
+      "createdAt": "2026-02-04T09:50:34.255Z",
+      "userStats": {
+        "userId": "1089617681080127578",
+        "username": "p6co",
+        "mention": "<@1089617681080127578>",
+        "displayName": "Roi",
+        "avatar": "https://cdn.discordapp.com/avatars/1089617681080127578/fecf1e685b8f5e532ce774bf5692ff9b.webp",
+        "realMessages": 10914,
+        "realVoiceTime": 277532001,
+        "formattedVoiceTime": "**3**d and **5**h and **5**m and **32**s and **1**ms",
+        "joinedChannels": 146,
+        "reactionsGiven": 31,
+        "activeDays": 0,
+        "weeklyMessages": 330,
+        "weeklyVoiceTime": 187323,
+        "formattedWeeklyVoiceTime": "**3**m and **7**s and **323**ms",
+        "weeklyReactions": 1,
+        "weeklyVoiceJoins": 1,
+        "joinedServer": 1765540192321,
+        "joinedServerFormatted": "Friday, December 12, 2025",
+        "accountCreated": 1679855499287,
+        "accountCreatedFormatted": "Sunday, March 26, 2023",
+        "timeInServerMs": 4658441345,
+        "timeInServerFormatted": "**53d** , **22h**",
+        "accountAgeMs": 90343134379,
+        "accountAgeFormatted": "**1045d** , **15h** , **18m**",
+        "lastActivity": "غير متصل",
+        "accountStatus": "Human",
+        "statusDetails": "",
+        "roleCount": 16,
+        "roles": [
+          {
+            "id": "1446962734301450371",
+            "name": "gem."
+          },
+          {
+            "id": "1446962819374256138",
+            "name": "nick."
+          },
+          {
+            "id": "1459263618024607754",
+            "name": "noe archiviste"
+          },
+          {
+            "id": "1452752069420253325",
+            "name": "a little death"
+          },
+          {
+            "id": "1458693817904529421",
+            "name": "X's"
+          },
+          {
+            "id": "1465732112719155343",
+            "name": "67"
+          },
+          {
+            "id": "1465732100492890197",
+            "name": "Something else"
+          },
+          {
+            "id": "1452493034083323934",
+            "name": "connect with you"
+          },
+          {
+            "id": "1467573420513427618",
+            "name": "Mika"
+          },
+          {
+            "id": "1446962184365146215",
+            "name": "hollow."
+          },
+          {
+            "id": "1446962508714737704",
+            "name": "viora."
+          },
+          {
+            "id": "1446962793377959976",
+            "name": "live."
+          },
+          {
+            "id": "1450837018643923115",
+            "name": "Softy"
+          },
+          {
+            "id": "1446962887796199534",
+            "name": "mention."
+          },
+          {
+            "id": "1462904396974260538",
+            "name": "Labubu"
+          },
+          {
+            "id": "1452010609318039613",
+            "name": "Kitty"
+          }
+        ],
+        "isBot": false,
+        "hasAdminRoles": false,
+        "collectedAt": 1770198633666
+      }
+    },
+    "1772203768441_1122589266908823612_756134765395968017": {
+      "candidateId": "1122589266908823612",
+      "candidateMention": "<@1122589266908823612>",
+      "requesterId": "756134765395968017",
+      "requesterMention": "<@756134765395968017>",
+      "createdAt": "2026-02-27T14:49:28.921Z",
+      "userStats": {
+        "userId": "1122589266908823612",
+        "username": "mm5_4",
+        "mention": "<@1122589266908823612>",
+        "displayName": "Eazy e",
+        "avatar": "https://cdn.discordapp.com/avatars/1122589266908823612/25ef5bdc440131068c4cbd240c203c9b.webp",
+        "realMessages": 3879,
+        "realVoiceTime": 13557083,
+        "formattedVoiceTime": "**3**h and **45**m and **57**s and **83**ms",
+        "joinedChannels": 32,
+        "reactionsGiven": 144,
+        "activeDays": 0,
+        "weeklyMessages": 2892,
+        "weeklyVoiceTime": 12432554,
+        "formattedWeeklyVoiceTime": "**3**h and **27**m and **12**s and **554**ms",
+        "weeklyReactions": 75,
+        "weeklyVoiceJoins": 27,
+        "joinedServer": 1765745586244,
+        "joinedServerFormatted": "Sunday, December 14, 2025",
+        "accountCreated": 1687716537931,
+        "accountCreatedFormatted": "Sunday, June 25, 2023",
+        "timeInServerMs": 6458182160,
+        "timeInServerFormatted": "**74d** , **17h** , **56m**",
+        "accountAgeMs": 84487230473,
+        "accountAgeFormatted": "**977d** , **20h** , **40m**",
+        "lastActivity": "Offline",
+        "accountStatus": "Human",
+        "statusDetails": "",
+        "roleCount": 6,
+        "roles": [
+          {
+            "id": "1283790613350973443",
+            "name": "•"
+          },
+          {
+            "id": "1446962734301450371",
+            "name": "gem."
+          },
+          {
+            "id": "1446962508714737704",
+            "name": "viora."
+          },
+          {
+            "id": "1446962887796199534",
+            "name": "mention."
+          },
+          {
+            "id": "1465409192184778904",
+            "name": "رول القاعده"
+          },
+          {
+            "id": "1474845952765591582",
+            "name": "القاعدة"
+          }
+        ],
+        "isBot": false,
+        "hasAdminRoles": false,
+        "collectedAt": 1772203768404
+      }
+    }
+  },
+  "rejectedCooldowns": {
+    "1405570190535823505": {
+      "rejectedAt": "2026-01-05T11:47:26.428Z",
+      "rejectedBy": "636930315503534110",
+      "rejectorName": "Ahmed.",
+      "reason": "معك رول"
+    },
+    "759644136629338162": {
+      "rejectedAt": "2026-01-05T13:28:09.254Z",
+      "rejectedBy": "284206267122188299",
+      "rejectorName": "UtopianNay3f",
+      "reason": "ارفع تفاعلك"
+    },
+    "1073708482659880992": {
+      "rejectedAt": "2026-01-13T20:15:37.838Z",
+      "rejectedBy": "1049761930665005198",
+      "rejectorName": "yurmir",
+      "reason": "ارفع تفاعلك فويس"
+    },
+    "1368866981582737489": {
+      "rejectedAt": "2026-01-16T06:47:19.350Z",
+      "rejectedBy": "1049761930665005198",
+      "rejectorName": "yurmir",
+      "reason": "ارفع تفاعلك فويس"
+    },
+    "989594757904863383": {
+      "rejectedAt": "2026-01-16T23:20:30.747Z",
+      "rejectedBy": "1049761930665005198",
+      "rejectorName": "yurmir",
+      "reason": "ارفع تفاعلك فويس"
+    },
+    "1280690765235748875": {
+      "rejectedAt": "2026-02-17T17:14:15.908Z",
+      "rejectedBy": "326831881012379648",
+      "rejectorName": "Rio",
+      "reason": "ارفع تفاعلك شات او فويس وحياك"
+    },
+    "1295781318772129855": {
+      "rejectedAt": "2026-02-28T00:42:04.733Z",
+      "rejectedBy": "636930315503534110",
+      "rejectorName": "Ahmed.",
+      "reason": "Test"
+    }
+  }
+}

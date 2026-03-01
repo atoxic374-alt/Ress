@@ -1,0 +1,9 @@
+{
+  "menuChannel": null,
+  "logChannel": null,
+  "downManagerUsers": [],
+  "allowedUsers": {
+    "type": null,
+    "targets": []
+  }
+}

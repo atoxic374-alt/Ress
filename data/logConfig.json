@@ -1,0 +1,44 @@
+{
+  "settings": {
+    "RESPONSIBILITY_MANAGEMENT": {
+      "enabled": false,
+      "channelId": null
+    },
+    "RESPONSIBLE_MEMBERS": {
+      "enabled": false,
+      "channelId": null
+    },
+    "TASK_LOGS": {
+      "enabled": false,
+      "channelId": null
+    },
+    "POINT_SYSTEM": {
+      "enabled": false,
+      "channelId": null
+    },
+    "ADMIN_ACTIONS": {
+      "enabled": false,
+      "channelId": null
+    },
+    "NOTIFICATION_SYSTEM": {
+      "enabled": false,
+      "channelId": null
+    },
+    "COOLDOWN_SYSTEM": {
+      "enabled": false,
+      "channelId": null
+    },
+    "SETUP_ACTIONS": {
+      "enabled": false,
+      "channelId": null
+    },
+    "BOT_SETTINGS": {
+      "enabled": false,
+      "channelId": null
+    },
+    "ADMIN_CALLS": {
+      "enabled": false,
+      "channelId": null
+    }
+  }
+}

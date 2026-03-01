@@ -1,0 +1,11 @@
+{
+  "menuChannel": "1449476272945365172",
+  "logChannel": "1446965815793549524",
+  "allowedUsers": {
+    "type": "roles",
+    "targets": [
+      "1451517781072810136"
+    ]
+  },
+  "menuMessageId": "1462638426548473928"
+}

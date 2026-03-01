@@ -1,0 +1,370 @@
+{
+  "settings": {
+    "approvers": [
+      "1447163112850718820",
+      "1446961644881313914"
+    ],
+    "interactiveRoles": [
+      "1446962195958206657",
+      "1446962193416458432",
+      "1446962188320374966",
+      "1446962191231225986",
+      "1446962734301450371"
+    ],
+    "requestChannel": null,
+    "exceptions": [],
+    "applicationSystem": {
+      "enabled": true,
+      "requestsChannelId": "1446961278651338935",
+      "managersChannelId": "1447207162454605824",
+      "roleConditions": {
+        "1446962734301450371": {
+          "messagesRequired": 500,
+          "voiceHoursRequired": 0,
+          "accountAgeDays": 30
+        },
+        "1446962188320374966": {
+          "messagesRequired": 500,
+          "voiceHoursRequired": 50,
+          "accountAgeDays": 90
+        },
+        "1446962191231225986": {
+          "messagesRequired": 500,
+          "voiceHoursRequired": 30,
+          "accountAgeDays": 90
+        },
+        "1446962193416458432": {
+          "messagesRequired": 500,
+          "voiceHoursRequired": 20,
+          "accountAgeDays": 90
+        },
+        "1446962195958206657": {
+          "messagesRequired": 500,
+          "voiceHoursRequired": 10,
+          "accountAgeDays": 90
+        }
+      },
+      "managersImagePath": "/home/container/data/interactiveRoleAssets/managers_panel_1283078116188749888.png",
+      "panelImagePath": "/home/container/data/interactiveRoleAssets/request_panel_1283078116188749888.png",
+      "displayType": "menu",
+      "defaultButtonEmoji": null,
+      "defaultMenuEmoji": "<:1340471954930663484:1453713972049215489>",
+      "panelMessageId": "1475733118219718676",
+      "orderMessageId": "1475733115623440446",
+      "rulesText": "**\n 1-  يُمنع فك الميوت عن أي عضو .\n 2- لا تسحب أي شخص بدون استئذانه .\n 3- يمنع دخول الرومات الممتلئة\n 4-  إذا أحد غلط عليك، لا ترد بالمثل\n 5- استخدم خاصية الميوت\n 6-  لا تستخدم الخصائص اللي معك شكل مزح أو عبث.\n 7- ممنوع استخدام خاصية ال\n Disconnect • نهائيًا\n\n 8- في حال دخلت روم بالغلط وسمعت ألفاظ مثل قذف أو سب .\n 9- عطهم \"ميوت\" . احفظ مقطع أو دليل .\n 10- إذا سحبك إداري بسبب مشكلة ، ميوت، أو استفسار :\n 11- خلك محترم وتجاوب معه بهدوء وبدون استفزاز . إذا كان أسلوب الإداري غير مناسب أو متحيز رغم إنك محترم ، من حقك تطلب إداري ثاني يتدخل في المشكلة .\n\n 12- الترقية و التصفية للرولات التفاعلية تتم كل يوم جمعة وتعتمد على :\n\n 13- لفلك في الفويس .\n\n 14- تفاعلك الأسبوعي .\n\n 15- تواجدك في الرومات العامة أكثر من الخاصة .\n16- عدم وجود مشاكل أو شكاوي عليك.**"
+    }
+  },
+  "pendingRequests": {},
+  "cooldowns": {
+    "823559382830415872": 1768543730186,
+    "883452479331790889": 1768565225959,
+    "1257560892271362130": 1768759801392,
+    "1127329329580363786": 1768801533247,
+    "1043571383382327306": 1768825807860
+  },
+  "exceptionCooldowns": {
+    "692793700497096714": {
+      "1446962734301450371": {
+        "قيم": 1768828410683
+      }
+    },
+    "636930315503534110": {
+      "1446962734301450371": {
+        "قيم": 1768828967929
+      }
+    },
+    "1027613080047333406": {
+      "1446962734301450371": {
+        "قيم": 1768829225627
+      }
+    },
+    "1401339361986875474": {
+      "1446962734301450371": {
+        "قيم": 1768957039214
+      }
+    },
+    "1185096992372822056": {
+      "1446962734301450371": {
+        "قيم": 1769004496189
+      }
+    },
+    "1170437484161798296": {
+      "1446962734301450371": {
+        "قيم": 1769126914253
+      }
+    },
+    "923481182707023894": {
+      "1446962734301450371": {
+        "قيم": 1769161656836
+      }
+    },
+    "811587477881880586": {
+      "1446962734301450371": {
+        "قيم": 1770054332500
+      }
+    },
+    "1428498940462104656": {
+      "1446962734301450371": {
+        "قيم": 1769274160386
+      }
+    },
+    "331643858813321218": {
+      "1446962734301450371": {
+        "قيم": 1769371228715
+      }
+    },
+    "1412196274148741165": {
+      "1446962734301450371": {
+        "قيم": 1769372360683
+      }
+    },
+    "1366873159042732103": {
+      "1446962734301450371": {
+        "قيم": 1769423096839
+      }
+    },
+    "1069983945778790430": {
+      "1446962734301450371": {
+        "قيم": 1769451862021
+      }
+    },
+    "284206267122188299": {
+      "1446962734301450371": {
+        "قيم": 1769465680285
+      }
+    },
+    "1398110375488262194": {
+      "1446962734301450371": {
+        "قيم": 1769519246666
+      }
+    },
+    "1069323673791631461": {
+      "1446962734301450371": {
+        "قيم": 1769813447335
+      }
+    },
+    "993267977824763974": {
+      "1446962734301450371": {
+        "العاب": 1770482293216
+      }
+    },
+    "964975672361631785": {
+      "1446962734301450371": {
+        "قيم": 1771183071790
+      }
+    },
+    "1128154439556026428": {
+      "1446962734301450371": {
+        "العاب": 1771673052425
+      }
+    },
+    "1168896772869980200": {
+      "1446962734301450371": {
+        "قيم": 1771798656894
+      }
+    }
+  },
+  "pendingExceptionRequests": {
+    "1769612772941_618168649588408332": {
+      "applicationId": "1769612772941_618168649588408332",
+      "messageId": "1466086981179150427",
+      "requesterId": "756134765395968017",
+      "targetId": "618168649588408332",
+      "originalContent": "618168649588408332 قيم",
+      "userStats": {
+        "userId": "618168649588408332",
+        "username": "8oqp",
+        "mention": "<@618168649588408332>",
+        "displayName": "Naiffffffffffff",
+        "avatar": "https://cdn.discordapp.com/avatars/618168649588408332/1661ac3cd9a0c5593e73fc31bbc0c919.webp",
+        "realMessages": 3444,
+        "realVoiceTime": 22200890,
+        "formattedVoiceTime": "**6**h and **10**m and **890**ms",
+        "joinedChannels": 11,
+        "reactionsGiven": 22,
+        "activeDays": 0,
+        "weeklyMessages": 2892,
+        "weeklyVoiceTime": 21430769,
+        "formattedWeeklyVoiceTime": "**5**h and **57**m and **10**s and **769**ms",
+        "weeklyReactions": 20,
+        "weeklyVoiceJoins": 8,
+        "joinedServer": 1769383397086,
+        "joinedServerFormatted": "Monday, January 26, 2026",
+        "accountCreated": 1567453291080,
+        "accountCreatedFormatted": "Monday, September 2, 2019",
+        "timeInServerMs": 229375840,
+        "timeInServerFormatted": "**2d** , **15h** , **42m**",
+        "accountAgeMs": 202159481846,
+        "accountAgeFormatted": "**2339d** , **19h** , **24m**",
+        "lastActivity": "Dnd",
+        "accountStatus": "Human",
+        "statusDetails": "",
+        "roleCount": 3,
+        "roles": [
+          {
+            "id": "1446962508714737704",
+            "name": "viora."
+          },
+          {
+            "id": "1446962819374256138",
+            "name": "nick."
+          },
+          {
+            "id": "1447353108945440919",
+            "name": "1"
+          }
+        ],
+        "isBot": false,
+        "hasAdminRoles": false,
+        "collectedAt": 1769612772926
+      },
+      "roleId": "1446962734301450371",
+      "keyword": "قيم",
+      "timestamp": 1769612775359
+    },
+    "1769691815051_331643858813321218": {
+      "applicationId": "1769691815051_331643858813321218",
+      "messageId": "1466418500590371082",
+      "requesterId": "1289911973533712475",
+      "targetId": "331643858813321218",
+      "originalContent": "331643858813321218 قيم",
+      "userStats": {
+        "userId": "331643858813321218",
+        "username": "qq4.j",
+        "mention": "<@331643858813321218>",
+        "displayName": "jwndom",
+        "avatar": "https://cdn.discordapp.com/avatars/331643858813321218/63164c660d9130ae1419680c6ef3798a.webp",
+        "realMessages": 4806,
+        "realVoiceTime": 12782146,
+        "formattedVoiceTime": "**3**h and **33**m and **2**s and **146**ms",
+        "joinedChannels": 12,
+        "reactionsGiven": 113,
+        "activeDays": 0,
+        "weeklyMessages": 4060,
+        "weeklyVoiceTime": 11191498,
+        "formattedWeeklyVoiceTime": "**3**h and **6**m and **31**s and **498**ms",
+        "weeklyReactions": 78,
+        "weeklyVoiceJoins": 11,
+        "joinedServer": 1769683618591,
+        "joinedServerFormatted": "Thursday, January 29, 2026",
+        "accountCreated": 1499140457586,
+        "accountCreatedFormatted": "Tuesday, July 4, 2017",
+        "timeInServerMs": 8196455,
+        "timeInServerFormatted": "**2h** , **16m**",
+        "accountAgeMs": 270551357460,
+        "accountAgeFormatted": "**3131d** , **9h** , **9m**",
+        "lastActivity": "Dnd",
+        "accountStatus": "Human",
+        "statusDetails": "",
+        "roleCount": 1,
+        "roles": [
+          {
+            "id": "1446962508714737704",
+            "name": "viora."
+          }
+        ],
+        "isBot": false,
+        "hasAdminRoles": false,
+        "collectedAt": 1769691815046
+      },
+      "roleId": "1446962734301450371",
+      "keyword": "قيم",
+      "timestamp": 1769691815592
+    },
+    "1769705520627_267696339414941696": {
+      "applicationId": "1769705520627_267696339414941696",
+      "messageId": "1466475986039214150",
+      "requesterId": "902528627369988126",
+      "targetId": "267696339414941696",
+      "originalContent": "267696339414941696 اعلى تفاعلي و قيم لاهنتم",
+      "userStats": {
+        "userId": "267696339414941696",
+        "username": "6.e4",
+        "mention": "<@267696339414941696>",
+        "displayName": "March",
+        "avatar": "https://cdn.discordapp.com/avatars/267696339414941696/29dd8c52db8e1a731e610392eb46054f.webp",
+        "realMessages": 7,
+        "realVoiceTime": 0,
+        "formattedVoiceTime": "**0ms**",
+        "joinedChannels": 0,
+        "reactionsGiven": 0,
+        "activeDays": 0,
+        "weeklyMessages": 7,
+        "weeklyVoiceTime": 0,
+        "formattedWeeklyVoiceTime": "**0ms**",
+        "weeklyReactions": 0,
+        "weeklyVoiceJoins": 0,
+        "joinedServer": 1769692415305,
+        "joinedServerFormatted": "Thursday, January 29, 2026",
+        "accountCreated": 1483894180874,
+        "accountCreatedFormatted": "Sunday, January 8, 2017",
+        "timeInServerMs": 13105316,
+        "timeInServerFormatted": "**3h** , **38m**",
+        "accountAgeMs": 285811339747,
+        "accountAgeFormatted": "**3308d** , **2m**",
+        "lastActivity": "Dnd",
+        "accountStatus": "Human",
+        "statusDetails": "",
+        "roleCount": 6,
+        "roles": [
+          {
+            "id": "1446962819374256138",
+            "name": "nick."
+          },
+          {
+            "id": "1462116550097113302",
+            "name": "veil"
+          },
+          {
+            "id": "1446962752034705479",
+            "name": "pic."
+          },
+          {
+            "id": "1446962508714737704",
+            "name": "viora."
+          },
+          {
+            "id": "1446962793377959976",
+            "name": "live."
+          },
+          {
+            "id": "1446962887796199534",
+            "name": "mention."
+          }
+        ],
+        "isBot": false,
+        "hasAdminRoles": false,
+        "collectedAt": 1769705520621
+      },
+      "roleId": "1446962734301450371",
+      "keyword": "قيم",
+      "timestamp": 1769705521399
+    }
+  },
+  "newPendingRequests": {
+    "950998042369200199:1446962195958206657": {
+      "requestId": "1771980577356_950998042369200199_1446962195958206657",
+      "userId": "950998042369200199",
+      "roleId": "1446962195958206657",
+      "managerMessageId": "1476018266013962405",
+      "managerChannelId": "1447207162454605824",
+      "createdAt": 1771980578653,
+      "conditionMet": true,
+      "conditionText": "**عدد الرسائل : 6526/500**\n**عدد الساعات : 68/10**\n**عمر الحساب : 1448/0 (غير مطلوب)**"
+    },
+    "950998042369200199:1446962191231225986": {
+      "requestId": "1771980583818_950998042369200199_1446962191231225986",
+      "userId": "950998042369200199",
+      "roleId": "1446962191231225986",
+      "managerMessageId": "1476018292262047901",
+      "managerChannelId": "1447207162454605824",
+      "createdAt": 1771980585386,
+      "conditionMet": true,
+      "conditionText": "**عدد الرسائل : 6526/500**\n**عدد الساعات : 68/30**\n**عمر الحساب : 1448/0 (غير مطلوب)**"
+    }
+  },
+  "newRoleCooldowns": {
+    "950998042369200199:1446962193416458432": 1772174837265,
+    "456556751014330379:1446962188320374966": 1772382533530
+  }
+}

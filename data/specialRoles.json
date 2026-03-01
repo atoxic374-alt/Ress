@@ -1,0 +1,2864 @@
+{
+  "roles": {
+    "1465409192184778904": {
+      "roleId": "1465409192184778904",
+      "guildId": "1283078116188749888",
+      "ownerId": "1315212043774726154",
+      "createdAt": 1769451180999,
+      "updatedAt": 1772221137151,
+      "createdBy": "636930315503534110",
+      "name": "رول القاعده",
+      "color": "#070707",
+      "icon": "https://cdn.discordapp.com/role-icons/1465409192184778904/44829d5b939146d867740c7e1d76c104.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1258792362801500267": {
+          "assignedAt": 1769495011185,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1401981621581905987": {
+          "assignedAt": 1769496110452,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1271349459581669459": {
+          "assignedAt": 1769509044546,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "856513750923214849": {
+          "assignedAt": 1771025577178,
+          "assignedBy": "1315212043774726154",
+          "assignedByIsBot": false
+        },
+        "1179435220911534101": {
+          "assignedAt": 1771097038522,
+          "assignedBy": "1315212043774726154",
+          "assignedByIsBot": false
+        },
+        "1266182796674728059": {
+          "assignedAt": 1771177983552,
+          "assignedBy": "1315212043774726154",
+          "assignedByIsBot": false
+        },
+        "1298311918020198420": {
+          "assignedAt": 1771183886531,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1315212043774726154": {
+          "assignedAt": 1771183925732,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "309372358655868928": {
+          "assignedAt": 1771249205327,
+          "assignedBy": "1315212043774726154",
+          "assignedByIsBot": false
+        },
+        "1069983945778790430": {
+          "assignedAt": 1771354556542,
+          "assignedBy": "1315212043774726154",
+          "assignedByIsBot": false
+        },
+        "1168896772869980200": {
+          "assignedAt": 1771656385614,
+          "assignedBy": "1315212043774726154",
+          "assignedByIsBot": false
+        },
+        "899016654476951644": {
+          "assignedAt": 1771719013431,
+          "assignedBy": "1315212043774726154",
+          "assignedByIsBot": false
+        },
+        "1400876125076324372": {
+          "assignedAt": 1771720102028,
+          "assignedBy": "1315212043774726154",
+          "assignedByIsBot": false
+        },
+        "696359781073682472": {
+          "assignedAt": 1771723237112,
+          "assignedBy": "1315212043774726154",
+          "assignedByIsBot": false
+        },
+        "1084217755512868904": {
+          "assignedAt": 1771729701380,
+          "assignedBy": "1315212043774726154",
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1452493034083323934": {
+      "roleId": "1452493034083323934",
+      "guildId": "1283078116188749888",
+      "ownerId": "848241603712778250",
+      "createdAt": 1769456490766,
+      "updatedAt": 1771453846146,
+      "createdBy": "1128154439556026428",
+      "name": "YE",
+      "color": "#ffffff",
+      "icon": "https://cdn.discordapp.com/role-icons/1452493034083323934/35174cb51d161f1660c116e4a8040d0a.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "848241603712778250": {
+          "assignedAt": 1769456490765,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "604465054800412713": {
+          "assignedAt": 1769456490766,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1350203540437471342": {
+          "assignedAt": 1769456490766,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "962433005807362159": {
+          "assignedAt": 1769456490766,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "674294707232309277": {
+          "assignedAt": 1769456490766,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1213261083251318825": {
+          "assignedAt": 1769456490766,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1000189862529466448": {
+          "assignedAt": 1769456490766,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "932300934590115900": {
+          "assignedAt": 1769456490766,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1149960004401643550": {
+          "assignedAt": 1770321339364,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "285101698593325058": {
+          "assignedAt": 1770324996104,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1101662016923517018": {
+          "assignedAt": 1771108494990,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1256604955251441771": {
+          "assignedAt": 1771453846146,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1459526113901674547": {
+      "roleId": "1459526113901674547",
+      "guildId": "1283078116188749888",
+      "ownerId": "794428513326989343",
+      "createdAt": 1769466454286,
+      "updatedAt": 1771563595151,
+      "createdBy": "636930315503534110",
+      "name": "555",
+      "color": "#000000",
+      "icon": "https://cdn.discordapp.com/role-icons/1459526113901674547/7062ecc8bc157d7f783cf1d209644130.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "794428513326989343": {
+          "assignedAt": 1769466454286,
+          "assignedBy": "636930315503534110",
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1450837173078065304": {
+      "roleId": "1450837173078065304",
+      "guildId": "1283078116188749888",
+      "ownerId": "326831881012379648",
+      "createdAt": 1769468536421,
+      "updatedAt": 1771949478302,
+      "createdBy": "1262736181825765376",
+      "name": "Rio's",
+      "color": "#ffffff",
+      "icon": "https://cdn.discordapp.com/role-icons/1450837173078065304/661f75a9f3d7a1c58c319d8e0f3c8341.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "854816386151874560": {
+          "assignedAt": 1769468536421,
+          "assignedBy": "1262736181825765376",
+          "assignedByIsBot": false
+        },
+        "1347923889623400510": {
+          "assignedAt": 1769468536421,
+          "assignedBy": "1262736181825765376",
+          "assignedByIsBot": false
+        },
+        "1258792362801500267": {
+          "assignedAt": 1769468536421,
+          "assignedBy": "1262736181825765376",
+          "assignedByIsBot": false
+        },
+        "487627043710697483": {
+          "assignedAt": 1769468536421,
+          "assignedBy": "1262736181825765376",
+          "assignedByIsBot": false
+        },
+        "1000189862529466448": {
+          "assignedAt": 1769468536421,
+          "assignedBy": "1262736181825765376",
+          "assignedByIsBot": false
+        },
+        "1217963068785430568": {
+          "assignedAt": 1769468536421,
+          "assignedBy": "1262736181825765376",
+          "assignedByIsBot": false
+        },
+        "1343224655258976379": {
+          "assignedAt": 1769468536421,
+          "assignedBy": "1262736181825765376",
+          "assignedByIsBot": false
+        },
+        "1414854105054314607": {
+          "assignedAt": 1769468536421,
+          "assignedBy": "1262736181825765376",
+          "assignedByIsBot": false
+        },
+        "1350542869248737301": {
+          "assignedAt": 1769468536421,
+          "assignedBy": "1262736181825765376",
+          "assignedByIsBot": false
+        },
+        "326831881012379648": {
+          "assignedAt": 1771529327763,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1453667086986641459": {
+      "roleId": "1453667086986641459",
+      "guildId": "1283078116188749888",
+      "ownerId": "1170437484161798296",
+      "createdAt": 1769470112166,
+      "updatedAt": 1772141937598,
+      "createdBy": "1027613080047333406",
+      "name": "Lost feelings",
+      "color": "#ffffff",
+      "icon": "https://cdn.discordapp.com/role-icons/1453667086986641459/e6c6e8a43bfd81262a444b18d9245a0e.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1170437484161798296": {
+          "assignedAt": 1769470112166,
+          "assignedBy": "1027613080047333406",
+          "assignedByIsBot": false
+        },
+        "1334286524174303244": {
+          "assignedAt": 1769470112166,
+          "assignedBy": "1027613080047333406",
+          "assignedByIsBot": false
+        },
+        "1197645460203110462": {
+          "assignedAt": 1769470112166,
+          "assignedBy": "1027613080047333406",
+          "assignedByIsBot": false
+        },
+        "1186687808644071550": {
+          "assignedAt": 1769470112166,
+          "assignedBy": "1027613080047333406",
+          "assignedByIsBot": false
+        },
+        "1474530713096290385": {
+          "assignedAt": 1772072213477,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1257560892271362130": {
+          "assignedAt": 1772141937597,
+          "assignedBy": "1170437484161798296",
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1465531252433096705": {
+      "roleId": "1465531252433096705",
+      "guildId": "1283078116188749888",
+      "ownerId": "1331988748472291483",
+      "createdAt": 1769480281038,
+      "updatedAt": 1771355672190,
+      "createdBy": "279655640195006464",
+      "name": "Scout Regiment",
+      "color": "#000000",
+      "icon": "https://cdn.discordapp.com/role-icons/1465531252433096705/6466dee581bd5b55337cbd707585b1a4.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1331988748472291483": {
+          "assignedAt": 1769480281038,
+          "assignedBy": "279655640195006464",
+          "assignedByIsBot": false
+        },
+        "752236125237805239": {
+          "assignedAt": 1769480368778,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1176305810821890214": {
+          "assignedAt": 1769558871526,
+          "assignedBy": "1331988748472291483",
+          "assignedByIsBot": false
+        },
+        "1436513190505615401": {
+          "assignedAt": 1769558872122,
+          "assignedBy": "1331988748472291483",
+          "assignedByIsBot": false
+        },
+        "844426328521572372": {
+          "assignedAt": 1770235857781,
+          "assignedBy": "1331988748472291483",
+          "assignedByIsBot": false
+        },
+        "1454807549244342386": {
+          "assignedAt": 1770380251525,
+          "assignedBy": "1331988748472291483",
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1452752069420253325": {
+      "roleId": "1452752069420253325",
+      "guildId": "1283078116188749888",
+      "ownerId": "1439624169309474927",
+      "createdAt": 1769520213465,
+      "updatedAt": 1772330336987,
+      "createdBy": "1128154439556026428",
+      "name": "a little death",
+      "color": "#d8d8d8",
+      "icon": "https://cdn.discordapp.com/role-icons/1452752069420253325/69d5b6e1f98c9b77fbcdcd95444d71cb.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "854816386151874560": {
+          "assignedAt": 1769520213465,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1342229702068408364": {
+          "assignedAt": 1769520213465,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "779710796237373450": {
+          "assignedAt": 1769520213465,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1414854105054314607": {
+          "assignedAt": 1769520213465,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "628601424657514526": {
+          "assignedAt": 1769727731130,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1439624169309474927": {
+          "assignedAt": 1770077587916,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "848241603712778250": {
+          "assignedAt": 1770330567344,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1397724939116609556": {
+          "assignedAt": 1770846696031,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1249878909952987167": {
+          "assignedAt": 1771106081099,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1256604955251441771": {
+          "assignedAt": 1771453800944,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1377991691633561704": {
+          "assignedAt": 1772232757007,
+          "assignedBy": "1439624169309474927",
+          "assignedByIsBot": false
+        },
+        "1381735827842797698": {
+          "assignedAt": 1772232757769,
+          "assignedBy": "1439624169309474927",
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1466230460609728583": {
+      "roleId": "1466230460609728583",
+      "guildId": "1466210237097971961",
+      "ownerId": "1340471954930663484",
+      "createdAt": 1769646985554,
+      "updatedAt": 1769769876444,
+      "createdBy": "636930315503534110",
+      "name": "انت شكلك تسويلك",
+      "color": "#000000",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "636930315503534110": {
+          "assignedAt": 1769647035977,
+          "assignedBy": "1340471954930663484",
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1466210237513076824": {
+      "roleId": "1466210237513076824",
+      "guildId": "1466210237097971961",
+      "ownerId": "1340471954930663484",
+      "createdAt": 1769647159541,
+      "updatedAt": 1769769875399,
+      "createdBy": "636930315503534110",
+      "name": "⚔️〡CIA MEMBER  ←",
+      "color": "#070707",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "636930315503534110": {
+          "assignedAt": 1769647159541,
+          "assignedBy": "636930315503534110",
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1450782940697989172": {
+      "roleId": "1450782940697989172",
+      "guildId": "1283078116188749888",
+      "ownerId": "1230829652390580245",
+      "createdAt": 1769962237045,
+      "updatedAt": 1772072165422,
+      "createdBy": "309372358655868928",
+      "name": "厳しい冬",
+      "color": "#0a0909",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "688040980787625994": {
+          "assignedAt": 1769962237045,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        },
+        "935246644495130634": {
+          "assignedAt": 1769962237045,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        },
+        "794428513326989343": {
+          "assignedAt": 1769962237045,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        },
+        "1214884722719858711": {
+          "assignedAt": 1769962237045,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        },
+        "528708206675886080": {
+          "assignedAt": 1769962237045,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        },
+        "1334286524174303244": {
+          "assignedAt": 1769962237045,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        },
+        "819101262598635530": {
+          "assignedAt": 1769962237045,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        },
+        "723546870579724449": {
+          "assignedAt": 1769962237045,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        },
+        "784650064526180352": {
+          "assignedAt": 1769962237045,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        },
+        "717064763489779786": {
+          "assignedAt": 1769962237045,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        },
+        "897578845018939423": {
+          "assignedAt": 1769962237045,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        },
+        "1029682807267655730": {
+          "assignedAt": 1769962237045,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        },
+        "1290669416379322369": {
+          "assignedAt": 1769962237045,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        },
+        "1230829652390580245": {
+          "assignedAt": 1770756041862,
+          "assignedBy": "1230829652390580245",
+          "assignedByIsBot": false
+        },
+        "761138324802240532": {
+          "assignedAt": 1770833271882,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1474530713096290385": {
+          "assignedAt": 1772072165422,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1459263618024607754": {
+      "roleId": "1459263618024607754",
+      "guildId": "1283078116188749888",
+      "ownerId": "1314705633466912840",
+      "createdAt": 1769967974941,
+      "updatedAt": 1771640045843,
+      "createdBy": "1128154439556026428",
+      "name": "noe archiviste",
+      "color": "#9462f0",
+      "icon": "https://cdn.discordapp.com/role-icons/1459263618024607754/80cc43ea616e2541523fff347873eb4f.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1314705633466912840": {
+          "assignedAt": 1769967974940,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "210487655186694145": {
+          "assignedAt": 1769967974941,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1439624169309474927": {
+          "assignedAt": 1770077589027,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1149960004401643550": {
+          "assignedAt": 1770321355880,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1455940286025957468": {
+      "roleId": "1455940286025957468",
+      "guildId": "1283078116188749888",
+      "ownerId": "1332967422801477722",
+      "createdAt": 1770327222443,
+      "updatedAt": 1772320763635,
+      "createdBy": "1275590615211573414",
+      "name": "Nana 𐙚",
+      "color": "#cabca1",
+      "icon": "https://cdn.discordapp.com/role-icons/1455940286025957468/81216036309dce0e818043aa92778d0f.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1332967422801477722": {
+          "assignedAt": 1770327222443,
+          "assignedBy": "1275590615211573414",
+          "assignedByIsBot": false
+        },
+        "278322511794536470": {
+          "assignedAt": 1771006130478,
+          "assignedBy": "1332967422801477722",
+          "assignedByIsBot": false
+        },
+        "1149960004401643550": {
+          "assignedAt": 1771605700021,
+          "assignedBy": "1332967422801477722",
+          "assignedByIsBot": false
+        },
+        "1408818360107532401": {
+          "assignedAt": 1772320763634,
+          "assignedBy": "1332967422801477722",
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1472635132870656000": {
+      "roleId": "1472635132870656000",
+      "guildId": "1283078116188749888",
+      "ownerId": "1079090083547860993",
+      "createdAt": 1771173978410,
+      "updatedAt": 1771436455033,
+      "createdBy": "1128154439556026428",
+      "name": "elden ring",
+      "color": "#95a5a6",
+      "icon": "https://cdn.discordapp.com/role-icons/1472635132870656000/be7fa38fd9db4289e3ab3869aae978c1.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1079090083547860993": {
+          "assignedAt": 1771173978648,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "604465054800412713": {
+          "assignedAt": 1771179443178,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "962433005807362159": {
+          "assignedAt": 1771179453030,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1220827560678789191": {
+          "assignedAt": 1771179463262,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "456556751014330379": {
+          "assignedAt": 1771179498547,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1219496787652378734": {
+          "assignedAt": 1771179503970,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1256606052837752854": {
+          "assignedAt": 1771436455033,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1473249566488002645": {
+      "roleId": "1473249566488002645",
+      "guildId": "1283078116188749888",
+      "ownerId": "1405570190535823505",
+      "createdAt": 1771320469378,
+      "updatedAt": 1772329913199,
+      "createdBy": "1128154439556026428",
+      "name": "ʚଓ",
+      "color": "#000000",
+      "icon": "https://cdn.discordapp.com/role-icons/1473249566488002645/7118c3ee83d86de8de22a55958b68938.webp",
+      "maxMembers": 67,
+      "memberMeta": {
+        "1352202740826378343": {
+          "assignedAt": 1771320792673,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "966553894396243988": {
+          "assignedAt": 1771320815744,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "1149960004401643550": {
+          "assignedAt": 1771501938393,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "1350203540437471342": {
+          "assignedAt": 1771501938924,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "1009386974852952147": {
+          "assignedAt": 1771600762590,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "1439624169309474927": {
+          "assignedAt": 1771762324478,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "858017596124168223": {
+          "assignedAt": 1771790731449,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "877950211400548393": {
+          "assignedAt": 1771794098820,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "636930315503534110": {
+          "assignedAt": 1772166569344,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "1256604955251441771": {
+          "assignedAt": 1772303907924,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "1411383107051061361": {
+          "assignedAt": 1772322960109,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1405570190535823505": {
+          "assignedAt": 1772329884752,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1473834803181916292": {
+      "roleId": "1473834803181916292",
+      "guildId": "1283078116188749888",
+      "ownerId": "1257560892271362130",
+      "createdAt": 1771460002564,
+      "updatedAt": 1771492657332,
+      "createdBy": "1257560892271362130",
+      "name": "miss you more than words",
+      "color": "#ffffff",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "1257560892271362130": {
+          "assignedAt": 1771460002564,
+          "assignedBy": "1257560892271362130",
+          "assignedByIsBot": false
+        },
+        "1185760671716102187": {
+          "assignedAt": 1771492657332,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1474847603220025577": {
+      "roleId": "1474847603220025577",
+      "guildId": "1283078116188749888",
+      "ownerId": "950998042369200199",
+      "createdAt": 1771701473552,
+      "updatedAt": 1772248946600,
+      "createdBy": "636930315503534110",
+      "name": "s5.8 (friends)",
+      "color": "#000000",
+      "icon": "https://cdn.discordapp.com/role-icons/1474847603220025577/27f2a2b2746936ad6ddae4ede60ca855.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1118882121138839602": {
+          "assignedAt": 1771701731411,
+          "assignedBy": "950998042369200199",
+          "assignedByIsBot": false
+        },
+        "1035521804720156702": {
+          "assignedAt": 1771706991787,
+          "assignedBy": "950998042369200199",
+          "assignedByIsBot": false
+        },
+        "398912265241362432": {
+          "assignedAt": 1771982189224,
+          "assignedBy": "950998042369200199",
+          "assignedByIsBot": false
+        },
+        "1412196274148741165": {
+          "assignedAt": 1771982189983,
+          "assignedBy": "950998042369200199",
+          "assignedByIsBot": false
+        },
+        "1413255938135294083": {
+          "assignedAt": 1771982190501,
+          "assignedBy": "950998042369200199",
+          "assignedByIsBot": false
+        },
+        "725660109925122049": {
+          "assignedAt": 1771982190971,
+          "assignedBy": "950998042369200199",
+          "assignedByIsBot": false
+        },
+        "941661978315849748": {
+          "assignedAt": 1771982243773,
+          "assignedBy": "950998042369200199",
+          "assignedByIsBot": false
+        },
+        "692793700497096714": {
+          "assignedAt": 1771982350274,
+          "assignedBy": "950998042369200199",
+          "assignedByIsBot": false
+        },
+        "1069313419204886719": {
+          "assignedAt": 1771982350678,
+          "assignedBy": "950998042369200199",
+          "assignedByIsBot": false
+        },
+        "1278382620530573312": {
+          "assignedAt": 1771982469334,
+          "assignedBy": "950998042369200199",
+          "assignedByIsBot": false
+        },
+        "1220528951772975267": {
+          "assignedAt": 1771982469902,
+          "assignedBy": "950998042369200199",
+          "assignedByIsBot": false
+        },
+        "966339746827751445": {
+          "assignedAt": 1771982549950,
+          "assignedBy": "950998042369200199",
+          "assignedByIsBot": false
+        },
+        "950998042369200199": {
+          "assignedAt": 1772037622465,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1474849317914153092": {
+      "roleId": "1474849317914153092",
+      "guildId": "1283078116188749888",
+      "ownerId": "1199807379466891376",
+      "createdAt": 1771701881596,
+      "updatedAt": 1772152629783,
+      "createdBy": "309372358655868928",
+      "name": "$$$",
+      "color": "#2ecc71",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "1199807379466891376": {
+          "assignedAt": 1771701881596,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        },
+        "1357657324503695431": {
+          "assignedAt": 1771715023263,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1474892177615098009": {
+      "roleId": "1474892177615098009",
+      "guildId": "1283078116188749888",
+      "ownerId": "1389843864902176801",
+      "createdAt": 1771712099583,
+      "updatedAt": 1772321291429,
+      "createdBy": "1275590615211573414",
+      "name": "till death do us part",
+      "color": "#e4dad8",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "1389843864902176801": {
+          "assignedAt": 1771712099583,
+          "assignedBy": "1275590615211573414",
+          "assignedByIsBot": false
+        },
+        "1415419754751070318": {
+          "assignedAt": 1771780255344,
+          "assignedBy": "1389843864902176801",
+          "assignedByIsBot": false
+        },
+        "847970608876486656": {
+          "assignedAt": 1771780256381,
+          "assignedBy": "1389843864902176801",
+          "assignedByIsBot": false
+        },
+        "1466669637147295980": {
+          "assignedAt": 1771790258022,
+          "assignedBy": "1389843864902176801",
+          "assignedByIsBot": false
+        },
+        "1222221195672289451": {
+          "assignedAt": 1772310115914,
+          "assignedBy": "1389843864902176801",
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1474897664142479576": {
+      "roleId": "1474897664142479576",
+      "guildId": "1283078116188749888",
+      "ownerId": "1350854938250707036",
+      "createdAt": 1771713413885,
+      "updatedAt": 1771713589362,
+      "createdBy": "1350854938250707036",
+      "name": "calm",
+      "color": "#ff5fa2",
+      "icon": "https://cdn.discordapp.com/role-icons/1474897664142479576/aaf1c0180b87e2751cf600717455c3e4.webp",
+      "maxMembers": 100,
+      "memberMeta": {}
+    },
+    "1474897680453992540": {
+      "roleId": "1474897680453992540",
+      "guildId": "1283078116188749888",
+      "ownerId": "1350854938250707036",
+      "createdAt": 1771713414698,
+      "updatedAt": 1771713658708,
+      "createdBy": "1350854938250707036",
+      "name": "calm",
+      "color": "#ff5fa2",
+      "icon": null,
+      "maxMembers": 100,
+      "memberMeta": {}
+    },
+    "1474897688569970759": {
+      "roleId": "1474897688569970759",
+      "guildId": "1283078116188749888",
+      "ownerId": "1350854938250707036",
+      "createdAt": 1771713415258,
+      "updatedAt": 1771713538123,
+      "createdBy": "1350854938250707036",
+      "name": "calm",
+      "color": "#ff5fa2",
+      "icon": null,
+      "maxMembers": 100,
+      "memberMeta": {}
+    },
+    "1474914551626469560": {
+      "roleId": "1474914551626469560",
+      "guildId": "1283078116188749888",
+      "ownerId": "456556751014330379",
+      "createdAt": 1771717433484,
+      "updatedAt": 1772048331058,
+      "createdBy": "604465054800412713",
+      "name": "Galaxy.",
+      "color": "#863b87",
+      "icon": "https://cdn.discordapp.com/role-icons/1474914551626469560/efa6454df6cb3114c76102133816fe88.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "456556751014330379": {
+          "assignedAt": 1771717433484,
+          "assignedBy": "604465054800412713",
+          "assignedByIsBot": false
+        },
+        "862396614412206150": {
+          "assignedAt": 1772048331058,
+          "assignedBy": "456556751014330379",
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1474920899533734064": {
+      "roleId": "1474920899533734064",
+      "guildId": "1283078116188749888",
+      "ownerId": "279655640195006464",
+      "createdAt": 1771719602659,
+      "updatedAt": 1772315289401,
+      "createdBy": "279655640195006464",
+      "name": "meow meow meow",
+      "color": "#f1c40f",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "279655640195006464": {
+          "assignedAt": 1772111191289,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1434174310075072616": {
+          "assignedAt": 1772214895612,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1428498940462104656": {
+          "assignedAt": 1772215507281,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1262736181825765376": {
+          "assignedAt": 1772251770424,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1475106903855075534": {
+      "roleId": "1475106903855075534",
+      "guildId": "1283078116188749888",
+      "ownerId": "1436807146347171961",
+      "createdAt": 1771763295303,
+      "updatedAt": 1772049609527,
+      "createdBy": "636930315503534110",
+      "name": "Mika",
+      "color": "#000000",
+      "icon": "https://cdn.discordapp.com/role-icons/1475106903855075534/9f3fd75164007a66e855719021fbc3e0.webp",
+      "maxMembers": null,
+      "memberMeta": {}
+    },
+    "1475191455587762391": {
+      "roleId": "1475191455587762391",
+      "guildId": "1283078116188749888",
+      "ownerId": "334630458757349377",
+      "createdAt": 1771783454759,
+      "updatedAt": 1771956636478,
+      "createdBy": "1275590615211573414",
+      "name": "Marv.",
+      "color": "#3f4250",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "877950211400548393": {
+          "assignedAt": 1771952383445,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "334630458757349377": {
+          "assignedAt": 1771956636478,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1475614359634968712": {
+      "roleId": "1475614359634968712",
+      "guildId": "1283078116188749888",
+      "ownerId": "358308123611627522",
+      "createdAt": 1771884281666,
+      "updatedAt": 1771884565396,
+      "createdBy": "636930315503534110",
+      "name": "@heyabunaif",
+      "color": "#000000",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "358308123611627522": {
+          "assignedAt": 1771884281666,
+          "assignedBy": "636930315503534110",
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1476112211003969596": {
+      "roleId": "1476112211003969596",
+      "guildId": "1283078116188749888",
+      "ownerId": "1434174310075072616",
+      "createdAt": 1771031611256,
+      "updatedAt": 1772225946422,
+      "createdBy": "1434174310075072616",
+      "name": "ٰ",
+      "color": "#ffffff",
+      "icon": "https://cdn.discordapp.com/role-icons/1476112211003969596/e740e8f7badb056f90be75c1e427d2db.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1439624169309474927": {
+          "assignedAt": 1772002978734,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1283926198052851777": {
+          "assignedAt": 1772002979122,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "771558188821643275": {
+          "assignedAt": 1772002979587,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1280171447389782160": {
+          "assignedAt": 1772002980027,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1249124479238537359": {
+          "assignedAt": 1772002980622,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1422287763645927485": {
+          "assignedAt": 1772002981022,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1438572558583857293": {
+          "assignedAt": 1772002982960,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1441428275300663306": {
+          "assignedAt": 1772002983434,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1332967422801477722": {
+          "assignedAt": 1772002983862,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1357733332749648107": {
+          "assignedAt": 1772002984434,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1414854105054314607": {
+          "assignedAt": 1772002989205,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1000189862529466448": {
+          "assignedAt": 1772002989840,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1334286524174303244": {
+          "assignedAt": 1772002990374,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "326831881012379648": {
+          "assignedAt": 1772002991243,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1422961374635495481": {
+          "assignedAt": 1772002991733,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1434174310075072616": {
+          "assignedAt": 1772003053529,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1258171628345491488": {
+          "assignedAt": 1772005535257,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1428015337160315054": {
+          "assignedAt": 1772005535751,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1371164140332388406": {
+          "assignedAt": 1772005536194,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "997775335372374076": {
+          "assignedAt": 1772005536628,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1095094276410572883": {
+          "assignedAt": 1772043862626,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1129110138196865146": {
+          "assignedAt": 1772043863051,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1220645702435082281": {
+          "assignedAt": 1772043863935,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1428498940462104656": {
+          "assignedAt": 1772215840041,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771949414259,
+      "deletedBy": "1148882775441690725"
+    },
+    "1476591064784834684": {
+      "roleId": "1476591064784834684",
+      "guildId": "1283078116188749888",
+      "ownerId": "1190080464350875741",
+      "createdAt": 1772117147674,
+      "updatedAt": 1772304502103,
+      "createdBy": "636930315503534110",
+      "name": "Cattie",
+      "color": "#000000",
+      "icon": "https://cdn.discordapp.com/role-icons/1476591064784834684/8bd8de473c0fcbd2ec603b782b8fb264.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1190080464350875741": {
+          "assignedAt": 1772117147674,
+          "assignedBy": "636930315503534110",
+          "assignedByIsBot": false
+        },
+        "951432461169094666": {
+          "assignedAt": 1772117424994,
+          "assignedBy": "1190080464350875741",
+          "assignedByIsBot": false
+        },
+        "1314974185885536279": {
+          "assignedAt": 1772117498779,
+          "assignedBy": "1190080464350875741",
+          "assignedByIsBot": false
+        },
+        "1089500745855946775": {
+          "assignedAt": 1772134046446,
+          "assignedBy": "1190080464350875741",
+          "assignedByIsBot": false
+        },
+        "1185096992372822056": {
+          "assignedAt": 1772138333512,
+          "assignedBy": "1190080464350875741",
+          "assignedByIsBot": false
+        },
+        "1267136406996652194": {
+          "assignedAt": 1772234883046,
+          "assignedBy": "1190080464350875741",
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1476820510938763395": {
+      "roleId": "1476820510938763395",
+      "guildId": "1283078116188749888",
+      "ownerId": "636930315503534110",
+      "createdAt": 1772171850034,
+      "updatedAt": 1772210398790,
+      "createdBy": "636930315503534110",
+      "name": "111",
+      "color": "#000000",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "636930315503534110": {
+          "assignedAt": 1772171850034,
+          "assignedBy": "636930315503534110",
+          "assignedByIsBot": false
+        }
+      }
+    },
+    "1477155386401357884": {
+      "roleId": "1477155386401357884",
+      "guildId": "1283078116188749888",
+      "ownerId": "1262736181825765376",
+      "createdAt": 1771719099646,
+      "updatedAt": 1772315289401,
+      "createdBy": "1262736181825765376",
+      "name": "We vibe really well",
+      "color": "#000000",
+      "icon": "https://cdn.discordapp.com/role-icons/1477155386401357884/cbf74e72f592cb2405936076f817eb91.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1439624169309474927": {
+          "assignedAt": 1772251690833,
+          "assignedBy": "279655640195006464",
+          "assignedByIsBot": false
+        },
+        "279655640195006464": {
+          "assignedAt": 1772251691406,
+          "assignedBy": "279655640195006464",
+          "assignedByIsBot": false
+        },
+        "1434174310075072616": {
+          "assignedAt": 1772251691898,
+          "assignedBy": "279655640195006464",
+          "assignedByIsBot": false
+        },
+        "1428498940462104656": {
+          "assignedAt": 1772251693834,
+          "assignedBy": "279655640195006464",
+          "assignedByIsBot": false
+        },
+        "1262736181825765376": {
+          "assignedAt": 1772251770424,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1772225946874,
+      "deletedBy": "1148882775441690725"
+    }
+  },
+  "deleted": {
+    "1465410317357158420": {
+      "roleId": "1465410317357158420",
+      "guildId": "1283078116188749888",
+      "ownerId": "1422961374635495481",
+      "createdAt": 1769451448872,
+      "updatedAt": 1769451448872,
+      "createdBy": "1185096992372822056",
+      "name": "Lost",
+      "color": "#000000",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "1422961374635495481": {
+          "assignedAt": 1769451448872,
+          "assignedBy": "1185096992372822056",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1769451828532,
+      "deletedBy": "1422961374635495481"
+    },
+    "1465469181649617103": {
+      "roleId": "1465469181649617103",
+      "guildId": "1283078116188749888",
+      "ownerId": "1245456564509347941",
+      "createdAt": 1769465482334,
+      "updatedAt": 1769465520618,
+      "createdBy": "1245456564509347941",
+      "name": "Die for u",
+      "color": "#000000",
+      "icon": "https://cdn.discordapp.com/role-icons/1465469181649617103/935a476cf554d605fafddf29e1bbe29f.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1245456564509347941": {
+          "assignedAt": 1769465482334,
+          "assignedBy": "1245456564509347941",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1769465718106,
+      "deletedBy": "1245456564509347941"
+    },
+    "1465433280152080639": {
+      "roleId": "1465433280152080639",
+      "guildId": "1283078116188749888",
+      "ownerId": "1089617681080127578",
+      "createdAt": 1769456921914,
+      "updatedAt": 1769528037914,
+      "createdBy": "1128154439556026428",
+      "name": "67",
+      "color": "#8a8a8a",
+      "icon": null,
+      "maxMembers": 50,
+      "memberMeta": {
+        "1128154439556026428": {
+          "assignedAt": 1769457231614,
+          "assignedBy": "1089617681080127578",
+          "assignedByIsBot": false
+        },
+        "1089617681080127578": {
+          "assignedAt": 1769525171964,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1439624169309474927": {
+          "assignedAt": 1769528036546,
+          "assignedBy": "1089617681080127578",
+          "assignedByIsBot": false
+        },
+        "1405570190535823505": {
+          "assignedAt": 1769528037914,
+          "assignedBy": "1089617681080127578",
+          "assignedByIsBot": false
+        },
+        "285101698593325058": {
+          "assignedAt": 1769528025074,
+          "assignedBy": "1089617681080127578",
+          "assignedByIsBot": false
+        },
+        "848241603712778250": {
+          "assignedAt": 1769528026359,
+          "assignedBy": "1089617681080127578",
+          "assignedByIsBot": false
+        },
+        "1249878909952987167": {
+          "assignedAt": 1769528026997,
+          "assignedBy": "1089617681080127578",
+          "assignedByIsBot": false
+        },
+        "1389843864902176801": {
+          "assignedAt": 1769528027624,
+          "assignedBy": "1089617681080127578",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1769528065032,
+      "deletedBy": "1089617681080127578"
+    },
+    "1465978720807424106": {
+      "roleId": "1465978720807424106",
+      "guildId": "1283078116188749888",
+      "ownerId": "1185096992372822056",
+      "createdAt": 1769586965423,
+      "updatedAt": 1769586965423,
+      "createdBy": "1185096992372822056",
+      "name": "любовь",
+      "color": "#ffffff",
+      "icon": "https://cdn.discordapp.com/role-icons/1465978720807424106/3f7a573a5bf49788102230c806ccf9ba.webp",
+      "maxMembers": 99,
+      "memberMeta": {
+        "1185096992372822056": {
+          "assignedAt": 1769586965423,
+          "assignedBy": "1185096992372822056",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1769588510216,
+      "deletedBy": "1185096992372822056"
+    },
+    "1467238601829126337": {
+      "roleId": "1467238601829126337",
+      "guildId": "1283078116188749888",
+      "ownerId": "1428498940462104656",
+      "createdAt": 1769887344953,
+      "updatedAt": 1770106180944,
+      "createdBy": "636930315503534110",
+      "name": "Heather",
+      "color": "#95a5a6",
+      "icon": "https://cdn.discordapp.com/role-icons/1467238601829126337/2e05b9fd8a51b7803237d4c286128a02.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1428498940462104656": {
+          "assignedAt": 1769887344953,
+          "assignedBy": "636930315503534110",
+          "assignedByIsBot": false
+        },
+        "326831881012379648": {
+          "assignedAt": 1769972832040,
+          "assignedBy": "1428498940462104656",
+          "assignedByIsBot": false
+        },
+        "1000189862529466448": {
+          "assignedAt": 1769972832652,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1262736181825765376": {
+          "assignedAt": 1769972833202,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1438572558583857293": {
+          "assignedAt": 1769975835445,
+          "assignedBy": "1428498940462104656",
+          "assignedByIsBot": false
+        },
+        "854816386151874560": {
+          "assignedAt": 1769975836335,
+          "assignedBy": "1428498940462104656",
+          "assignedByIsBot": false
+        },
+        "1271349459581669459": {
+          "assignedAt": 1769975836919,
+          "assignedBy": "1428498940462104656",
+          "assignedByIsBot": false
+        },
+        "1309945785756024855": {
+          "assignedAt": 1770037565297,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1770107907422,
+      "deletedBy": "1148882775441690725"
+    },
+    "1465421971499126845": {
+      "roleId": "1465421971499126845",
+      "guildId": "1283078116188749888",
+      "ownerId": "1274953503529369632",
+      "createdAt": 1769454227003,
+      "updatedAt": 1770141802085,
+      "createdBy": "1185096992372822056",
+      "name": "24",
+      "color": "#c8c8ca",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {},
+      "deletedAt": 1770141802804,
+      "deletedBy": "1148882775441690725"
+    },
+    "1468496436604964916": {
+      "roleId": "1468496436604964916",
+      "guildId": "1283078116188749888",
+      "ownerId": "1129110138196865146",
+      "createdAt": 1770187235602,
+      "updatedAt": 1770187538849,
+      "createdBy": "309372358655868928",
+      "name": "الدواسر كواسر",
+      "color": "#f1c40f",
+      "icon": "https://cdn.discordapp.com/role-icons/1468496436604964916/6cf7acf96c653c25479bb6c97ce5ada3.webp",
+      "maxMembers": null,
+      "memberMeta": {},
+      "deletedAt": 1770187780831,
+      "deletedBy": "1148882775441690725"
+    },
+    "1468592503195304152": {
+      "roleId": "1468592503195304152",
+      "guildId": "1283078116188749888",
+      "ownerId": "1129110138196865146",
+      "createdAt": 1770210142279,
+      "updatedAt": 1770210142346,
+      "createdBy": "309372358655868928",
+      "name": "Salvatore Brothers",
+      "color": "#000000",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "1129110138196865146": {
+          "assignedAt": 1770210142346,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1770210218252,
+      "deletedBy": "1148882775441690725"
+    },
+    "1468378526393831626": {
+      "roleId": "1468378526393831626",
+      "guildId": "1283078116188749888",
+      "ownerId": "1438072513794936933",
+      "createdAt": 1770159124175,
+      "updatedAt": 1770212379819,
+      "createdBy": "636930315503534110",
+      "name": "A",
+      "color": "#000000",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {},
+      "deletedAt": 1770212380572,
+      "deletedBy": "1148882775441690725"
+    },
+    "1467553971257348331": {
+      "roleId": "1467553971257348331",
+      "guildId": "1283078116188749888",
+      "ownerId": "1069983945778790430",
+      "createdAt": 1769962536654,
+      "updatedAt": 1770229789610,
+      "createdBy": "309372358655868928",
+      "name": "الاحرار",
+      "color": "#2ecc71",
+      "icon": "https://cdn.discordapp.com/role-icons/1467553971257348331/9f1266edb365d3b7698b8ec7ea2cac30.webp",
+      "maxMembers": null,
+      "memberMeta": {},
+      "deletedAt": 1770229790210,
+      "deletedBy": "1148882775441690725"
+    },
+    "1465461192691683351": {
+      "roleId": "1465461192691683351",
+      "guildId": "1283078116188749888",
+      "ownerId": "1239622242753581178",
+      "createdAt": 1769463576624,
+      "updatedAt": 1770416510301,
+      "createdBy": "1350854938250707036",
+      "name": "M Friend’s",
+      "color": "#000000",
+      "icon": "https://cdn.discordapp.com/role-icons/1465461192691683351/8273d777280477c2ea4e54f4758f7e13.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "993267977824763974": {
+          "assignedAt": 1769463781440,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1343157782236500003": {
+          "assignedAt": 1769463854506,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "854816386151874560": {
+          "assignedAt": 1769463860578,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1414854105054314607": {
+          "assignedAt": 1769463866999,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1341865224227131405": {
+          "assignedAt": 1769463887205,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1271349459581669459": {
+          "assignedAt": 1769463937116,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "326831881012379648": {
+          "assignedAt": 1769463966774,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1387424855242047630": {
+          "assignedAt": 1769463980311,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1368866981582737489": {
+          "assignedAt": 1769464258107,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "768204981282275368": {
+          "assignedAt": 1769687114324,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1334286524174303244": {
+          "assignedAt": 1769718347766,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1220645702435082281": {
+          "assignedAt": 1769718385973,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1422961374635495481": {
+          "assignedAt": 1769882870531,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1396360180194873387": {
+          "assignedAt": 1770040107671,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1283771749917397024": {
+          "assignedAt": 1770224534511,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1770416510925,
+      "deletedBy": "1148882775441690725"
+    },
+    "1465953516194631835": {
+      "roleId": "1465953516194631835",
+      "guildId": "1283078116188749888",
+      "ownerId": "334630458757349377",
+      "createdAt": 1769580956797,
+      "updatedAt": 1770773929572,
+      "createdBy": "636930315503534110",
+      "name": "Yalo",
+      "color": "#ffffff",
+      "icon": "https://cdn.discordapp.com/role-icons/1465953516194631835/230fae1e76c0fd5d9b8bea220638f65c.webp",
+      "maxMembers": null,
+      "memberMeta": {},
+      "deletedAt": 1770773930056,
+      "deletedBy": "1148882775441690725"
+    },
+    "1465470411838980229": {
+      "roleId": "1465470411838980229",
+      "guildId": "1283078116188749888",
+      "ownerId": "1245456564509347941",
+      "createdAt": 1769465775121,
+      "updatedAt": 1770781540201,
+      "createdBy": "1245456564509347941",
+      "name": "None",
+      "color": "#000000",
+      "icon": "https://cdn.discordapp.com/role-icons/1465470411838980229/935a476cf554d605fafddf29e1bbe29f.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "794428513326989343": {
+          "assignedAt": 1770439265096,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1770781540700,
+      "deletedBy": "1148882775441690725"
+    },
+    "1465732100492890197": {
+      "roleId": "1465732100492890197",
+      "guildId": "1283078116188749888",
+      "ownerId": "1089617681080127578",
+      "createdAt": 1769528168492,
+      "updatedAt": 1770330568284,
+      "createdBy": "1128154439556026428",
+      "name": "Something else",
+      "color": "#fff6e8",
+      "icon": "https://cdn.discordapp.com/role-icons/1465732100492890197/9aedcbb78053e1d4425f6e80dd5b2cf6.webp",
+      "maxMembers": 50,
+      "memberMeta": {
+        "1089617681080127578": {
+          "assignedAt": 1769528168492,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1249878909952987167": {
+          "assignedAt": 1769529167922,
+          "assignedBy": "1089617681080127578",
+          "assignedByIsBot": false
+        },
+        "342337009500684290": {
+          "assignedAt": 1769694006856,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1439624169309474927": {
+          "assignedAt": 1770077589518,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "848241603712778250": {
+          "assignedAt": 1770330568284,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1770843015982,
+      "deletedBy": "1148882775441690725"
+    },
+    "1465732112719155343": {
+      "roleId": "1465732112719155343",
+      "guildId": "1283078116188749888",
+      "ownerId": "1089617681080127578",
+      "createdAt": 1769528170073,
+      "updatedAt": 1770852293226,
+      "createdBy": "1128154439556026428",
+      "name": "67",
+      "color": "#000000",
+      "icon": null,
+      "maxMembers": 50,
+      "memberMeta": {},
+      "deletedAt": 1771004272680,
+      "deletedBy": "1148882775441690725"
+    },
+    "1465689275558531176": {
+      "roleId": "1465689275558531176",
+      "guildId": "1283078116188749888",
+      "ownerId": "309372358655868928",
+      "createdAt": 1769517956516,
+      "updatedAt": 1769585372127,
+      "createdBy": "636930315503534110",
+      "name": "Valor",
+      "color": "#95a5a6",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "309372358655868928": {
+          "assignedAt": 1769517956516,
+          "assignedBy": "636930315503534110",
+          "assignedByIsBot": false
+        },
+        "1139374823492042792": {
+          "assignedAt": 1769585371859,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        },
+        "628601424657514526": {
+          "assignedAt": 1769585372127,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771249204460,
+      "deletedBy": "309372358655868928"
+    },
+    "1458693817904529421": {
+      "roleId": "1458693817904529421",
+      "guildId": "1283078116188749888",
+      "ownerId": "1405570190535823505",
+      "createdAt": 1769450808098,
+      "updatedAt": 1771319149704,
+      "createdBy": "1128154439556026428",
+      "name": "ʚଓ",
+      "color": "#dfdfdf",
+      "icon": "https://cdn.discordapp.com/role-icons/1458693817904529421/74ac2f209a278bcb46fdbfa0f48d9350.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "604465054800412713": {
+          "assignedAt": 1769450808098,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1332967422801477722": {
+          "assignedAt": 1769450808098,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1350203540437471342": {
+          "assignedAt": 1769450808098,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1352202740826378343": {
+          "assignedAt": 1769450808098,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1184995180814794863": {
+          "assignedAt": 1769450808098,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1256606052837752854": {
+          "assignedAt": 1769457543711,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "1149960004401643550": {
+          "assignedAt": 1770411677866,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "1128154439556026428": {
+          "assignedAt": 1770864014547,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "1191676489343717437": {
+          "assignedAt": 1771044500045,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "893065977229611080": {
+          "assignedAt": 1771044500433,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "1439624169309474927": {
+          "assignedAt": 1771063293022,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "285101698593325058": {
+          "assignedAt": 1771096652028,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1256604955251441771": {
+          "assignedAt": 1771123428833,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "877950211400548393": {
+          "assignedAt": 1771232614490,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        },
+        "966553894396243988": {
+          "assignedAt": 1771232869588,
+          "assignedBy": "1405570190535823505",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771319150162,
+      "deletedBy": "1148882775441690725"
+    },
+    "1452016683421274234": {
+      "roleId": "1452016683421274234",
+      "guildId": "1283078116188749888",
+      "ownerId": "923481182707023894",
+      "createdAt": 1769453264047,
+      "updatedAt": 1771409700433,
+      "createdBy": "636930315503534110",
+      "name": "2.1",
+      "color": "#404041",
+      "icon": "https://cdn.discordapp.com/role-icons/1452016683421274234/d3b1b0c7149d33e4475bb2d5340a4a8a.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1309945785756024855": {
+          "assignedAt": 1769725383078,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771409701026,
+      "deletedBy": "1148882775441690725"
+    },
+    "1472950934697934973": {
+      "roleId": "1472950934697934973",
+      "guildId": "1283078116188749888",
+      "ownerId": "309372358655868928",
+      "createdAt": 1771249269798,
+      "updatedAt": 1771249313128,
+      "createdBy": "309372358655868928",
+      "name": "Lost from light",
+      "color": "#000000",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "309372358655868928": {
+          "assignedAt": 1771249269798,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        },
+        "1315212043774726154": {
+          "assignedAt": 1771249313128,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459534843,
+      "deletedBy": "1148882775441690725"
+    },
+    "1472635133839278163": {
+      "roleId": "1472635133839278163",
+      "guildId": "1283078116188749888",
+      "ownerId": "1079090083547860993",
+      "createdAt": 1771173978881,
+      "updatedAt": 1771420031746,
+      "createdBy": "1128154439556026428",
+      "name": "elden ring",
+      "color": "#000000",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "1079090083547860993": {
+          "assignedAt": 1771173978881,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459537003,
+      "deletedBy": "1148882775441690725"
+    },
+    "1470865247949684890": {
+      "roleId": "1470865247949684890",
+      "guildId": "1283078116188749888",
+      "ownerId": "993267977824763974",
+      "createdAt": 1770752004475,
+      "updatedAt": 1771408907767,
+      "createdBy": "309372358655868928",
+      "name": "Tfa7 Friends",
+      "color": "#95a5a6",
+      "icon": "https://cdn.discordapp.com/role-icons/1470865247949684890/be2107decab72268e6f23fde365f7888.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1065661182389784758": {
+          "assignedAt": 1770757966974,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "692793700497096714": {
+          "assignedAt": 1771071766950,
+          "assignedBy": "993267977824763974",
+          "assignedByIsBot": false
+        },
+        "997452348890828840": {
+          "assignedAt": 1771071767320,
+          "assignedBy": "993267977824763974",
+          "assignedByIsBot": false
+        },
+        "993267977824763974": {
+          "assignedAt": 1771355928053,
+          "assignedBy": "993267977824763974",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459537528,
+      "deletedBy": "1148882775441690725"
+    },
+    "1469554521343525007": {
+      "roleId": "1469554521343525007",
+      "guildId": "1283078116188749888",
+      "ownerId": "1069983945778790430",
+      "createdAt": 1770439502006,
+      "updatedAt": 1770439535765,
+      "createdBy": "1128154439556026428",
+      "name": "Ravellore",
+      "color": "#000000",
+      "icon": null,
+      "maxMembers": 50,
+      "memberMeta": {
+        "1069983945778790430": {
+          "assignedAt": 1770439502006,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459537986,
+      "deletedBy": "1148882775441690725"
+    },
+    "1469061664845594767": {
+      "roleId": "1469061664845594767",
+      "guildId": "1283078116188749888",
+      "ownerId": "1149960004401643550",
+      "createdAt": 1770321996842,
+      "updatedAt": 1770322551093,
+      "createdBy": "1128154439556026428",
+      "name": "مولاتكم نوني",
+      "color": "#000000",
+      "icon": "https://cdn.discordapp.com/role-icons/1469061664845594767/bd18e25d7691bab7b6e9f404527e735f.webp",
+      "maxMembers": 50,
+      "memberMeta": {
+        "1149960004401643550": {
+          "assignedAt": 1770321996842,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459538617,
+      "deletedBy": "1148882775441690725"
+    },
+    "1468669115777417354": {
+      "roleId": "1468669115777417354",
+      "guildId": "1283078116188749888",
+      "ownerId": "1093942728280256574",
+      "createdAt": 1770228406856,
+      "updatedAt": 1771102324726,
+      "createdBy": "309372358655868928",
+      "name": "red eye",
+      "color": "#ffffff",
+      "icon": "https://cdn.discordapp.com/role-icons/1468669115777417354/6e3d240a13423cee9f332aae9cebcafa.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1093942728280256574": {
+          "assignedAt": 1770228406856,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459539069,
+      "deletedBy": "1148882775441690725"
+    },
+    "1468664224401199297": {
+      "roleId": "1468664224401199297",
+      "guildId": "1283078116188749888",
+      "ownerId": "1009386974852952147",
+      "createdAt": 1770227240063,
+      "updatedAt": 1770318656782,
+      "createdBy": "1275590615211573414",
+      "name": "B",
+      "color": "#000000",
+      "icon": "https://cdn.discordapp.com/role-icons/1468664224401199297/bdbccba9ace2ff463694196b93ddf918.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1009386974852952147": {
+          "assignedAt": 1770227240063,
+          "assignedBy": "1275590615211573414",
+          "assignedByIsBot": false
+        },
+        "1275590615211573414": {
+          "assignedAt": 1770307682184,
+          "assignedBy": "1275590615211573414",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459539547,
+      "deletedBy": "1148882775441690725"
+    },
+    "1468592519268012045": {
+      "roleId": "1468592519268012045",
+      "guildId": "1283078116188749888",
+      "ownerId": "1129110138196865146",
+      "createdAt": 1770210144510,
+      "updatedAt": 1770933594380,
+      "createdBy": "309372358655868928",
+      "name": "Salvatore Brothers",
+      "color": "#ffffff",
+      "icon": "https://cdn.discordapp.com/role-icons/1468592519268012045/42cf5620391ac7024b42567d0adccbdd.webp",
+      "maxMembers": null,
+      "memberMeta": {},
+      "deletedAt": 1771459539935,
+      "deletedBy": "1148882775441690725"
+    },
+    "1468241043714474114": {
+      "roleId": "1468241043714474114",
+      "guildId": "1283078116188749888",
+      "ownerId": "342337009500684290",
+      "createdAt": 1770126345262,
+      "updatedAt": 1770256655510,
+      "createdBy": "1185096992372822056",
+      "name": "Joestar",
+      "color": "#9b59b6",
+      "icon": "https://cdn.discordapp.com/role-icons/1468241043714474114/5b9133e313ff9a7b3f9a83a70fde5162.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "342337009500684290": {
+          "assignedAt": 1770126345262,
+          "assignedBy": "1185096992372822056",
+          "assignedByIsBot": false
+        },
+        "1368238185707995137": {
+          "assignedAt": 1770143705952,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "962433005807362159": {
+          "assignedAt": 1770143732595,
+          "assignedBy": "342337009500684290",
+          "assignedByIsBot": false
+        },
+        "304581932149374977": {
+          "assignedAt": 1770256655510,
+          "assignedBy": "342337009500684290",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459544746,
+      "deletedBy": "1148882775441690725"
+    },
+    "1468078603727016168": {
+      "roleId": "1468078603727016168",
+      "guildId": "1283078116188749888",
+      "ownerId": "267696339414941696",
+      "createdAt": 1770087617737,
+      "updatedAt": 1770088168461,
+      "createdBy": "636930315503534110",
+      "name": "March",
+      "color": "#000000",
+      "icon": "https://cdn.discordapp.com/role-icons/1468078603727016168/769d0f88e40e421e5b08274aa46b316e.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "267696339414941696": {
+          "assignedAt": 1770087617737,
+          "assignedBy": "636930315503534110",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459545315,
+      "deletedBy": "1148882775441690725"
+    },
+    "1467134563070378066": {
+      "roleId": "1467134563070378066",
+      "guildId": "1283078116188749888",
+      "ownerId": "858017596124168223",
+      "createdAt": 1769862540291,
+      "updatedAt": 1771071283243,
+      "createdBy": "309372358655868928",
+      "name": "2mi",
+      "color": "#ffffff",
+      "icon": "https://cdn.discordapp.com/role-icons/1467134563070378066/ee883eb76ed432337f2f39d7d4e7d19d.webp",
+      "maxMembers": 100,
+      "memberMeta": {
+        "858017596124168223": {
+          "assignedAt": 1769862540291,
+          "assignedBy": "309372358655868928",
+          "assignedByIsBot": false
+        },
+        "1389843864902176801": {
+          "assignedAt": 1770985856448,
+          "assignedBy": "858017596124168223",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459545923,
+      "deletedBy": "1148882775441690725"
+    },
+    "1465418759262048465": {
+      "roleId": "1465418759262048465",
+      "guildId": "1283078116188749888",
+      "ownerId": "1275590615211573414",
+      "createdAt": 1769453461233,
+      "updatedAt": 1771087140080,
+      "createdBy": "1350854938250707036",
+      "name": "يوسف",
+      "color": "#000000",
+      "icon": "https://cdn.discordapp.com/role-icons/1465418759262048465/25a76d8c644250644e93d9ffe476fcec.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1009386974852952147": {
+          "assignedAt": 1769482495195,
+          "assignedBy": "1275590615211573414",
+          "assignedByIsBot": false
+        },
+        "739812383287017602": {
+          "assignedAt": 1769482505266,
+          "assignedBy": "1275590615211573414",
+          "assignedByIsBot": false
+        },
+        "1275590615211573414": {
+          "assignedAt": 1770321185849,
+          "assignedBy": "1275590615211573414",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459546511,
+      "deletedBy": "1148882775441690725"
+    },
+    "1466529775819686174": {
+      "roleId": "1466529775819686174",
+      "guildId": "1283078116188749888",
+      "ownerId": "902528627369988126",
+      "createdAt": 1769718347424,
+      "updatedAt": 1771459548011,
+      "createdBy": "636930315503534110",
+      "name": "Mayod",
+      "color": "#000000",
+      "icon": "https://cdn.discordapp.com/role-icons/1466529775819686174/51d932899612b5453672c1eab1e31ca6.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "902528627369988126": {
+          "assignedAt": 1769718347424,
+          "assignedBy": "636930315503534110",
+          "assignedByIsBot": false
+        },
+        "1027613080047333406": {
+          "assignedAt": 1769722587160,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459548601,
+      "deletedBy": "1148882775441690725"
+    },
+    "1466087735184851109": {
+      "roleId": "1466087735184851109",
+      "guildId": "1283078116188749888",
+      "ownerId": "1257560892271362130",
+      "createdAt": 1769612958503,
+      "updatedAt": 1770114320539,
+      "createdBy": "1128154439556026428",
+      "name": "miss you more than words",
+      "color": "#ffffff",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "1257560892271362130": {
+          "assignedAt": 1769612958504,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1185760671716102187": {
+          "assignedAt": 1769613126042,
+          "assignedBy": "1257560892271362130",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459549237,
+      "deletedBy": "1148882775441690725"
+    },
+    "1465985631099420737": {
+      "roleId": "1465985631099420737",
+      "guildId": "1283078116188749888",
+      "ownerId": "1185096992372822056",
+      "createdAt": 1769588615522,
+      "updatedAt": 1770840700520,
+      "createdBy": "1185096992372822056",
+      "name": "Two hearts suspended together",
+      "color": "#ffffff",
+      "icon": "https://cdn.discordapp.com/role-icons/1465985631099420737/cf5190659e2ca9ee6c56c5fe7d996c9d.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1350854938250707036": {
+          "assignedAt": 1769596168734,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1185096992372822056": {
+          "assignedAt": 1769626846789,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459549639,
+      "deletedBy": "1148882775441690725"
+    },
+    "1465461593994432715": {
+      "roleId": "1465461593994432715",
+      "guildId": "1283078116188749888",
+      "ownerId": "1051229246720331837",
+      "createdAt": 1769463673467,
+      "updatedAt": 1770773929572,
+      "createdBy": "636930315503534110",
+      "name": "618",
+      "color": "#000000",
+      "icon": "https://cdn.discordapp.com/role-icons/1465461593994432715/a9e01ccf74d560213eec415c94d1addc.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1051229246720331837": {
+          "assignedAt": 1769463673467,
+          "assignedBy": "636930315503534110",
+          "assignedByIsBot": false
+        },
+        "1247732351883280475": {
+          "assignedAt": 1769556278520,
+          "assignedBy": "1051229246720331837",
+          "assignedByIsBot": false
+        },
+        "1151890817246568449": {
+          "assignedAt": 1769716161431,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459550080,
+      "deletedBy": "1148882775441690725"
+    },
+    "1465415877628268647": {
+      "roleId": "1465415877628268647",
+      "guildId": "1283078116188749888",
+      "ownerId": "1350854938250707036",
+      "createdAt": 1769452773642,
+      "updatedAt": 1769706365780,
+      "createdBy": "636930315503534110",
+      "name": "Love always wins",
+      "color": "#FFC0CB",
+      "icon": "https://cdn.discordapp.com/role-icons/1465415877628268647/13a17af36f28161d9f0d4d7c8b5ec4cc.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1350854938250707036": {
+          "assignedAt": 1769452773750,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1185096992372822056": {
+          "assignedAt": 1769706365780,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459550645,
+      "deletedBy": "1148882775441690725"
+    },
+    "1465413121538654440": {
+      "roleId": "1465413121538654440",
+      "guildId": "1283078116188749888",
+      "ownerId": "1422961374635495481",
+      "createdAt": 1769452115324,
+      "updatedAt": 1771178243119,
+      "createdBy": "1128154439556026428",
+      "name": "Lost",
+      "color": "#FF4500",
+      "icon": "https://cdn.discordapp.com/role-icons/1465413121538654440/fef7bd11909a7e9a24b12f388273205d.webp",
+      "maxMembers": null,
+      "memberMeta": {},
+      "deletedAt": 1771459551187,
+      "deletedBy": "1148882775441690725"
+    },
+    "1465411172416094208": {
+      "roleId": "1465411172416094208",
+      "guildId": "1283078116188749888",
+      "ownerId": "883452479331790889",
+      "createdAt": 1769451651640,
+      "updatedAt": 1769511971357,
+      "createdBy": "883452479331790889",
+      "name": "Solide unite",
+      "color": "#000000",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {},
+      "deletedAt": 1771459551888,
+      "deletedBy": "1148882775441690725"
+    },
+    "1465411159828992100": {
+      "roleId": "1465411159828992100",
+      "guildId": "1283078116188749888",
+      "ownerId": "883452479331790889",
+      "createdAt": 1769451648386,
+      "updatedAt": 1771059334542,
+      "createdBy": "883452479331790889",
+      "name": "Solid unit",
+      "color": "#000000",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "883452479331790889": {
+          "assignedAt": 1769512012009,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "811587477881880586": {
+          "assignedAt": 1769727413307,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "823559382830415872": {
+          "assignedAt": 1771059334542,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459552534,
+      "deletedBy": "1148882775441690725"
+    },
+    "1465409592996528335": {
+      "roleId": "1465409592996528335",
+      "guildId": "1283078116188749888",
+      "ownerId": "279655640195006464",
+      "createdAt": 1769451275804,
+      "updatedAt": 1770153435940,
+      "createdBy": "279655640195006464",
+      "name": "Zhaoyun",
+      "color": "#000000",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "279655640195006464": {
+          "assignedAt": 1769451275804,
+          "assignedBy": "279655640195006464",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771459557274,
+      "deletedBy": "1148882775441690725"
+    },
+    "1460081962122481826": {
+      "roleId": "1460081962122481826",
+      "guildId": "1283078116188749888",
+      "ownerId": "1389843864902176801",
+      "createdAt": 1769454036185,
+      "updatedAt": 1771555589824,
+      "createdBy": "1128154439556026428",
+      "name": "till death do us part",
+      "color": "#ffffff",
+      "icon": "https://cdn.discordapp.com/role-icons/1460081962122481826/ee883eb76ed432337f2f39d7d4e7d19d.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "847970608876486656": {
+          "assignedAt": 1769509813319,
+          "assignedBy": "1389843864902176801",
+          "assignedByIsBot": false
+        },
+        "1366873159042732103": {
+          "assignedAt": 1769509814321,
+          "assignedBy": "1389843864902176801",
+          "assignedByIsBot": false
+        },
+        "858017596124168223": {
+          "assignedAt": 1769862140263,
+          "assignedBy": "1389843864902176801",
+          "assignedByIsBot": false
+        },
+        "1228833600779325581": {
+          "assignedAt": 1770758770638,
+          "assignedBy": "1389843864902176801",
+          "assignedByIsBot": false
+        },
+        "1439624169309474927": {
+          "assignedAt": 1770848845809,
+          "assignedBy": "1389843864902176801",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771555590261,
+      "deletedBy": "1148882775441690725"
+    },
+    "1456956584168132670": {
+      "roleId": "1456956584168132670",
+      "guildId": "1283078116188749888",
+      "ownerId": "1309945785756024855",
+      "createdAt": 1769724823747,
+      "updatedAt": 1771616111983,
+      "createdBy": "1027613080047333406",
+      "name": "Nona's friends",
+      "color": "#b38481",
+      "icon": "https://cdn.discordapp.com/role-icons/1456956584168132670/3f7a573a5bf49788102230c806ccf9ba.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1428498940462104656": {
+          "assignedAt": 1770037605399,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1283771749917397024": {
+          "assignedAt": 1770224540690,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771616112536,
+      "deletedBy": "1148882775441690725"
+    },
+    "1474847113790754988": {
+      "roleId": "1474847113790754988",
+      "guildId": "1283078116188749888",
+      "ownerId": "1289911973533712475",
+      "createdAt": 1771701355270,
+      "updatedAt": 1771724055171,
+      "createdBy": "636930315503534110",
+      "name": "Asa & Denji",
+      "color": "#000000",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {},
+      "deletedAt": 1771724055541,
+      "deletedBy": "1148882775441690725"
+    },
+    "1475610056555892911": {
+      "roleId": "1475610056555892911",
+      "guildId": "1283078116188749888",
+      "ownerId": "1190080464350875741",
+      "createdAt": 1771883256880,
+      "updatedAt": 1771959318286,
+      "createdBy": "636930315503534110",
+      "name": "Bunny",
+      "color": "#ffffff",
+      "icon": "https://cdn.discordapp.com/role-icons/1475610056555892911/cb6550491c597dd8a2dd747dc374e37f.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "951432461169094666": {
+          "assignedAt": 1771884007313,
+          "assignedBy": "1190080464350875741",
+          "assignedByIsBot": false
+        },
+        "1185096992372822056": {
+          "assignedAt": 1771884019581,
+          "assignedBy": "1190080464350875741",
+          "assignedByIsBot": false
+        },
+        "1474530713096290385": {
+          "assignedAt": 1771884176331,
+          "assignedBy": "1190080464350875741",
+          "assignedByIsBot": false
+        },
+        "1334286524174303244": {
+          "assignedAt": 1771887650934,
+          "assignedBy": "1190080464350875741",
+          "assignedByIsBot": false
+        },
+        "1089500745855946775": {
+          "assignedAt": 1771928545874,
+          "assignedBy": "1190080464350875741",
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771959318927,
+      "deletedBy": "1148882775441690725"
+    },
+    "1450837018643923115": {
+      "roleId": "1450837018643923115",
+      "guildId": "1283078116188749888",
+      "ownerId": "1128154439556026428",
+      "createdAt": 1769450664232,
+      "updatedAt": 1771993416228,
+      "createdBy": "1128154439556026428",
+      "name": "Softy",
+      "color": "#c8c8c8",
+      "icon": "https://cdn.discordapp.com/role-icons/1450837018643923115/1e44fdf111328935bcea179a760ffcf9.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1009386974852952147": {
+          "assignedAt": 1769450664232,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "604465054800412713": {
+          "assignedAt": 1769450664232,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1350203540437471342": {
+          "assignedAt": 1769450664232,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "936274009983700992": {
+          "assignedAt": 1769450664232,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1418265859457155174": {
+          "assignedAt": 1769450664232,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1334286524174303244": {
+          "assignedAt": 1769450664232,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1256606052837752854": {
+          "assignedAt": 1769450664232,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "858017596124168223": {
+          "assignedAt": 1769450664232,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1184995180814794863": {
+          "assignedAt": 1769450664232,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "764429995183439882": {
+          "assignedAt": 1769451948338,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1439624169309474927": {
+          "assignedAt": 1770077581385,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1149960004401643550": {
+          "assignedAt": 1770321403703,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "848241603712778250": {
+          "assignedAt": 1770330564528,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1314705633466912840": {
+          "assignedAt": 1771074530257,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1256604955251441771": {
+          "assignedAt": 1771453861515,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1771993416646,
+      "deletedBy": "1148882775441690725"
+    },
+    "1459262846855545156": {
+      "roleId": "1459262846855545156",
+      "guildId": "1283078116188749888",
+      "ownerId": "285101698593325058",
+      "createdAt": 1769456768255,
+      "updatedAt": 1771453818961,
+      "createdBy": "1128154439556026428",
+      "name": "Radiant",
+      "color": "#965f7f",
+      "icon": "https://cdn.discordapp.com/role-icons/1459262846855545156/b3879385d9ed6645d75d2ac40e49e996.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "285101698593325058": {
+          "assignedAt": 1769527548215,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1332967422801477722": {
+          "assignedAt": 1769456768255,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "1350203540437471342": {
+          "assignedAt": 1769456768255,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "962433005807362159": {
+          "assignedAt": 1769456768255,
+          "assignedBy": "1128154439556026428",
+          "assignedByIsBot": false
+        },
+        "604465054800412713": {
+          "assignedAt": 1769456844365,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1073708482659880992": {
+          "assignedAt": 1769716513405,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1079090083547860993": {
+          "assignedAt": 1769853389318,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1439624169309474927": {
+          "assignedAt": 1770077588561,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "848241603712778250": {
+          "assignedAt": 1770330563217,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1002831032556474438": {
+          "assignedAt": 1770834385890,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "456556751014330379": {
+          "assignedAt": 1771095733176,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1219496787652378734": {
+          "assignedAt": 1771095885983,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1220827560678789191": {
+          "assignedAt": 1771095906901,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1256604955251441771": {
+          "assignedAt": 1771453818961,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1772059006596,
+      "deletedBy": "1148882775441690725"
+    },
+    "1474099328619516057": {
+      "roleId": "1474099328619516057",
+      "guildId": "1283078116188749888",
+      "ownerId": "964975672361631785",
+      "createdAt": 1771523070827,
+      "updatedAt": 1772068338067,
+      "createdBy": "1434174310075072616",
+      "name": "bloodborne",
+      "color": "#D4C2A8",
+      "icon": "https://cdn.discordapp.com/role-icons/1474099328619516057/c2cfc106c2461ff6280b0ffd316547de.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "1357733332749648107": {
+          "assignedAt": 1771523214875,
+          "assignedBy": "964975672361631785",
+          "assignedByIsBot": false
+        },
+        "893405737177460736": {
+          "assignedAt": 1771523259292,
+          "assignedBy": "964975672361631785",
+          "assignedByIsBot": false
+        },
+        "1035521804720156702": {
+          "assignedAt": 1771725846519,
+          "assignedBy": "964975672361631785",
+          "assignedByIsBot": false
+        },
+        "950998042369200199": {
+          "assignedAt": 1772037622150,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1772068338416,
+      "deletedBy": "1148882775441690725"
+    },
+    "1476661408761516180": {
+      "roleId": "1476661408761516180",
+      "guildId": "1283078116188749888",
+      "ownerId": "1171950193286074388",
+      "createdAt": 1772133916769,
+      "updatedAt": 1772152293274,
+      "createdBy": "636930315503534110",
+      "name": "Midnight rain",
+      "color": "#ffffff",
+      "icon": "https://cdn.discordapp.com/role-icons/1476661408761516180/13dbc7a41cc044129738dc445e88bb3c.webp",
+      "maxMembers": null,
+      "memberMeta": {
+        "996721595160735754": {
+          "assignedAt": 1772134296175,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "743675292870246502": {
+          "assignedAt": 1772134309953,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1287934551015952462": {
+          "assignedAt": 1772134345440,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1463780661419704455": {
+          "assignedAt": 1772134380398,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1306471421639135254": {
+          "assignedAt": 1772134398690,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1372984860670693436": {
+          "assignedAt": 1772147539334,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1772152293699,
+      "deletedBy": "1148882775441690725"
+    },
+    "1474219541029585016": {
+      "roleId": "1474219541029585016",
+      "guildId": "1283078116188749888",
+      "ownerId": "636930315503534110",
+      "createdAt": 1771551730073,
+      "updatedAt": 1772171791216,
+      "createdBy": "636930315503534110",
+      "name": "111",
+      "color": "#000000",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {},
+      "deletedAt": 1772171792873,
+      "deletedBy": "1148882775441690725"
+    },
+    "1476286099243663370": {
+      "roleId": "1476286099243663370",
+      "guildId": "1283078116188749888",
+      "ownerId": "1319168553156476940",
+      "createdAt": 1770844081011,
+      "updatedAt": 1772265746457,
+      "createdBy": "1275590615211573414",
+      "name": "Ooh sienna",
+      "color": "#ffc6de",
+      "icon": null,
+      "maxMembers": null,
+      "memberMeta": {
+        "1000189862529466448": {
+          "assignedAt": 1772044534852,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1446903723363405834": {
+          "assignedAt": 1772044436201,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1154785927768580156": {
+          "assignedAt": 1772044439005,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "991144704718671933": {
+          "assignedAt": 1772044439461,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1437798668349472769": {
+          "assignedAt": 1772044439919,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1274675476459294844": {
+          "assignedAt": 1772044440389,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "490489248378650645": {
+          "assignedAt": 1772044441004,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "326831881012379648": {
+          "assignedAt": 1772044441367,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1095094276410572883": {
+          "assignedAt": 1772044535405,
+          "assignedBy": "1434174310075072616",
+          "assignedByIsBot": false
+        },
+        "1428498940462104656": {
+          "assignedAt": 1772215830031,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        },
+        "1434174310075072616": {
+          "assignedAt": 1772215857854,
+          "assignedBy": null,
+          "assignedByIsBot": false
+        }
+      },
+      "deletedAt": 1772315289871,
+      "deletedBy": "1148882775441690725"
+    }
+  }
+}

@@ -1,0 +1,2480 @@
+{
+  "1329394551504240671_1446953932026023958_1767902661731": {
+    "id": "1329394551504240671_1446953932026023958_1767902661731",
+    "userId": "1329394551504240671",
+    "roleId": "1446953932026023958",
+    "guildId": "1283078116188749888",
+    "reason": "كيفي",
+    "byUserId": "636930315503534110",
+    "startTime": 1767902661732,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 2370049,
+      "totalMessages": 0,
+      "totalReactions": 0,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1401981621581905987_1446955800596840511_1767935922156": {
+    "id": "1401981621581905987_1446955800596840511_1767935922156",
+    "userId": "1401981621581905987",
+    "roleId": "1446955800596840511",
+    "guildId": "1283078116188749888",
+    "reason": "كانت رول تجريبي",
+    "byUserId": "636930315503534110",
+    "startTime": 1767935922156,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 30822072,
+      "totalMessages": 440,
+      "totalReactions": 45,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1401981621581905987_1446952742169083995_1767935947842": {
+    "id": "1401981621581905987_1446952742169083995_1767935947842",
+    "userId": "1401981621581905987",
+    "roleId": "1446952742169083995",
+    "guildId": "1283078116188749888",
+    "reason": "اول رول اداري",
+    "byUserId": "636930315503534110",
+    "startTime": 1767935947842,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 30822072,
+      "totalMessages": 440,
+      "totalReactions": 45,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1289911973533712475_1446955784171684067_1767936473786": {
+    "id": "1289911973533712475_1446955784171684067_1767936473786",
+    "userId": "1289911973533712475",
+    "roleId": "1446955784171684067",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767936473786,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 718516119,
+      "totalMessages": 3769,
+      "totalReactions": 500,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1405570190535823505_1446955789272219919_1767936600350": {
+    "id": "1405570190535823505_1446955789272219919_1767936600350",
+    "userId": "1405570190535823505",
+    "roleId": "1446955789272219919",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767936600350,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 659827997,
+      "totalMessages": 3012,
+      "totalReactions": 28,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1343157782236500003_1446955466730246215_1767936779212": {
+    "id": "1343157782236500003_1446955466730246215_1767936779212",
+    "userId": "1343157782236500003",
+    "roleId": "1446955466730246215",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767936779212,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 139628442,
+      "totalMessages": 1401,
+      "totalReactions": 3,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1434174310075072616_1446952667413872650_1767936902869": {
+    "id": "1434174310075072616_1446952667413872650_1767936902869",
+    "userId": "1434174310075072616",
+    "roleId": "1446952667413872650",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767936902869,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 661009495,
+      "totalMessages": 219,
+      "totalReactions": 20,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1434174310075072616_1446955075384770640_1767936926137": {
+    "id": "1434174310075072616_1446955075384770640_1767936926137",
+    "userId": "1434174310075072616",
+    "roleId": "1446955075384770640",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767936926137,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 661009495,
+      "totalMessages": 219,
+      "totalReactions": 20,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1000189862529466448_1446955460904353812_1767937014314": {
+    "id": "1000189862529466448_1446955460904353812_1767937014314",
+    "userId": "1000189862529466448",
+    "roleId": "1446955460904353812",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767937014314,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 57298790,
+      "totalMessages": 1370,
+      "totalReactions": 34,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1331988748472291483_1446955069353230496_1767937168777": {
+    "id": "1331988748472291483_1446955069353230496_1767937168777",
+    "userId": "1331988748472291483",
+    "roleId": "1446955069353230496",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767937168778,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 5235020,
+      "totalMessages": 1324,
+      "totalReactions": 5,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1238153083838795876_1446952650020094035_1767937227222": {
+    "id": "1238153083838795876_1446952650020094035_1767937227222",
+    "userId": "1238153083838795876",
+    "roleId": "1446952650020094035",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767937227222,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 672086177,
+      "totalMessages": 2231,
+      "totalReactions": 241,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1238153083838795876_1446953283804729385_1767937246555": {
+    "id": "1238153083838795876_1446953283804729385_1767937246555",
+    "userId": "1238153083838795876",
+    "roleId": "1446953283804729385",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767937246555,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 672086177,
+      "totalMessages": 2231,
+      "totalReactions": 241,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1327070916659908709_1446952650020094035_1767937329863": {
+    "id": "1327070916659908709_1446952650020094035_1767937329863",
+    "userId": "1327070916659908709",
+    "roleId": "1446952650020094035",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767937329863,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 643177797,
+      "totalMessages": 237,
+      "totalReactions": 17,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1327070916659908709_1446953323470262331_1767937354865": {
+    "id": "1327070916659908709_1446953323470262331_1767937354865",
+    "userId": "1327070916659908709",
+    "roleId": "1446953323470262331",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767937354865,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 643177797,
+      "totalMessages": 237,
+      "totalReactions": 17,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1258792362801500267_1446954512026959954_1767937775001": {
+    "id": "1258792362801500267_1446954512026959954_1767937775001",
+    "userId": "1258792362801500267",
+    "roleId": "1446954512026959954",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767937775001,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 138346727,
+      "totalMessages": 1785,
+      "totalReactions": 137,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "636930315503534110_1446952697503809576_1767938177370": {
+    "id": "636930315503534110_1446952697503809576_1767938177370",
+    "userId": "636930315503534110",
+    "roleId": "1446952697503809576",
+    "guildId": "1283078116188749888",
+    "reason": "Test",
+    "byUserId": "636930315503534110",
+    "startTime": 1767938177370,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 59258005,
+      "totalMessages": 2756,
+      "totalReactions": 33,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1422961374635495481_1446955472161734686_1767956025220": {
+    "id": "1422961374635495481_1446955472161734686_1767956025220",
+    "userId": "1422961374635495481",
+    "roleId": "1446955472161734686",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767956025220,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 30326780,
+      "totalMessages": 2926,
+      "totalReactions": 45,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1422961374635495481_1446955472161734686_1767956026623": {
+    "id": "1422961374635495481_1446955472161734686_1767956026623",
+    "userId": "1422961374635495481",
+    "roleId": "1446955472161734686",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767956026623,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 30326780,
+      "totalMessages": 2926,
+      "totalReactions": 45,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1411165166384578706_1446953335759572992_1768262248768": {
+    "id": "1411165166384578706_1446953335759572992_1768262248768",
+    "userId": "1411165166384578706",
+    "roleId": "1446953335759572992",
+    "guildId": "1283078116188749888",
+    "reason": "ترقية ظاهريتين ( استثنائية ) \nوالسبب التفاعل المستمر",
+    "byUserId": "279655640195006464",
+    "startTime": 1768262248770,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 176416977,
+      "totalMessages": 1474,
+      "totalReactions": 41,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1170437484161798296_1446953283804729385_1768262345176": {
+    "id": "1170437484161798296_1446953283804729385_1768262345176",
+    "userId": "1170437484161798296",
+    "roleId": "1446953283804729385",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه ( تفاعله جميل ) لكن ركز عالصوت شوي",
+    "byUserId": "279655640195006464",
+    "startTime": 1768262345176,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 94012113,
+      "totalMessages": 1400,
+      "totalReactions": 51,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1275442996204146826_1446953335759572992_1768262544075": {
+    "id": "1275442996204146826_1446953335759572992_1768262544075",
+    "userId": "1275442996204146826",
+    "roleId": "1446953335759572992",
+    "guildId": "1283078116188749888",
+    "reason": "ترقية استثنائية ( امساك المسؤولية  بشكل رهيب) وتفاعلك جميل لكن ركزي على الصوت",
+    "byUserId": "279655640195006464",
+    "startTime": 1768262544075,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 80797439,
+      "totalMessages": 250,
+      "totalReactions": 4,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "923481182707023894_1446953283804729385_1768262815540": {
+    "id": "923481182707023894_1446953283804729385_1768262815540",
+    "userId": "923481182707023894",
+    "roleId": "1446953283804729385",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه + شد حيلك بالتفاعل تراك مرتخي شويتين وركز على الصوت",
+    "byUserId": "279655640195006464",
+    "startTime": 1768262815540,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 28989016,
+      "totalMessages": 38,
+      "totalReactions": 0,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "604465054800412713_1446953932026023958_1768263784131": {
+    "id": "604465054800412713_1446953932026023958_1768263784131",
+    "userId": "604465054800412713",
+    "roleId": "1446953932026023958",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه لكن ركزو على التفاعل الصوتي",
+    "byUserId": "279655640195006464",
+    "startTime": 1768263784131,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 132101992,
+      "totalMessages": 234,
+      "totalReactions": 2,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "326831881012379648_1446953932026023958_1768263785385": {
+    "id": "326831881012379648_1446953932026023958_1768263785385",
+    "userId": "326831881012379648",
+    "roleId": "1446953932026023958",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه لكن ركزو على التفاعل الصوتي",
+    "byUserId": "279655640195006464",
+    "startTime": 1768263785385,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 12318840,
+      "totalMessages": 416,
+      "totalReactions": 1,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "848241603712778250_1446953932026023958_1768263787488": {
+    "id": "848241603712778250_1446953932026023958_1768263787488",
+    "userId": "848241603712778250",
+    "roleId": "1446953932026023958",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه لكن ركزو على التفاعل الصوتي",
+    "byUserId": "279655640195006464",
+    "startTime": 1768263787488,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 73663418,
+      "totalMessages": 1336,
+      "totalReactions": 2,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1439624169309474927_1446953932026023958_1768263788713": {
+    "id": "1439624169309474927_1446953932026023958_1768263788713",
+    "userId": "1439624169309474927",
+    "roleId": "1446953932026023958",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه لكن ركزو على التفاعل الصوتي",
+    "byUserId": "279655640195006464",
+    "startTime": 1768263788713,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 17431472,
+      "totalMessages": 1775,
+      "totalReactions": 26,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1381889294909702205_1446953932026023958_1768263789846": {
+    "id": "1381889294909702205_1446953932026023958_1768263789846",
+    "userId": "1381889294909702205",
+    "roleId": "1446953932026023958",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه لكن ركزو على التفاعل الصوتي",
+    "byUserId": "279655640195006464",
+    "startTime": 1768263789846,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 0,
+      "totalMessages": 69,
+      "totalReactions": 1,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "962433005807362159_1446953932026023958_1768263794621": {
+    "id": "962433005807362159_1446953932026023958_1768263794621",
+    "userId": "962433005807362159",
+    "roleId": "1446953932026023958",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه لكن ركزو على التفاعل الصوتي",
+    "byUserId": "279655640195006464",
+    "startTime": 1768263794621,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 128797860,
+      "totalMessages": 132,
+      "totalReactions": 4,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1413866169026478100_1446953932026023958_1768263795954": {
+    "id": "1413866169026478100_1446953932026023958_1768263795954",
+    "userId": "1413866169026478100",
+    "roleId": "1446953932026023958",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه لكن ركزو على التفاعل الصوتي",
+    "byUserId": "279655640195006464",
+    "startTime": 1768263795954,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 148644242,
+      "totalMessages": 776,
+      "totalReactions": 8,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "831566106253852693_1446953932026023958_1768263797125": {
+    "id": "831566106253852693_1446953932026023958_1768263797125",
+    "userId": "831566106253852693",
+    "roleId": "1446953932026023958",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه لكن ركزو على التفاعل الصوتي",
+    "byUserId": "279655640195006464",
+    "startTime": 1768263797125,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 37643671,
+      "totalMessages": 251,
+      "totalReactions": 0,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1128154439556026428_1446953932026023958_1768263798214": {
+    "id": "1128154439556026428_1446953932026023958_1768263798214",
+    "userId": "1128154439556026428",
+    "roleId": "1446953932026023958",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه لكن ركزو على التفاعل الصوتي",
+    "byUserId": "279655640195006464",
+    "startTime": 1768263798214,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 133209644,
+      "totalMessages": 2639,
+      "totalReactions": 10,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1411165166384578706_1446953335759572992_1768314364660": {
+    "promoteId": "1411165166384578706_1446953335759572992_1768262248768",
+    "id": "1411165166384578706_1446953335759572992_1768314364660",
+    "userId": "1411165166384578706",
+    "roleId": "1446953335759572992",
+    "guildId": "1283078116188749888",
+    "reason": "ترقية ظاهريتين ( استثنائية ) \nوالسبب التفاعل المستمر",
+    "byUserId": "279655640195006464",
+    "startTime": 1768262248770,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 176416977,
+      "totalMessages": 1474,
+      "totalReactions": 41,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1768314364660,
+    "originalLeftAt": 1768313637562
+  },
+  "1329394551504240671_1446952667413872650_1768549340247": {
+    "id": "1329394551504240671_1446952667413872650_1768549340247",
+    "userId": "1329394551504240671",
+    "roleId": "1446952667413872650",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "636930315503534110",
+    "startTime": 1768549340248,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 0,
+      "totalMessages": 0,
+      "totalReactions": 0,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1329394551504240671_1446953930537042090_1768549417053": {
+    "id": "1329394551504240671_1446953930537042090_1768549417053",
+    "userId": "1329394551504240671",
+    "roleId": "1446953930537042090",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "636930315503534110",
+    "startTime": 1768549417053,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 0,
+      "totalMessages": 0,
+      "totalReactions": 0,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1329394551504240671_1446955466730246215_1768549888052": {
+    "id": "1329394551504240671_1446955466730246215_1768549888052",
+    "userId": "1329394551504240671",
+    "roleId": "1446955466730246215",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "636930315503534110",
+    "startTime": 1768549888052,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 0,
+      "totalMessages": 0,
+      "totalReactions": 0,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1329394551504240671_1446955472161734686_1768550699608": {
+    "id": "1329394551504240671_1446955472161734686_1768550699608",
+    "userId": "1329394551504240671",
+    "roleId": "1446955472161734686",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1768550699608,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 266217,
+      "totalMessages": 0,
+      "totalReactions": 0,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1000189862529466448_1446955075384770640_1768550945435": {
+    "id": "1000189862529466448_1446955075384770640_1768550945435",
+    "userId": "1000189862529466448",
+    "roleId": "1446955075384770640",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1768550945435,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 86131278,
+      "totalMessages": 1922,
+      "totalReactions": 68,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1343157782236500003_1446955472161734686_1768550945969": {
+    "id": "1343157782236500003_1446955472161734686_1768550945969",
+    "userId": "1343157782236500003",
+    "roleId": "1446955472161734686",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1768550945969,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 85817718,
+      "totalMessages": 1382,
+      "totalReactions": 19,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1258792362801500267_1446954457584894052_1768550946687": {
+    "id": "1258792362801500267_1446954457584894052_1768550946687",
+    "userId": "1258792362801500267",
+    "roleId": "1446954457584894052",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1768550946688,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 217516201,
+      "totalMessages": 1875,
+      "totalReactions": 114,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1219359102870749247_1446955472161734686_1768550948750": {
+    "id": "1219359102870749247_1446955472161734686_1768550948750",
+    "userId": "1219359102870749247",
+    "roleId": "1446955472161734686",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1768550948750,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 145388502,
+      "totalMessages": 900,
+      "totalReactions": 8,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1434174310075072616_1446954512026959954_1768551088326": {
+    "id": "1434174310075072616_1446954512026959954_1768551088326",
+    "userId": "1434174310075072616",
+    "roleId": "1446954512026959954",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1768551088326,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 268348530,
+      "totalMessages": 6870,
+      "totalReactions": 19,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1249878909952987167_1446955074755629106_1768551088815": {
+    "id": "1249878909952987167_1446955074755629106_1768551088815",
+    "userId": "1249878909952987167",
+    "roleId": "1446955074755629106",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1768551088815,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 433046325,
+      "totalMessages": 4183,
+      "totalReactions": 71,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1239622242753581178_1446955466063220858_1768551089390": {
+    "id": "1239622242753581178_1446955466063220858_1768551089390",
+    "userId": "1239622242753581178",
+    "roleId": "1446955466063220858",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1768551089390,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 117874235,
+      "totalMessages": 7311,
+      "totalReactions": 193,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1089617681080127578_1446955463932645397_1768551090143": {
+    "id": "1089617681080127578_1446955463932645397_1768551090143",
+    "userId": "1089617681080127578",
+    "roleId": "1446955463932645397",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1768551090143,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 211296256,
+      "totalMessages": 5626,
+      "totalReactions": 21,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1422961374635495481_1446955075384770640_1768551336599": {
+    "id": "1422961374635495481_1446955075384770640_1768551336599",
+    "userId": "1422961374635495481",
+    "roleId": "1446955075384770640",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1768551336599,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 467003121,
+      "totalMessages": 11644,
+      "totalReactions": 86,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1405570190535823505_1446955073484755047_1768551337253": {
+    "id": "1405570190535823505_1446955073484755047_1768551337253",
+    "userId": "1405570190535823505",
+    "roleId": "1446955073484755047",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1768551337253,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 373652912,
+      "totalMessages": 8191,
+      "totalReactions": 27,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1289911973533712475_1446955073484755047_1768551337810": {
+    "id": "1289911973533712475_1446955073484755047_1768551337810",
+    "userId": "1289911973533712475",
+    "roleId": "1446955073484755047",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1768551337810,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 539858254,
+      "totalMessages": 9899,
+      "totalReactions": 196,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "883452479331790889_1446952518046187560_1768563115963": {
+    "id": "883452479331790889_1446952518046187560_1768563115963",
+    "userId": "883452479331790889",
+    "roleId": "1446952518046187560",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "636930315503534110",
+    "startTime": 1768563115963,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 2385842,
+      "totalMessages": 422,
+      "totalReactions": 7,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "688040980787625994_1446952518046187560_1768563389832": {
+    "id": "688040980787625994_1446952518046187560_1768563389832",
+    "userId": "688040980787625994",
+    "roleId": "1446952518046187560",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "279655640195006464",
+    "startTime": 1768563389832,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 17160381,
+      "totalMessages": 644,
+      "totalReactions": 9,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1128154439556026428_1446953932026023958_1768815816380": {
+    "promoteId": "1128154439556026428_1446953932026023958_1768263798214",
+    "id": "1128154439556026428_1446953932026023958_1768815816380",
+    "userId": "1128154439556026428",
+    "roleId": "1446953932026023958",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه لكن ركزو على التفاعل الصوتي",
+    "byUserId": "279655640195006464",
+    "startTime": 1768263798214,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 133209644,
+      "totalMessages": 2639,
+      "totalReactions": 10,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1768815816380,
+    "originalLeftAt": 1768815478277
+  },
+  "923481182707023894_1446953283804729385_1768815893923": {
+    "promoteId": "923481182707023894_1446953283804729385_1768262815540",
+    "id": "923481182707023894_1446953283804729385_1768815893923",
+    "userId": "923481182707023894",
+    "roleId": "1446953283804729385",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه + شد حيلك بالتفاعل تراك مرتخي شويتين وركز على الصوت",
+    "byUserId": "279655640195006464",
+    "startTime": 1768262815540,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 28989016,
+      "totalMessages": 38,
+      "totalReactions": 0,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1768815893923,
+    "originalLeftAt": 1768764695814
+  },
+  "1128154439556026428_1446953932026023958_1768816825055": {
+    "promoteId": "1128154439556026428_1446953932026023958_1768263798214",
+    "id": "1128154439556026428_1446953932026023958_1768816825055",
+    "userId": "1128154439556026428",
+    "roleId": "1446953932026023958",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه لكن ركزو على التفاعل الصوتي",
+    "byUserId": "279655640195006464",
+    "startTime": 1768263798214,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 133209644,
+      "totalMessages": 2639,
+      "totalReactions": 10,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1768816825056,
+    "originalLeftAt": 1768815941031
+  },
+  "1128154439556026428_1446953932026023958_1768816825056": {
+    "promoteId": "1128154439556026428_1446953932026023958_1768263798214",
+    "id": "1128154439556026428_1446953932026023958_1768816825056",
+    "userId": "1128154439556026428",
+    "roleId": "1446953932026023958",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه لكن ركزو على التفاعل الصوتي",
+    "byUserId": "279655640195006464",
+    "startTime": 1768263798214,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 133209644,
+      "totalMessages": 2639,
+      "totalReactions": 10,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1768816825056,
+    "originalLeftAt": 1768815941031
+  },
+  "1289911973533712475_1446955784171684067_1768849534295": {
+    "promoteId": "1289911973533712475_1446955784171684067_1767936473786",
+    "id": "1289911973533712475_1446955784171684067_1768849534295",
+    "userId": "1289911973533712475",
+    "roleId": "1446955784171684067",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767936473786,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 718516119,
+      "totalMessages": 3769,
+      "totalReactions": 500,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1768849534295,
+    "originalLeftAt": 1768849019585
+  },
+  "1289911973533712475_1446955073484755047_1768849534973": {
+    "promoteId": "1289911973533712475_1446955073484755047_1768551337810",
+    "id": "1289911973533712475_1446955073484755047_1768849534973",
+    "userId": "1289911973533712475",
+    "roleId": "1446955073484755047",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1768551337810,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 539858254,
+      "totalMessages": 9899,
+      "totalReactions": 196,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1768849534973,
+    "originalLeftAt": 1768849019585
+  },
+  "1289911973533712475_1446955784171684067_1768849858752": {
+    "promoteId": "1289911973533712475_1446955784171684067_1767936473786",
+    "id": "1289911973533712475_1446955784171684067_1768849858752",
+    "userId": "1289911973533712475",
+    "roleId": "1446955784171684067",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767936473786,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 718516119,
+      "totalMessages": 3769,
+      "totalReactions": 500,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1768849858752,
+    "originalLeftAt": 1768849713819
+  },
+  "1289911973533712475_1446955073484755047_1768849864465": {
+    "promoteId": "1289911973533712475_1446955073484755047_1768551337810",
+    "id": "1289911973533712475_1446955073484755047_1768849864465",
+    "userId": "1289911973533712475",
+    "roleId": "1446955073484755047",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1768551337810,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 539858254,
+      "totalMessages": 9899,
+      "totalReactions": 196,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1768849864465,
+    "originalLeftAt": 1768849713819
+  },
+  "1289911973533712475_1446955784171684067_1768849864465": {
+    "promoteId": "1289911973533712475_1446955784171684067_1767936473786",
+    "id": "1289911973533712475_1446955784171684067_1768849864465",
+    "userId": "1289911973533712475",
+    "roleId": "1446955784171684067",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767936473786,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 718516119,
+      "totalMessages": 3769,
+      "totalReactions": 500,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1768849864465,
+    "originalLeftAt": 1768849713819
+  },
+  "326831881012379648_1446953932026023958_1768914080562": {
+    "promoteId": "326831881012379648_1446953932026023958_1768263785385",
+    "id": "326831881012379648_1446953932026023958_1768914080562",
+    "userId": "326831881012379648",
+    "roleId": "1446953932026023958",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه لكن ركزو على التفاعل الصوتي",
+    "byUserId": "279655640195006464",
+    "startTime": 1768263785385,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 12318840,
+      "totalMessages": 416,
+      "totalReactions": 1,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1768914080562,
+    "originalLeftAt": 1768909659948
+  },
+  "326831881012379648_1446953932026023958_1768916214772": {
+    "promoteId": "326831881012379648_1446953932026023958_1768263785385",
+    "id": "326831881012379648_1446953932026023958_1768916214772",
+    "userId": "326831881012379648",
+    "roleId": "1446953932026023958",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه لكن ركزو على التفاعل الصوتي",
+    "byUserId": "279655640195006464",
+    "startTime": 1768263785385,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 12318840,
+      "totalMessages": 416,
+      "totalReactions": 1,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1768916214772,
+    "originalLeftAt": 1768914720759
+  },
+  "923481182707023894_1446953283804729385_1768990274687": {
+    "promoteId": "923481182707023894_1446953283804729385_1768262815540",
+    "id": "923481182707023894_1446953283804729385_1768990274687",
+    "userId": "923481182707023894",
+    "roleId": "1446953283804729385",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه + شد حيلك بالتفاعل تراك مرتخي شويتين وركز على الصوت",
+    "byUserId": "279655640195006464",
+    "startTime": 1768262815540,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 28989016,
+      "totalMessages": 38,
+      "totalReactions": 0,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1768990274687,
+    "originalLeftAt": 1768815963616
+  },
+  "923481182707023894_1446953283804729385_1768990275088": {
+    "promoteId": "923481182707023894_1446953283804729385_1768262815540",
+    "id": "923481182707023894_1446953283804729385_1768990275088",
+    "userId": "923481182707023894",
+    "roleId": "1446953283804729385",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه + شد حيلك بالتفاعل تراك مرتخي شويتين وركز على الصوت",
+    "byUserId": "279655640195006464",
+    "startTime": 1768262815540,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 28989016,
+      "totalMessages": 38,
+      "totalReactions": 0,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1768990275088,
+    "originalLeftAt": 1768815963616
+  },
+  "1405570190535823505_1446955789272219919_1769024661476": {
+    "promoteId": "1405570190535823505_1446955789272219919_1767936600350",
+    "id": "1405570190535823505_1446955789272219919_1769024661476",
+    "userId": "1405570190535823505",
+    "roleId": "1446955789272219919",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767936600350,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 659827997,
+      "totalMessages": 3012,
+      "totalReactions": 28,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1769024661476,
+    "originalLeftAt": 1769024651455
+  },
+  "1405570190535823505_1446955073484755047_1769024662319": {
+    "promoteId": "1405570190535823505_1446955073484755047_1768551337253",
+    "id": "1405570190535823505_1446955073484755047_1769024662319",
+    "userId": "1405570190535823505",
+    "roleId": "1446955073484755047",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1768551337253,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 373652912,
+      "totalMessages": 8191,
+      "totalReactions": 27,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1769024662319,
+    "originalLeftAt": 1769024651455
+  },
+  "1405570190535823505_1446955789272219919_1769024785002": {
+    "promoteId": "1405570190535823505_1446955789272219919_1767936600350",
+    "id": "1405570190535823505_1446955789272219919_1769024785002",
+    "userId": "1405570190535823505",
+    "roleId": "1446955789272219919",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767936600350,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 659827997,
+      "totalMessages": 3012,
+      "totalReactions": 28,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1769024785002,
+    "originalLeftAt": 1769024764259
+  },
+  "1405570190535823505_1446955073484755047_1769024785947": {
+    "promoteId": "1405570190535823505_1446955073484755047_1768551337253",
+    "id": "1405570190535823505_1446955073484755047_1769024785947",
+    "userId": "1405570190535823505",
+    "roleId": "1446955073484755047",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1768551337253,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 373652912,
+      "totalMessages": 8191,
+      "totalReactions": 27,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1769024785947,
+    "originalLeftAt": 1769024764259
+  },
+  "1405570190535823505_1446955789272219919_1769024785947": {
+    "promoteId": "1405570190535823505_1446955789272219919_1767936600350",
+    "id": "1405570190535823505_1446955789272219919_1769024785947",
+    "userId": "1405570190535823505",
+    "roleId": "1446955789272219919",
+    "guildId": "1283078116188749888",
+    "reason": "مستحقه",
+    "byUserId": "1257560892271362130",
+    "startTime": 1767936600350,
+    "endTime": null,
+    "duration": null,
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 659827997,
+      "totalMessages": 3012,
+      "totalReactions": 28,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1769024785947,
+    "originalLeftAt": 1769024764259
+  },
+  "581829708895748096_1446954402328871002_1769065117363": {
+    "id": "581829708895748096_1446954402328871002_1769065117363",
+    "userId": "581829708895748096",
+    "roleId": "1446954402328871002",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065117363,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 67882395,
+      "totalMessages": 7,
+      "totalReactions": 1,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "332614105351323649_1446954402328871002_1769065118065": {
+    "id": "332614105351323649_1446954402328871002_1769065118065",
+    "userId": "332614105351323649",
+    "roleId": "1446954402328871002",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065118065,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 55234782,
+      "totalMessages": 215,
+      "totalReactions": 0,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1414995922001334404_1446954402328871002_1769065118810": {
+    "id": "1414995922001334404_1446954402328871002_1769065118810",
+    "userId": "1414995922001334404",
+    "roleId": "1446954402328871002",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065118810,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 15360499,
+      "totalMessages": 2377,
+      "totalReactions": 138,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1341865224227131405_1446955800596840511_1769065119646": {
+    "id": "1341865224227131405_1446955800596840511_1769065119646",
+    "userId": "1341865224227131405",
+    "roleId": "1446955800596840511",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065119646,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 38156013,
+      "totalMessages": 4028,
+      "totalReactions": 62,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1157659116618121267_1446955800596840511_1769065121772": {
+    "id": "1157659116618121267_1446955800596840511_1769065121772",
+    "userId": "1157659116618121267",
+    "roleId": "1446955800596840511",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065121772,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 184828174,
+      "totalMessages": 5098,
+      "totalReactions": 37,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1458854239400104021_1446955800596840511_1769065122445": {
+    "id": "1458854239400104021_1446955800596840511_1769065122445",
+    "userId": "1458854239400104021",
+    "roleId": "1446955800596840511",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065122445,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 93663897,
+      "totalMessages": 224,
+      "totalReactions": 4,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1449788910514344056_1446955795311759370_1769065123082": {
+    "id": "1449788910514344056_1446955795311759370_1769065123082",
+    "userId": "1449788910514344056",
+    "roleId": "1446955795311759370",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065123082,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 144774126,
+      "totalMessages": 623,
+      "totalReactions": 14,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "982739298392608798_1446955472161734686_1769065124687": {
+    "id": "982739298392608798_1446955472161734686_1769065124687",
+    "userId": "982739298392608798",
+    "roleId": "1446955472161734686",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065124687,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 101332617,
+      "totalMessages": 521,
+      "totalReactions": 9,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1343157782236500003_1446955466063220858_1769065298055": {
+    "id": "1343157782236500003_1446955466063220858_1769065298055",
+    "userId": "1343157782236500003",
+    "roleId": "1446955466063220858",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065298055,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 169045295,
+      "totalMessages": 3922,
+      "totalReactions": 66,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "986404614775648266_1446955795311759370_1769065301737": {
+    "id": "986404614775648266_1446955795311759370_1769065301737",
+    "userId": "986404614775648266",
+    "roleId": "1446955795311759370",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065301737,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 539009126,
+      "totalMessages": 389,
+      "totalReactions": 12,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1368866981582737489_1446955792346644513_1769065302619": {
+    "id": "1368866981582737489_1446955792346644513_1769065302619",
+    "userId": "1368866981582737489",
+    "roleId": "1446955792346644513",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065302619,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 181817157,
+      "totalMessages": 2737,
+      "totalReactions": 69,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1089617681080127578_1446955069353230496_1769065304020": {
+    "id": "1089617681080127578_1446955069353230496_1769065304020",
+    "userId": "1089617681080127578",
+    "roleId": "1446955069353230496",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065304020,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 251524366,
+      "totalMessages": 7823,
+      "totalReactions": 30,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "932300934590115900_1446955463932645397_1769065304883": {
+    "id": "932300934590115900_1446955463932645397_1769065304883",
+    "userId": "932300934590115900",
+    "roleId": "1446955463932645397",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065304883,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 249093811,
+      "totalMessages": 1451,
+      "totalReactions": 6,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1219359102870749247_1446955466063220858_1769065306227": {
+    "id": "1219359102870749247_1446955466063220858_1769065306227",
+    "userId": "1219359102870749247",
+    "roleId": "1446955466063220858",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065306227,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 194761412,
+      "totalMessages": 1485,
+      "totalReactions": 13,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "342337009500684290_1446955792346644513_1769065447183": {
+    "id": "342337009500684290_1446955792346644513_1769065447183",
+    "userId": "342337009500684290",
+    "roleId": "1446955792346644513",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065447183,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 320221034,
+      "totalMessages": 6719,
+      "totalReactions": 132,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1434174310075072616_1446953930537042090_1769065447843": {
+    "id": "1434174310075072616_1446953930537042090_1769065447843",
+    "userId": "1434174310075072616",
+    "roleId": "1446953930537042090",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065447843,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 380371453,
+      "totalMessages": 11006,
+      "totalReactions": 91,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1428498940462104656_1446955460904353812_1769065448687": {
+    "id": "1428498940462104656_1446955460904353812_1769065448687",
+    "userId": "1428498940462104656",
+    "roleId": "1446955460904353812",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065448687,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 315288364,
+      "totalMessages": 17477,
+      "totalReactions": 123,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1422961374635495481_1446955073484755047_1769065449500": {
+    "id": "1422961374635495481_1446955073484755047_1769065449500",
+    "userId": "1422961374635495481",
+    "roleId": "1446955073484755047",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065449500,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 751645471,
+      "totalMessages": 17128,
+      "totalReactions": 259,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1239622242753581178_1446955074755629106_1769065451011": {
+    "id": "1239622242753581178_1446955074755629106_1769065451011",
+    "userId": "1239622242753581178",
+    "roleId": "1446955074755629106",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065451011,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 316206165,
+      "totalMessages": 23917,
+      "totalReactions": 797,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1289911973533712475_1446954512026959954_1769065706282": {
+    "id": "1289911973533712475_1446954512026959954_1769065706282",
+    "userId": "1289911973533712475",
+    "roleId": "1446954512026959954",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065706282,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 934369300,
+      "totalMessages": 16681,
+      "totalReactions": 376,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1289911973533712475_1446952667413872650_1769065836879": {
+    "id": "1289911973533712475_1446952667413872650_1769065836879",
+    "userId": "1289911973533712475",
+    "roleId": "1446952667413872650",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "636930315503534110",
+    "startTime": 1769065836879,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 934369300,
+      "totalMessages": 16681,
+      "totalReactions": 376,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1428498940462104656_1446955460904353812_1769108742095": {
+    "promoteId": "1428498940462104656_1446955460904353812_1769065448687",
+    "id": "1428498940462104656_1446955460904353812_1769108742095",
+    "userId": "1428498940462104656",
+    "roleId": "1446955460904353812",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065448687,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 315288364,
+      "totalMessages": 17477,
+      "totalReactions": 123,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1769108742095,
+    "originalLeftAt": 1769108554970
+  },
+  "1331988748472291483_1446955080204025929_1769111472923": {
+    "id": "1331988748472291483_1446955080204025929_1769111472923",
+    "userId": "1331988748472291483",
+    "roleId": "1446955080204025929",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769111472923,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 127346699,
+      "totalMessages": 3607,
+      "totalReactions": 36,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1428498940462104656_1446955460904353812_1769119555371": {
+    "promoteId": "1428498940462104656_1446955460904353812_1769065448687",
+    "id": "1428498940462104656_1446955460904353812_1769119555371",
+    "userId": "1428498940462104656",
+    "roleId": "1446955460904353812",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1769065448687,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 315288364,
+      "totalMessages": 17477,
+      "totalReactions": 123,
+      "totalSessions": 0,
+      "activeDays": 0
+    },
+    "restoredAfterLeave": true,
+    "restoredAt": 1769119555371,
+    "originalLeftAt": 1769113665515
+  },
+  "1439624169309474927_1464223165357232159_1770041745127": {
+    "id": "1439624169309474927_1464223165357232159_1770041745127",
+    "userId": "1439624169309474927",
+    "roleId": "1464223165357232159",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut DOWN",
+    "byUserId": "636930315503534110",
+    "startTime": 1770041745127,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 721479572,
+      "totalMessages": 26985,
+      "totalReactions": 511,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1439624169309474927_1446944053865353350_1770041794201": {
+    "id": "1439624169309474927_1446944053865353350_1770041794201",
+    "userId": "1439624169309474927",
+    "roleId": "1446944053865353350",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "636930315503534110",
+    "startTime": 1770041794201,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 721479572,
+      "totalMessages": 27018,
+      "totalReactions": 511,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1368866981582737489_1446955784171684067_1770301892813": {
+    "id": "1368866981582737489_1446955784171684067_1770301892813",
+    "userId": "1368866981582737489",
+    "roleId": "1446955784171684067",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1770301892813,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 365279224,
+      "totalMessages": 4299,
+      "totalReactions": 93,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1157659116618121267_1446955792346644513_1770301893642": {
+    "id": "1157659116618121267_1446955792346644513_1770301893642",
+    "userId": "1157659116618121267",
+    "roleId": "1446955792346644513",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1770301893642,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 302704222,
+      "totalMessages": 8636,
+      "totalReactions": 114,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1239622242753581178_1446955069353230496_1770301894188": {
+    "id": "1239622242753581178_1446955069353230496_1770301894188",
+    "userId": "1239622242753581178",
+    "roleId": "1446955069353230496",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1770301894188,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 433934526,
+      "totalMessages": 33206,
+      "totalReactions": 1461,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "398912265241362432_1446953930537042090_1770301897983": {
+    "id": "398912265241362432_1446953930537042090_1770301897983",
+    "userId": "398912265241362432",
+    "roleId": "1446953930537042090",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1770301897983,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 450363331,
+      "totalMessages": 4020,
+      "totalReactions": 183,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1190080464350875741_1446954402328871002_1770301898425": {
+    "id": "1190080464350875741_1446954402328871002_1770301898425",
+    "userId": "1190080464350875741",
+    "roleId": "1446954402328871002",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1770301898425,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 19078633,
+      "totalMessages": 2396,
+      "totalReactions": 96,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1029682807267655730_1446955800596840511_1770301899225": {
+    "id": "1029682807267655730_1446955800596840511_1770301899225",
+    "userId": "1029682807267655730",
+    "roleId": "1446955800596840511",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1770301899225,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 113000027,
+      "totalMessages": 935,
+      "totalReactions": 28,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "342337009500684290_1446955784171684067_1770301900048": {
+    "id": "342337009500684290_1446955784171684067_1770301900048",
+    "userId": "342337009500684290",
+    "roleId": "1446955784171684067",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1770301900048,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 717263625,
+      "totalMessages": 11408,
+      "totalReactions": 234,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1079090083547860993_1446955795311759370_1770302079373": {
+    "id": "1079090083547860993_1446955795311759370_1770302079373",
+    "userId": "1079090083547860993",
+    "roleId": "1446955795311759370",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1770302079373,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 728664291,
+      "totalMessages": 230,
+      "totalReactions": 2,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1069983945778790430_1446955795311759370_1770302080066": {
+    "id": "1069983945778790430_1446955795311759370_1770302080066",
+    "userId": "1069983945778790430",
+    "roleId": "1446955795311759370",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1770302080066,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 9040467,
+      "totalMessages": 5051,
+      "totalReactions": 278,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "756134765395968017_1446955466730246215_1770302244089": {
+    "id": "756134765395968017_1446955466730246215_1770302244089",
+    "userId": "756134765395968017",
+    "roleId": "1446955466730246215",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1770302244089,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 250095247,
+      "totalMessages": 7630,
+      "totalReactions": 107,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1422961374635495481_1446954476346015764_1770302246107": {
+    "id": "1422961374635495481_1446954476346015764_1770302246107",
+    "userId": "1422961374635495481",
+    "roleId": "1446954476346015764",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1770302246107,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 1698870589,
+      "totalMessages": 25525,
+      "totalReactions": 481,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "342337009500684290_1446955466730246215_1770928727003": {
+    "id": "342337009500684290_1446955466730246215_1770928727003",
+    "userId": "342337009500684290",
+    "roleId": "1446955466730246215",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "326831881012379648",
+    "startTime": 1770928727003,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 844756464,
+      "totalMessages": 11499,
+      "totalReactions": 236,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1422961374635495481_1446953930537042090_1770928727425": {
+    "id": "1422961374635495481_1446953930537042090_1770928727425",
+    "userId": "1422961374635495481",
+    "roleId": "1446953930537042090",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "326831881012379648",
+    "startTime": 1770928727425,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 1998159487,
+      "totalMessages": 26247,
+      "totalReactions": 490,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1331988748472291483_1446953930537042090_1770928727825": {
+    "id": "1331988748472291483_1446953930537042090_1770928727825",
+    "userId": "1331988748472291483",
+    "roleId": "1446953930537042090",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "326831881012379648",
+    "startTime": 1770928727826,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 165626253,
+      "totalMessages": 6343,
+      "totalReactions": 82,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "756134765395968017_1446955472161734686_1770929042208": {
+    "id": "756134765395968017_1446955472161734686_1770929042208",
+    "userId": "756134765395968017",
+    "roleId": "1446955472161734686",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1770929042208,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 271475742,
+      "totalMessages": 8234,
+      "totalReactions": 112,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1341865224227131405_1446955792346644513_1770929042965": {
+    "id": "1341865224227131405_1446955792346644513_1770929042965",
+    "userId": "1341865224227131405",
+    "roleId": "1446955792346644513",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1770929042965,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 148334371,
+      "totalMessages": 6751,
+      "totalReactions": 85,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1428498940462104656_1446955074755629106_1770929043531": {
+    "id": "1428498940462104656_1446955074755629106_1770929043531",
+    "userId": "1428498940462104656",
+    "roleId": "1446955074755629106",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1770929043531,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 520009516,
+      "totalMessages": 32434,
+      "totalReactions": 308,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1157659116618121267_1446955789272219919_1770929043992": {
+    "id": "1157659116618121267_1446955789272219919_1770929043992",
+    "userId": "1157659116618121267",
+    "roleId": "1446955789272219919",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1257560892271362130",
+    "startTime": 1770929043992,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 319563530,
+      "totalMessages": 8934,
+      "totalReactions": 120,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "964975672361631785_1446955800596840511_1771533316928": {
+    "id": "964975672361631785_1446955800596840511_1771533316928",
+    "userId": "964975672361631785",
+    "roleId": "1446955800596840511",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "326831881012379648",
+    "startTime": 1771533316928,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 351883970,
+      "totalMessages": 2857,
+      "totalReactions": 3,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1334286524174303244_1446955466730246215_1771533317401": {
+    "id": "1334286524174303244_1446955466730246215_1771533317401",
+    "userId": "1334286524174303244",
+    "roleId": "1446955466730246215",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "326831881012379648",
+    "startTime": 1771533317401,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 21752807,
+      "totalMessages": 9386,
+      "totalReactions": 632,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1314705633466912840_1446955800596840511_1771533318061": {
+    "id": "1314705633466912840_1446955800596840511_1771533318061",
+    "userId": "1314705633466912840",
+    "roleId": "1446955800596840511",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "326831881012379648",
+    "startTime": 1771533318062,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 140485662,
+      "totalMessages": 6443,
+      "totalReactions": 343,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1343157782236500003_1446955075384770640_1771533318593": {
+    "id": "1343157782236500003_1446955075384770640_1771533318593",
+    "userId": "1343157782236500003",
+    "roleId": "1446955075384770640",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "326831881012379648",
+    "startTime": 1771533318593,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 337437148,
+      "totalMessages": 9581,
+      "totalReactions": 132,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1428498940462104656_1446955069353230496_1771533598412": {
+    "id": "1428498940462104656_1446955069353230496_1771533598412",
+    "userId": "1428498940462104656",
+    "roleId": "1446955069353230496",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "636930315503534110",
+    "startTime": 1771533598412,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 670519923,
+      "totalMessages": 41792,
+      "totalReactions": 370,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1079090083547860993_1446955792346644513_1771533598890": {
+    "id": "1079090083547860993_1446955792346644513_1771533598890",
+    "userId": "1079090083547860993",
+    "roleId": "1446955792346644513",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "636930315503534110",
+    "startTime": 1771533598890,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 977656719,
+      "totalMessages": 363,
+      "totalReactions": 4,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "756134765395968017_1446955466063220858_1771534037132": {
+    "id": "756134765395968017_1446955466063220858_1771534037132",
+    "userId": "756134765395968017",
+    "roleId": "1446955466063220858",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "636930315503534110",
+    "startTime": 1771534037132,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 289002898,
+      "totalMessages": 10076,
+      "totalReactions": 129,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "604465054800412713_1464223165357232159_1771535426032": {
+    "id": "604465054800412713_1464223165357232159_1771535426032",
+    "userId": "604465054800412713",
+    "roleId": "1464223165357232159",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "636930315503534110",
+    "startTime": 1771535426032,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 2747875517,
+      "totalMessages": 5622,
+      "totalReactions": 82,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1439624169309474927_1446952667413872650_1771797299849": {
+    "id": "1439624169309474927_1446952667413872650_1771797299849",
+    "userId": "1439624169309474927",
+    "roleId": "1446952667413872650",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut DOWN",
+    "byUserId": "636930315503534110",
+    "startTime": 1771797299849,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 1135046097,
+      "totalMessages": 46249,
+      "totalReactions": 739,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1422961374635495481_1446953928444084404_1771880133138": {
+    "id": "1422961374635495481_1446953928444084404_1771880133138",
+    "userId": "1422961374635495481",
+    "roleId": "1446953928444084404",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "279655640195006464",
+    "startTime": 1771880133138,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 2791751248,
+      "totalMessages": 29909,
+      "totalReactions": 678,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1315212043774726154_1446955800596840511_1772148937506": {
+    "id": "1315212043774726154_1446955800596840511_1772148937506",
+    "userId": "1315212043774726154",
+    "roleId": "1446955800596840511",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1319168553156476940",
+    "startTime": 1772148937506,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 236059241,
+      "totalMessages": 2733,
+      "totalReactions": 120,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "456556751014330379_1446955800596840511_1772148938048": {
+    "id": "456556751014330379_1446955800596840511_1772148938048",
+    "userId": "456556751014330379",
+    "roleId": "1446955800596840511",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1319168553156476940",
+    "startTime": 1772148938048,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 429618251,
+      "totalMessages": 564,
+      "totalReactions": 11,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1428498940462104656_1446954371219984627_1772148938608": {
+    "id": "1428498940462104656_1446954371219984627_1772148938608",
+    "userId": "1428498940462104656",
+    "roleId": "1446954371219984627",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1319168553156476940",
+    "startTime": 1772148938608,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 821046570,
+      "totalMessages": 45891,
+      "totalReactions": 407,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "1190080464350875741_1446953930537042090_1772148939045": {
+    "id": "1190080464350875741_1446953930537042090_1772148939045",
+    "userId": "1190080464350875741",
+    "roleId": "1446953930537042090",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1319168553156476940",
+    "startTime": 1772148939045,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 49029307,
+      "totalMessages": 7391,
+      "totalReactions": 442,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  },
+  "756134765395968017_1446955075384770640_1772148962364": {
+    "id": "756134765395968017_1446955075384770640_1772148962364",
+    "userId": "756134765395968017",
+    "roleId": "1446955075384770640",
+    "guildId": "1283078116188749888",
+    "reason": "Shortcut UP",
+    "byUserId": "1319168553156476940",
+    "startTime": 1772148962364,
+    "endTime": null,
+    "duration": "نهائي",
+    "status": "active",
+    "userStats": {
+      "totalVoiceTime": 292140960,
+      "totalMessages": 11904,
+      "totalReactions": 141,
+      "totalSessions": 0,
+      "activeDays": 0
+    }
+  }
+}

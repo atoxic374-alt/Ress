@@ -1,0 +1,8 @@
+{
+  "enabled": false,
+  "pointsOnReport": false,
+  "reportChannel": null,
+  "requiredFor": [],
+  "approvalRequiredFor": [],
+  "templates": {}
+}

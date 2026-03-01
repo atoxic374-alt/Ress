@@ -1,0 +1,131 @@
+{
+  "settings": {
+    "rejectCooldownHours": 48,
+    "notificationMethod": "channel",
+    "notificationChannel": "1449476636524150895",
+    "approverType": "owners",
+    "approverTargets": []
+  },
+  "pending": {},
+  "active": {
+    "1262736181825765376": {
+      "reason": "عندي دراسة و فاينل",
+      "startDate": "2026-02-21T04:15:49.017Z",
+      "endDate": "2026-03-23T04:15:49.017Z",
+      "processed": true,
+      "status": "active",
+      "approvedBy": "1262736181825765376",
+      "approvedAt": "2026-02-21T04:16:00.513Z",
+      "removedRoles": [],
+      "guildId": "1283078116188749888",
+      "memberData": {
+        "id": "1262736181825765376",
+        "tag": "08.l",
+        "displayName": "Viu"
+      },
+      "rolesData": []
+    },
+    "1000189862529466448": {
+      "reason": "midterms",
+      "startDate": "2026-02-23T20:36:27.495Z",
+      "endDate": "2026-03-05T20:36:27.495Z",
+      "processed": true,
+      "status": "active",
+      "approvedBy": "636930315503534110",
+      "approvedAt": "2026-02-23T21:40:31.289Z",
+      "removedRoles": [
+        "1446952518046187560",
+        "1446953323470262331"
+      ],
+      "guildId": "1283078116188749888",
+      "memberData": {
+        "id": "1000189862529466448",
+        "tag": "jxc7",
+        "displayName": "thio"
+      },
+      "rolesData": [
+        {
+          "id": "1446952518046187560",
+          "name": "x."
+        },
+        {
+          "id": "1446953323470262331",
+          "name": "royal"
+        }
+      ]
+    },
+    "1428498940462104656": {
+      "reason": "ملاك تعرف السبب",
+      "startDate": "2026-02-25T10:44:35.888Z",
+      "endDate": "2026-03-02T10:44:35.888Z",
+      "processed": true,
+      "status": "active",
+      "approvedBy": "636930315503534110",
+      "approvedAt": "2026-02-27T08:05:09.162Z",
+      "removedRoles": [
+        "1446952667413872650",
+        "1446954371219984627"
+      ],
+      "guildId": "1283078116188749888",
+      "memberData": {
+        "id": "1428498940462104656",
+        "tag": "yi.lx",
+        "displayName": "Vvvvvvvv"
+      },
+      "rolesData": [
+        {
+          "id": "1446952667413872650",
+          "name": "e."
+        },
+        {
+          "id": "1446954371219984627",
+          "name": "feint"
+        }
+      ]
+    }
+  },
+  "pendingTermination": {},
+  "cooldowns": {
+    "1129110138196865146": 1770476384910,
+    "1190080464350875741": 1772055623397,
+    "1434174310075072616": 1772142757265
+  },
+  "rejected": {
+    "1129110138196865146": {
+      "reason": "بسحب من يولا",
+      "rejectReason": "دز بس",
+      "startDate": "2026-02-05T13:25:43.263Z",
+      "endDate": "2026-02-10T13:25:43.263Z",
+      "rejectedBy": "iw0g",
+      "rejectedById": "1257560892271362130",
+      "rejectedAt": "2026-02-05T14:59:44.911Z"
+    },
+    "1428498940462104656": {
+      "reason": "أسباب خاصه",
+      "rejectReason": "مافي سبب",
+      "startDate": "2026-02-23T06:07:07.499Z",
+      "endDate": "2026-02-26T06:07:07.499Z",
+      "rejectedBy": "4_3a",
+      "rejectedById": "636930315503534110",
+      "rejectedAt": "2026-02-23T08:32:48.964Z"
+    },
+    "1190080464350875741": {
+      "reason": "بدون سبب",
+      "rejectReason": "لا تستهبلين بالاجازات",
+      "startDate": "2026-02-23T20:48:13.741Z",
+      "endDate": "4767-05-04T20:48:13.741Z",
+      "rejectedBy": "4_3a",
+      "rejectedById": "636930315503534110",
+      "rejectedAt": "2026-02-23T21:40:23.397Z"
+    },
+    "1434174310075072616": {
+      "reason": "اسباب خاصه + تعرفها ملاك",
+      "rejectReason": "خلها تسحبها يدوي",
+      "startDate": "2026-02-24T21:35:15.490Z",
+      "endDate": "2026-03-03T21:35:15.490Z",
+      "rejectedBy": "4_3a",
+      "rejectedById": "636930315503534110",
+      "rejectedAt": "2026-02-24T21:52:37.265Z"
+    }
+  }
+}

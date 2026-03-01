@@ -1,0 +1,13 @@
+{
+  "default": 60000,
+  "responsibilities": {},
+  "userCooldowns": {
+    "1319168553156476940_داون": 1772316835402,
+    "756134765395968017_باند": 1772321224045
+  },
+  "bypass": {
+    "users": [],
+    "roles": [],
+    "responsibilities": []
+  }
+}
