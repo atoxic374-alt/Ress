@@ -872,13 +872,16 @@ async function createColorsImage(guild, guildConfig) {
         const canvasWidth = backgroundImage.width;
         const canvasHeight = backgroundImage.height;
 
-        // إعدادات مربعات الألوان - متناسبة مع حجم الصورة
-        // نحسب الحجم بناءً على عرض الصورة لضمان التناسب
-        const scaleFactor = canvasWidth / 1024; // نسبة التناسب (1024 كمرجع)
-        const boxSize = Math.max(40, Math.round(60 * scaleFactor)); // حجم كل مربع
-        const gap = Math.max(8, Math.round(12 * scaleFactor)); // المسافة بين المربعات
-        const padding = Math.max(20, Math.round(30 * scaleFactor)); // المسافة من الحواف
-        const cornerRadius = Math.max(6, Math.round(10 * scaleFactor)); // انحناء زوايا المربعات
+        // إعدادات مربعات الألوان - متناسبة مع عرض + طول الصورة
+        // نستخدم معامل مبني على البعدين لتفادي التضخم في الصور العريضة القصيرة
+        const widthScaleFactor = canvasWidth / 1024;  // مرجع العرض
+        const heightScaleFactor = canvasHeight / 576; // مرجع الطول
+        const scaleFactor = Math.min(widthScaleFactor, heightScaleFactor);
+
+        const boxSize = Math.max(32, Math.round(60 * scaleFactor)); // حجم كل مربع
+        const gap = Math.max(6, Math.round(12 * scaleFactor)); // المسافة بين المربعات
+        const padding = Math.max(12, Math.round(30 * scaleFactor)); // المسافة من الحواف
+        const cornerRadius = Math.max(5, Math.round(10 * scaleFactor)); // انحناء زوايا المربعات
 
         const colorsPerRow = 10; // عدد الألوان في كل صف
         const totalColors = guildConfig.colorRoleIds.length;
@@ -892,14 +895,14 @@ async function createColorsImage(guild, guildConfig) {
 
         // حساب عرض المربعات للتمركز أفقياً
         const totalBoxesWidth = (boxSize * colorsPerRow) + (gap * (colorsPerRow - 1));
-        const startX = (canvasWidth - totalBoxesWidth) / 2;
+        const startX = Math.max(padding, (canvasWidth - totalBoxesWidth) / 2);
 
         // حساب ارتفاع المربعات لتحديد موقع البداية عمودياً (مع حساب الصفوف)
         const totalBoxesHeight = (boxSize * rows) + (gap * (rows - 1));
         // تحسين التمركز الرأسي - نضع المربعات في النصف السفلي من الصورة
-        const startY = rows > 1 
-            ? (canvasHeight - totalBoxesHeight) / 2 // تمركز في المنتصف للصفوف المتعددة
-            : (canvasHeight * 0.6) - (totalBoxesHeight / 2); // صف واحد - في النصف السفلي
+        const startY = rows > 1
+            ? Math.max(padding, (canvasHeight - totalBoxesHeight) / 2) // تمركز مرن للصفوف المتعددة
+            : Math.max(padding, (canvasHeight * 0.6) - (totalBoxesHeight / 2)); // صف واحد - في النصف السفلي
         
         // الحصول على النص المخصص من الإعدادات
         const colorsTitle = guildConfig.colorsTitle !== undefined ? guildConfig.colorsTitle : 'Colors list :';

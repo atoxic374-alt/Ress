@@ -472,6 +472,58 @@ function getUserPendingInteractiveRequests(settings, userId) {
     return Object.values(settings?.newPendingRequests || {}).filter((request) => request?.userId === userId);
 }
 
+async function cleanupStaleNewPendingRequests(settings, guild, userId = null) {
+    const pendingEntries = Object.entries(settings?.newPendingRequests || {});
+    if (pendingEntries.length === 0) return false;
+
+    let changed = false;
+
+    for (const [key, request] of pendingEntries) {
+        if (!request || (userId && request.userId !== userId)) continue;
+
+        const managerChannelId = request.managerChannelId;
+        const managerMessageId = request.managerMessageId;
+        if (!managerChannelId || !managerMessageId) {
+            delete settings.newPendingRequests[key];
+            changed = true;
+            continue;
+        }
+
+        const managerChannel = guild.channels.cache.get(managerChannelId)
+            || await guild.channels.fetch(managerChannelId).catch(() => null);
+        if (!managerChannel) {
+            delete settings.newPendingRequests[key];
+            changed = true;
+            continue;
+        }
+
+        const managerMessage = await managerChannel.messages.fetch(managerMessageId).catch(() => null);
+        if (!managerMessage) {
+            delete settings.newPendingRequests[key];
+            changed = true;
+            continue;
+        }
+
+        const stillActionable = Array.isArray(managerMessage.components)
+            && managerMessage.components.some((row) => Array.isArray(row.components)
+                && row.components.some((component) => {
+                    const componentId = component?.customId || '';
+                    return componentId.startsWith('int_new_approve_') || componentId.startsWith('int_new_reject_trigger_');
+                }));
+
+        if (!stillActionable) {
+            delete settings.newPendingRequests[key];
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        saveSettings(settings);
+    }
+
+    return changed;
+}
+
 async function resolveRoleDisplayInfo(guild, roleId, roleFromContext = null, fallbackName = null) {
     let role = roleFromContext || guild.roles.cache.get(roleId) || null;
 
@@ -570,6 +622,8 @@ async function handleInteraction(interaction) {
             return interaction.reply({ content: '**لديك هذا الرول بالفعل.**', ephemeral: true }).catch(() => {});
         }
 
+        await cleanupStaleNewPendingRequests(settings, interaction.guild, interaction.user.id);
+
         const isExceptionRole = exceptionRoleIds.has(roleId);
         const memberInteractive = getMemberInteractiveRoles(member, interactiveRoleSet, exceptionRoleIds);
 
@@ -593,7 +647,42 @@ async function handleInteraction(interaction) {
             return interaction.reply({ content: '**لديك طلب معلق بالفعل**.', ephemeral: true }).catch(() => {});
         }
         if (!isExceptionRole && hasPendingNormal) {
-            return interaction.reply({ content: '**يمكنك تقديم طلب واحد فقط للرولات التفاعلية.**', ephemeral: true }).catch(() => {});
+            const normalPendingRequests = pendingRequests.filter((request) => !exceptionRoleIds.has(request.roleId));
+            const requestedRolePosition = role.position;
+
+            let highestPendingPosition = -1;
+            for (const pendingRequest of normalPendingRequests) {
+                const pendingRole = interaction.guild.roles.cache.get(pendingRequest.roleId)
+                    || await interaction.guild.roles.fetch(pendingRequest.roleId).catch(() => null);
+                if (pendingRole && pendingRole.position > highestPendingPosition) {
+                    highestPendingPosition = pendingRole.position;
+                }
+            }
+
+            if (requestedRolePosition <= highestPendingPosition) {
+                return interaction.reply({ content: '**يمكنك تقديم طلب واحد فقط للرولات التفاعلية. الرتبة المطلوبة ليست أعلى من طلبك الحالي.**', ephemeral: true }).catch(() => {});
+            }
+
+            for (const pendingRequest of normalPendingRequests) {
+                const existingKey = `${pendingRequest.userId}:${pendingRequest.roleId}`;
+                delete settings.newPendingRequests[existingKey];
+
+                const pendingChannel = interaction.guild.channels.cache.get(pendingRequest.managerChannelId)
+                    || await interaction.guild.channels.fetch(pendingRequest.managerChannelId).catch(() => null);
+                const pendingMessage = pendingChannel
+                    ? await pendingChannel.messages.fetch(pendingRequest.managerMessageId).catch(() => null)
+                    : null;
+
+                if (pendingMessage?.embeds?.[0]) {
+                    const replacedEmbed = EmbedBuilder.from(pendingMessage.embeds[0]).addFields({
+                        name: 'الحالة',
+                        value: `*تم إلغاء الطلب تلقائياً لأن العضو قدّم على رول أعلى.*`
+                    });
+                    await pendingMessage.edit({ embeds: [replacedEmbed], components: [] }).catch(() => {});
+                }
+            }
+
+            saveSettings(settings);
         }
 
         if (isUserBlocked(interaction.user.id)) {
