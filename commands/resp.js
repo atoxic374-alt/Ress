@@ -941,6 +941,7 @@ async function handleApplyRespModal(interaction, client) {
         }
 
         const respData = currentResps[respName];
+        const globalSeparator = config.guilds[guildId]?.globalImageUrl || null;
         const applyEmbed = colorManager.createEmbed()
             .setTitle('Apply Resp')
             .addFields([
@@ -966,8 +967,11 @@ async function handleApplyRespModal(interaction, client) {
 
         await channel.send({ embeds: [applyEmbed], components: [row] });
         
-        // إرسال صورة المسؤولية (المعينة عبر resp img) كخط فاصل منفصل بعد الإيمبد مباشرة
-        if (respData && respData.image) {
+        // إرسال خط فاصل بعد الإيمبد مباشرة
+        // الأولوية: resp img all (globalImageUrl) ثم صورة المسؤولية الفردية ثم الافتراضي
+        if (globalSeparator) {
+            await channel.send({ content: globalSeparator }).catch(err => console.error('Failed to send global separator image:', err));
+        } else if (respData && respData.image) {
             await channel.send({ content: respData.image }).catch(err => console.error('Failed to send responsibility separator image:', err));
         } else {
             // خط فاصل افتراضي في حال عدم وجود صورة للمسؤولية
