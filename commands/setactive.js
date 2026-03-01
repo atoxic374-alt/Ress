@@ -155,7 +155,13 @@ function buildRolesOrderEmbed(guild, settings) {
 }
 
 function buildPanelComponents(guild, settings) {
-    const roles = (settings.settings.interactiveRoles || []).filter((id) => guild.roles.cache.has(id));
+    const roles = (settings.settings.interactiveRoles || [])
+        .filter((id) => guild.roles.cache.has(id))
+        .sort((a, b) => {
+            const roleA = guild.roles.cache.get(a);
+            const roleB = guild.roles.cache.get(b);
+            return (roleB?.position || 0) - (roleA?.position || 0);
+        });
     const app = settings.settings.applicationSystem;
     const rows = [];
 
@@ -167,7 +173,11 @@ function buildPanelComponents(guild, settings) {
             .setMaxValues(1)
             .addOptions(roles.slice(0, 25).map((roleId) => {
                 const role = guild.roles.cache.get(roleId);
-                const option = { label: (role?.name || roleId).slice(0, 100), value: roleId };
+                const option = {
+                    label: (role?.name || roleId).slice(0, 100),
+                    description: `${guild.name} - Active Role`.slice(0, 100),
+                    value: roleId
+                };
                 if (app.defaultMenuEmoji) option.emoji = app.defaultMenuEmoji;
                 return option;
             }));
@@ -356,7 +366,6 @@ async function handleSetActiveInteraction(interaction) {
             app.enabled = !app.enabled;
             if (app.enabled) {
                 settings.settings.requestChannel = null;
-                settings.settings.exceptions = [];
             }
             saveSettings(settings);
             const txt = app.enabled
@@ -446,6 +455,7 @@ async function handleSetActiveInteraction(interaction) {
                 .addFields(
                     { name: 'المسؤولون', value: (settings.settings.approvers || []).map((id) => `<@&${id}>`).join('\n') || '**لا يوجد**', inline: false },
                     { name: 'الرولات التفاعلية', value: (settings.settings.interactiveRoles || []).map((id) => `<@&${id}>`).join('\n') || '**لا يوجد**', inline: false },
+                    { name: 'رولات الاستثناء', value: (settings.settings.exceptions || []).map((entry) => `<@&${entry.roleId}>`).join('\n') || '**لا يوجد**', inline: false },
                     { name: 'نظام التقديم الجديد', value: app.enabled ? '**مفعل**' : '**معطل**', inline: true },
                     { name: 'روم الطلبات الجديد', value: app.requestsChannelId ? `<#${app.requestsChannelId}>` : '**غير محدد**', inline: true },
                     { name: 'روم المسؤولين', value: app.managersChannelId ? `<#${app.managersChannelId}>` : '**غير محدد**', inline: true },
@@ -464,12 +474,27 @@ async function handleSetActiveInteraction(interaction) {
     }
 
     if (customId === 'setactive_select_interactive_roles') {
-        settings.settings.interactiveRoles = interaction.values;
+        const selectedSet = new Set(interaction.values);
+        const exceptionRoleIds = (settings.settings.exceptions || [])
+            .map((entry) => entry?.roleId)
+            .filter((roleId) => typeof roleId === 'string' && roleId.length > 0);
+
+        // الاحتفاظ برولات الاستثناء ضمن الرولات التفاعلية دائماً
+        for (const exceptionRoleId of exceptionRoleIds) {
+            selectedSet.add(exceptionRoleId);
+        }
+
+        settings.settings.interactiveRoles = Array.from(selectedSet).sort((a, b) => {
+            const roleA = interaction.guild.roles.cache.get(a);
+            const roleB = interaction.guild.roles.cache.get(b);
+            return (roleB?.position || 0) - (roleA?.position || 0);
+        });
         saveSettings(settings);
         if (app.enabled && app.requestsChannelId) {
             await sendOrUpdateApplicationPanel(interaction.guild, settings).catch(() => {});
         }
-        return interaction.update({ content: '**تم تحديث الرولات التفاعلية بنجاح**', components: getPersistentMenuRows(settings), embeds: [] });
+        const exceptionNotice = exceptionRoleIds.length > 0 ? `\n**تم الحفاظ تلقائياً على ${exceptionRoleIds.length} رول استثناء داخل الرولات التفاعلية.**` : '';
+        return interaction.update({ content: `**تم تحديث الرولات التفاعلية بنجاح**${exceptionNotice}`, components: getPersistentMenuRows(settings), embeds: [] });
     }
 
     if (customId === 'setactive_select_app_requests_channel') {
