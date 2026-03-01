@@ -137,41 +137,82 @@ function drawRoundedRect(ctx, x, y, w, h, r) {
 
 function drawFlameIcon(ctx, cx, cy, isActive) {
     if (!isActive) {
-        ctx.fillStyle = 'rgba(170,180,205,0.38)';
+        // شمعة مطفية بشكل واقعي
+        const waxGrad = ctx.createLinearGradient(cx, cy - 8, cx, cy + 20);
+        waxGrad.addColorStop(0, 'rgba(214, 224, 243, 0.9)');
+        waxGrad.addColorStop(1, 'rgba(162, 176, 206, 0.86)');
+        ctx.fillStyle = waxGrad;
         ctx.beginPath();
-        ctx.ellipse(cx, cy + 9, 16, 21, 0, 0, Math.PI * 2);
+        ctx.roundRect(cx - 11, cy - 2, 22, 26, 6);
         ctx.fill();
 
-        ctx.fillStyle = 'rgba(118,128,154,0.48)';
+        // فتيل دخاني صغير
+        ctx.strokeStyle = 'rgba(90,98,120,0.95)';
+        ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.ellipse(cx, cy + 9, 8, 12, 0, 0, Math.PI * 2);
+        ctx.moveTo(cx, cy - 10);
+        ctx.bezierCurveTo(cx + 2, cy - 14, cx + 4, cy - 10, cx + 1, cy - 6);
+        ctx.stroke();
+
+        // هالة خافتة جداً (بدون لهب)
+        const dimAura = ctx.createRadialGradient(cx, cy - 3, 1, cx, cy - 3, 11);
+        dimAura.addColorStop(0, 'rgba(175, 190, 220, 0.22)');
+        dimAura.addColorStop(1, 'rgba(175, 190, 220, 0)');
+        ctx.fillStyle = dimAura;
+        ctx.beginPath();
+        ctx.arc(cx, cy - 3, 11, 0, Math.PI * 2);
         ctx.fill();
         return;
     }
 
     ctx.save();
-    ctx.shadowColor = 'rgba(255, 138, 52, 0.75)';
-    ctx.shadowBlur = 22;
+    ctx.shadowColor = 'rgba(255, 168, 72, 0.82)';
+    ctx.shadowBlur = 24;
 
-    const outer = ctx.createLinearGradient(cx, cy - 30, cx, cy + 26);
-    outer.addColorStop(0, '#ffd36f');
-    outer.addColorStop(0.35, '#ff8738');
-    outer.addColorStop(1, '#ff3f6a'); // لمسة قريبة من شعلة تيك توك
-    ctx.fillStyle = outer;
+    // جسم الشمعة المنوّرة
+    const waxBody = ctx.createLinearGradient(cx, cy - 4, cx, cy + 24);
+    waxBody.addColorStop(0, 'rgba(249, 240, 221, 0.95)');
+    waxBody.addColorStop(1, 'rgba(226, 205, 173, 0.9)');
+    ctx.fillStyle = waxBody;
     ctx.beginPath();
-    ctx.moveTo(cx, cy - 28);
-    ctx.bezierCurveTo(cx + 18, cy - 16, cx + 21, cy + 8, cx, cy + 24);
-    ctx.bezierCurveTo(cx - 18, cy + 8, cx - 20, cy - 16, cx, cy - 28);
+    ctx.roundRect(cx - 11, cy - 1, 22, 25, 6);
     ctx.fill();
 
-    const inner = ctx.createRadialGradient(cx, cy + 1, 1, cx, cy + 4, 14);
+    // ذوبان بسيط على الحواف
+    ctx.fillStyle = 'rgba(255, 241, 214, 0.35)';
+    ctx.beginPath();
+    ctx.ellipse(cx - 7, cy + 4, 2.2, 5.2, -0.2, 0, Math.PI * 2);
+    ctx.ellipse(cx + 6, cy + 7, 2, 4.5, 0.25, 0, Math.PI * 2);
+    ctx.fill();
+
+    // الفتيل
+    ctx.strokeStyle = 'rgba(72,58,45,0.95)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 8);
+    ctx.bezierCurveTo(cx + 1, cy - 12, cx + 1, cy - 12, cx, cy - 6);
+    ctx.stroke();
+
+    // اللهب
+    const outer = ctx.createLinearGradient(cx, cy - 30, cx, cy + 26);
+    outer.addColorStop(0, '#fff0b0');
+    outer.addColorStop(0.35, '#ffb24a');
+    outer.addColorStop(1, '#ff6436');
+    ctx.fillStyle = outer;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 26);
+    ctx.bezierCurveTo(cx + 12, cy - 16, cx + 14, cy + 0, cx, cy + 12);
+    ctx.bezierCurveTo(cx - 12, cy + 0, cx - 13, cy - 16, cx, cy - 26);
+    ctx.fill();
+
+    const inner = ctx.createRadialGradient(cx, cy - 2, 1, cx, cy + 2, 10);
     inner.addColorStop(0, '#fffef1');
-    inner.addColorStop(1, '#ffd24c');
+    inner.addColorStop(1, '#ffd86a');
     ctx.fillStyle = inner;
     ctx.beginPath();
-    ctx.moveTo(cx, cy - 12);
-    ctx.bezierCurveTo(cx + 8, cy - 4, cx + 8, cy + 8, cx, cy + 14);
-    ctx.bezierCurveTo(cx - 8, cy + 8, cx - 8, cy - 4, cx, cy - 12);
+    ctx.moveTo(cx, cy - 14);
+    ctx.bezierCurveTo(cx + 6, cy - 7, cx + 6, cy + 2, cx, cy + 8);
+    ctx.bezierCurveTo(cx - 6, cy + 2, cx - 6, cy - 7, cx, cy - 14);
     ctx.fill();
 
     ctx.globalAlpha = 0.4;

@@ -543,6 +543,18 @@ function getAttachmentExtension(attachment) {
     if (contentType.includes('webp')) return '.webp';
     if (contentType.includes('gif')) return '.gif';
     if (contentType.includes('bmp')) return '.bmp';
+    if (contentType.includes('mp4')) return '.mp4';
+    if (contentType.includes('webm')) return '.webm';
+    if (contentType.includes('mov') || contentType.includes('quicktime')) return '.mov';
+    if (contentType.includes('mkv')) return '.mkv';
+    if (contentType.includes('avi')) return '.avi';
+    if (contentType.includes('wmv')) return '.wmv';
+    if (contentType.includes('flv')) return '.flv';
+    if (contentType.includes('mp3')) return '.mp3';
+    if (contentType.includes('wav')) return '.wav';
+    if (contentType.includes('ogg')) return '.ogg';
+    if (contentType.includes('m4a')) return '.m4a';
+    if (contentType.includes('aac')) return '.aac';
 
     try {
         const parsed = new URL(attachment?.url || '');
@@ -553,24 +565,46 @@ function getAttachmentExtension(attachment) {
     return '.png';
 }
 
-async function cacheLockitImage(message) {
-    const imageAttachment = message.attachments.find(att => {
+function pickBestMediaAttachment(message) {
+    if (!message?.attachments?.size) return null;
+
+    const isAllowedMedia = (att) => {
         const contentType = (att?.contentType || '').toLowerCase();
         const fileName = (att?.name || '').toLowerCase();
-        return contentType.startsWith('image/') || ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'].some(ext => fileName.endsWith(ext));
-    });
+        const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
+        const videoExtensions = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.wmv', '.flv'];
+        const audioExtensions = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac'];
 
-    if (!imageAttachment?.url) return null;
+        if (contentType.startsWith('image/')) return true;
+        if (contentType.startsWith('video/')) return true;
+        if (contentType.startsWith('audio/')) return true;
+        if (imageExtensions.some(ext => fileName.endsWith(ext))) return true;
+        if (videoExtensions.some(ext => fileName.endsWith(ext))) return true;
+        if (audioExtensions.some(ext => fileName.endsWith(ext))) return true;
+        return false;
+    };
+
+    const attachments = [...message.attachments.values()].filter(isAllowedMedia);
+    if (!attachments.length) return null;
+
+    return attachments.find(att => (att?.contentType || '').toLowerCase().startsWith('video/'))
+        || attachments.find(att => (att?.contentType || '').toLowerCase().startsWith('image/'))
+        || attachments[0];
+}
+
+async function cacheLockitMedia(message) {
+    const mediaAttachment = pickBestMediaAttachment(message);
+    if (!mediaAttachment?.url) return null;
 
     try {
         const folder = path.join(__dirname, '..', 'data', 'streak_posts', message.guild.id, message.author.id);
         if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
 
-        const ext = getAttachmentExtension(imageAttachment);
+        const ext = getAttachmentExtension(mediaAttachment);
         const fileName = `${message.id}${ext}`;
         const localPath = path.join(folder, fileName);
 
-        const response = await axios.get(imageAttachment.url, {
+        const response = await axios.get(mediaAttachment.url, {
             responseType: 'arraybuffer',
             timeout: 15000,
             headers: { 'User-Agent': 'Mozilla/5.0 (compatible; StreakBot/1.0)' }
@@ -579,7 +613,7 @@ async function cacheLockitImage(message) {
         await fs.promises.writeFile(localPath, Buffer.from(response.data));
         return localPath;
     } catch (error) {
-        console.log(`⚠️ تعذر حفظ صورة اللوكيت محلياً: ${error.message}`);
+        console.log(`⚠️ تعذر حفظ ميديا اللوكيت محلياً: ${error.message}`);
         return null;
     }
 }
@@ -816,7 +850,7 @@ async function handleLockedRoomMessage(message, client, botOwners) {
         console.log(`➕ إنشاء خط فاصل جديد للصورة من ${message.author.username}`);
         await createDivider(message.channel, message.author, settings, guildId, [message.id]);
 
-        const localImagePath = await cacheLockitImage(message);
+        const localImagePath = await cacheLockitMedia(message);
 
         // فحص هل تم النشر اليوم
         if (userStreak && userStreak.last_post_date === today) {
@@ -1095,11 +1129,19 @@ async function getTopReactionPostForUser(guild, channelId, userId) {
 
     if (!best) return null;
 
-    const imageAttachment = best.attachments.find(att => att.contentType?.startsWith('image/')) || best.attachments.first();
+    const bestMediaAttachment = pickBestMediaAttachment(best);
+    const mediaContentType = (bestMediaAttachment?.contentType || '').toLowerCase();
+    const mediaKind = mediaContentType.startsWith('video/')
+        ? 'video'
+        : mediaContentType.startsWith('audio/')
+            ? 'audio'
+            : 'image';
+
     return {
         message: best,
         reactionsCount: Math.max(bestCount, 0),
-        imageUrl: imageAttachment?.url || null,
+        mediaUrl: bestMediaAttachment?.url || null,
+        mediaKind,
         localPath: bestLocalPath
     };
 }
@@ -1129,7 +1171,7 @@ async function handleShowTopReactionImage(interaction) {
 
     const bestPost = await getTopReactionPostForUser(interaction.guild, settings.lockedChannelId, ownerUserId);
     if (!bestPost) {
-        return interaction.editReply({ content: '**ما حصلت صورة لوكيت مناسبة لعرض أعلى رياكشن**' });
+        return interaction.editReply({ content: '**ما حصلت ميديا لوكيت مناسبة لعرض أعلى رياكشن**' });
     }
 
     const postOwner = await interaction.client.users.fetch(ownerUserId).catch(() => null);
@@ -1139,15 +1181,39 @@ async function handleShowTopReactionImage(interaction) {
 [رابط الرسالة الأصلية](${bestPost.message.url})`)
         .setFooter({ text: 'Streak System' }), postOwner, 'Member');
 
-    if (bestPost.imageUrl) {
-        embed.setImage(bestPost.imageUrl);
+    if (bestPost.mediaUrl && bestPost.mediaKind === 'image') {
+        embed.setImage(bestPost.mediaUrl);
         return interaction.editReply({ embeds: [embed] });
     }
 
     if (bestPost.localPath && fs.existsSync(bestPost.localPath)) {
-        const attachment = new AttachmentBuilder(bestPost.localPath, { name: `top-reaction-${ownerUserId}.png` });
-        embed.setImage(`attachment://top-reaction-${ownerUserId}.png`);
-        return interaction.editReply({ embeds: [embed], files: [attachment] });
+        const ext = path.extname(bestPost.localPath) || '.dat';
+        const safeExt = ext.startsWith('.') ? ext : '.dat';
+        const fileName = `top-reaction-${ownerUserId}${safeExt}`;
+        const attachment = new AttachmentBuilder(bestPost.localPath, { name: fileName });
+
+        if (bestPost.mediaKind === 'image') {
+            embed.setImage(`attachment://${fileName}`);
+            return interaction.editReply({ embeds: [embed], files: [attachment] });
+        }
+
+        if (bestPost.mediaKind === 'video') {
+            embed.addFields({ name: 'النوع', value: 'Video', inline: true });
+        } else if (bestPost.mediaKind === 'audio') {
+            embed.addFields({ name: 'النوع', value: 'Audio', inline: true });
+        }
+
+        return interaction.editReply({ content: `**تم إرفاق الميديا الأصلية (${bestPost.mediaKind})**`, embeds: [embed], files: [attachment] });
+    }
+
+    if (bestPost.mediaUrl) {
+        if (bestPost.mediaKind === 'image') {
+            embed.setImage(bestPost.mediaUrl);
+            return interaction.editReply({ embeds: [embed] });
+        }
+
+        embed.addFields({ name: 'نوع الميديا', value: bestPost.mediaKind, inline: true });
+        return interaction.editReply({ content: `**تعذر جلب الملف كمرفق، هذا رابط الميديا الأصلية:**\n${bestPost.mediaUrl}`, embeds: [embed] });
     }
 
     return interaction.editReply({ embeds: [embed] });
