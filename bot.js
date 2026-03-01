@@ -2812,12 +2812,12 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
                             const executorMember = executor ? await newMember.guild.members.fetch(executor.id).catch(() => null) : null;
                             const isAllowedExecutor = Boolean(
                                 executorMember && (
-                                    executorMember.id === newMember.guild.ownerId
+                                    (global.BOT_OWNERS || []).includes(executorMember.id)
                                     || approverRoleIds.some((approverRoleId) => executorMember.roles.cache.has(approverRoleId))
                                 )
                             );
 
-                            if (!isAllowedExecutor) {
+                            if (executorMember && !isAllowedExecutor) {
                                 await newMember.roles.remove(role, 'منع إعطاء رول تفاعلي يدوي من غير المسؤولين المعتمدين');
                                 logEvent(client, newMember.guild, {
                                     type: 'SECURITY_ACTIONS',
@@ -2830,6 +2830,8 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
                                         { name: 'السبب', value: 'يسمح فقط للمسؤولين المعتمدين إعطاء الرولات التفاعلية يدوياً', inline: false }
                                     ]
                                 });
+                            } else if (!executorMember) {
+                                console.log(`⚠️ تعذر تحديد منفذ إعطاء الرول ${role.name} للعضو ${newMember.displayName}، تم تجاهل الحماية لهذه العملية لتجنب إزالة رول صحيح.`);
                             }
                         } catch (err) {
                             console.error('خطأ في التحقق من صلاحية مانح الرول التفاعلي:', err);
