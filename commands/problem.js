@@ -54,6 +54,23 @@ function loadAdminRoles() {
   }
 }
 
+function loadBotOwners() {
+  const fromGlobal = Array.isArray(global.BOT_OWNERS) ? global.BOT_OWNERS : [];
+  if (fromGlobal.length > 0) return fromGlobal;
+
+  try {
+    const botConfigPath = path.join(__dirname, '..', 'data', 'botConfig.json');
+    if (fs.existsSync(botConfigPath)) {
+      const botConfig = JSON.parse(fs.readFileSync(botConfigPath, 'utf8'));
+      return Array.isArray(botConfig.owners) ? botConfig.owners : [];
+    }
+  } catch (error) {
+    console.error('Error reading bot owners in problem.js:', error);
+  }
+
+  return [];
+}
+
 // Problem configuration (logs channel, mute role, mute duration).  These
 // values are loaded from a JSON file on disk so they persist between
 // restarts.  The config file is stored in data/problemConfig.json.  If
@@ -1591,14 +1608,13 @@ async function handleMemberUpdate(oldMember, newMember, client) {
           executorMember = null;
         }
         if (executorMember) {
+          const BOT_OWNERS = loadBotOwners();
           // Authorised if guild owner
           if (executorMember.id === guild.ownerId) authorized = true;
           // Authorised if the bot removed the mute (scheduled expiry or command action)
           else if (client?.user?.id && executorMember.id === client.user.id) authorized = true;
-          // Or if has responsible roles from config
-          else if (config.responsibleRoleIds && config.responsibleRoleIds.some((rid) => executorMember.roles.cache.has(rid))) {
-            authorized = true;
-          }
+          // Authorised if bot owner
+          else if (BOT_OWNERS.includes(executorMember.id)) authorized = true;
         }
       }
          if (!authorized) {
