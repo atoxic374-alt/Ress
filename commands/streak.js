@@ -565,6 +565,35 @@ function getAttachmentExtension(attachment) {
     return '.png';
 }
 
+function getExtensionFromUrlOrContentType(url, contentType = '') {
+    const normalizedType = String(contentType || '').toLowerCase();
+    if (normalizedType.includes('png')) return '.png';
+    if (normalizedType.includes('jpeg') || normalizedType.includes('jpg')) return '.jpg';
+    if (normalizedType.includes('webp')) return '.webp';
+    if (normalizedType.includes('gif')) return '.gif';
+    if (normalizedType.includes('bmp')) return '.bmp';
+    if (normalizedType.includes('mp4')) return '.mp4';
+    if (normalizedType.includes('webm')) return '.webm';
+    if (normalizedType.includes('mov') || normalizedType.includes('quicktime')) return '.mov';
+    if (normalizedType.includes('mkv')) return '.mkv';
+    if (normalizedType.includes('avi')) return '.avi';
+    if (normalizedType.includes('wmv')) return '.wmv';
+    if (normalizedType.includes('flv')) return '.flv';
+    if (normalizedType.includes('mp3')) return '.mp3';
+    if (normalizedType.includes('wav')) return '.wav';
+    if (normalizedType.includes('ogg')) return '.ogg';
+    if (normalizedType.includes('m4a')) return '.m4a';
+    if (normalizedType.includes('aac')) return '.aac';
+
+    try {
+        const parsed = new URL(url || '');
+        const ext = path.extname(parsed.pathname);
+        if (ext) return ext.toLowerCase();
+    } catch (error) {}
+
+    return '.dat';
+}
+
 function pickBestMediaAttachment(message) {
     if (!message?.attachments?.size) return null;
 
@@ -1212,8 +1241,30 @@ async function handleShowTopReactionImage(interaction) {
             return interaction.editReply({ embeds: [embed] });
         }
 
-        embed.addFields({ name: 'نوع الميديا', value: bestPost.mediaKind, inline: true });
-        return interaction.editReply({ content: `**تعذر جلب الملف كمرفق، هذا رابط الميديا الأصلية:**\n${bestPost.mediaUrl}`, embeds: [embed] });
+        try {
+            const mediaResponse = await axios.get(bestPost.mediaUrl, {
+                responseType: 'arraybuffer',
+                timeout: 20000,
+                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; StreakBot/1.0)' }
+            });
+
+            const ext = getExtensionFromUrlOrContentType(bestPost.mediaUrl, mediaResponse.headers?.['content-type']);
+            const safeExt = ext.startsWith('.') ? ext : '.dat';
+            const fileName = `top-reaction-${ownerUserId}${safeExt}`;
+            const attachment = new AttachmentBuilder(Buffer.from(mediaResponse.data), { name: fileName });
+
+            if (bestPost.mediaKind === 'image') {
+                embed.setImage(`attachment://${fileName}`);
+            } else {
+                embed.addFields({ name: 'نوع الميديا', value: bestPost.mediaKind, inline: true });
+            }
+
+            return interaction.editReply({ content: `**تم إرفاق الميديا الأصلية (${bestPost.mediaKind})**`, embeds: [embed], files: [attachment] });
+        } catch (downloadError) {
+            console.error('Failed to download top reaction media directly:', downloadError.message);
+            embed.addFields({ name: 'نوع الميديا', value: bestPost.mediaKind, inline: true });
+            return interaction.editReply({ content: '**تعذر تحميل الميديا كمرفق حالياً.**', embeds: [embed] });
+        }
     }
 
     return interaction.editReply({ embeds: [embed] });
