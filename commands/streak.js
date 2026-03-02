@@ -596,20 +596,35 @@ function getExtensionFromUrlOrContentType(url, contentType = '') {
 
 function buildMediaCandidateUrls(attachment) {
     if (!attachment) return [];
-    const urls = [attachment.url, attachment.proxyURL].filter(Boolean);
 
-    // بديل إضافي شائع لروابط Discord CDN
-    for (const url of [...urls]) {
+    const urls = [];
+    const pushVariant = (url) => {
+        if (!url) return;
         try {
             const parsed = new URL(url);
+            urls.push(parsed.toString());
+
+            // نسخة بدون query لأن روابط موقعة قد تنتهي
+            const withoutQuery = new URL(parsed.toString());
+            withoutQuery.search = '';
+            urls.push(withoutQuery.toString());
+
             if (parsed.hostname === 'cdn.discordapp.com') {
-                parsed.hostname = 'media.discordapp.net';
-                urls.push(parsed.toString());
+                const mediaHost = new URL(parsed.toString());
+                mediaHost.hostname = 'media.discordapp.net';
+                urls.push(mediaHost.toString());
+
+                const mediaHostNoQuery = new URL(mediaHost.toString());
+                mediaHostNoQuery.search = '';
+                urls.push(mediaHostNoQuery.toString());
             }
         } catch (error) {}
-    }
+    };
 
-    return [...new Set(urls)];
+    pushVariant(attachment.url);
+    pushVariant(attachment.proxyURL);
+
+    return [...new Set(urls.filter(Boolean))];
 }
 
 async function robustDownloadMediaBuffer(urls) {
@@ -619,12 +634,15 @@ async function robustDownloadMediaBuffer(urls) {
     let lastError = null;
 
     for (const mediaUrl of candidates) {
-        for (let attempt = 1; attempt <= 3; attempt += 1) {
+        for (let attempt = 1; attempt <= 4; attempt += 1) {
             try {
                 const response = await axios.get(mediaUrl, {
                     responseType: 'arraybuffer',
-                    timeout: 20000,
-                    maxRedirects: 5,
+                    timeout: 30000,
+                    maxRedirects: 8,
+                    maxContentLength: Infinity,
+                    maxBodyLength: Infinity,
+                    validateStatus: (status) => status >= 200 && status < 400,
                     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; StreakBot/1.0)' }
                 });
 
@@ -1290,20 +1308,37 @@ async function handleShowTopReactionImage(interaction) {
             return interaction.editReply({ content: `**تم إرفاق الميديا الأصلية (${bestPost.mediaKind})**`, embeds: [embed], files: [attachment] });
         } catch (downloadError) {
             console.error('Failed to download top reaction media directly:', downloadError.message);
+
+            // محاولة بديلة: إعادة جلب الرسالة للحصول على روابط مرفق محدثة ثم التحميل مجدداً
             try {
-                const fallbackName = `top-reaction-${ownerUserId}${getExtensionFromUrlOrContentType(bestPost.mediaUrl)}`;
-                const remoteAttachment = { attachment: bestPost.mediaUrl, name: fallbackName };
-                if (bestPost.mediaKind === 'image') {
-                    embed.setImage(`attachment://${fallbackName}`);
-                } else {
-                    embed.addFields({ name: 'نوع الميديا', value: bestPost.mediaKind, inline: true });
+                const refreshedMessage = await bestPost.message.channel.messages.fetch(bestPost.message.id).catch(() => null);
+                const refreshedAttachment = pickBestMediaAttachment(refreshedMessage);
+                const refreshedCandidates = buildMediaCandidateUrls(refreshedAttachment);
+
+                if (refreshedCandidates.length) {
+                    const refreshedMediaResponse = await robustDownloadMediaBuffer(refreshedCandidates);
+                    const refreshedExt = refreshedMediaResponse.ext || getExtensionFromUrlOrContentType(refreshedAttachment?.url, refreshedMediaResponse.contentType);
+                    const refreshedSafeExt = refreshedExt.startsWith('.') ? refreshedExt : '.dat';
+                    const refreshedFileName = `top-reaction-${ownerUserId}${refreshedSafeExt}`;
+                    const refreshedAttachmentFile = new AttachmentBuilder(refreshedMediaResponse.buffer, { name: refreshedFileName });
+
+                    if (bestPost.mediaKind === 'image') {
+                        embed.setImage(`attachment://${refreshedFileName}`);
+                    } else {
+                        embed.addFields({ name: 'نوع الميديا', value: bestPost.mediaKind, inline: true });
+                    }
+
+                    return interaction.editReply({ content: `**تم إرفاق الميديا الأصلية (${bestPost.mediaKind})**`, embeds: [embed], files: [refreshedAttachmentFile] });
                 }
-                return interaction.editReply({ content: `**تم إرفاق الميديا الأصلية (${bestPost.mediaKind})**`, embeds: [embed], files: [remoteAttachment] });
-            } catch (fallbackError) {
-                console.error('Fallback URL attachment failed:', fallbackError.message);
-                embed.addFields({ name: 'نوع الميديا', value: bestPost.mediaKind, inline: true });
-                return interaction.editReply({ content: '**تعذر تحميل الميديا كمرفق حالياً.**', embeds: [embed] });
+            } catch (refetchDownloadError) {
+                console.error('Refetched message media download failed:', refetchDownloadError.message);
             }
+
+            embed.addFields({ name: 'نوع الميديا', value: bestPost.mediaKind, inline: true });
+            return interaction.editReply({
+                content: '**تعذر تحميل الميديا كمرفق حالياً. جرب مرة ثانية بعد دقائق، أو أرسل لوكيت جديد ليتم حفظه محلياً وعرضه مباشرة.**',
+                embeds: [embed]
+            });
         }
     }
 
