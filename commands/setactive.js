@@ -391,20 +391,44 @@ async function handleSetActiveInteraction(interaction) {
         }
 
         if (value === 'set_exceptions') {
-            if (app.enabled) {
-                const roleMenu = new RoleSelectMenuBuilder()
-                    .setCustomId('setactive_select_exception_roles_new')
-                    .setPlaceholder('اختر رولات الاستثناء (النظام الجديد)')
-                    .setMinValues(1)
-                    .setMaxValues(10);
-                return interaction.update({ content: '**اختر رولات الاستثناء (في النظام الجديد لا تحتاج كلمات).**', components: [new ActionRowBuilder().addComponents(roleMenu), getBackRow()], embeds: [] });
+            const interactiveRolesSorted = (settings.settings.interactiveRoles || [])
+                .map((roleId) => interaction.guild.roles.cache.get(roleId))
+                .filter(Boolean)
+                .sort((a, b) => b.position - a.position)
+                .slice(0, 25);
+
+            if (!interactiveRolesSorted.length) {
+                return interaction.update({
+                    content: '**لا توجد رولات تفاعلية حالياً. حدد الرولات التفاعلية أولاً ثم اختر رول/رولات الاستثناء منها.**',
+                    components: getPersistentMenuRows(settings),
+                    embeds: []
+                });
             }
 
-            const roleMenu = new RoleSelectMenuBuilder()
+            if (app.enabled) {
+                const roleMenu = new StringSelectMenuBuilder()
+                    .setCustomId('setactive_select_exception_roles_new')
+                    .setPlaceholder('اختر رولات الاستثناء من الرولات التفاعلية')
+                    .setMinValues(1)
+                    .setMaxValues(Math.min(10, interactiveRolesSorted.length))
+                    .addOptions(interactiveRolesSorted.map((role) => ({
+                        label: role.name.slice(0, 100),
+                        value: role.id,
+                        description: `${interaction.guild.name} - Active Role`.slice(0, 100)
+                    })));
+                return interaction.update({ content: '**اختر رولات الاستثناء من نفس قائمة الرولات التفاعلية (في النظام الجديد لا تحتاج كلمات).**', components: [new ActionRowBuilder().addComponents(roleMenu), getBackRow()], embeds: [] });
+            }
+
+            const roleMenu = new StringSelectMenuBuilder()
                 .setCustomId('setactive_select_exception_role_old')
-                .setPlaceholder('اختر رول الاستثناء (النظام القديم)')
+                .setPlaceholder('اختر رول الاستثناء من الرولات التفاعلية')
                 .setMinValues(1)
-                .setMaxValues(1);
+                .setMaxValues(1)
+                .addOptions(interactiveRolesSorted.map((role) => ({
+                    label: role.name.slice(0, 100),
+                    value: role.id,
+                    description: `${interaction.guild.name} - Active Role`.slice(0, 100)
+                })));
             return interaction.update({ content: '**اختر رول الاستثناء ثم ستكتب الكلمات المرتبطة به (النظام القديم).**', components: [new ActionRowBuilder().addComponents(roleMenu), getBackRow()], embeds: [] });
         }
 
@@ -515,14 +539,7 @@ async function handleSetActiveInteraction(interaction) {
     }
 
     if (customId === 'setactive_select_interactive_roles') {
-        const exceptionRoleIds = new Set(
-            (settings.settings.exceptions || [])
-                .map((entry) => entry?.roleId)
-                .filter((roleId) => typeof roleId === 'string' && roleId.length > 0)
-        );
-
-        // لا يمكن أن يكون الرول تفاعلي ومستثنى بنفس الوقت
-        const selectedSet = new Set(interaction.values.filter((roleId) => !exceptionRoleIds.has(roleId)));
+        const selectedSet = new Set(interaction.values);
 
         settings.settings.interactiveRoles = Array.from(selectedSet).sort((a, b) => {
             const roleA = interaction.guild.roles.cache.get(a);
@@ -533,23 +550,18 @@ async function handleSetActiveInteraction(interaction) {
         if (app.enabled && app.requestsChannelId) {
             await sendOrUpdateApplicationPanel(interaction.guild, settings).catch(() => {});
         }
-        const removedOverlapCount = interaction.values.length - selectedSet.size;
-        const overlapNotice = removedOverlapCount > 0 ? `\n**تم استبعاد ${removedOverlapCount} رول لأنه مستثنى (لا يمكن الجمع بين تفاعلي ومستثنى).**` : '';
-        return interaction.update({ content: `**تم تحديث الرولات التفاعلية بنجاح**${overlapNotice}`, components: getPersistentMenuRows(settings), embeds: [] });
+        return interaction.update({ content: '**تم تحديث الرولات التفاعلية بنجاح**', components: getPersistentMenuRows(settings), embeds: [] });
     }
 
     if (customId === 'setactive_select_exception_roles_new') {
         const selectedRoleIds = interaction.values;
         settings.settings.exceptions = selectedRoleIds.map((roleId) => ({ roleId, keywords: [] }));
 
-        const exceptionSet = new Set(selectedRoleIds);
-        settings.settings.interactiveRoles = (settings.settings.interactiveRoles || []).filter((roleId) => !exceptionSet.has(roleId));
-
         saveSettings(settings);
         if (app.requestsChannelId) {
             await sendOrUpdateApplicationPanel(interaction.guild, settings).catch(() => {});
         }
-        return interaction.update({ content: '**تم تحديث رولات الاستثناء للنظام الجديد (بدون كلمات) مع إزالة أي تداخل من الرولات التفاعلية.**', components: getPersistentMenuRows(settings), embeds: [] });
+        return interaction.update({ content: '**تم تحديث رولات الاستثناء للنظام الجديد (بدون كلمات) مع بقائها ضمن الرولات التفاعلية.**', components: getPersistentMenuRows(settings), embeds: [] });
     }
 
     if (customId === 'setactive_select_exception_role_old') {
@@ -667,9 +679,8 @@ async function handleSetActiveInteraction(interaction) {
         }
 
         settings.settings.exceptions = [{ roleId, keywords: [...new Set(keywords)] }];
-        settings.settings.interactiveRoles = (settings.settings.interactiveRoles || []).filter((id) => id !== roleId);
         saveSettings(settings);
-        return interaction.reply({ content: '**تم حفظ رول الاستثناء والكلمات المرتبطة له (النظام القديم) وإزالة أي تداخل مع الرولات التفاعلية.**', ephemeral: true });
+        return interaction.reply({ content: '**تم حفظ رول الاستثناء والكلمات المرتبطة له (النظام القديم) مع بقائه ضمن الرولات التفاعلية.**', ephemeral: true });
     }
 
     if (interaction.isModalSubmit() && customId.startsWith('setactive_role_cond_modal_')) {
