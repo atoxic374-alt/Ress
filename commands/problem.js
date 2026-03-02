@@ -1615,6 +1615,10 @@ async function handleMemberUpdate(oldMember, newMember, client) {
           else if (client?.user?.id && executorMember.id === client.user.id) authorized = true;
           // Authorised if bot owner
           else if (BOT_OWNERS.includes(executorMember.id)) authorized = true;
+          // Authorised for configured problem responsibles only when executor is a real user (not an external bot)
+          else if (!executorMember.user?.bot && config.responsibleRoleIds && config.responsibleRoleIds.some((rid) => executorMember.roles.cache.has(rid))) {
+            authorized = true;
+          }
         }
       }
          if (!authorized) {
