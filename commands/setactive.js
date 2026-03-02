@@ -88,21 +88,31 @@ function hasPermission(member) {
 
 function buildMainMenu(settings) {
     const appEnabled = settings.settings.applicationSystem.enabled;
+    const baseOptions = [
+        { label: 'تحديد المسؤولين', description: 'تحديد الرولات التي يمكنها قبول/رفض الطلبات', value: 'set_approvers' },
+        { label: 'الرولات التفاعلية', description: 'إضافة أو إزالة الرولات التي يمكن طلبها', value: 'set_roles' },
+        { label: 'رولات الاستثناء', description: appEnabled ? 'تحديد رولات استثناء (بدون كلمات)' : 'تحديد رول استثناء مع كلمات مرتبطة', value: 'set_exceptions' },
+        { label: appEnabled ? 'تعطيل نظام التقديم الجديد' : 'تفعيل نظام التقديم الجديد', description: 'التبديل بين النظام القديم والجديد', value: 'toggle_new_system' }
+    ];
+
+    const newSystemOptions = [
+        { label: 'روم الطلبات الجديد', description: 'تحديد أو تعديل روم الطلبات الجديدة', value: 'set_app_requests_channel' },
+        { label: 'روم المسؤولين', description: 'الروم الذي يستقبل طلبات القبول/الرفض', value: 'set_app_managers_channel' },
+        { label: 'طريقة العرض', description: 'أزرار أو منيو مع الإيموجي', value: 'set_display_type' },
+        { label: 'شروط التقديم لكل رول', description: 'تحديد عدد الرسائل والساعات وعمر الحساب', value: 'set_role_conditions' },
+        { label: 'قوانين التقديم (اختياري)', description: 'إضافة قوانين تظهر مع ترتيب الرولات', value: 'set_app_rules' }
+    ];
+
+    const finalOptions = [
+        ...baseOptions,
+        ...(appEnabled ? newSystemOptions : []),
+        { label: 'عرض الإعدادات', description: 'عرض الإعدادات الحالية للنظام', value: 'show_settings' }
+    ];
+
     return new StringSelectMenuBuilder()
         .setCustomId('setactive_main_menu')
         .setPlaceholder('اختر الإعداد...')
-        .addOptions([
-            { label: 'تحديد المسؤولين', description: 'تحديد الرولات التي يمكنها قبول/رفض الطلبات', value: 'set_approvers' },
-            { label: 'الرولات التفاعلية', description: 'إضافة أو إزالة الرولات التي يمكن طلبها', value: 'set_roles' },
-            { label: 'رولات الاستثناء', description: appEnabled ? 'تحديد رولات استثناء (بدون كلمات)' : 'تحديد رول استثناء مع كلمات مرتبطة', value: 'set_exceptions' },
-            { label: appEnabled ? 'تعطيل نظام التقديم الجديد' : 'تفعيل نظام التقديم الجديد', description: 'التبديل بين النظام القديم والجديد', value: 'toggle_new_system' },
-            { label: 'روم الطلبات الجديد', description: appEnabled ? 'تحديد أو تعديل روم الطلبات الجديدة' : 'يحتاج تفعيل النظام أولاً', value: 'set_app_requests_channel' },
-            { label: 'روم المسؤولين', description: appEnabled ? 'الروم الذي يستقبل طلبات القبول/الرفض' : 'يحتاج تفعيل النظام أولاً', value: 'set_app_managers_channel' },
-            { label: 'طريقة العرض', description: appEnabled ? 'أزرار أو منيو مع الإيموجي' : 'يحتاج تفعيل النظام أولاً', value: 'set_display_type' },
-            { label: 'شروط التقديم لكل رول', description: appEnabled ? 'تحديد عدد الرسائل والساعات وعمر الحساب' : 'يحتاج تفعيل النظام أولاً', value: 'set_role_conditions' },
-            { label: 'قوانين التقديم (اختياري)', description: appEnabled ? 'إضافة قوانين تظهر مع ترتيب الرولات' : 'يحتاج تفعيل النظام أولاً', value: 'set_app_rules' },
-            { label: 'عرض الإعدادات', description: 'عرض الإعدادات الحالية للنظام', value: 'show_settings' }
-        ]);
+        .addOptions(finalOptions);
 }
 
 function getBackRow() {
@@ -468,20 +478,32 @@ async function handleSetActiveInteraction(interaction) {
         }
 
         if (value === 'show_settings') {
-            const embed = new EmbedBuilder()
-                .setTitle('الإعدادات الحالية')
-                .setColor(colorManager.getColor ? colorManager.getColor() : '#00ff00')
-                .addFields(
-                    { name: 'المسؤولون', value: (settings.settings.approvers || []).map((id) => `<@&${id}>`).join('\n') || '**لا يوجد**', inline: false },
-                    { name: 'الرولات التفاعلية', value: (settings.settings.interactiveRoles || []).map((id) => `<@&${id}>`).join('\n') || '**لا يوجد**', inline: false },
-                    { name: 'رولات الاستثناء', value: (settings.settings.exceptions || []).map((entry) => `<@&${entry.roleId}>`).join('\n') || '**لا يوجد**', inline: false },
-                    { name: 'نظام التقديم الجديد', value: app.enabled ? '**مفعل**' : '**معطل**', inline: true },
+            const fields = [
+                { name: 'المسؤولون', value: (settings.settings.approvers || []).map((id) => `<@&${id}>`).join('\n') || '**لا يوجد**', inline: false },
+                { name: 'الرولات التفاعلية', value: (settings.settings.interactiveRoles || []).map((id) => `<@&${id}>`).join('\n') || '**لا يوجد**', inline: false },
+                { name: 'رولات الاستثناء', value: (settings.settings.exceptions || []).map((entry) => `<@&${entry.roleId}>`).join('\n') || '**لا يوجد**', inline: false },
+                { name: 'نظام التقديم الجديد', value: app.enabled ? '**مفعل**' : '**معطل**', inline: true }
+            ];
+
+            if (app.enabled) {
+                fields.push(
                     { name: 'روم الطلبات الجديد', value: app.requestsChannelId ? `<#${app.requestsChannelId}>` : '**غير محدد**', inline: true },
                     { name: 'روم المسؤولين', value: app.managersChannelId ? `<#${app.managersChannelId}>` : '**غير محدد**', inline: true },
                     { name: 'طريقة العرض', value: `**${app.displayType === 'menu' ? 'منيو' : 'أزرار'}**`, inline: true },
                     { name: 'الشروط', value: formatConditionsMap(app.roleConditions, interaction.guild), inline: false },
                     { name: 'قوانين التقديم', value: (app.rulesText || '').trim() || '**لا توجد قوانين**', inline: false }
                 );
+            } else {
+                fields.push(
+                    { name: 'روم الطلبات (النظام القديم)', value: settings.settings.requestChannel ? `<#${settings.settings.requestChannel}>` : '**غير محدد**', inline: true },
+                    { name: 'تنبيه', value: '**خيارات النظام الجديد مخفية حالياً لأن النظام الجديد معطل.**', inline: false }
+                );
+            }
+
+            const embed = new EmbedBuilder()
+                .setTitle('الإعدادات الحالية')
+                .setColor(colorManager.getColor ? colorManager.getColor() : '#00ff00')
+                .addFields(fields);
             return interaction.update({ embeds: [embed], components: [getBackRow()], content: null });
         }
     }
