@@ -625,14 +625,6 @@ async function handleInteraction(interaction) {
         await cleanupStaleNewPendingRequests(settings, interaction.guild, interaction.user.id);
 
         const isExceptionRole = exceptionRoleIds.has(roleId);
-        const memberInteractive = getMemberInteractiveRoles(member, interactiveRoleSet, exceptionRoleIds);
-
-        if (!isExceptionRole && memberInteractive.highestNonExceptionRole && role.position <= memberInteractive.highestNonExceptionRole.position) {
-            return interaction.reply({
-                content: `**لديك بالفعل رول تفاعلي أعلى أو مساوي (${memberInteractive.highestNonExceptionRole}). لا يمكنك التقديم إلا على رول أعلى منه**.`,
-                ephemeral: true
-            }).catch(() => {});
-        }
 
         const pendingKey = `${interaction.user.id}:${roleId}`;
         if (settings.newPendingRequests[pendingKey]) {
@@ -647,42 +639,7 @@ async function handleInteraction(interaction) {
             return interaction.reply({ content: '**لديك طلب معلق بالفعل**.', ephemeral: true }).catch(() => {});
         }
         if (!isExceptionRole && hasPendingNormal) {
-            const normalPendingRequests = pendingRequests.filter((request) => !exceptionRoleIds.has(request.roleId));
-            const requestedRolePosition = role.position;
-
-            let highestPendingPosition = -1;
-            for (const pendingRequest of normalPendingRequests) {
-                const pendingRole = interaction.guild.roles.cache.get(pendingRequest.roleId)
-                    || await interaction.guild.roles.fetch(pendingRequest.roleId).catch(() => null);
-                if (pendingRole && pendingRole.position > highestPendingPosition) {
-                    highestPendingPosition = pendingRole.position;
-                }
-            }
-
-            if (requestedRolePosition <= highestPendingPosition) {
-                return interaction.reply({ content: '**يمكنك تقديم طلب واحد فقط للرولات التفاعلية. الرتبة المطلوبة ليست أعلى من طلبك الحالي.**', ephemeral: true }).catch(() => {});
-            }
-
-            for (const pendingRequest of normalPendingRequests) {
-                const existingKey = `${pendingRequest.userId}:${pendingRequest.roleId}`;
-                delete settings.newPendingRequests[existingKey];
-
-                const pendingChannel = interaction.guild.channels.cache.get(pendingRequest.managerChannelId)
-                    || await interaction.guild.channels.fetch(pendingRequest.managerChannelId).catch(() => null);
-                const pendingMessage = pendingChannel
-                    ? await pendingChannel.messages.fetch(pendingRequest.managerMessageId).catch(() => null)
-                    : null;
-
-                if (pendingMessage?.embeds?.[0]) {
-                    const replacedEmbed = EmbedBuilder.from(pendingMessage.embeds[0]).addFields({
-                        name: 'الحالة',
-                        value: `*تم إلغاء الطلب تلقائياً لأن العضو قدّم على رول أعلى.*`
-                    });
-                    await pendingMessage.edit({ embeds: [replacedEmbed], components: [] }).catch(() => {});
-                }
-            }
-
-            saveSettings(settings);
+            return interaction.reply({ content: '**لديك طلب تفاعلي عادي معلق بالفعل، انتظر حتى يتم الرد عليه أولاً.**', ephemeral: true }).catch(() => {});
         }
 
         if (isUserBlocked(interaction.user.id)) {
@@ -778,26 +735,9 @@ async function handleInteraction(interaction) {
         const role = roleDisplay.role;
         if (!targetMember || !role) return interaction.reply({ content: 'تعذر جلب العضو أو الرول.', ephemeral: true }).catch(() => {});
 
-        const { interactiveRoleSet, exceptionRoleIds } = getInteractiveRoleSets(settings);
+        const { exceptionRoleIds } = getInteractiveRoleSets(settings);
         const isExceptionRole = exceptionRoleIds.has(role.id);
-        const memberInteractive = getMemberInteractiveRoles(targetMember, interactiveRoleSet, exceptionRoleIds);
         let removedRoleMentions = [];
-
-        if (!isExceptionRole) {
-            const rolesToRemove = memberInteractive.nonExceptionRoles.filter((existingRole) => existingRole.id !== role.id);
-            const higherOrEqualRole = rolesToRemove.find((existingRole) => existingRole.position >= role.position);
-            if (higherOrEqualRole) {
-                return interaction.reply({
-                    content: `**لا يمكن القبول لأن العضو يملك رول تفاعلي أعلى أو مساوي بالفعل (${higherOrEqualRole}).**`,
-                    ephemeral: true
-                }).catch(() => {});
-            }
-
-            if (rolesToRemove.size > 0) {
-                removedRoleMentions = rolesToRemove.map((existingRole) => `<@&${existingRole.id}>`);
-                await targetMember.roles.remove(rolesToRemove).catch(() => {});
-            }
-        }
 
         if (typeof global.markInteractiveRoleGrant === 'function') global.markInteractiveRoleGrant(interaction.guild.id, targetMember.id, role.id);
         await targetMember.roles.add(role).catch(() => {});
