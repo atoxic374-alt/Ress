@@ -222,27 +222,30 @@ async function execute(message, args, { saveData, BOT_OWNERS, client }) {
               .sort((a, b) => b.position - a.position);
 
             const relatedRoleIds = Array.from(relatedRoles.keys());
+            const singleRoleIds = [selectedRoleId];
 
             if (relatedRoleIds.length === 0) {
               return interaction.followUp({ content: '**لم يتم العثور على رولات أعلى/مساوية للرول المحدد.**', ephemeral: true });
             }
 
             const stamp = Date.now();
-            const confirmId = `adminroles_confirm_${interaction.user.id}_${stamp}`;
+            const confirmSingleId = `adminroles_confirm_single_${interaction.user.id}_${stamp}`;
+            const confirmHierarchyId = `adminroles_confirm_hierarchy_${interaction.user.id}_${stamp}`;
             const cancelId = `adminroles_cancel_${interaction.user.id}_${stamp}`;
 
             const confirmRow = new ActionRowBuilder().addComponents(
-              new ButtonBuilder().setCustomId(confirmId).setLabel('تأكيد').setStyle(ButtonStyle.Success),
+              new ButtonBuilder().setCustomId(confirmSingleId).setLabel('الرول المحدد فقط').setStyle(ButtonStyle.Success),
+              new ButtonBuilder().setCustomId(confirmHierarchyId).setLabel('الرول + اللي فوقه').setStyle(ButtonStyle.Primary),
               new ButtonBuilder().setCustomId(cancelId).setLabel('إلغاء').setStyle(ButtonStyle.Danger)
             );
 
             await interaction.followUp({
-              content: `**تأكيد العملية**\nسيتم تطبيق Toggle على ${relatedRoleIds.length} رول (الرول المحدد + كل الرولات الأعلى).\n\n${relatedRoleIds.map(id => `<@&${id}>`).join('\n')}`,
+              content: `**اختر نوع الإضافة/الإزالة**\n- الرول المحدد: <@&${selectedRoleId}>\n- إذا اخترت (الرول + اللي فوقه): سيتم تطبيق Toggle على ${relatedRoleIds.length} رول.`,
               components: [confirmRow],
               ephemeral: true
             });
 
-            const buttonFilter = i => i.user.id === interaction.user.id && (i.customId === confirmId || i.customId === cancelId);
+            const buttonFilter = i => i.user.id === interaction.user.id && [confirmSingleId, confirmHierarchyId, cancelId].includes(i.customId);
             const buttonInteraction = await interaction.channel.awaitMessageComponent({ filter: buttonFilter, time: 60000 }).catch(() => null);
 
             if (!buttonInteraction) {
@@ -254,10 +257,12 @@ async function execute(message, args, { saveData, BOT_OWNERS, client }) {
               return;
             }
 
+            const targetRoleIds = buttonInteraction.customId === confirmSingleId ? singleRoleIds : relatedRoleIds;
+
             let addedRoles = [];
             let removedRoles = [];
 
-            for (const roleId of relatedRoleIds) {
+            for (const roleId of targetRoleIds) {
               if (ADMIN_ROLES.includes(roleId)) {
                 ADMIN_ROLES = ADMIN_ROLES.filter(id => id !== roleId);
                 removedRoles.push(roleId);
@@ -286,7 +291,7 @@ async function execute(message, args, { saveData, BOT_OWNERS, client }) {
               logEvent(client, message.guild, {
                 type: 'ADMIN_ACTIONS',
                 title: 'تعديل رولات الادارة (تبديل)',
-                description: `تم تنفيذ تبديل على ${relatedRoleIds.length} رول (المحدد وما فوقه)`,
+                description: `تم تنفيذ تبديل على ${targetRoleIds.length} رول (${buttonInteraction.customId === confirmSingleId ? 'الرول المحدد فقط' : 'المحدد وما فوقه'})`,
                 user: message.author,
                 fields: [
                   { name: 'الرول المحدد', value: `<@&${selectedRoleId}>`, inline: false },
@@ -299,6 +304,7 @@ async function execute(message, args, { saveData, BOT_OWNERS, client }) {
             await buttonInteraction.update({
               content:
                 `**✅ تم تنفيذ العملية**\n` +
+                `- النطاق: ${buttonInteraction.customId === confirmSingleId ? 'الرول المحدد فقط' : 'الرول المحدد + اللي فوقه'}\n` +
                 `- الرول المحدد: <@&${selectedRoleId}>\n` +
                 `- تمت الإضافة: ${addedRoles.length}\n` +
                 `- تمت الإزالة: ${removedRoles.length}`,
