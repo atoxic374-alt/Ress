@@ -1,4 +1,4 @@
-const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, ChannelType } = require('discord.js');
 const colorManager = require('../utils/colorManager.js');
 const { isUserBlocked } = require('./block.js');
 const { isChannelBlocked } = require('./chatblock.js');
@@ -274,19 +274,33 @@ async function getTopUsers(db, category, period, limit = 50) {
         // إضافة الوقت الحي للفويس في الترتيب (اليومي والأسبوعي والشهري والكلي)
         if (category === 'voice' && global.client && global.client.voiceSessions) {
             const updatedResults = [...results];
-            
+            const AFK_LIMIT = 24 * 60 * 60 * 1000;
+
             for (const [userId, session] of global.client.voiceSessions.entries()) {
-                let liveDuration = 0;
-                if (!session.isAFK) {
-                    const liveStart = session.lastTrackedTime || session.startTime || session.sessionStartTime || nowMs;
-                    const effectiveStart = periodStartMs ? Math.max(liveStart, periodStartMs) : liveStart;
-                    liveDuration = Math.max(0, nowMs - effectiveStart);
+                // استبعاد Stage من احتساب الوقت الحي
+                const sessionChannel = global.client.channels?.cache?.get(session.channelId);
+                if (sessionChannel && sessionChannel.type === ChannelType.GuildStageVoice) {
+                    continue;
                 }
+
+                let liveDuration = 0;
+                const sessionStart = session.startTime || session.sessionStartTime || nowMs;
+                const liveStart = session.lastTrackedTime || sessionStart;
+
+                // تطبيق حد أقصى 24 ساعة حتى لو isAFK لم تُحدّث بعد
+                const hardCapTime = sessionStart + AFK_LIMIT;
+                const cappedNow = Math.min(nowMs, hardCapTime);
+
+                if (!session.isAFK && cappedNow > liveStart) {
+                    const effectiveStart = periodStartMs ? Math.max(liveStart, periodStartMs) : liveStart;
+                    liveDuration = Math.max(0, cappedNow - effectiveStart);
+                }
+
                 const existingUser = updatedResults.find(r => r.user_id === userId);
-                
+
                 if (existingUser) {
                     existingUser.value = (existingUser.value || 0) + liveDuration;
-                } else {
+                } else if (liveDuration > 0) {
                     updatedResults.push({ user_id: userId, value: liveDuration });
                 }
             }

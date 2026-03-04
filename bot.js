@@ -1179,11 +1179,14 @@ client.once(Events.ClientReady, async () => {
         const displayName = newState.member.displayName;
         const now = Date.now();
 
-        // معلومات القنوات
-        const oldChannelId = oldState.channel?.id;
-        const newChannelId = newState.channel?.id;
-        const oldChannelName = oldState.channel?.name || 'لا يوجد';
-        const newChannelName = newState.channel?.name || 'لا يوجد';
+        // معلومات القنوات (استبعاد Stage من احتساب الفويس)
+        const isOldTrackableVoice = !!oldState.channel && oldState.channel.type !== ChannelType.GuildStageVoice;
+        const isNewTrackableVoice = !!newState.channel && newState.channel.type !== ChannelType.GuildStageVoice;
+
+        const oldChannelId = isOldTrackableVoice ? oldState.channel.id : null;
+        const newChannelId = isNewTrackableVoice ? newState.channel.id : null;
+        const oldChannelName = isOldTrackableVoice ? (oldState.channel?.name || 'لا يوجد') : 'Stage';
+        const newChannelName = isNewTrackableVoice ? (newState.channel?.name || 'لا يوجد') : 'Stage';
 
         // تحميل دالة تتبع النشاط
         const { trackUserActivity } = require('./utils/userStatsCollector');
@@ -1298,6 +1301,12 @@ client.once(Events.ClientReady, async () => {
 
             for (const [userId, session] of client.voiceSessions.entries()) {
                 try {
+                    const sessionChannel = client.channels.cache.get(session.channelId);
+                    if (sessionChannel && sessionChannel.type === ChannelType.GuildStageVoice) {
+                        client.voiceSessions.delete(userId);
+                        continue;
+                    }
+
                     const sessionStart = session.startTime || session.sessionStartTime;
                     const totalSessionDuration = now - sessionStart;
                     if (totalSessionDuration >= AFK_LIMIT) {
