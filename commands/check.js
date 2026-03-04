@@ -1,4 +1,4 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, ChannelType } = require('discord.js');
 const colorManager = require('../utils/colorManager.js');
 const { isUserBlocked } = require('./block.js');
 const moment = require('moment-timezone');
@@ -150,9 +150,15 @@ async function getColorIndicator(userId, client, dbManager) {
         let liveDuration = 0;
         if (activeSessions.has(userId)) {
             const session = activeSessions.get(userId);
+            const AFK_LIMIT = 24 * 60 * 60 * 1000;
             if (session && !session.isAFK) {
-                const liveStart = session.lastTrackedTime || session.startTime || session.sessionStartTime;
-                liveDuration = Math.max(0, Date.now() - liveStart);
+                const sessionChannel = client.channels?.cache?.get(session.channelId);
+                if (!sessionChannel || sessionChannel.type !== ChannelType.GuildStageVoice) {
+                    const sessionStart = session.startTime || session.sessionStartTime || Date.now();
+                    const liveStart = session.lastTrackedTime || sessionStart;
+                    const cappedNow = Math.min(Date.now(), sessionStart + AFK_LIMIT);
+                    liveDuration = Math.max(0, cappedNow - liveStart);
+                }
             }
         }
 
