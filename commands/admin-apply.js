@@ -134,6 +134,31 @@ function formatTimeLeft(milliseconds) {
     }
 }
 
+
+function isServerOrBotOwner(member) {
+    const BOT_OWNERS = global.BOT_OWNERS || [];
+    return member.guild.ownerId === member.id || BOT_OWNERS.includes(member.id);
+}
+
+function withContextAvatar(embed, { guild = null, member = null, user = null } = {}) {
+    if (!embed) return embed;
+
+    const guildIcon = guild?.iconURL?.({ dynamic: true, size: 256 });
+    if (guildIcon) {
+        embed.setAuthor({ name: guild.name || 'Server', iconURL: guildIcon });
+    }
+
+    const avatarUser = user || member?.user;
+    const avatar = avatarUser?.displayAvatarURL?.({ dynamic: true, size: 256 });
+    if (avatar) {
+        embed.setThumbnail(avatar);
+    } else if (guildIcon) {
+        embed.setThumbnail(guildIcon);
+    }
+
+    return embed;
+}
+
 module.exports = {
     name: 'admin-apply',
     aliases: ['إدارة', 'ادارة' ,'admin'],
@@ -149,8 +174,38 @@ module.exports = {
                 return;
             }
 
+
             // تحميل الإعدادات
             const settings = loadAdminApplicationSettings();
+
+            // وضع روم تهنئة القبول: ادارة #channel (للمالك فقط)
+            const messageContent = interaction.message?.content || '';
+            const channelMentionMatch = messageContent.match(/<#(\d+)>/);
+            if (channelMentionMatch) {
+                if (!isServerOrBotOwner(interaction.member)) {
+                    await interaction.reply({
+                        content: '**❌ فقط مالك السيرفر أو مالك البوت يمكنه تحديد روم تهنئة قبول الإدارة.**'
+                    });
+                    return;
+                }
+
+                const targetChannelId = channelMentionMatch[1];
+                const targetChannel = interaction.guild.channels.cache.get(targetChannelId);
+
+                if (!targetChannel || !targetChannel.isTextBased()) {
+                    await interaction.reply({
+                        content: '**❌ الروم المحدد غير صالح.**'
+                    });
+                    return;
+                }
+
+                settings.settings.acceptedAdminAnnouncementChannel = targetChannelId;
+                saveAdminApplicationSettings(settings);
+                await interaction.reply({
+                    content: `**✅ تم تعيين روم تهنئة قبول الإدارة إلى <#${targetChannelId}>**`
+                });
+                return;
+            }
 
             // التحقق من إعداد النظام
             if (!settings.settings.applicationChannel) {
@@ -191,7 +246,6 @@ module.exports = {
             let candidateId = null;
 
             // message command - استخراج المرشح من محتوى الرسالة
-            const messageContent = interaction.message?.content || '';
             const mentionMatch = messageContent.match(/<@!?(\d+)>/);
 
             if (!mentionMatch) {
@@ -249,13 +303,13 @@ module.exports = {
             await interaction.deferReply();
 
             const userStats = await collectUserStats(candidate);
-            const statsEmbed = await createUserStatsEmbed(userStats, colorManager);
+            const statsEmbed = withContextAvatar(await createUserStatsEmbed(userStats, colorManager), { guild: interaction.guild, member: candidate, user: candidate.user });
 
             // إنشاء معرف فريد أبسط للطلب مع معلومات إضافية
             const applicationId = `${Date.now()}_${candidateId}_${interaction.user.id}`;
 
             // إنشاء embed محسّن للآيفون
-            const simpleEmbed = await createUserStatsEmbed(userStats, colorManager, true, interaction.member.displayName, `<@${interaction.user.id}>`);
+            const simpleEmbed = withContextAvatar(await createUserStatsEmbed(userStats, colorManager, true, interaction.member.displayName, `<@${interaction.user.id}>`), { guild: interaction.guild, member: candidate, user: candidate.user });
 
             // تقليل حجم الـ embed للآيفون
             if (simpleEmbed.data && simpleEmbed.data.fields) {
@@ -542,6 +596,8 @@ async function handleAdminApplicationInteraction(interaction) {
                 .setColor('#ff0000')
                 .setTitle('❌ Rejected')
                 .setFields([]) // مسح الحقول القديمة
+                .setAuthor({ name: interaction.guild.name, iconURL: interaction.guild.iconURL({ dynamic: true }) || undefined })
+                .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true }))
                 .addFields([
                     { name: '**المسؤول**', value: `<@${interaction.user.id}>`, inline: true },
                     { name: '**المرفوض**', value: `<@${candidateId}>`, inline: true },
@@ -556,7 +612,7 @@ async function handleAdminApplicationInteraction(interaction) {
             try {
                 const guild = interaction.guild;
                 const member = await guild.members.fetch(candidateId);
-                const rejectNotificationEmbed = colorManager.createEmbed()
+                const rejectNotificationEmbed = withContextAvatar(colorManager.createEmbed(), { guild: interaction.guild, member: member, user: member.user })
                     .setTitle('تم رفض تقديمك للإدارة')
                     .setDescription(`**المسؤول :** <@${interaction.user.id}>\n**السبب :** ${reason}\n\n**عليك كولداون تقديم إدارة لمدة :** ${settings.settings.rejectCooldownHours} ساعة`)
                     .setTimestamp();
@@ -599,7 +655,7 @@ async function handleAdminApplicationInteraction(interaction) {
 
             switch (selectedDetail) {
                 case 'dates':
-                    detailEmbed = colorManager.createEmbed()
+                    detailEmbed = withContextAvatar(colorManager.createEmbed(), { guild: interaction.guild, member: candidate, user: candidate.user })
                         .setTitle(` ** Dates - ${userStats.mention}**`)
                         .setThumbnail(userStats.avatar)
                         .addFields([
@@ -640,7 +696,7 @@ async function handleAdminApplicationInteraction(interaction) {
                         timeInServerDays // أيام في السيرفر
                     );
 
-                    detailEmbed = colorManager.createEmbed()
+                    detailEmbed = withContextAvatar(colorManager.createEmbed(), { guild: interaction.guild, member: candidate, user: candidate.user })
                         .setTitle(` **Evaluation**`)
                         .setThumbnail(userStats.avatar)
                         .addFields([
@@ -658,7 +714,7 @@ async function handleAdminApplicationInteraction(interaction) {
                         ? userStats.roles.map((role, index) => `**${index + 1}.** <@&${role.id}> (${role.name})`).join('\n')
                         : '**لا توجد رولات إضافية**';
 
-                    detailEmbed = colorManager.createEmbed()
+                    detailEmbed = withContextAvatar(colorManager.createEmbed(), { guild: interaction.guild, member: candidate, user: candidate.user })
                         .setTitle(` ** Roles - ${userStats.mention}**`)
                         .setThumbnail(userStats.avatar)
                         .addFields([
@@ -670,7 +726,7 @@ async function handleAdminApplicationInteraction(interaction) {
                     break;
 
                 case 'advanced_stats':
-                    detailEmbed = colorManager.createEmbed()
+                    detailEmbed = withContextAvatar(colorManager.createEmbed(), { guild: interaction.guild, member: candidate, user: candidate.user })
                         .setTitle(` ** Stats - ${userStats.mention}**`)
                         .setThumbnail(userStats.avatar)
                         .addFields([
@@ -687,7 +743,7 @@ async function handleAdminApplicationInteraction(interaction) {
                 case 'simple_view':
                 default:
                     // العودة للعرض البسيط مع النصوص الديناميكية
-                    detailEmbed = await createUserStatsEmbed(userStats, colorManager, true, application.requesterName, application.requesterMention);
+                    detailEmbed = withContextAvatar(await createUserStatsEmbed(userStats, colorManager, true, application.requesterName, application.requesterMention), { guild: interaction.guild, member: candidate, user: candidate.user });
                     break;
             }
 
@@ -799,7 +855,7 @@ async function handleAdminApplicationInteraction(interaction) {
             delete settings.pendingApplications[applicationId];
             saveAdminApplicationSettings(settings);
 
-            const errorEmbed = colorManager.createEmbed()
+            const errorEmbed = withContextAvatar(colorManager.createEmbed(), { guild: interaction.guild, member: interaction.member, user: interaction.user })
                 .setTitle('❌ خطأ')
                 .setDescription('**لم يتم العثور على العضو في السيرفر. تم حذف الطلب.**')
                 .setTimestamp();
@@ -868,7 +924,7 @@ async function handleAdminApplicationInteraction(interaction) {
             }
 
             // تحديث الرسالة الأصلية
-            const approvedEmbed = colorManager.createEmbed()
+            const approvedEmbed = withContextAvatar(colorManager.createEmbed(), { guild: interaction.guild, member: candidate, user: candidate.user })
                 .setTitle('✅ Accepted')
                 .setDescription(`**By : <@${interaction.user.id}>\nNew Admin : <@${application.candidateId}> **`)
                 .addFields([
@@ -899,7 +955,7 @@ async function handleAdminApplicationInteraction(interaction) {
             // إرسال إشعار للمرشح
             if (addedRoles.length > 0) {
                 try {
-                    const notificationEmbed = colorManager.createEmbed()
+                    const notificationEmbed = withContextAvatar(colorManager.createEmbed(), { guild: interaction.guild, member: interaction.member, user: interaction.user })
                         .setTitle('تم قبول طلبك للإدارة')
                         .setDescription(`**قبلك مسؤول الإدارة :** <@${interaction.user.id}>\n\n**رولك الذي عُطي :** ${addedRoles.map(r => r.name).join(', ')}\n\n**تاريخ الموافقة :** ${moment().tz('Asia/Riyadh').format('YYYY-MM-DD HH:mm')}`)
                         .setTimestamp();
@@ -910,6 +966,27 @@ async function handleAdminApplicationInteraction(interaction) {
                     ]);
 
                     await candidate.user.send({ embeds: [notificationEmbed] });
+
+                    // إرسال رسالة ترحيب في الروم المحدد (إن تم ضبطه عبر: ادارة #channel)
+                    const announceChannelId = settings.settings.acceptedAdminAnnouncementChannel;
+                    if (announceChannelId) {
+                        const announceChannel = interaction.guild.channels.cache.get(announceChannelId);
+                        if (announceChannel && announceChannel.isTextBased()) {
+                            const welcomeEmbed = withContextAvatar(colorManager.createEmbed(), { guild: interaction.guild, member: candidate, user: candidate.user })
+                                .setTitle('رحبوا بالادمن الجديد')
+                                .addFields(
+                                    { name: 'الادمن', value: `<@${application.candidateId}>`, inline: true },
+                                    { name: 'ID', value: `\`${application.candidateId}\``, inline: true }
+                                )
+                                .setTimestamp();
+
+                            await announceChannel.send({
+                                content: '@here',
+                                embeds: [welcomeEmbed]
+                            }).catch(() => {});
+                        }
+                    }
+
                     console.log(`📧 تم إرسال إشعار مفصل للمرشح <@${application.candidateId}>`);
                 } catch (dmError) {
                     console.log(`⚠️ تعذر إرسال إشعار خاص للمرشح <@${application.candidateId}>:`, dmError.message);
