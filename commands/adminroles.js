@@ -200,82 +200,117 @@ async function execute(message, args, { saveData, BOT_OWNERS, client }) {
             const rolesInput = msg.content.trim();
             const roleIds = rolesInput.split(/\s+/).map(role => role.replace(/[<@&>]/g, '')).filter(id => id);
 
-            if (roleIds.length === 0) {
-              return interaction.followUp({ content: '**لم يتم تحديد أي رولات صحيحة.**', ephemeral: true });
+            if (roleIds.length !== 1) {
+              return interaction.followUp({ content: '**منشن رول واحد فقط أو اكتب ID واحد فقط.**', ephemeral: true });
+            }
+
+            const selectedRoleId = roleIds[0];
+            let selectedRole;
+
+            try {
+              selectedRole = await interaction.guild.roles.fetch(selectedRoleId);
+            } catch (error) {
+              selectedRole = null;
+            }
+
+            if (!selectedRole) {
+              return interaction.followUp({ content: '**❌ الرول غير موجود أو غير صالح.**', ephemeral: true });
+            }
+
+            const relatedRoles = interaction.guild.roles.cache
+              .filter(role => role.id !== interaction.guild.roles.everyone.id && role.position >= selectedRole.position)
+              .sort((a, b) => b.position - a.position);
+
+            const relatedRoleIds = Array.from(relatedRoles.keys());
+
+            if (relatedRoleIds.length === 0) {
+              return interaction.followUp({ content: '**لم يتم العثور على رولات أعلى/مساوية للرول المحدد.**', ephemeral: true });
+            }
+
+            const stamp = Date.now();
+            const confirmId = `adminroles_confirm_${interaction.user.id}_${stamp}`;
+            const cancelId = `adminroles_cancel_${interaction.user.id}_${stamp}`;
+
+            const confirmRow = new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId(confirmId).setLabel('تأكيد').setStyle(ButtonStyle.Success),
+              new ButtonBuilder().setCustomId(cancelId).setLabel('إلغاء').setStyle(ButtonStyle.Danger)
+            );
+
+            await interaction.followUp({
+              content: `**تأكيد العملية**\nسيتم تطبيق Toggle على ${relatedRoleIds.length} رول (الرول المحدد + كل الرولات الأعلى).\n\n${relatedRoleIds.map(id => `<@&${id}>`).join('\n')}`,
+              components: [confirmRow],
+              ephemeral: true
+            });
+
+            const buttonFilter = i => i.user.id === interaction.user.id && (i.customId === confirmId || i.customId === cancelId);
+            const buttonInteraction = await interaction.channel.awaitMessageComponent({ filter: buttonFilter, time: 60000 }).catch(() => null);
+
+            if (!buttonInteraction) {
+              return interaction.followUp({ content: '**انتهت مهلة التأكيد.**', ephemeral: true });
+            }
+
+            if (buttonInteraction.customId === cancelId) {
+              await buttonInteraction.update({ content: '**تم إلغاء العملية.**', components: [] });
+              return;
             }
 
             let addedRoles = [];
-            let existingRoles = [];
-            let invalidRoles = [];
+            let removedRoles = [];
 
-            for (const roleId of roleIds) {
+            for (const roleId of relatedRoleIds) {
               if (ADMIN_ROLES.includes(roleId)) {
-                existingRoles.push(roleId);
+                ADMIN_ROLES = ADMIN_ROLES.filter(id => id !== roleId);
+                removedRoles.push(roleId);
               } else {
-                try {
-                  const role = await interaction.guild.roles.fetch(roleId);
-                  if (role) {
-                    ADMIN_ROLES.push(roleId);
-                    addedRoles.push(roleId);
-                  } else {
-                    invalidRoles.push(roleId);
-                  }
-                } catch (error) {
-                  invalidRoles.push(roleId);
-                }
+                ADMIN_ROLES.push(roleId);
+                addedRoles.push(roleId);
               }
             }
 
-            // حفظ التغييرات في JSON
-            if (addedRoles.length > 0) {
+            ADMIN_ROLES = [...new Set(ADMIN_ROLES)];
+
+            if (addedRoles.length > 0 || removedRoles.length > 0) {
               saveAdminRoles(ADMIN_ROLES);
 
-              // تحديث الكاش
               if (global.updateAdminRolesCache) {
                 global.updateAdminRolesCache();
               }
 
-              // تحديث صلاحيات اللوق
               if (client.logConfig && client.logConfig.logRoles) {
                 const { updateLogPermissions } = require('./logs.js');
                 await updateLogPermissions(message.guild, client.logConfig.logRoles);
               }
             }
 
-            // Log the admin role addition
-            if (addedRoles.length > 0) {
+            if (addedRoles.length > 0 || removedRoles.length > 0) {
               logEvent(client, message.guild, {
                 type: 'ADMIN_ACTIONS',
-                title: 'تمت إضافة رولات اداره',
-                description: `تم إضافة ${addedRoles.length} رول جديد لقائمة رولات الاداره`,
+                title: 'تعديل رولات الادارة (تبديل)',
+                description: `تم تنفيذ تبديل على ${relatedRoleIds.length} رول (المحدد وما فوقه)`,
                 user: message.author,
                 fields: [
-                  { name: 'الرولات المضافة', value: addedRoles.map(id => `<@&${id}>`).join('\n'), inline: false }
+                  { name: 'الرول المحدد', value: `<@&${selectedRoleId}>`, inline: false },
+                  { name: 'تمت الإضافة', value: addedRoles.length ? addedRoles.map(id => `<@&${id}>`).join('\n') : 'لا يوجد', inline: false },
+                  { name: 'تمت الإزالة', value: removedRoles.length ? removedRoles.map(id => `<@&${id}>`).join('\n') : 'لا يوجد', inline: false }
                 ]
               });
             }
 
-            let response = '';
-            if (addedRoles.length > 0) {
-              response += `**✅ Completely Add :**\n ${addedRoles.map(id => `<@&${id}>`).join('\n')}\n\n`;
-            }
-            if (existingRoles.length > 0) {
-              response += `** already in the list :**\n${existingRoles.map(id => `<@&${id}>`).join('\n')}\n\n`;
-            }
-            if (invalidRoles.length > 0) {
-              response += `**❌ رولات غير صحيحة:**\n${invalidRoles.join(', ')}\n\n`;
-            }
+            await buttonInteraction.update({
+              content:
+                `**✅ تم تنفيذ العملية**\n` +
+                `- الرول المحدد: <@&${selectedRoleId}>\n` +
+                `- تمت الإضافة: ${addedRoles.length}\n` +
+                `- تمت الإزالة: ${removedRoles.length}`,
+              components: []
+            });
 
-            await interaction.followUp({ content: response || '**لم يتم إجراء أي تغييرات.**', ephemeral: true });
-
-            // تحديث القائمة الرئيسية
             await sentMessage.edit({ embeds: [createMainEmbed()], components: [row] });
           } catch (error) {
             console.error('Error processing roles:', error);
             await interaction.followUp({ content: '**حدث خطأ أثناء معالجة الرولات.**', ephemeral: true });
           }
         });
-
         messageCollector.on('end', (collected) => {
           if (collected.size === 0) {
             interaction.followUp({ content: '**انتهت مهلة الانتظار.**', ephemeral: true }).catch(() => {});
