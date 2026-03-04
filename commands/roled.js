@@ -18,12 +18,12 @@ function canManageSpecialRoles(member, guildConfig, botOwners = []) {
 
 function buildLoadingEmbed(guild, requesterId, checked, total, matched) {
     return colorManager.createEmbed()
-        .setTitle('⏳ جاري فحص الرولات')
+        .setTitle('⏳ Procces')
         .setDescription(
-            `**المنفذ:** <@${requesterId}>\n` +
-            `**السيرفر:** ${guild.name}\n` +
-            `**Progress:** \`${checked}/${total}\`\n` +
-            `**الرولات الأقل من 5 أعضاء:** \`${matched}\``
+            `**المنفذ :** <@${requesterId}>\n` +
+            `**السيرفر :** ${guild.name}\n` +
+            `**Progress :** \`${checked}/${total}\`\n` +
+            `**الرولات الأقل من 5 أعضاء :** \`${matched}\``
         )
         .setThumbnail(guild.iconURL({ dynamic: true }))
         .setTimestamp();
@@ -35,13 +35,13 @@ function buildResultsEmbed(guild, requesterId, roles, page, pageSize) {
     const start = currentPage * pageSize;
     const pageItems = roles.slice(start, start + pageSize);
 
-    const lines = pageItems.map((item) => `**${item.role.toString()}  owner : ${item.owner}  number : ${item.count}**`);
+    const lines = pageItems.map((item) => `**#${item.role.toString()}\n #owner : ${item.owner}\n  #member : ${item.count}**`);
 
     return colorManager.createEmbed()
-        .setTitle('📋 الرولات الأقل من 5 أعضاء')
+        .setTitle('Roles Have 5 Or Low')
         .setDescription(
-            `**المنفذ:** <@${requesterId}>\n` +
-            `**الإجمالي:** \`${roles.length}\` رول\n\n` +
+            `**المنفذ :** <@${requesterId}>\n` +
+            `**الإجمالي :** \`${roles.length}\` رول\n\n` +
             (lines.length > 0 ? lines.join('\n') : '**لا توجد بيانات لعرضها في هذه الصفحة**')
         )
         .addFields({ name: 'الصفحة', value: `**${currentPage + 1} / ${totalPages}**`, inline: true })
@@ -66,12 +66,12 @@ function buildActionRows(page, totalPages, disabled = false) {
     const actionRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId('roled_delete')
-            .setLabel('🗑️ حذف')
+            .setLabel('Delete')
             .setStyle(ButtonStyle.Danger)
             .setDisabled(disabled),
         new ButtonBuilder()
             .setCustomId('roled_cancel')
-            .setLabel('✖️ إلغاء')
+            .setLabel('Cancel')
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(disabled)
     );
@@ -217,8 +217,8 @@ async function execute(message, args, { client, BOT_OWNERS }) {
             await interaction.update({
                 embeds: [
                     colorManager.createEmbed()
-                        .setTitle('⏳ جاري حذف الرولات')
-                        .setDescription(`**عدد الرولات المستهدفة:** \`${matchedRoles.length}\``)
+                        .setTitle('⏳ Procces')
+                        .setDescription(`**عدد الرولات المستهدفة :** \`${matchedRoles.length}\``)
                         .setTimestamp()
                 ],
                 components: buildActionRows(page, totalPages, true)
@@ -244,8 +244,8 @@ async function execute(message, args, { client, BOT_OWNERS }) {
                     colorManager.createEmbed()
                         .setTitle('✅ انتهت عملية الحذف')
                         .setDescription(
-                            `**نجاح:** \`${success}\`\n` +
-                            `**فشل:** \`${failed}\``
+                            `**Done :** \`${success}\`\n` +
+                            `**Failed :** \`${failed}\``
                         )
                         .setTimestamp()
                 ],
