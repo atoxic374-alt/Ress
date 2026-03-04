@@ -4,7 +4,8 @@
   "description": "Discord bot for managing responsibilities and tasks",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "test:new-flows": "node scripts/validate-new-flows.js"
   },
   "dependencies": {
     "@discordjs/voice": "^0.18.0",

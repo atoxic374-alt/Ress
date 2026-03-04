@@ -1,4 +1,4 @@
-const { EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder } = require('discord.js');
+const { EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, ChannelType } = require('discord.js');
 const colorManager = require('../utils/colorManager.js');
 const { isUserBlocked } = require('./block.js');
 const { isChannelBlocked } = require('./chatblock.js');
@@ -49,10 +49,18 @@ function parseTimeInput(value) {
 function getLiveVoiceDuration(userId, fromTimestamp) {
     if (global.client && global.client.voiceSessions && global.client.voiceSessions.has(userId)) {
         const session = global.client.voiceSessions.get(userId);
+        const AFK_LIMIT = 24 * 60 * 60 * 1000;
         if (session && !session.isAFK) {
-            const liveStart = session.lastTrackedTime || session.startTime || session.sessionStartTime;
+            const sessionChannel = global.client.channels?.cache?.get(session.channelId);
+            if (sessionChannel && sessionChannel.type === ChannelType.GuildStageVoice) {
+                return 0;
+            }
+
+            const sessionStart = session.startTime || session.sessionStartTime || Date.now();
+            const liveStart = session.lastTrackedTime || sessionStart;
             const effectiveStart = Math.max(liveStart, fromTimestamp || 0);
-            return Math.max(0, Date.now() - effectiveStart);
+            const cappedNow = Math.min(Date.now(), sessionStart + AFK_LIMIT);
+            return Math.max(0, cappedNow - effectiveStart);
         }
     }
     return 0;
