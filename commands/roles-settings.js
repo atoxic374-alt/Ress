@@ -75,6 +75,106 @@ function getRequestCooldownRemaining(guildConfig, userId) {
   return remaining > 0 ? remaining : 0;
 }
 
+
+function parseHexColor(value) {
+  const raw = (value || '').trim();
+  if (!raw) return null;
+  const normalized = raw.startsWith('#') ? raw : `#${raw}`;
+  return /^#[0-9A-Fa-f]{6}$/.test(normalized) ? normalized : null;
+}
+
+function parseMaxMembers(value) {
+  const raw = (value || '').trim();
+  if (!raw) return null;
+  const num = Number(raw);
+  if (!Number.isInteger(num) || num <= 0) return null;
+  return num;
+}
+
+async function configureRequestAllowedRolesByReaction(interaction, adminRoleIds) {
+  const guildConfig = getGuildConfig(interaction.guild.id);
+  const original = Array.isArray(guildConfig.requestAllowedRoleIds) ? [...guildConfig.requestAllowedRoleIds] : [];
+  const working = new Set(original);
+
+  const prompt = await interaction.channel.send({
+    embeds: [
+      colorManager.createEmbed()
+        .setTitle('تحديد الرولات المسموح لها بطلب الرول الخاص')
+        .setDescription(
+          '**أرسل منشن الرولات (غير الإدارية) الآن وسيتم تطبيق Toggle عليها.**\n' +
+          '**✅ React على هذه الرسالة للإنهاء والحفظ**\n' +
+          '**❌ React على هذه الرسالة للإلغاء**\n\n' +
+          `الحالي: ${original.length ? original.map(id => `<@&${id}>`).join(' ') : 'لا يوجد (إداري فقط)'}`
+        )
+        .setTimestamp()
+    ]
+  });
+
+  await prompt.react('✅').catch(() => {});
+  await prompt.react('❌').catch(() => {});
+
+  const msgCollector = interaction.channel.createMessageCollector({
+    filter: m => m.author.id === interaction.user.id,
+    time: 120000
+  });
+
+  msgCollector.on('collect', async (msg) => {
+    const mentionedRoles = Array.from(msg.mentions.roles.values());
+    if (!mentionedRoles.length) {
+      await msg.react('❌').catch(() => {});
+      return;
+    }
+
+    let changed = 0;
+    for (const role of mentionedRoles) {
+      if (adminRoleIds.includes(role.id)) continue;
+      if (working.has(role.id)) {
+        working.delete(role.id);
+      } else {
+        working.add(role.id);
+      }
+      changed += 1;
+    }
+
+    await msg.react(changed > 0 ? '✅' : '❌').catch(() => {});
+  });
+
+  const reaction = await prompt.awaitReactions({
+    filter: (r, u) => u.id === interaction.user.id && (r.emoji.name === '✅' || r.emoji.name === '❌'),
+    max: 1,
+    time: 120000
+  }).catch(() => null);
+
+  msgCollector.stop('done');
+
+  const picked = reaction?.first?.();
+  const cancelled = !picked || picked.emoji.name === '❌';
+
+  if (cancelled) {
+    await prompt.edit({
+      embeds: [
+        colorManager.createEmbed()
+          .setTitle('تم إلغاء تعديل الرولات المسموح لها')
+          .setDescription('لم يتم حفظ أي تغييرات جديدة.')
+      ]
+    }).catch(() => {});
+    return { cancelled: true, roles: original };
+  }
+
+  const finalRoles = [...working];
+  updateGuildConfig(interaction.guild.id, { requestAllowedRoleIds: finalRoles });
+
+  await prompt.edit({
+    embeds: [
+      colorManager.createEmbed()
+        .setTitle('✅ تم حفظ الرولات المسموح لها')
+        .setDescription(finalRoles.length ? finalRoles.map(id => `<@&${id}>`).join(' ') : 'لا يوجد (إداري فقط)')
+    ]
+  }).catch(() => {});
+
+  return { cancelled: false, roles: finalRoles };
+}
+
 function getValidOwnerRoleEntry(guild, ownerId, deletedBy = 'system_cleanup') {
   const roleEntry = findRoleByOwner(guild.id, ownerId);
   if (!roleEntry) return null;
@@ -406,6 +506,7 @@ async function buildPanelPayload(type, guild, guildConfig) {
       ),
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('customroles_member_action_members').setLabel('الأعضاء').setEmoji('<:emoji_12:1465332124784656446>').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('customroles_member_action_info').setLabel('معلومات رولي').setEmoji('ℹ️').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('customroles_member_action_transfer').setLabel('نقل الملكية').setEmoji('<:emoji_10:1465332029473161350>').setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId('customroles_member_action_delete').setLabel('حذف الرول').setEmoji('<:emoji_21:1465336647477493894>').setStyle(ButtonStyle.Danger)
       )
@@ -1235,6 +1336,8 @@ async function handleCustomRolesInteraction(interaction, client, BOT_OWNERS) {
       }
       if (panelType === 'request') {
         await sendRequestPanel(interaction.guild, channel, guildConfig);
+        const adminRoles = loadAdminRoles();
+        await configureRequestAllowedRolesByReaction(interaction, adminRoles);
       }
       if (panelType === 'top') {
         await sendTopRolesPanel(interaction.guild, channel, guildConfig);
@@ -1297,6 +1400,18 @@ async function handleCustomRolesInteraction(interaction, client, BOT_OWNERS) {
 
   if (interaction.customId.startsWith('customroles_member_action_')) {
     const action = interaction.customId.replace('customroles_member_action_', '');
+    if (action === 'info') {
+      const roleEntry = findRoleByOwner(interaction.guild.id, interaction.user.id);
+      if (!roleEntry) {
+        await interaction.reply({ content: '❌ لا تملك رول خاص حالياً.', ephemeral: true });
+        return;
+      }
+      await interaction.deferReply({ ephemeral: true }).catch(() => {});
+      const fakeMessage = { guild: interaction.guild, channel: interaction.channel, client: interaction.client };
+      await listCommand.renderRoleDetails(fakeMessage, roleEntry);
+      await interaction.editReply({ content: '✅ تم إرسال معلومات رولك في الشات.' }).catch(() => {});
+      return;
+    }
     await myRoleCommand.handleMemberAction(interaction, action, client);
     return;
   }
@@ -2027,11 +2142,11 @@ async function handleCustomRolesInteraction(interaction, client, BOT_OWNERS) {
       return;
     }
     const memberRolesCache = interaction.member?.roles?.cache;
-    const hasAdminRole = memberRolesCache
-      ? memberRolesCache.some(role => adminRoles.includes(role.id))
-      : true;
-    if (!hasAdminRole) {
-      await interaction.reply({ content: '❌ هذا الزر مخصص لرولات الإدارة فقط.', ephemeral: true });
+    const allowedRequestRoleIds = Array.isArray(guildConfig.requestAllowedRoleIds) ? guildConfig.requestAllowedRoleIds : [];
+    const hasAdminRole = memberRolesCache ? memberRolesCache.some(role => adminRoles.includes(role.id)) : true;
+    const hasAllowedRequestRole = memberRolesCache ? memberRolesCache.some(role => allowedRequestRoleIds.includes(role.id)) : false;
+    if (!hasAdminRole && !hasAllowedRequestRole) {
+      await interaction.reply({ content: '❌ هذا الزر مخصص للإدارة أو للرولات المسموح لها فقط.', ephemeral: true });
       return;
     }
     const modal = new ModalBuilder()
@@ -2044,15 +2159,22 @@ async function handleCustomRolesInteraction(interaction, client, BOT_OWNERS) {
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
-    const reasonInput = new TextInputBuilder()
-      .setCustomId('role_reason')
-      .setLabel('رولك؟ (اختياري)')
-      .setStyle(TextInputStyle.Paragraph)
+    const colorInput = new TextInputBuilder()
+      .setCustomId('role_color')
+      .setLabel('لون الرول (اختياري - مثال: #ff9900)')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(false);
+
+    const maxMembersInput = new TextInputBuilder()
+      .setCustomId('role_max_members')
+      .setLabel('اقصى عدد يشيله الرول (اختياري)')
+      .setStyle(TextInputStyle.Short)
       .setRequired(false);
 
     modal.addComponents(
       new ActionRowBuilder().addComponents(nameInput),
-      new ActionRowBuilder().addComponents(reasonInput)
+      new ActionRowBuilder().addComponents(colorInput),
+      new ActionRowBuilder().addComponents(maxMembersInput)
     );
 
     try {
@@ -2074,12 +2196,14 @@ async function handleCustomRolesInteraction(interaction, client, BOT_OWNERS) {
       return;
     }
     const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+    const guildConfig = getGuildConfig(interaction.guild.id);
+    const allowedRequestRoleIds = Array.isArray(guildConfig.requestAllowedRoleIds) ? guildConfig.requestAllowedRoleIds : [];
     const hasAdminRole = member ? member.roles.cache.some(role => adminRoles.includes(role.id)) : false;
-    if (!hasAdminRole) {
-      await interaction.editReply({ content: '❌ هذا النموذج مخصص لرولات الإدارة فقط.' });
+    const requesterAllowedRole = member ? member.roles.cache.find(role => allowedRequestRoleIds.includes(role.id)) : null;
+    if (!hasAdminRole && !requesterAllowedRole) {
+      await interaction.editReply({ content: '❌ هذا النموذج مخصص للإدارة أو للرولات المسموح لها فقط.' });
       return;
     }
-    const guildConfig = getGuildConfig(interaction.guild.id);
     const remainingCooldown = getRequestCooldownRemaining(guildConfig, interaction.user.id);
     if (remainingCooldown > 0) {
       await interaction.editReply({
@@ -2102,7 +2226,20 @@ async function handleCustomRolesInteraction(interaction, client, BOT_OWNERS) {
     }
 
     const roleName = interaction.fields.getTextInputValue('role_name');
-    const reason = interaction.fields.getTextInputValue('role_reason');
+    const rawColor = interaction.fields.getTextInputValue('role_color');
+    const rawMaxMembers = interaction.fields.getTextInputValue('role_max_members');
+
+    const parsedColor = parseHexColor(rawColor);
+    if (rawColor && rawColor.trim() && !parsedColor) {
+      await interaction.editReply({ content: '❌ صيغة اللون غير صحيحة. استخدم مثال: #ff9900' });
+      return;
+    }
+
+    const parsedMaxMembers = parseMaxMembers(rawMaxMembers);
+    if (rawMaxMembers && rawMaxMembers.trim() && !parsedMaxMembers) {
+      await interaction.editReply({ content: '❌ اقصى عدد يجب أن يكون رقمًا صحيحًا أكبر من 0.' });
+      return;
+    }
     const requestChannel = await interaction.guild.channels.fetch(guildConfig.requestInboxChannelId).catch(() => null);
     if (!requestChannel) {
       await interaction.editReply({ content: '❌ روم استقبال الطلبات غير موجود.' });
@@ -2114,7 +2251,9 @@ async function handleCustomRolesInteraction(interaction, client, BOT_OWNERS) {
       .setDescription(`العضو: <@${interaction.user.id}>`)
       .addFields(
         { name: 'الرول المطلوب', value: roleName },
-        { name: 'السبب', value: reason || 'بدون سبب' }
+        { name: 'لون الرول', value: parsedColor || 'غير محدد' },
+        { name: 'اقصى عدد', value: parsedMaxMembers ? `${parsedMaxMembers}` : 'غير محدد' },
+        { name: 'رول صاحب الطلب', value: hasAdminRole ? (member.roles.cache.find(role => adminRoles.includes(role.id)) ? `<@&${member.roles.cache.find(role => adminRoles.includes(role.id)).id}>` : 'إداري') : `<@&${requesterAllowedRole.id}>` }
       )
       .setColor(colorManager.getColor ? colorManager.getColor() : '#2f3136')
       .setThumbnail(interaction.client.user.displayAvatarURL({ size: 128 }));
@@ -2130,7 +2269,10 @@ async function handleCustomRolesInteraction(interaction, client, BOT_OWNERS) {
       createdAt: Date.now(),
       messageId: requestMessage.id,
       channelId: requestChannel.id,
-      roleName
+      roleName,
+      roleColor: parsedColor || null,
+      maxMembers: parsedMaxMembers || null,
+      requesterRoleId: hasAdminRole ? (member.roles.cache.find(role => adminRoles.includes(role.id))?.id || null) : requesterAllowedRole.id
     };
     updateGuildConfig(interaction.guild.id, { pendingRoleRequests: pendingRequests });
     await interaction.editReply({ content: '✅ تم إرسال طلبك للمراجعة.' });
@@ -2203,16 +2345,21 @@ async function handleCustomRolesInteraction(interaction, client, BOT_OWNERS) {
 
     const roleNameField = interaction.message.embeds[0]?.fields?.find(field => field.name === 'الرول المطلوب');
     const roleName = pendingRequest?.roleName || roleNameField?.value || `رول-${member.user.username}`;
+    const roleColor = pendingRequest?.roleColor || null;
+    const roleMaxMembers = pendingRequest?.maxMembers || null;
 
     const pendingRequests = { ...(latestConfig.pendingRoleRequests || {}) };
     delete pendingRequests[userId];
     updateGuildConfig(interaction.guild.id, { pendingRoleRequests: pendingRequests });
 
-    const role = await interaction.guild.roles.create({
+    const rolePayload = {
       name: roleName,
       permissions: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages],
       reason: `موافقة على طلب رول خاص ${member.user.tag}`
-    }).catch(() => null);
+    };
+    if (roleColor) rolePayload.color = roleColor;
+
+    const role = await interaction.guild.roles.create(rolePayload).catch(() => null);
 
     if (!role) {
       const restoredPendingRequests = { ...(getGuildConfig(interaction.guild.id).pendingRoleRequests || {}) };
@@ -2243,7 +2390,7 @@ async function handleCustomRolesInteraction(interaction, client, BOT_OWNERS) {
       name: role.name,
       color: role.hexColor,
       icon: role.iconURL(),
-      maxMembers: null,
+      maxMembers: roleMaxMembers || null,
       memberMeta: {
         [member.id]: {
           assignedAt: Date.now(),
@@ -2395,7 +2542,7 @@ async function handleCustomRolesInteraction(interaction, client, BOT_OWNERS) {
       name: role.name,
       color: role.hexColor,
       icon: role.iconURL(),
-      maxMembers: null,
+      maxMembers: roleMaxMembers || null,
       memberMeta: {
         [ownerId]: {
           assignedAt: Date.now(),
@@ -2488,7 +2635,7 @@ async function handleCustomRolesInteraction(interaction, client, BOT_OWNERS) {
         name: role.name,
         color: role.hexColor,
         icon: role.iconURL(),
-        maxMembers: null,
+        maxMembers: roleMaxMembers || null,
         memberMeta
       });
       results.push(`✅ تمت إضافة الرول ${role.name} للقاعدة.`);
