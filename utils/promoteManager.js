@@ -313,7 +313,7 @@ isBotPromotion(guildId, userId, roleId) {
             if (role.position <= targetHighestRole.position && targetHighestRole.name !== '@everyone') {
                 return {
                     valid: false,
-                    error: `الرول المحدد (**${role.name}**) يجب أن يكون أعلى من أعلى رول للعضو (**${targetHighestRole.name}**)`
+                    error: `لا يمكن الترقية: العضو لديه رول أعلى/مساوٍ للرول المطلوب (الرول المطلوب: **${role.name}** | أعلى رول للعضو: **${targetHighestRole.name}**). اختر رولًا أعلى من رول العضو الحالي أو أنزل روله أولاً.`
                 };
             }
 
