@@ -1,10 +1,49 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
+const {
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    StringSelectMenuBuilder,
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle
+} = require('discord.js');
 const colorManager = require('../utils/colorManager.js');
 const { isUserBlocked } = require('./block.js');
 const { isChannelBlocked } = require('./chatblock.js');
 const { getGuildConfig, getGuildRoles } = require('../utils/customRolesSystem.js');
 
 const name = 'roled';
+const EXCLUSIONS_PATH = path.join(__dirname, '..', 'data', 'roledExclusions.json');
+const SEARCH_OPTION_VALUE = 'roled_search_option';
+
+function loadExclusions() {
+    try {
+        if (!fs.existsSync(EXCLUSIONS_PATH)) return {};
+        const parsed = JSON.parse(fs.readFileSync(EXCLUSIONS_PATH, 'utf8'));
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (error) {
+        console.error('Failed to load roled exclusions:', error);
+        return {};
+    }
+}
+
+function saveExclusions(data) {
+    try {
+        fs.writeFileSync(EXCLUSIONS_PATH, JSON.stringify(data, null, 2), 'utf8');
+        return true;
+    } catch (error) {
+        console.error('Failed to save roled exclusions:', error);
+        return false;
+    }
+}
+
+function saveGuildExclusions(guildId, excludedRoleIds) {
+    const latestExclusions = loadExclusions();
+    latestExclusions[guildId] = [...new Set(excludedRoleIds)];
+    return saveExclusions(latestExclusions);
+}
 
 function canManageSpecialRoles(member, guildConfig, botOwners = []) {
     if (!member || !guildConfig) return false;
@@ -35,18 +74,66 @@ function buildResultsEmbed(guild, requesterId, roles, page, pageSize) {
     const start = currentPage * pageSize;
     const pageItems = roles.slice(start, start + pageSize);
 
-    const lines = pageItems.map((item) => `**${item.role.toString()}  owner : ${item.owner}  number : ${item.count}**`);
+    const lines = pageItems.map((item) => [
+        `**الرول:** ${item.role}`,
+        `**Display Owner:** ${item.owner}`,
+        `**الأعضاء:** ${item.count}`
+    ].join('\n'));
 
     return colorManager.createEmbed()
         .setTitle('📋 الرولات الأقل من 5 أعضاء')
         .setDescription(
             `**المنفذ:** <@${requesterId}>\n` +
             `**الإجمالي:** \`${roles.length}\` رول\n\n` +
-            (lines.length > 0 ? lines.join('\n') : '**لا توجد بيانات لعرضها في هذه الصفحة**')
+            (lines.length > 0 ? lines.join('\n\n') : '**لا توجد بيانات لعرضها في هذه الصفحة**')
         )
         .addFields({ name: 'الصفحة', value: `**${currentPage + 1} / ${totalPages}**`, inline: true })
         .setThumbnail(guild.iconURL({ dynamic: true }))
         .setTimestamp();
+}
+
+function buildExclusionMenuRow(allRoles, excludedRoleIds = [], searchQuery = '') {
+    const normalizedQuery = (searchQuery || '').trim().toLowerCase();
+    const filtered = allRoles.filter((entry) => {
+        if (!normalizedQuery) return true;
+        const roleName = (entry.role.name || '').toLowerCase();
+        const roleId = entry.role.id;
+        const ownerId = entry.ownerId || '';
+        return roleName.includes(normalizedQuery) || roleId.includes(normalizedQuery) || ownerId.includes(normalizedQuery);
+    });
+
+    const canShowSearchOption = allRoles.length > 25 || normalizedQuery.length > 0;
+    const optionsSource = canShowSearchOption ? filtered.slice(0, 24) : filtered.slice(0, 25);
+
+    const visibleRoleIds = optionsSource.map((entry) => entry.role.id);
+    const options = optionsSource.map((entry) => ({
+        label: (entry.role.name && entry.role.name.trim() ? entry.role.name : `Role ${entry.role.id}`).slice(0, 100),
+        description: (`Display Owner: ${entry.ownerText}`).slice(0, 100),
+        value: entry.role.id,
+        default: excludedRoleIds.includes(entry.role.id)
+    }));
+
+    if (canShowSearchOption) {
+        options.push({ label: '🔎 بحث', value: SEARCH_OPTION_VALUE, description: 'بحث عن رول بالاسم / ID / Owner ID' });
+    }
+
+    if (options.length === 0) {
+        options.push({ label: 'لا توجد نتائج', value: 'roled_no_results', description: 'جرّب بحثًا آخر' });
+    }
+
+    const maxValues = options.some((opt) => opt.value === 'roled_no_results') ? 1 : Math.min(25, options.length);
+
+    const menu = new StringSelectMenuBuilder()
+        .setCustomId('roled_exceptions_select')
+        .setPlaceholder('استثناء - اختر الرولات المستثناة (الاختيار يحفظ مباشرة)')
+        .setMinValues(0)
+        .setMaxValues(maxValues)
+        .addOptions(options);
+
+    return {
+        row: new ActionRowBuilder().addComponents(menu),
+        visibleRoleIds
+    };
 }
 
 function buildActionRows(page, totalPages, disabled = false) {
@@ -80,9 +167,7 @@ function buildActionRows(page, totalPages, disabled = false) {
 }
 
 async function execute(message, args, { client, BOT_OWNERS }) {
-    if (isChannelBlocked(message.channel.id)) {
-        return;
-    }
+    if (isChannelBlocked(message.channel.id)) return;
 
     if (isUserBlocked(message.author.id)) {
         const blockedEmbed = colorManager.createEmbed()
@@ -108,7 +193,9 @@ async function execute(message, args, { client, BOT_OWNERS }) {
             if (!role) return null;
             return {
                 role,
-                owner: entry.ownerId ? `<@${entry.ownerId}>` : 'غير معروف'
+                ownerId: entry.ownerId || '',
+                ownerText: entry.ownerId ? `${entry.ownerId}` : 'غير معروف',
+                ownerMention: entry.ownerId ? `<@${entry.ownerId}>` : 'غير معروف'
             };
         })
         .filter(Boolean)
@@ -119,9 +206,35 @@ async function execute(message, args, { client, BOT_OWNERS }) {
         return;
     }
 
-    let checked = 0;
-    const matchedRoles = [];
+    const initialExclusions = loadExclusions();
+    let excludedRoleIds = Array.isArray(initialExclusions[message.guild.id])
+        ? [...new Set(initialExclusions[message.guild.id])]
+        : [];
 
+    const pageSize = 8;
+    let page = 0;
+    let totalPages = 1;
+    let matchedRoles = [];
+    let menuQuery = '';
+
+    const recalculateMatchedRoles = () => {
+        matchedRoles = allRoles
+            .map((entry) => ({ role: entry.role, owner: entry.ownerMention, count: entry.role.members.size }))
+            .filter((entry) => entry.count < 5 && !excludedRoleIds.includes(entry.role.id));
+
+        totalPages = Math.max(1, Math.ceil(matchedRoles.length / pageSize));
+        page = Math.min(page, totalPages - 1);
+    };
+
+    const buildComponents = () => {
+        const menuData = buildExclusionMenuRow(allRoles, excludedRoleIds, menuQuery);
+        return {
+            rows: [...buildActionRows(page, totalPages), menuData.row],
+            visibleRoleIds: menuData.visibleRoleIds
+        };
+    };
+
+    let checked = 0;
     const loadingMessage = await message.channel.send({
         embeds: [buildLoadingEmbed(message.guild, message.author.id, checked, allRoles.length, matchedRoles.length)]
     });
@@ -129,15 +242,9 @@ async function execute(message, args, { client, BOT_OWNERS }) {
     let lastProgressUpdateAt = 0;
     for (const entry of allRoles) {
         checked += 1;
-        const role = entry.role;
-        const memberCount = role.members.size;
-
-        if (memberCount < 5) {
-            matchedRoles.push({
-                role,
-                owner: entry.owner,
-                count: memberCount
-            });
+        const memberCount = entry.role.members.size;
+        if (memberCount < 5 && !excludedRoleIds.includes(entry.role.id)) {
+            matchedRoles.push({ role: entry.role, owner: entry.ownerMention, count: memberCount });
         }
 
         const now = Date.now();
@@ -150,57 +257,116 @@ async function execute(message, args, { client, BOT_OWNERS }) {
         }
     }
 
-    if (matchedRoles.length === 0) {
-        await loadingMessage.edit({
-            embeds: [
-                colorManager.createEmbed()
-                    .setTitle('✅ اكتمل الفحص')
-                    .setDescription('**لا توجد أي رولات أقل من 5 أعضاء.**')
-                    .setThumbnail(message.guild.iconURL({ dynamic: true }))
-                    .setTimestamp()
-            ],
-            components: []
-        });
-        return;
-    }
-
-    const pageSize = 8;
-    let page = 0;
-    const totalPages = Math.max(1, Math.ceil(matchedRoles.length / pageSize));
-
+    recalculateMatchedRoles();
+    let currentComponents = buildComponents();
     await loadingMessage.edit({
         embeds: [buildResultsEmbed(message.guild, message.author.id, matchedRoles, page, pageSize)],
-        components: buildActionRows(page, totalPages)
+        components: currentComponents.rows
     });
 
     const collector = loadingMessage.createMessageComponentCollector({ time: 120000 });
 
     collector.on('collect', async (interaction) => {
         if (interaction.user.id !== message.author.id) {
-            await interaction.reply({ content: '❌ فقط منفذ الأمر يمكنه استخدام الأزرار.', ephemeral: true });
+            await interaction.reply({ content: '❌ فقط منفذ الأمر يمكنه استخدام العناصر.', ephemeral: true });
             return;
         }
 
         if (interaction.customId === 'roled_prev') {
             page = Math.max(0, page - 1);
+            currentComponents = buildComponents();
             await interaction.update({
                 embeds: [buildResultsEmbed(message.guild, message.author.id, matchedRoles, page, pageSize)],
-                components: buildActionRows(page, totalPages)
+                components: currentComponents.rows
             });
             return;
         }
 
         if (interaction.customId === 'roled_next') {
             page = Math.min(totalPages - 1, page + 1);
+            currentComponents = buildComponents();
             await interaction.update({
                 embeds: [buildResultsEmbed(message.guild, message.author.id, matchedRoles, page, pageSize)],
-                components: buildActionRows(page, totalPages)
+                components: currentComponents.rows
+            });
+            return;
+        }
+
+        if (interaction.customId === 'roled_exceptions_select') {
+            const selectedValues = interaction.values || [];
+
+            if (selectedValues.includes('roled_no_results')) {
+                await interaction.deferUpdate();
+                return;
+            }
+
+            if (selectedValues.includes(SEARCH_OPTION_VALUE)) {
+                if (selectedValues.length > 1) {
+                    await interaction.reply({ content: '⚠️ اختر خيار البحث وحده.', ephemeral: true });
+                    return;
+                }
+
+                const modal = new ModalBuilder()
+                    .setCustomId(`roled_search_modal_${interaction.user.id}`)
+                    .setTitle('بحث عن رول');
+
+                const queryInput = new TextInputBuilder()
+                    .setCustomId('roled_search_query')
+                    .setLabel('ابحث بالاسم أو ID أو Owner ID')
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(true)
+                    .setPlaceholder('مثال: اسم الرول أو 123456...');
+
+                modal.addComponents(new ActionRowBuilder().addComponents(queryInput));
+                await interaction.showModal(modal);
+
+                try {
+                    const modalSubmit = await interaction.awaitModalSubmit({
+                        filter: (m) => m.customId === `roled_search_modal_${interaction.user.id}` && m.user.id === interaction.user.id,
+                        time: 45000
+                    });
+
+                    menuQuery = modalSubmit.fields.getTextInputValue('roled_search_query')?.trim() || '';
+                    currentComponents = buildComponents();
+                    await modalSubmit.update({
+                        embeds: [buildResultsEmbed(message.guild, message.author.id, matchedRoles, page, pageSize)],
+                        components: currentComponents.rows
+                    });
+                } catch (_) {
+                    // ignore timeout
+                }
+                return;
+            }
+
+            const selectedRoleIds = selectedValues.filter((value) => value !== SEARCH_OPTION_VALUE);
+            const excludedSet = new Set(excludedRoleIds);
+
+            for (const roleId of currentComponents.visibleRoleIds) {
+                excludedSet.delete(roleId);
+            }
+            for (const roleId of selectedRoleIds) {
+                excludedSet.add(roleId);
+            }
+
+            excludedRoleIds = [...excludedSet];
+            const saved = saveGuildExclusions(message.guild.id, excludedRoleIds);
+            recalculateMatchedRoles();
+
+            currentComponents = buildComponents();
+            await interaction.update({
+                embeds: [buildResultsEmbed(message.guild, message.author.id, matchedRoles, page, pageSize)],
+                components: currentComponents.rows
+            });
+            await interaction.followUp({
+                content: saved ? '✅ تم حفظ الاستثناءات' : '⚠️ تعذر حفظ الاستثناءات في الملف، لكن تم تحديث العرض الحالي.',
+                ephemeral: true
             });
             return;
         }
 
         if (interaction.customId === 'roled_cancel') {
             collector.stop('cancelled');
+            currentComponents = buildComponents();
             await interaction.update({
                 embeds: [
                     colorManager.createEmbed()
@@ -208,7 +374,7 @@ async function execute(message, args, { client, BOT_OWNERS }) {
                         .setDescription('**تم إيقاف أمر roled بدون حذف أي رول.**')
                         .setTimestamp()
                 ],
-                components: buildActionRows(page, totalPages, true)
+                components: [...buildActionRows(page, totalPages, true), currentComponents.rows[2]]
             });
             return;
         }
@@ -221,7 +387,7 @@ async function execute(message, args, { client, BOT_OWNERS }) {
                         .setDescription(`**عدد الرولات المستهدفة:** \`${matchedRoles.length}\``)
                         .setTimestamp()
                 ],
-                components: buildActionRows(page, totalPages, true)
+                components: [...buildActionRows(page, totalPages, true), currentComponents.rows[2]]
             });
 
             let success = 0;
@@ -238,15 +404,11 @@ async function execute(message, args, { client, BOT_OWNERS }) {
             }
 
             collector.stop('deleted');
-
             await loadingMessage.edit({
                 embeds: [
                     colorManager.createEmbed()
                         .setTitle('✅ انتهت عملية الحذف')
-                        .setDescription(
-                            `**نجاح:** \`${success}\`\n` +
-                            `**فشل:** \`${failed}\``
-                        )
+                        .setDescription(`**نجاح:** \`${success}\`\n**فشل:** \`${failed}\``)
                         .setTimestamp()
                 ],
                 components: []
@@ -255,13 +417,11 @@ async function execute(message, args, { client, BOT_OWNERS }) {
     });
 
     collector.on('end', async (_, reason) => {
-        if (reason === 'cancelled' || reason === 'deleted') {
-            return;
-        }
-
+        if (reason === 'cancelled' || reason === 'deleted') return;
         try {
+            currentComponents = buildComponents();
             await loadingMessage.edit({
-                components: buildActionRows(page, totalPages, true)
+                components: [...buildActionRows(page, totalPages, true), currentComponents.rows[2]]
             });
         } catch (error) {
             console.error('roled collector end edit error:', error);
