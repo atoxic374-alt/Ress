@@ -296,11 +296,17 @@ isBotPromotion(guildId, userId, roleId) {
             }
 
             // Get highest roles
-            const targetHighestRole = targetMember.roles.highest;
             const promoterHighestRole = promoterMember.roles.highest;
+            const adminRoles = this.getAdminRoles();
+            const isTargetRoleRank = (role.name || '').length <= 3;
+
+            // أعلى رول للعضو من نفس نوع العملية فقط (حرف/ظواهر)
+            const targetHighestSameTypeRole = targetMember.roles.cache
+                .filter((memberRole) => adminRoles.includes(memberRole.id) && ((memberRole.name || '').length <= 3) === isTargetRoleRank)
+                .sort((a, b) => b.position - a.position)
+                .first();
 
             // تحسين منطق التحقق: إذا كان الشخص المعين مالك البوت، يُسمح بالترقية بغض النظر عن الهرمية
-            const settings = this.getSettings();
             const botOwnersData = readJson(path.join(__dirname, '..', 'data', 'botConfig.json'), {});
             const botOwners = botOwnersData.owners || [];
 
@@ -309,11 +315,11 @@ isBotPromotion(guildId, userId, roleId) {
                 return { valid: true };
             }
 
-            // للأشخاص العاديين: الرول الجديد يجب أن يكون أعلى من الرول الحالي للهدف
-            if (role.position <= targetHighestRole.position && targetHighestRole.name !== '@everyone') {
+            // للأشخاص العاديين: الرول الجديد يجب أن يكون أعلى من أعلى رول للهدف من نفس النوع فقط
+            if (targetHighestSameTypeRole && role.position <= targetHighestSameTypeRole.position) {
                 return {
                     valid: false,
-                    error: `لا يمكن الترقية: العضو لديه رول أعلى/مساوٍ للرول المطلوب (الرول المطلوب: **${role.name}** | أعلى رول للعضو: **${targetHighestRole.name}**). اختر رولًا أعلى من رول العضو الحالي أو أنزل روله أولاً.`
+                    error: `لا يمكن الترقية: في نفس النوع (${isTargetRoleRank ? 'حرف' : 'ظواهر'}) العضو لديه رول أعلى/مساوٍ للرول المطلوب (الرول المطلوب: **${role.name}** | أعلى رول بنفس النوع: **${targetHighestSameTypeRole.name}**).`
                 };
             }
 
