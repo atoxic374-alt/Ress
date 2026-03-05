@@ -312,10 +312,29 @@ module.exports = {
                     setTimeout(() => recentPromotions.delete(undoId), 60000);
                 }
 
+                const successCount = outcome.filter((line) => line.startsWith('✅')).length;
+                const failedCount = outcome.filter((line) => line.startsWith('❌')).length;
+                const skippedCount = outcome.filter((line) => line.startsWith('⚠️')).length;
+
+                let statusTitle = 'اكتملت معالجة الطلبات';
+                let statusLine = 'تم الانتهاء من معالجة جميع الطلبات.';
+
+                if (successCount === 0 && (failedCount > 0 || skippedCount > 0)) {
+                    statusTitle = 'انتهت المعالجة بدون نجاح';
+                    statusLine = 'تمت المحاولة ولكن لم تنجح أي عملية.';
+                } else if (failedCount > 0 || skippedCount > 0) {
+                    statusTitle = 'اكتملت المعالجة (نتيجة جزئية)';
+                    statusLine = 'تمت معالجة الطلبات مع وجود بعض العمليات غير المكتملة.';
+                }
+
                 const finalResultEmbed = colorManager.createEmbed()
-                    .setTitle('اكتملت العملية بنجاح')
-                    .setDescription(`تم الانتهاء من معالجة جميع الطلبات .\n\n**النتائج :**\n${outcome.join('\n')}`)
-                    .setFooter({ text: 'يمكنك التراجع عن هذه العملية بالكامل خلال دقيقة واحدة .' });
+                    .setTitle(statusTitle)
+                    .setDescription(
+                        `${statusLine}\n` +
+                        `**الملخص:** ✅ ${successCount} | ❌ ${failedCount} | ⚠️ ${skippedCount}\n\n` +
+                        `**النتائج :**\n${outcome.join('\n')}`
+                    )
+                    .setFooter({ text: 'يمكنك التراجع عن العمليات الناجحة خلال دقيقة واحدة .' });
 
                 const undoButton = new ButtonBuilder()
                     .setCustomId(undoId)
