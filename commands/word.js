@@ -51,6 +51,13 @@ function normalizeWord(input) {
     return String(input || '').trim().toLowerCase();
 }
 
+function normalizeRoleName(input) {
+    return normalizeWord(input)
+        .replace(/[._,،\-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
 function parseKeywordsInput(input) {
     const raw = String(input || '').trim();
     if (!raw) return { ok: false, error: '❌ **لازم تكتب كلمة واحدة على الأقل.**' };
@@ -106,16 +113,29 @@ function findClosestRole(guild, rawInput) {
     if (!query) return null;
 
     const mentionMatch = query.match(/^<@&(\d+)>$/);
-    const roleId = mentionMatch ? mentionMatch[1] : query.replace(/\D/g, '');
+    const idMatch = query.match(/^\d{16,20}$/);
+    const roleId = mentionMatch ? mentionMatch[1] : (idMatch ? idMatch[0] : null);
     if (roleId && guild.roles.cache.has(roleId)) return guild.roles.cache.get(roleId);
 
-    const normalized = query.toLowerCase();
-    const exact = guild.roles.cache.find(r => r.name.toLowerCase() === normalized);
+    const normalized = normalizeRoleName(query);
+    const exact = guild.roles.cache.find(r => normalizeRoleName(r.name) === normalized);
     if (exact) return exact;
 
+    const compactNormalized = normalized.replace(/\s+/g, '');
+    const compactExact = guild.roles.cache.find(r => normalizeRoleName(r.name).replace(/\s+/g, '') === compactNormalized);
+    if (compactExact) return compactExact;
+
     return guild.roles.cache
-        .filter(r => r.name.toLowerCase().includes(normalized) || normalized.includes(r.name.toLowerCase()))
-        .sort((a, b) => a.name.length - b.name.length)
+        .filter(r => {
+            const roleName = normalizeRoleName(r.name);
+            const roleCompact = roleName.replace(/\s+/g, '');
+            return roleName.includes(normalized) || roleCompact.includes(compactNormalized);
+        })
+        .sort((a, b) => {
+            const aLen = normalizeRoleName(a.name).length;
+            const bLen = normalizeRoleName(b.name).length;
+            return aLen - bLen;
+        })
         .first() || null;
 }
 
@@ -124,16 +144,31 @@ function parseRolesFromMessage(guild, content) {
     if (!raw) return { ok: false, error: '❌ **لازم ترسل الرولات ( منشن / ID / اسم ) أو 0.**' };
     if (raw === '0') return { ok: true, mode: 'admin', roleIds: [] };
 
-    const parts = raw.split(/[،,\n]+/).map(p => p.trim()).filter(Boolean);
+    const mentionMatches = raw.match(/<@&\d+>/g) || [];
+    const rawWithoutMentions = raw.replace(/<@&\d+>/g, ' ');
+    const nameOrIdParts = rawWithoutMentions
+        .split(/[،,\n]+/)
+        .map(p => p.trim())
+        .filter(Boolean);
+    const parts = [...mentionMatches, ...nameOrIdParts];
+
+    if (parts.length === 0) {
+        return { ok: false, error: '❌ **ما تم العثور على أي رول صالح في الرسالة.**' };
+    }
+
     const roleIds = [];
+    const resolvedRoles = [];
 
     for (const part of parts) {
         const role = findClosestRole(guild, part);
         if (!role) return { ok: false, error: `❌ **ما قدرت أحدد الرول :** ${part}` };
-        if (!roleIds.includes(role.id)) roleIds.push(role.id);
+        if (!roleIds.includes(role.id)) {
+            roleIds.push(role.id);
+            resolvedRoles.push(role);
+        }
     }
 
-    return { ok: true, mode: 'roles', roleIds };
+    return { ok: true, mode: 'roles', roleIds, resolvedRoles };
 }
 
 function isDangerousRole(role) {
