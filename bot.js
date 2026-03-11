@@ -58,6 +58,7 @@ const DATA_FILES = {
     adminApplications: path.join(dataDir, 'adminApplications.json'),
     serverMapConfig: path.join(dataDir, 'serverMapConfig.json'),
     voiceSessions: path.join(dataDir, 'voiceSessions.json'),
+    wordTriggers: path.join(dataDir, 'wordTriggers.json'),
 
     roleGrantHistory: path.join(dataDir, 'roleGrantHistory.json')
     
@@ -67,6 +68,7 @@ const DATA_FILES = {
 function ensureDataFiles() {
     
     const defaults = {
+        wordTriggers: {},
         roleGrantHistory: {},
         serverMapConfig: {
             enabled: false,
@@ -477,8 +479,8 @@ if (command.aliases && Array.isArray(command.aliases)) {
           console.log(`  ↳ Alias: ${alias}`);
         }
       }
-      // تسجيل معالج التفاعلات المستقل لأمر report
-      if (command.name === 'report' && command.registerInteractionHandler) {
+      // تسجيل معالجات التفاعلات المستقلة للأوامر
+      if (typeof command.registerInteractionHandler === 'function') {
         command.registerInteractionHandler(client);
       }
     }
@@ -2108,6 +2110,17 @@ client.on('messageCreate', async message => {
   const { isChannelBlocked } = require('./commands/chatblock.js');
   if (isChannelBlocked(message.channel.id)) {
     return; // تجاهل الأوامر في القنوات المحظورة بصمت
+  }
+
+  // نظام كلمات word
+  try {
+    const wordCommand = client.commands.get('word');
+    if (wordCommand && typeof wordCommand.handleMessage === 'function') {
+      const consumed = await wordCommand.handleMessage(message, { client, BOT_OWNERS });
+      if (consumed) return;
+    }
+  } catch (error) {
+    console.error('❌ خطأ في نظام word:', error);
   }
 
   // معالجة الأوامر (البريفكس)
