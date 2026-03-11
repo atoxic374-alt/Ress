@@ -114,12 +114,32 @@ async function getRecentExecutorId(guild, actionType) {
 }
 
 
+function isMajorProtectionIncident(guild, cfg) {
+    const expectedChannels = cfg?.expectedChannels || 0;
+    const expectedRoles = cfg?.expectedRoles || 0;
+    const channelRatio = expectedChannels > 0 ? (getCurrentChannelCount(guild) / expectedChannels) : 1;
+    const roleRatio = expectedRoles > 0 ? (getCurrentRoleCount(guild) / expectedRoles) : 1;
+
+    const channelsMajor = cfg?.protectionTypes?.channelsCategories && channelRatio <= 0.75;
+    const rolesMajor = cfg?.protectionTypes?.rolesPermissions && roleRatio <= 0.75;
+    return channelsMajor || rolesMajor;
+}
+
 async function processProtectionIncident(guild, cfg, actor, reason, restoreReason = reason) {
-    await Promise.allSettled([
-        disableAdministratorEverywhere(guild, `Protection: ${reason} lockdown`),
+    const majorIncident = isMajorProtectionIncident(guild, cfg);
+    const punishMode = majorIncident ? 'hard' : 'soft';
+    const incidentReason = `Unauthorized ${reason}`;
+
+    const tasks = [
         runProtectionRestore(guild, cfg, restoreReason),
-        punishExecutor(guild, actor, `Unauthorized ${reason}`, cfg.trustedUsers || [], 'hard')
-    ]);
+        punishExecutor(guild, actor, incidentReason, cfg.trustedUsers || [], punishMode)
+    ];
+
+    if (majorIncident) {
+        tasks.push(disableAdministratorEverywhere(guild, `Protection: ${reason} lockdown`));
+    }
+
+    await Promise.allSettled(tasks);
 }
 
 function formatActorText(userId, displayName = 'Unknown User', canMention = false) {
@@ -160,12 +180,22 @@ async function punishExecutor(guild, userId, reason, trustedUsers = [], mode = '
                 .setLabel(isHard ? 'Restore All Admin Permissions' : 'Restore Admin Roles')
                 .setStyle(ButtonStyle.Danger)
         );
-        await owner.send({
+        const dmMessage = await owner.send({
             content: `⚠️ Protection alert in **${guild.name}**
 Actor: ${formatActorText(userId, actorName, Boolean(userObject || member))}
 Reason: ${reason}`,
             components: [row]
-        }).catch(() => {});
+        }).catch(() => null);
+
+        if (dmMessage && userId) {
+            const key = `${guild.id}:${userId}`;
+            const existing = protectionRuntime.removedAdminRoles.get(key);
+            if (existing) {
+                existing.ownerDmChannelId = dmMessage.channel?.id || null;
+                existing.ownerDmMessageId = dmMessage.id;
+                protectionRuntime.removedAdminRoles.set(key, existing);
+            }
+        }
     }
 }
 
@@ -395,8 +425,21 @@ async function handleRestoreAdminRoles(interaction) {
     }
 
     await member.roles.add(validRoleIds, `Owner requested admin-role restore (${payload.reason || 'protection'})`).catch(() => {});
+
+    if (payload.ownerDmChannelId && payload.ownerDmMessageId) {
+        const dmChannel = await interaction.client.channels.fetch(payload.ownerDmChannelId).catch(() => null);
+        const dmMessage = dmChannel ? await dmChannel.messages.fetch(payload.ownerDmMessageId).catch(() => null) : null;
+        if (dmMessage) {
+            await dmMessage.edit({
+                content: `✅ تمت استعادة رولات الأدمن للفاعل بواسطة <@${interaction.user.id}>
+Actor: ${member.displayName}`,
+                components: []
+            }).catch(() => {});
+        }
+    }
+
     protectionRuntime.removedAdminRoles.delete(entryKey);
-    await interaction.reply({ content: `✅ Restored ${validRoleIds.length} admin role(s) for ${member.displayName}.`, ephemeral: true }).catch(() => {});
+    await interaction.reply({ content: `✅ Restored ${validRoleIds.length} admin role(s) for ${member.displayName}. تم إشعار المالك بمن أعاد الرول.`, ephemeral: true }).catch(() => {});
     await disableSourceButtons(interaction);
     return true;
 }
@@ -505,7 +548,7 @@ async function handleBulkRestoreAdminRoles(interaction) {
         const result = await restoreAdminRolesWithFilters(guild, session.excludedRoleIds, session.excludedUserIds);
         protectionRuntime.bulkRestoreSessions.delete(sessionId);
         await interaction.update({
-            content: `✅ تمت الاستعادة لـ ${result.restoredMembers} عضو وبعدد ${result.restoredRoles} رول إداري.`,
+            content: `✅ تمت الاستعادة لـ ${result.restoredMembers} عضو وبعدد ${result.restoredRoles} رول إداري بواسطة <@${interaction.user.id}>.`,
             components: []
         }).catch(() => {});
         return true;
