@@ -478,8 +478,10 @@ if (command.aliases && Array.isArray(command.aliases)) {
           console.log(`  ↳ Alias: ${alias}`);
         }
       }
-      // تسجيل معالج التفاعلات المستقل لأمر report
-            if (typeof command.registerInteractionHandler === 'function') {
+      // تسجيل معالج التفاعلات المستقل للأوامر التي توفره
+      if (typeof command.registerInteractionHandler === 'function') {
+        command.registerInteractionHandler(client);
+        console.log(`  ↳ Registered interaction handler for: ${command.name}`);
       }
     }
   } catch (error) {
