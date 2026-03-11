@@ -86,7 +86,7 @@ function findClosestRole(guild, rawInput) {
 
 function parseRolesFromMessage(guild, content) {
     const raw = String(content || '').trim();
-    if (!raw) return { ok: false, error: '❌ لازم ترسل الرولات (منشن/ID/اسم) أو 0.' };
+    if (!raw) return { ok: false, error: '❌ **لازم ترسل الرولات ( منشن / ID / اسم ) أو 0.**' };
     if (raw === '0') return { ok: true, mode: 'admin', roleIds: [] };
 
     const parts = raw.split(/[،,\n]+/).map(p => p.trim()).filter(Boolean);
@@ -94,7 +94,7 @@ function parseRolesFromMessage(guild, content) {
 
     for (const part of parts) {
         const role = findClosestRole(guild, part);
-        if (!role) return { ok: false, error: `❌ ما قدرت أحدد الرول: ${part}` };
+        if (!role) return { ok: false, error: `❌ **ما قدرت أحدد الرول :** ${part}` };
         if (!roleIds.includes(role.id)) roleIds.push(role.id);
     }
 
@@ -120,14 +120,14 @@ function isDangerousRole(role) {
 }
 
 function ensureSafeTargetRole(interaction, role) {
-    if (!role) return '❌ الرول غير صالح.';
-    if (isDangerousRole(role)) return '❌ هذا رول خطير ولا يمكن ربطه بأمر word.';
+    if (!role) return '❌ **الرول غير صالح.**';
+    if (isDangerousRole(role)) return '❌ **هذا رول خطير ولا يمكن ربطه بأمر word.**';
 
     const me = interaction.guild.members.me;
-    if (!me) return '❌ تعذر التحقق من صلاحيات البوت.';
+    if (!me) return '❌ **تعذر التحقق من صلاحيات البوت.**';
 
     if (role.position >= me.roles.highest.position) {
-        return '❌ هذا الرول أعلى/يساوي أعلى رول للبوت، ما أقدر أتعامل معه.';
+        return '❌ **هذا الرول أعلى / يساوي أعلى رول للبوت، ما أقدر أتعامل معه.**';
     }
 
     return null;
@@ -183,7 +183,7 @@ async function promptAllowedRolesByMessage(interaction) {
     }).catch(() => null);
 
     if (!collected || !collected.first()) {
-        return { ok: false, error: '❌ انتهى الوقت. أعد إنشاء الكلمة من جديد.' };
+        return { ok: false, error: '❌ **انتهى الوقت. أعد إنشاء الكلمة من جديد.**' };
     }
 
     const response = collected.first();
