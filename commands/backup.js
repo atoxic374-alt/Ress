@@ -1491,7 +1491,13 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                 }
             }
 
-            if (shouldRestoreChannels) await executeParallel(allChannelsInCategories, async (chData) => {
+            const backupLooseChannelKeys = new Set([
+                ...allChannelsInCategories.map(ch => `${(ch.name || '').toLowerCase()}::${ch.type}`),
+                ...backupStandaloneChannels.map(ch => `${(ch.name || '').toLowerCase()}::${ch.type}`)
+            ]);
+            const backupCategoryNames = new Set(backupCategories.map(cat => (cat.name || '').toLowerCase()));
+
+            const restoreChannelsInCategoriesPromise = shouldRestoreChannels ? executeParallel(allChannelsInCategories, async (chData) => {
                 let targetParentId = chData.parentId;
 
                 // محاولة إنقاذ الأب عند فقدان parentId
@@ -1559,10 +1565,10 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                         stats.channelsMatched++;
                     }
                 }
-            }, channelRestoreConcurrency);
+            }, channelRestoreConcurrency) : Promise.resolve();
 
             // 3) مطابقة/إنشاء القنوات خارج الكاتقريات
-            if (shouldRestoreChannels) await executeParallel(backupStandaloneChannels, async (chData) => {
+            const restoreStandaloneChannelsPromise = shouldRestoreChannels ? executeParallel(backupStandaloneChannels, async (chData) => {
                 const key = getChannelKey(null, chData.name, chData.type);
                 const queue = channelsBySignature.get(key) || [];
                 const matchedById = channelsById.get(chData.id);
@@ -1595,32 +1601,39 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                     channelMap.set(chData.id, newCh.id);
                     stats.channelsCreated++;
                 } catch (err) {}
-            }, channelRestoreConcurrency);
+            }, channelRestoreConcurrency) : Promise.resolve();
 
-            // 4) حذف القنوات/الكاتقريات الزائدة فقط (الفروقات)
-            const expectedChannelTargets = allChannelsInCategories.length + backupStandaloneChannels.length;
-            const mappedChannels = Array.from(channelMap.values()).filter(Boolean).length;
-            const hasHealthyChannelMapping = !shouldRestoreChannels || mappedChannels >= Math.floor(expectedChannelTargets * 0.8);
+            // 4) حذف الزوائد بالتوازي مع الاستعادة (بدون انتظار تسلسلي)
+            const deleteExtrasPromise = Promise.allSettled([
+                shouldRestoreChannels
+                    ? executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type !== ChannelType.GuildCategory), async (ch) => {
+                        if (usedChannelIds.has(ch.id)) return;
+                        const looseKey = `${(ch.name || '').toLowerCase()}::${ch.type}`;
+                        if (backupLooseChannelKeys.has(looseKey)) return;
+                        try {
+                            await ch.delete('Smart diff restore - extra channel').catch(() => {});
+                            stats.channelsDeleted++;
+                        } catch (err) {}
+                    }, 20)
+                    : Promise.resolve(),
+                shouldRestoreCategories
+                    ? executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type === ChannelType.GuildCategory), async (ch) => {
+                        if (usedChannelIds.has(ch.id)) return;
+                        const categoryName = (ch.name || '').toLowerCase();
+                        if (backupCategoryNames.has(categoryName)) return;
+                        try {
+                            await ch.delete('Smart diff restore - extra category').catch(() => {});
+                            stats.categoriesDeleted++;
+                        } catch (err) {}
+                    }, 12)
+                    : Promise.resolve()
+            ]);
 
-            if (shouldRestoreChannels && hasHealthyChannelMapping) await executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type !== ChannelType.GuildCategory), async (ch) => {
-                if (usedChannelIds.has(ch.id)) return;
-                try {
-                    await ch.delete('Smart diff restore - extra channel').catch(() => {});
-                    stats.channelsDeleted++;
-                } catch (err) {}
-            }, 6);
-
-            if (shouldRestoreCategories && hasHealthyChannelMapping) await executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type === ChannelType.GuildCategory), async (ch) => {
-                if (usedChannelIds.has(ch.id)) return;
-                try {
-                    await ch.delete('Smart diff restore - extra category').catch(() => {});
-                    stats.categoriesDeleted++;
-                } catch (err) {}
-            }, 4);
-
-            if ((shouldRestoreChannels || shouldRestoreCategories) && !hasHealthyChannelMapping) {
-                stats.errors.push('تم تخطي حذف الزوائد مؤقتًا لحماية البنية لأن المطابقة/الإنشاء لم تكتمل بشكل كافٍ.');
-            }
+            await Promise.allSettled([
+                restoreChannelsInCategoriesPromise,
+                restoreStandaloneChannelsPromise,
+                deleteExtrasPromise
+            ]);
 
             // 5) ترتيب نهائي
             const positions = [];
