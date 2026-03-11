@@ -836,6 +836,8 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
 
             const backupCategories = backupData.data.categories || [];
             const backupStandaloneChannels = backupData.data.channels || [];
+            const shouldRestoreCategories = options.includes('categories');
+            const shouldRestoreChannels = options.includes('channels');
 
             const existingAllChannels = Array.from(guild.channels.cache.values());
             const existingCategories = existingAllChannels.filter(ch => ch.type === ChannelType.GuildCategory);
@@ -859,7 +861,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
             const usedChannelIds = new Set();
 
             // 1) مطابقة/إنشاء الكاتقريات
-            for (const catData of backupCategories) {
+            if (shouldRestoreCategories) for (const catData of backupCategories) {
                 const queue = categoriesByName.get(catData.name || '') || [];
                 let matched = queue.find(c => !usedChannelIds.has(c.id));
                 if (!matched) {
@@ -892,14 +894,13 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
             // 2) مطابقة/إنشاء قنوات داخل الكاتقريات
             const allChannelsInCategories = [];
             for (const catData of backupCategories) {
-                const parentId = categoryMap.get(catData.id);
-                if (!parentId) continue;
+                const parentId = categoryMap.get(catData.id) || (categoriesByName.get(catData.name || '') || [])[0]?.id || null;
                 for (const chData of catData.channels || []) {
                     allChannelsInCategories.push({ ...chData, parentId });
                 }
             }
 
-            await executeParallel(allChannelsInCategories, async (chData) => {
+            if (shouldRestoreChannels) await executeParallel(allChannelsInCategories, async (chData) => {
                 const key = getChannelKey(chData.parentId, chData.name, chData.type);
                 const queue = channelsBySignature.get(key) || [];
                 const matched = queue.find(ch => !usedChannelIds.has(ch.id));
@@ -938,7 +939,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
             }, 14);
 
             // 3) مطابقة/إنشاء القنوات خارج الكاتقريات
-            await executeParallel(backupStandaloneChannels, async (chData) => {
+            if (shouldRestoreChannels) await executeParallel(backupStandaloneChannels, async (chData) => {
                 const key = getChannelKey(null, chData.name, chData.type);
                 const queue = channelsBySignature.get(key) || [];
                 const matched = queue.find(ch => !usedChannelIds.has(ch.id));
@@ -971,7 +972,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
             }, 14);
 
             // 4) حذف القنوات/الكاتقريات الزائدة فقط (الفروقات)
-            await executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type !== ChannelType.GuildCategory), async (ch) => {
+            if (shouldRestoreChannels) await executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type !== ChannelType.GuildCategory), async (ch) => {
                 if (usedChannelIds.has(ch.id)) return;
                 try {
                     await ch.delete('Smart diff restore - extra channel').catch(() => {});
@@ -979,7 +980,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                 } catch (err) {}
             }, 14);
 
-            await executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type === ChannelType.GuildCategory), async (ch) => {
+            if (shouldRestoreCategories) await executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type === ChannelType.GuildCategory), async (ch) => {
                 if (usedChannelIds.has(ch.id)) return;
                 try {
                     await ch.delete('Smart diff restore - extra category').catch(() => {});
@@ -991,14 +992,14 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
             const positions = [];
             for (const catData of backupCategories) {
                 const newCatId = categoryMap.get(catData.id);
-                if (newCatId) positions.push({ channel: newCatId, position: catData.position });
+                if (shouldRestoreCategories && newCatId) positions.push({ channel: newCatId, position: catData.position });
 
-                for (const chData of catData.channels || []) {
+                if (shouldRestoreChannels) for (const chData of catData.channels || []) {
                     const newChId = channelMap.get(chData.id);
                     if (newChId) positions.push({ channel: newChId, position: chData.position });
                 }
             }
-            for (const chData of backupStandaloneChannels) {
+            if (shouldRestoreChannels) for (const chData of backupStandaloneChannels) {
                 const newChId = channelMap.get(chData.id);
                 if (newChId) positions.push({ channel: newChId, position: chData.position });
             }
@@ -1009,7 +1010,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
             // برمشنات الرومات بعد اكتمال الرولات فقط
             await rolesTaskPromise;
 
-            await executeParallel(backupCategories, async (catData) => {
+            if (shouldRestoreCategories) await executeParallel(backupCategories, async (catData) => {
                 const newCatId = categoryMap.get(catData.id);
                 if (!newCatId) return;
                 const channel = guild.channels.cache.get(newCatId);
@@ -1017,7 +1018,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                 await channel.permissionOverwrites.set(convertPermissions(catData.permissionOverwrites)).catch(() => {});
             }, 10);
 
-            await executeParallel(allChannelsInCategories, async (chData) => {
+            if (shouldRestoreChannels) await executeParallel(allChannelsInCategories, async (chData) => {
                 const newChId = channelMap.get(chData.id);
                 if (!newChId) return;
                 const channel = guild.channels.cache.get(newChId);
@@ -1025,7 +1026,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                 await channel.permissionOverwrites.set(convertPermissions(chData.permissionOverwrites)).catch(() => {});
             }, 10);
 
-            await executeParallel(backupStandaloneChannels, async (chData) => {
+            if (shouldRestoreChannels) await executeParallel(backupStandaloneChannels, async (chData) => {
                 const newChId = channelMap.get(chData.id);
                 if (!newChId) return;
                 const channel = guild.channels.cache.get(newChId);
@@ -1258,8 +1259,8 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
         // فحص نهائي للتأكد أنه لا يوجد نقص بعد الاستعادة
         const verification = {
             roles: !options.includes('roles') || roleMap.size >= (backupData.data.roles || []).length,
-            categories: !(options.includes('categories') || options.includes('channels')) || categoryMap.size >= (backupData.data.categories || []).length,
-            channels: !(options.includes('channels') || options.includes('categories')) || channelMap.size >= ((backupData.data.channels || []).length + (backupData.data.categories || []).reduce((sum, cat) => sum + (cat.channels?.length || 0), 0) + (backupData.data.categories || []).length),
+            categories: !options.includes('categories') || categoryMap.size >= (backupData.data.categories || []).length,
+            channels: !options.includes('channels') || channelMap.size >= ((backupData.data.channels || []).length + (backupData.data.categories || []).reduce((sum, cat) => sum + (cat.channels?.length || 0), 0) + (options.includes('categories') ? (backupData.data.categories || []).length : 0)),
             bans: !options.includes('bans') || stats.bansRestored >= (backupData.data.bans || []).length,
             memberRoles: !options.includes('memberroles') || stats.memberRolesRestored >= (backupData.data.members || []).length
         };
