@@ -42,8 +42,8 @@ const FILES_TO_BACKUP = [
     'setrooms.json', 'blocked.json'
 ];
 
-// دالة لإعادة المحاولة السريعة بدون تأخير
-async function retryOperation(operation, maxRetries = 2, baseDelay = 0, operationName = 'Operation Name') {
+// دالة لإعادة المحاولة السريعة مع backoff خفيف جداً لزيادة الثبات
+async function retryOperation(operation, maxRetries = 2, baseDelay = 40, operationName = 'Operation Name') {
     for (let i = 0; i < maxRetries; i++) {
         try {
             return await operation();
@@ -51,13 +51,50 @@ async function retryOperation(operation, maxRetries = 2, baseDelay = 0, operatio
             if (i === maxRetries - 1) {
                 throw error;
             }
+
+            // backoff تصاعدي خفيف + jitter بسيط لتقليل تصادم الطلبات
+            const jitter = Math.floor(Math.random() * 20);
+            const delay = (baseDelay * (i + 1)) + jitter;
+            if (delay > 0) {
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
         }
     }
 }
 
-// دالة للتنفيذ المتوازي المطلق بدون أي حدود
-async function executeParallel(items, operation, concurrency = Infinity) {
-    return Promise.allSettled(items.map(operation));
+// دالة تنفيذ متوازي عالية السرعة مع احترام concurrency
+async function executeParallel(items, operation, concurrency = 100) {
+    if (!Array.isArray(items) || items.length === 0) {
+        return [];
+    }
+
+    const safeConcurrency = Number.isFinite(concurrency) && concurrency > 0
+        ? Math.floor(concurrency)
+        : items.length;
+
+    if (safeConcurrency >= items.length) {
+        return Promise.allSettled(items.map(operation));
+    }
+
+    const results = new Array(items.length);
+    let currentIndex = 0;
+
+    const workers = Array.from({ length: safeConcurrency }, async () => {
+        while (true) {
+            const idx = currentIndex++;
+            if (idx >= items.length) return;
+
+            try {
+                const value = await operation(items[idx], idx);
+                results[idx] = { status: 'fulfilled', value };
+            } catch (reason) {
+                results[idx] = { status: 'rejected', reason };
+            }
+        }
+    });
+
+    await Promise.all(workers);
+    return results;
 }
 
 // دالة لتحديث مؤشر التقدم (محسّنة للسيرفرات الضخمة)
@@ -951,7 +988,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                         .filter(newRoleId => newRoleId && guild.roles.cache.has(newRoleId));
 
                     if (rolesToAdd.length > 0) {
-                        await retryOperation(async () => member.roles.add(rolesToAdd), 2, 0, `Add roles to ${memberData.username}`);
+                        await retryOperation(async () => member.roles.add(rolesToAdd), 2, 20, `Add roles to ${memberData.username}`);
                     }
 
                     if (memberData.nickname) {
