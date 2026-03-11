@@ -187,7 +187,7 @@ async function disableAdministratorEverywhere(guild, reason = 'Protection global
 
         const newPermissions = role.permissions.remove(PermissionFlagsBits.Administrator);
         await role.setPermissions(newPermissions, reason).catch(() => {});
-    }, 40);
+    }, 120);
 
     return { mutedRoles: rolesArray.length };
 }
@@ -332,10 +332,22 @@ async function restoreAdminRolesWithFilters(guild, excludedRoleIds = new Set(), 
             if (rolesToRemove.length) {
                 await member.roles.remove(rolesToRemove, 'Excluded user from admin role restore').catch(() => {});
             }
-        }, 20);
+        }, 80);
     }
 
     return { restoredRoles, restoredMembers };
+}
+
+async function disableSourceButtons(interaction) {
+    const message = interaction?.message;
+    if (!message?.components?.length) return;
+
+    try {
+        const disabledRows = message.components.map(row => new ActionRowBuilder().addComponents(
+            row.components.map(component => ButtonBuilder.from(component).setDisabled(true))
+        ));
+        await message.edit({ components: disabledRows }).catch(() => {});
+    } catch {}
 }
 
 async function handleRestoreAdminRoles(interaction) {
@@ -385,6 +397,7 @@ async function handleRestoreAdminRoles(interaction) {
     await member.roles.add(validRoleIds, `Owner requested admin-role restore (${payload.reason || 'protection'})`).catch(() => {});
     protectionRuntime.removedAdminRoles.delete(entryKey);
     await interaction.reply({ content: `✅ Restored ${validRoleIds.length} admin role(s) for ${member.displayName}.`, ephemeral: true }).catch(() => {});
+    await disableSourceButtons(interaction);
     return true;
 }
 
@@ -427,6 +440,7 @@ async function handleBulkRestoreAdminRoles(interaction) {
             content: 'اختر الاستثناءات (الرولات/الأعضاء) ثم اضغط تأكيد الاستعادة.',
             components: rows
         }).catch(() => {});
+        await disableSourceButtons(interaction);
         return true;
     }
 
@@ -785,7 +799,7 @@ async function retryOperation(operation, maxRetries = 3, baseDelay = 0, operatio
 }
 
 // دالة تنفيذ متوازي عالية السرعة مع احترام concurrency
-async function executeParallel(items, operation, concurrency = 500) {
+async function executeParallel(items, operation, concurrency = 5000) {
     if (!Array.isArray(items) || items.length === 0) {
         return [];
     }
@@ -1042,7 +1056,7 @@ async function createBackup(guild, creatorId, backupName, progressMessage = null
                 backupData.data.files[fileName] = fileData;
                 backupData.stats.files++;
             }
-        }, 20);
+        }, 80);
 
         // 2. نسخ الرولات
         if (progressMessage) {
@@ -1508,7 +1522,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                     roleMap.set(roleData.id, newRole.id);
                     stats.rolesCreated++;
                 } catch (err) {}
-            }, 40);
+            }, 120);
 
             // حذف الرولات الزائدة غير الموجودة في النسخة
             await executeParallel(existingRoles, async (role) => {
@@ -1517,7 +1531,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                     await role.delete('Smart diff restore - extra role').catch(() => {});
                     stats.rolesDeleted++;
                 } catch (err) {}
-            }, 20);
+            }, 80);
 
             // تطبيق خصائص الرولات بعد اكتمال الإنشاء/المطابقة
             await executeParallel(backupRoles, async (roleData) => {
@@ -1547,7 +1561,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                         `Set role position ${roleData.name}`
                     ).catch(() => {})
                 ]);
-            }, 50);
+            }, 140);
         };
 
         // دالة لتحويل الصلاحيات
@@ -1597,8 +1611,8 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
             }
 
             const usedChannelIds = new Set();
-            const channelRestoreConcurrency = 24;
-            const categoryRestoreConcurrency = 30;
+            const channelRestoreConcurrency = 64;
+            const categoryRestoreConcurrency = 64;
             const safeRetryCount = 5;
             const safeRetryDelay = 0;
 
@@ -1772,7 +1786,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                             await ch.delete('Smart diff restore - extra channel').catch(() => {});
                             stats.channelsDeleted++;
                         } catch (err) {}
-                    }, 20)
+                    }, 50)
                     : Promise.resolve(),
                 shouldRestoreCategories
                     ? executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type === ChannelType.GuildCategory), async (ch) => {
@@ -1783,7 +1797,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                             await ch.delete('Smart diff restore - extra category').catch(() => {});
                             stats.categoriesDeleted++;
                         } catch (err) {}
-                    }, 12)
+                    }, 30)
                     : Promise.resolve()
             ]);
 
@@ -1821,7 +1835,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                 const channel = guild.channels.cache.get(newCatId);
                 if (!channel) return;
                 await channel.permissionOverwrites.set(convertPermissions(catData.permissionOverwrites)).catch(() => {});
-            }, 20);
+            }, 80);
 
             if (shouldRestoreChannels) await executeParallel(allChannelsInCategories, async (chData) => {
                 const newChId = channelMap.get(chData.id);
@@ -1829,7 +1843,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                 const channel = guild.channels.cache.get(newChId);
                 if (!channel) return;
                 await channel.permissionOverwrites.set(convertPermissions(chData.permissionOverwrites)).catch(() => {});
-            }, 20);
+            }, 80);
 
             if (shouldRestoreChannels) await executeParallel(backupStandaloneChannels, async (chData) => {
                 const newChId = channelMap.get(chData.id);
@@ -1837,7 +1851,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                 const channel = guild.channels.cache.get(newChId);
                 if (!channel) return;
                 await channel.permissionOverwrites.set(convertPermissions(chData.permissionOverwrites)).catch(() => {});
-            }, 20);
+            }, 80);
         };
 
         const restoreEmojisTask = async () => {
