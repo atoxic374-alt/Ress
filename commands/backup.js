@@ -25,6 +25,8 @@ function readJSON(filePath, defaultValue = {}) {
 
 function saveJSON(filePath, data) {
     try {
+        const dir = path.dirname(filePath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
         return true;
     } catch (error) {
@@ -33,14 +35,36 @@ function saveJSON(filePath, data) {
     }
 }
 
-const FILES_TO_BACKUP = [
-    'points.json', 'responsibilities.json', 'logConfig.json', 'adminRoles.json',
-    'botConfig.json', 'cooldowns.json', 'notifications.json', 'reports.json',
-    'adminApplications.json', 'vacations.json', 'activePromotes.json',
-    'activeWarns.json', 'promoteBans.json', 'promoteLogs.json',
-    'promoteSettings.json', 'warnLogs.json', 'categories.json',
-    'setrooms.json', 'blocked.json'
-];
+function getDataJsonFiles() {
+    const files = [];
+    const stack = [''];
+
+    while (stack.length > 0) {
+        const relativeDir = stack.pop();
+        const absDir = path.join(dataDir, relativeDir);
+        let entries = [];
+
+        try {
+            entries = fs.readdirSync(absDir, { withFileTypes: true });
+        } catch {
+            continue;
+        }
+
+        for (const entry of entries) {
+            const relativePath = path.join(relativeDir, entry.name);
+            if (entry.isDirectory()) {
+                stack.push(relativePath);
+                continue;
+            }
+
+            if (entry.isFile() && entry.name.endsWith('.json')) {
+                files.push(relativePath);
+            }
+        }
+    }
+
+    return files;
+}
 
 
 const protectionConfigPath = path.join(dataDir, 'protection.json');
@@ -851,7 +875,8 @@ async function createBackup(guild, creatorId, backupName, progressMessage = null
             await updateProgress(progressMessage, 'Backup Loading', ++currentStep, totalSteps, 'Json Copied...');
         }
 
-        await executeParallel(FILES_TO_BACKUP, async (fileName) => {
+        const jsonFiles = getDataJsonFiles();
+        await executeParallel(jsonFiles, async (fileName) => {
             const filePath = path.join(dataDir, fileName);
             if (!fs.existsSync(filePath)) return;
             const fileData = readJSON(filePath, null);
