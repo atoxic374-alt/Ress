@@ -58,8 +58,7 @@ const DATA_FILES = {
     adminApplications: path.join(dataDir, 'adminApplications.json'),
     serverMapConfig: path.join(dataDir, 'serverMapConfig.json'),
     voiceSessions: path.join(dataDir, 'voiceSessions.json'),
-    wordTriggers: path.join(dataDir, 'wordTriggers.json'),
-
+wordTriggers: path.join(dataDir, 'wordTriggers.json'),
     roleGrantHistory: path.join(dataDir, 'roleGrantHistory.json')
     
 };
@@ -68,8 +67,8 @@ const DATA_FILES = {
 function ensureDataFiles() {
     
     const defaults = {
-        wordTriggers: {},
         roleGrantHistory: {},
+        wordTriggers: {},
         serverMapConfig: {
             enabled: false,
             imageUrl: "https://i.imgur.com/Xv7XzXz.png",
@@ -479,9 +478,8 @@ if (command.aliases && Array.isArray(command.aliases)) {
           console.log(`  ↳ Alias: ${alias}`);
         }
       }
-      // تسجيل معالجات التفاعلات المستقلة للأوامر
-      if (typeof command.registerInteractionHandler === 'function') {
-        command.registerInteractionHandler(client);
+      // تسجيل معالج التفاعلات المستقل لأمر report
+            if (typeof command.registerInteractionHandler === 'function') {
       }
     }
   } catch (error) {
@@ -2111,18 +2109,25 @@ client.on('messageCreate', async message => {
   if (isChannelBlocked(message.channel.id)) {
     return; // تجاهل الأوامر في القنوات المحظورة بصمت
   }
-
   // نظام كلمات word
-  try {
-    const wordCommand = client.commands.get('word');
-    if (wordCommand && typeof wordCommand.handleMessage === 'function') {
-      const consumed = await wordCommand.handleMessage(message, { client, BOT_OWNERS });
-      if (consumed) return;
-    }
-  } catch (error) {
-    console.error('❌ خطأ في نظام word:', error);
-  }
 
+  try {
+
+    const wordCommand = client.commands.get('word');
+
+    if (wordCommand && typeof wordCommand.handleMessage === 'function') {
+
+      const consumed = await wordCommand.handleMessage(message, { client, BOT_OWNERS });
+
+      if (consumed) return;
+
+    }
+
+  } catch (error) {
+
+    console.error('❌ خطأ في نظام word:', error);
+
+  }
   // معالجة الأوامر (البريفكس)
   const prefix = getCachedPrefix();
   if (prefix && message.content.startsWith(prefix)) {
@@ -2403,7 +2408,7 @@ client.on('messageCreate', async message => {
       await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
     }
     // Commands for admins and owners (user, مسؤول, اجازه, check, rooms)
-    else if (commandName === 'ترقيه' || commandName === 'list' || commandName === 'حذف' || commandName === 'settings' || commandName === 'problem' || commandName === 'مشكله' || commandName === 'roled' || commandName === 'انشاء' || commandName === 'اجازه' || commandName === 'تصفيه' || commandName === 'مسؤولياتي' || commandName === 'اجازتي' || commandName === 'check' || commandName === 'rooms') {
+    else if (commandName === 'ترقيه' || commandName === 'list' || commandName === 'حذف' || commandName === 'settings' || commandName === 'problem' || commandName === 'مشكله' || commandName === 'word' || commandName === 'roled' || commandName === 'انشاء' || commandName === 'اجازه' || commandName === 'تصفيه' || commandName === 'مسؤولياتي' || commandName === 'اجازتي' || commandName === 'check' || commandName === 'rooms') {
       if (commandName === 'مسؤول') {
         console.log(`🔍 التحقق من صلاحيات المستخدم ${message.author.id} لأمر مسؤول:`);
         console.log(`- isOwner: ${isOwner}`);
@@ -3433,7 +3438,23 @@ client.on('interactionCreate', async (interaction) => {
     if (await interactionRouter.route(interaction, { client, BOT_OWNERS })) {
         return;
     }
+if ((interaction.isButton() || interaction.isModalSubmit()) && customId.startsWith('word_')) {
 
+        const wordCommand = client.commands.get('word');
+
+        if (wordCommand && typeof wordCommand.handleInteraction === 'function') {
+
+            const consumed = await wordCommand.handleInteraction(interaction, { client, BOT_OWNERS });
+
+            if (consumed !== false) {
+
+                return;
+
+            }
+
+        }
+
+    }
     // --- DIE & DEAD ACTION HANDLERS (Instant Explosion Mode) ---
     if (interaction.isButton() && (interaction.customId === 'die_action' || interaction.customId === 'Dead_action' || interaction.customId.startsWith('die_action_') || interaction.customId.startsWith('Dead_action_'))) {
         const customId = interaction.customId;
