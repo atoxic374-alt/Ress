@@ -189,22 +189,23 @@ function upsertWord(guildId, wordEntry) {
 function buildWordPreview(entry, guild) {
     const keywordsText = getEntryKeywords(entry).join(' ، ') || '—';
     const allowedText = entry.allowedMode === 'admin'
-        ? 'جميع رولات الأدمن (adminRoles.json)'
-        : entry.allowedRoleIds.map(id => guild.roles.cache.get(id)?.toString() || `\`${id}\``).join(' ، ') || '—';
+        ? 'جميع رولات الأدمن '
+        : entry.allowedRoleIds.map(id => guild.roles.cache.get(id)?.toString() || `\`${id}\``).join(' , ') || '—';
 
     return colorManager.createEmbed()
-        .setTitle('**تم حفظ إعداد كلمة**')
+        .setTitle('**Saved word**')
         .setThumbnail(guild.iconURL({ size: 256 }) || null)
         .setDescription([
-            `**الكلمات (Prefix):** ${keywordsText}`,
-            '',
-            `**الرول المربوط :** <@&${entry.targetRoleId}>`,
-            '',
-            `**رسالة بدون صلاحية :** ${entry.noPermMessage || 'غير محددة'}`,
-            '',
-            `**رسالة مع صلاحية :** ${entry.hasPermMessage || 'غير محددة'}`,
-            '',
-            `**الرولات المسموح لها :** ${allowedText}`
+        ` ** `,
+            `• الكلمات : ${keywordsText}`,
+            
+            `• الرول : <@&${entry.targetRoleId}>`,
+            
+            `• رسالة بدون صلاحية : ${entry.noPermMessage || ' رياكشن '}`,
+            
+            `• رسالة مع صلاحية : ${entry.hasPermMessage || 'رياكشن '}`,
+            
+            `• الرولات المسموح لها : ${allowedText}**`
         ].join('\n'));
 }
 
@@ -216,18 +217,19 @@ function buildWordSystemEmbed(guild) {
     const listText = words.length === 0
         ? '**لا توجد كلمات مضافة حالياً.**'
         : words.map((entry, index) => {
-            const prefixes = getEntryKeywords(entry).join(' ، ') || '—';
+            const prefixes = getEntryKeywords(entry).join('  ,  ') || '—';
             const allowedText = entry.allowedMode === 'admin'
-                ? 'adminRoles.json'
+                ? 'كل الادارة'
                 : `${(entry.allowedRoleIds || []).length} رول`;
 
             return [
-                `**#${index + 1}**`,
-                `**Prefix:** ${prefixes}`,
-                `**Role:** <@&${entry.targetRoleId}>`,
-                `**Allowed:** ${allowedText}`
+                `**`,
+                `• #${index + 1}`,
+                `• Prefix : ${prefixes}`,
+                `• Role : <@&${entry.targetRoleId}>`,
+                `• Allowed : ${allowedText}**`
             ].join('\n');
-        }).join('\n\n━━━━━━━━━━━━━━━━\n\n');
+        }).join('\n\n••••••••••••••••\n\n');
 
     return colorManager.createEmbed()
         .setTitle('**نظام word**')
@@ -239,7 +241,7 @@ function buildWordSystemEmbed(guild) {
             '**• إزالة**',
             '**• تعديل**',
             '',
-            `**إجمالي الإعدادات الحالية :** ${words.length}`,
+            `**• All words : ${words.length}**`,
             '',
             listText
         ].join('\n'));
@@ -264,7 +266,7 @@ async function refreshWordPanelMessage(interaction, panelMessageId) {
 
 async function promptAllowedRolesByMessage(interaction) {
     await interaction.editReply({
-        content: '✅ **المدخلات صحيحة.**\n**أرسل الآن رسالة في نفس الشات تحتوي الرولات المسموح لها ( منشن / ID / اسم ) أو اكتب `0` لكل adminRoles.**',
+        content: '✅ **المدخلات صحيحة.**\n**أرسل الآن رسالة في نفس الشات تحتوي الرولات المسموح لها ( منشن / ID / اسم ) أو اكتب `0` لكل الادمن.**',
         components: []
     });
 
@@ -583,7 +585,7 @@ async function handleMessage(message, context) {
 
     const targetMember = await resolveTargetMember(message);
     if (!targetMember) {
-        await message.react('❌').catch(() => {});
+        await message.react('<:emoji_44:1481252878604697692>').catch(() => {});
         return true;
     }
 
@@ -594,21 +596,21 @@ async function handleMessage(message, context) {
             await message.react('❌').catch(() => {});
             return true;
         }
-        await message.react('☑️').catch(() => {});
+        await message.react('<:emoji_42:1481252567227826388>').catch(() => {});
         return true;
     }
 
     const addResult = await targetMember.roles.add(entry.targetRoleId).then(() => true).catch(() => false);
     if (!addResult) {
         await message.reply('❌ **فشل إضافة الرول للهدف (تحقق من صلاحيات البوت وترتيب الرولات).**').catch(() => {});
-        await message.react('❌').catch(() => {});
+        await message.react('<:emoji_44:1481252878604697692>').catch(() => {});
         return true;
     }
 
     if (entry.hasPermMessage) {
         await message.reply(entry.hasPermMessage).catch(() => {});
     } else {
-        await message.react('✅').catch(() => {});
+        await message.react('<:emoji_43:1481252608361365701>').catch(() => {});
     }
 
     return true;
