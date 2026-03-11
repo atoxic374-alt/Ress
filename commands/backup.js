@@ -25,6 +25,8 @@ function readJSON(filePath, defaultValue = {}) {
 
 function saveJSON(filePath, data) {
     try {
+        const dir = path.dirname(filePath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
         return true;
     } catch (error) {
@@ -33,17 +35,579 @@ function saveJSON(filePath, data) {
     }
 }
 
-const FILES_TO_BACKUP = [
-    'points.json', 'responsibilities.json', 'logConfig.json', 'adminRoles.json',
-    'botConfig.json', 'cooldowns.json', 'notifications.json', 'reports.json',
-    'adminApplications.json', 'vacations.json', 'activePromotes.json',
-    'activeWarns.json', 'promoteBans.json', 'promoteLogs.json',
-    'promoteSettings.json', 'warnLogs.json', 'categories.json',
-    'setrooms.json', 'blocked.json'
-];
+function getDataJsonFiles() {
+    const files = [];
+    const stack = [''];
 
-// دالة لإعادة المحاولة السريعة بدون تأخير
-async function retryOperation(operation, maxRetries = 2, baseDelay = 50, operationName = 'Operation Name') {
+    while (stack.length > 0) {
+        const relativeDir = stack.pop();
+        const absDir = path.join(dataDir, relativeDir);
+        let entries = [];
+
+        try {
+            entries = fs.readdirSync(absDir, { withFileTypes: true });
+        } catch {
+            continue;
+        }
+
+        for (const entry of entries) {
+            const relativePath = path.join(relativeDir, entry.name);
+            if (entry.isDirectory()) {
+                stack.push(relativePath);
+                continue;
+            }
+
+            if (entry.isFile() && entry.name.endsWith('.json')) {
+                files.push(relativePath);
+            }
+        }
+    }
+
+    return files;
+}
+
+
+const protectionConfigPath = path.join(dataDir, 'protection.json');
+const protectionRuntime = {
+    listenersInstalled: false,
+    snapshotIntervals: new Map(),
+    activeRestores: new Set(),
+    removedAdminRoles: new Map(),
+    bulkRestoreSessions: new Map(),
+    protectionBootstrapped: false
+};
+
+function getCurrentRoleCount(guild) {
+    return guild.roles.cache.filter(role => !role.managed && role.id !== guild.id).size;
+}
+
+function getCurrentChannelCount(guild) {
+    return guild.channels.cache.filter(ch => !ch.isThread()).size;
+}
+
+function getProtectionConfigAll() {
+    return readJSON(protectionConfigPath, {});
+}
+
+function getGuildProtectionConfig(guildId) {
+    return getProtectionConfigAll()[guildId] || null;
+}
+
+function setGuildProtectionConfig(guildId, config) {
+    const all = getProtectionConfigAll();
+    all[guildId] = config;
+    saveJSON(protectionConfigPath, all);
+}
+
+async function getRecentExecutorId(guild, actionType) {
+    try {
+        const logs = await guild.fetchAuditLogs({ type: actionType, limit: 1 });
+        const entry = logs.entries.first();
+        if (!entry?.executor) return null;
+        if (Date.now() - entry.createdTimestamp > 10000) return null;
+        return entry.executor.id;
+    } catch {
+        return null;
+    }
+}
+
+function formatActorText(userId, displayName = 'Unknown User', canMention = false) {
+    if (canMention && userId) return `<@${userId}> (${displayName})`;
+    return displayName;
+}
+
+async function punishExecutor(guild, userId, reason, trustedUsers = [], mode = 'soft', fallbackName = 'Unknown User') {
+    if (!userId || trustedUsers.includes(userId) || userId === guild.ownerId || userId === guild.client.user.id) return;
+    const member = await guild.members.fetch(userId).catch(() => null);
+    const userObject = await guild.client.users.fetch(userId).catch(() => null);
+    const actorName = member?.displayName || userObject?.globalName || userObject?.username || fallbackName;
+
+    if (member) {
+        const adminRoles = member.roles.cache.filter(r => r.permissions.has(PermissionFlagsBits.Administrator));
+        if (adminRoles.size > 0) {
+            protectionRuntime.removedAdminRoles.set(`${guild.id}:${userId}`, {
+                roleIds: adminRoles.map(r => r.id),
+                removedAt: Date.now(),
+                reason,
+                actorName,
+                mode
+            });
+            await member.roles.remove(adminRoles.map(r => r.id)).catch(() => {});
+        }
+
+        if (mode === 'hard') {
+            await member.kick(`Protection: ${reason}`).catch(() => {});
+        }
+    }
+
+    const owner = await guild.fetchOwner().catch(() => null);
+    if (owner) {
+        const isHard = mode === 'hard';
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`${isHard ? 'restore_admin_roles_bulk_' : 'restore_admin_roles_'}${guild.id}`)
+                .setLabel(isHard ? 'Restore All Admin Permissions' : 'Restore Admin Roles')
+                .setStyle(ButtonStyle.Danger)
+        );
+        await owner.send({
+            content: `⚠️ Protection alert in **${guild.name}**
+Actor: ${formatActorText(userId, actorName, Boolean(userObject || member))}
+Reason: ${reason}`,
+            components: [row]
+        }).catch(() => {});
+    }
+}
+
+function buildBulkRestoreComponents(guild, session) {
+    const entries = Array.from(protectionRuntime.removedAdminRoles.entries())
+        .filter(([key]) => key.startsWith(`${guild.id}:`))
+        .map(([key, payload]) => {
+            const targetId = key.split(':')[1];
+            return { key, payload, targetId };
+        });
+
+    const rolePool = new Map();
+    entries.forEach(({ payload }) => {
+        (payload.roleIds || []).forEach(roleId => {
+            const role = guild.roles.cache.get(roleId);
+            if (role) rolePool.set(roleId, role);
+        });
+    });
+
+    const roleOptions = Array.from(rolePool.values())
+        .sort((a, b) => b.position - a.position)
+        .slice(0, 25)
+        .map(role => ({
+            label: role.name.slice(0, 100),
+            value: role.id,
+            description: `ID: ${role.id}`.slice(0, 100),
+            default: session.excludedRoleIds.has(role.id)
+        }));
+
+    const userOptions = entries
+        .map(({ targetId, payload }) => {
+            const member = guild.members.cache.get(targetId);
+            const username = member?.displayName || payload.actorName || `User ${targetId}`;
+            return {
+                label: username.slice(0, 100),
+                value: targetId,
+                description: `ID: ${targetId}`.slice(0, 100),
+                default: session.excludedUserIds.has(targetId)
+            };
+        })
+        .slice(0, 25);
+
+    const rows = [];
+    if (roleOptions.length) {
+        rows.push(new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder()
+                .setCustomId(`restore_bulk_roles_${session.id}`)
+                .setPlaceholder('استثناء رولات من الاستعادة')
+                .setMinValues(0)
+                .setMaxValues(roleOptions.length)
+                .addOptions(roleOptions)
+        ));
+    }
+
+    if (userOptions.length) {
+        rows.push(new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder()
+                .setCustomId(`restore_bulk_users_${session.id}`)
+                .setPlaceholder('استثناء أعضاء من الاستعادة')
+                .setMinValues(0)
+                .setMaxValues(userOptions.length)
+                .addOptions(userOptions)
+        ));
+    }
+
+    rows.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`restore_bulk_confirm_${session.id}`).setLabel('تأكيد الاستعادة').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(`restore_bulk_cancel_${session.id}`).setLabel('إلغاء').setStyle(ButtonStyle.Secondary)
+    ));
+
+    return rows;
+}
+
+async function restoreAdminRolesWithFilters(guild, excludedRoleIds = new Set(), excludedUserIds = new Set()) {
+    const entries = Array.from(protectionRuntime.removedAdminRoles.entries())
+        .filter(([key]) => key.startsWith(`${guild.id}:`));
+
+    let restoredRoles = 0;
+    let restoredMembers = 0;
+
+    for (const [entryKey, payload] of entries) {
+        const targetId = entryKey.split(':')[1];
+        if (excludedUserIds.has(targetId)) continue;
+
+        const member = await guild.members.fetch(targetId).catch(() => null);
+        if (!member) continue;
+
+        const validRoleIds = (payload.roleIds || [])
+            .filter(roleId => !excludedRoleIds.has(roleId))
+            .filter(roleId => guild.roles.cache.has(roleId));
+
+        if (!validRoleIds.length) continue;
+
+        await member.roles.add(validRoleIds, `Owner requested admin-role restore (${payload.reason || 'protection'})`).catch(() => {});
+        protectionRuntime.removedAdminRoles.delete(entryKey);
+        restoredRoles += validRoleIds.length;
+        restoredMembers += 1;
+    }
+
+    return { restoredRoles, restoredMembers };
+}
+
+async function handleRestoreAdminRoles(interaction) {
+    if (!interaction.isButton() || !interaction.customId.startsWith('restore_admin_roles_')) return false;
+
+    const guildId = interaction.customId.replace('restore_admin_roles_', '');
+    if (!guildId) {
+        await interaction.reply({ content: '❌ Invalid request.', ephemeral: true }).catch(() => {});
+        return true;
+    }
+
+    const guild = interaction.client.guilds.cache.get(guildId) || await interaction.client.guilds.fetch(guildId).catch(() => null);
+    if (!guild) {
+        await interaction.reply({ content: '❌ Guild not found.', ephemeral: true }).catch(() => {});
+        return true;
+    }
+
+    if (interaction.user.id !== guild.ownerId) {
+        await interaction.reply({ content: '❌ This button is only for the server owner.', ephemeral: true }).catch(() => {});
+        return true;
+    }
+
+    const entries = Array.from(protectionRuntime.removedAdminRoles.entries())
+        .filter(([key]) => key.startsWith(`${guild.id}:`))
+        .sort((a, b) => b[1].removedAt - a[1].removedAt);
+
+    if (entries.length === 0) {
+        await interaction.reply({ content: '⚠️ No stored admin roles to restore.', ephemeral: true }).catch(() => {});
+        return true;
+    }
+
+    const [entryKey, payload] = entries[0];
+    const targetId = entryKey.split(':')[1];
+    const member = await guild.members.fetch(targetId).catch(() => null);
+
+    if (!member) {
+        await interaction.reply({ content: `⚠️ ${payload.actorName || targetId} غير موجود الآن داخل السيرفر.`, ephemeral: true }).catch(() => {});
+        return true;
+    }
+
+    const validRoleIds = (payload.roleIds || []).filter(roleId => guild.roles.cache.has(roleId));
+    if (validRoleIds.length === 0) {
+        await interaction.reply({ content: '⚠️ Stored admin roles are no longer available.', ephemeral: true }).catch(() => {});
+        return true;
+    }
+
+    await member.roles.add(validRoleIds, `Owner requested admin-role restore (${payload.reason || 'protection'})`).catch(() => {});
+    protectionRuntime.removedAdminRoles.delete(entryKey);
+    await interaction.reply({ content: `✅ Restored ${validRoleIds.length} admin role(s) for ${member.displayName}.`, ephemeral: true }).catch(() => {});
+    return true;
+}
+
+async function handleBulkRestoreAdminRoles(interaction) {
+    const customId = interaction.customId || '';
+
+    if (interaction.isButton() && customId.startsWith('restore_admin_roles_bulk_')) {
+        const guildId = customId.replace('restore_admin_roles_bulk_', '');
+        const guild = interaction.client.guilds.cache.get(guildId) || await interaction.client.guilds.fetch(guildId).catch(() => null);
+        if (!guild) {
+            await interaction.reply({ content: '❌ Guild not found.', ephemeral: true }).catch(() => {});
+            return true;
+        }
+
+        if (interaction.user.id !== guild.ownerId) {
+            await interaction.reply({ content: '❌ This button is only for the server owner.', ephemeral: true }).catch(() => {});
+            return true;
+        }
+
+        const entries = Array.from(protectionRuntime.removedAdminRoles.entries()).filter(([key]) => key.startsWith(`${guild.id}:`));
+        if (!entries.length) {
+            await interaction.reply({ content: '⚠️ لا توجد صلاحيات محفوظة للاستعادة.', ephemeral: true }).catch(() => {});
+            return true;
+        }
+
+        const sessionId = `${guild.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const session = {
+            id: sessionId,
+            guildId: guild.id,
+            ownerId: interaction.user.id,
+            excludedRoleIds: new Set(),
+            excludedUserIds: new Set(),
+            createdAt: Date.now()
+        };
+        protectionRuntime.bulkRestoreSessions.set(sessionId, session);
+
+        const rows = buildBulkRestoreComponents(guild, session);
+        await interaction.reply({
+            ephemeral: true,
+            content: 'اختر الاستثناءات (الرولات/الأعضاء) ثم اضغط تأكيد الاستعادة.',
+            components: rows
+        }).catch(() => {});
+        return true;
+    }
+
+    if (interaction.isStringSelectMenu() && (customId.startsWith('restore_bulk_roles_') || customId.startsWith('restore_bulk_users_'))) {
+        const sessionId = customId.replace('restore_bulk_roles_', '').replace('restore_bulk_users_', '');
+        const session = protectionRuntime.bulkRestoreSessions.get(sessionId);
+        if (!session) {
+            await interaction.reply({ content: '⚠️ انتهت الجلسة.', ephemeral: true }).catch(() => {});
+            return true;
+        }
+
+        if (interaction.user.id !== session.ownerId) {
+            await interaction.reply({ content: '❌ هذه الجلسة مخصصة لمالك السيرفر فقط.', ephemeral: true }).catch(() => {});
+            return true;
+        }
+
+        const guild = interaction.client.guilds.cache.get(session.guildId) || await interaction.client.guilds.fetch(session.guildId).catch(() => null);
+        if (!guild) {
+            await interaction.reply({ content: '❌ Guild not found.', ephemeral: true }).catch(() => {});
+            return true;
+        }
+
+        if (customId.startsWith('restore_bulk_roles_')) {
+            session.excludedRoleIds = new Set(interaction.values);
+        } else {
+            session.excludedUserIds = new Set(interaction.values);
+        }
+
+        const rows = buildBulkRestoreComponents(guild, session);
+        await interaction.update({
+            content: 'تم تحديث الاستثناءات. اضغط تأكيد الاستعادة عند الجاهزية.',
+            components: rows
+        }).catch(() => {});
+        return true;
+    }
+
+    if (interaction.isButton() && (customId.startsWith('restore_bulk_confirm_') || customId.startsWith('restore_bulk_cancel_'))) {
+        const sessionId = customId.replace('restore_bulk_confirm_', '').replace('restore_bulk_cancel_', '');
+        const session = protectionRuntime.bulkRestoreSessions.get(sessionId);
+        if (!session) {
+            await interaction.reply({ content: '⚠️ انتهت الجلسة.', ephemeral: true }).catch(() => {});
+            return true;
+        }
+
+        if (interaction.user.id !== session.ownerId) {
+            await interaction.reply({ content: '❌ هذه الجلسة مخصصة لمالك السيرفر فقط.', ephemeral: true }).catch(() => {});
+            return true;
+        }
+
+        if (customId.startsWith('restore_bulk_cancel_')) {
+            protectionRuntime.bulkRestoreSessions.delete(sessionId);
+            await interaction.update({ content: 'تم إلغاء العملية.', components: [] }).catch(() => {});
+            return true;
+        }
+
+        const guild = interaction.client.guilds.cache.get(session.guildId) || await interaction.client.guilds.fetch(session.guildId).catch(() => null);
+        if (!guild) {
+            await interaction.reply({ content: '❌ Guild not found.', ephemeral: true }).catch(() => {});
+            return true;
+        }
+
+        const result = await restoreAdminRolesWithFilters(guild, session.excludedRoleIds, session.excludedUserIds);
+        protectionRuntime.bulkRestoreSessions.delete(sessionId);
+        await interaction.update({
+            content: `✅ تمت الاستعادة لـ ${result.restoredMembers} عضو وبعدد ${result.restoredRoles} رول إداري.`,
+            components: []
+        }).catch(() => {});
+        return true;
+    }
+
+    return false;
+}
+
+async function runProtectionRestore(guild, cfg, reason = 'auto') {
+    if (!cfg?.enabled || !cfg.latestBackupFile || protectionRuntime.activeRestores.has(guild.id)) return;
+    protectionRuntime.activeRestores.add(guild.id);
+    try {
+        const options = [];
+        if (cfg.protectionTypes?.serverSettings) options.push('serverinfo');
+        options.push('files');
+        if (cfg.protectionTypes?.rolesPermissions) options.push('roles');
+        if (cfg.protectionTypes?.channelsCategories) {
+            options.push('categories');
+            options.push('channels');
+            options.push('messages');
+        }
+        if (cfg.protectionTypes?.kickBan) options.push('bans');
+        if (cfg.protectionTypes?.rolesPermissions) options.push('memberroles');
+        options.push('emojis');
+
+        const uniqueOptions = Array.from(new Set(options));
+        await restoreBackup(cfg.latestBackupFile, guild, guild.client.user.id, uniqueOptions, null);
+    } catch (err) {
+        console.error('Protection restore failed:', reason, err.message);
+    } finally {
+        protectionRuntime.activeRestores.delete(guild.id);
+    }
+}
+
+async function createProtectionSnapshot(guild, cfg) {
+    const snapshotName = `${guild.name}_protect_snapshot`;
+    const previousSnapshot = cfg.latestBackupFile;
+
+    const result = await createBackup(guild, guild.client.user.id, snapshotName, null);
+    if (!result.success) return;
+
+    if (previousSnapshot && previousSnapshot !== result.fileName) {
+        const oldPath = path.join(backupsDir, previousSnapshot);
+        if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+    }
+
+    cfg.latestBackupFile = result.fileName;
+    cfg.expectedChannels = (result.data?.stats?.channels || 0) + (result.data?.stats?.categories || 0);
+    cfg.expectedRoles = result.data?.stats?.roles || 0;
+    cfg.updatedAt = Date.now();
+    setGuildProtectionConfig(guild.id, cfg);
+}
+
+async function hydrateProtectionCache(guild) {
+    await Promise.allSettled([
+        guild.channels.fetch(),
+        guild.roles.fetch(),
+        guild.members.fetch()
+    ]);
+}
+
+function startSnapshotRefresh(guild) {
+    if (protectionRuntime.snapshotIntervals.has(guild.id)) {
+        clearInterval(protectionRuntime.snapshotIntervals.get(guild.id));
+    }
+
+    const intervalId = setInterval(async () => {
+        const liveCfg = getGuildProtectionConfig(guild.id);
+        if (!liveCfg?.enabled) {
+            clearInterval(intervalId);
+            protectionRuntime.snapshotIntervals.delete(guild.id);
+            return;
+        }
+
+        await createProtectionSnapshot(guild, liveCfg);
+    }, 3 * 60 * 60 * 1000);
+
+    protectionRuntime.snapshotIntervals.set(guild.id, intervalId);
+}
+
+
+async function refreshProtectionStateFast(guild, cfg) {
+    if (!cfg?.enabled) return;
+    await Promise.allSettled([
+        hydrateProtectionCache(guild),
+        createProtectionSnapshot(guild, cfg)
+    ]);
+    startSnapshotRefresh(guild);
+}
+
+async function handleTrustedActorChange(guild, cfg, actorId) {
+    const trusted = cfg?.trustedUsers || [];
+    if (!actorId || !trusted.includes(actorId)) return false;
+    await refreshProtectionStateFast(guild, cfg);
+    return true;
+}
+
+async function bootstrapProtectionForClient(client) {
+    if (protectionRuntime.protectionBootstrapped) return;
+    protectionRuntime.protectionBootstrapped = true;
+
+    const allCfg = getProtectionConfigAll();
+    const enabledGuilds = Object.entries(allCfg).filter(([, cfg]) => cfg?.enabled);
+
+    await executeParallel(enabledGuilds, async ([guildId, cfg]) => {
+        const guild = client.guilds.cache.get(guildId) || await client.guilds.fetch(guildId).catch(() => null);
+        if (!guild) return;
+
+        await refreshProtectionStateFast(guild, cfg);
+    }, 200);
+}
+
+function ensureProtectionEngine(client) {
+    if (protectionRuntime.listenersInstalled) return;
+    protectionRuntime.listenersInstalled = true;
+
+    const bootstrap = () => bootstrapProtectionForClient(client).catch(() => {});
+    if (typeof client.isReady === 'function' && client.isReady()) bootstrap();
+    else client.once('ready', bootstrap);
+
+    client.on('channelDelete', async (channel) => {
+        const guild = channel.guild;
+        if (!guild) return;
+        const cfg = getGuildProtectionConfig(guild.id);
+        if (!cfg?.enabled || !cfg.protectionTypes?.channelsCategories) return;
+        const actor = await getRecentExecutorId(guild, 12);
+        if (await handleTrustedActorChange(guild, cfg, actor)) return;
+        await Promise.allSettled([
+            punishExecutor(guild, actor, 'Unauthorized channel delete', cfg.trustedUsers || [], 'hard'),
+            runProtectionRestore(guild, cfg, 'channelDelete')
+        ]);
+    });
+
+    client.on('roleDelete', async (role) => {
+        const guild = role.guild;
+        const cfg = getGuildProtectionConfig(guild.id);
+        if (!cfg?.enabled || !cfg.protectionTypes?.rolesPermissions) return;
+        const actor = await getRecentExecutorId(guild, 32);
+        if (await handleTrustedActorChange(guild, cfg, actor)) return;
+        await Promise.allSettled([
+            punishExecutor(guild, actor, 'Unauthorized role delete', cfg.trustedUsers || [], 'hard'),
+            runProtectionRestore(guild, cfg, 'roleDelete')
+        ]);
+    });
+
+    client.on('guildUpdate', async (oldGuild, newGuild) => {
+        const cfg = getGuildProtectionConfig(newGuild.id);
+        if (!cfg?.enabled || !cfg.protectionTypes?.serverSettings) return;
+        const actor = await getRecentExecutorId(newGuild, 1);
+        if (await handleTrustedActorChange(newGuild, cfg, actor)) return;
+        await Promise.allSettled([
+            punishExecutor(newGuild, actor, 'Unauthorized server update', cfg.trustedUsers || [], 'hard'),
+            runProtectionRestore(newGuild, cfg, 'guildUpdate')
+        ]);
+    });
+
+    client.on('guildBanAdd', async (ban) => {
+        const guild = ban.guild;
+        const cfg = getGuildProtectionConfig(guild.id);
+        if (!cfg?.enabled || !cfg.protectionTypes?.kickBan) return;
+        const actor = await getRecentExecutorId(guild, 22);
+        if (await handleTrustedActorChange(guild, cfg, actor)) return;
+        await punishExecutor(guild, actor, 'Unauthorized ban', cfg.trustedUsers || [], 'hard');
+    });
+
+    client.on('guildMemberRemove', async (member) => {
+        const guild = member.guild;
+        const cfg = getGuildProtectionConfig(guild.id);
+        if (!cfg?.enabled || !cfg.protectionTypes?.kickBan) return;
+        const actor = await getRecentExecutorId(guild, 20);
+        if (await handleTrustedActorChange(guild, cfg, actor)) return;
+        await punishExecutor(guild, actor, 'Unauthorized kick', cfg.trustedUsers || [], 'hard');
+    });
+
+    client.on('guildMemberAdd', async (member) => {
+        if (!member.user.bot) return;
+        const guild = member.guild;
+        const cfg = getGuildProtectionConfig(guild.id);
+        if (!cfg?.enabled) return;
+        const trusted = cfg.trustedUsers || [];
+        if (trusted.includes(member.user.id)) return;
+        const snap = readJSON(path.join(backupsDir, cfg.latestBackupFile || ''), null);
+        const allowedBots = new Set((snap?.data?.members || []).filter(m => m.userId).map(m => m.userId));
+        if (!allowedBots.has(member.user.id)) {
+            await member.kick('Protection: unknown bot').catch(() => {});
+        }
+    });
+
+    client.on('interactionCreate', async interaction => {
+        const handledBulk = await handleBulkRestoreAdminRoles(interaction);
+        if (handledBulk) return;
+        await handleRestoreAdminRoles(interaction);
+    });
+}
+
+// دالة لإعادة المحاولة السريعة مع backoff خفيف جداً لزيادة الثبات
+async function retryOperation(operation, maxRetries = 3, baseDelay = 0, operationName = 'Operation Name') {
     for (let i = 0; i < maxRetries; i++) {
         try {
             return await operation();
@@ -51,19 +615,49 @@ async function retryOperation(operation, maxRetries = 2, baseDelay = 50, operati
             if (i === maxRetries - 1) {
                 throw error;
             }
-            await new Promise(resolve => setTimeout(resolve, baseDelay));
+
+            // backoff تصاعدي خفيف + jitter بسيط لتقليل تصادم الطلبات
+            const jitter = 0;
+            const delay = 0;
+            if (delay > 0) {
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
         }
     }
 }
 
-// دالة للتنفيذ المتوازي الفائق السرعة
-async function executeParallel(items, operation, concurrency = 50) {
-    const results = [];
-    for (let i = 0; i < items.length; i += concurrency) {
-        const batch = items.slice(i, i + concurrency);
-        const batchResults = await Promise.allSettled(batch.map(operation));
-        results.push(...batchResults);
+// دالة تنفيذ متوازي عالية السرعة مع احترام concurrency
+async function executeParallel(items, operation, concurrency = 500) {
+    if (!Array.isArray(items) || items.length === 0) {
+        return [];
     }
+
+    const safeConcurrency = Number.isFinite(concurrency) && concurrency > 0
+        ? Math.floor(concurrency)
+        : items.length;
+
+    if (safeConcurrency >= items.length) {
+        return Promise.allSettled(items.map(operation));
+    }
+
+    const results = new Array(items.length);
+    let currentIndex = 0;
+
+    const workers = Array.from({ length: safeConcurrency }, async () => {
+        while (true) {
+            const idx = currentIndex++;
+            if (idx >= items.length) return;
+
+            try {
+                const value = await operation(items[idx], idx);
+                results[idx] = { status: 'fulfilled', value };
+            } catch (reason) {
+                results[idx] = { status: 'rejected', reason };
+            }
+        }
+    });
+
+    await Promise.all(workers);
     return results;
 }
 
@@ -174,7 +768,6 @@ async function backupChannelMessages(channel, maxMessages = 150) {
             if (batch.size < fetchLimit) break;
 
             // تقليل التأخير للسرعة الفائقة
-            await new Promise(resolve => setTimeout(resolve, 30));
         }
 
         return messages.reverse();
@@ -189,8 +782,8 @@ async function backupThreads(channel) {
     const threads = [];
     try {
         const [activeThreads, archivedThreads] = await Promise.all([
-            retryOperation(() => channel.threads.fetchActive(), 2, 500, 'Fetch active threads').catch(() => ({ threads: new Map() })),
-            retryOperation(() => channel.threads.fetchArchived(), 2, 500, 'Fetch archived threads').catch(() => ({ threads: new Map() }))
+            retryOperation(() => channel.threads.fetchActive(), 3, 0, 'Fetch active threads').catch(() => ({ threads: new Map() })),
+            retryOperation(() => channel.threads.fetchArchived(), 3, 0, 'Fetch archived threads').catch(() => ({ threads: new Map() }))
         ]);
 
         const allThreads = [...activeThreads.threads.values(), ...archivedThreads.threads.values()];
@@ -226,10 +819,6 @@ async function backupThreads(channel) {
                 }
             });
 
-            // تقليل التأخير للسرعة الفائقة
-            if (i + threadBatchSize < allThreads.length) {
-                await new Promise(resolve => setTimeout(resolve, 50));
-            }
         }
     } catch (error) {
         console.error(`فشل نسخ الثريدات للقناة ${channel.name}:`, error);
@@ -286,16 +875,16 @@ async function createBackup(guild, creatorId, backupName, progressMessage = null
             await updateProgress(progressMessage, 'Backup Loading', ++currentStep, totalSteps, 'Json Copied...');
         }
 
-        for (const fileName of FILES_TO_BACKUP) {
+        const jsonFiles = getDataJsonFiles();
+        await executeParallel(jsonFiles, async (fileName) => {
             const filePath = path.join(dataDir, fileName);
-            if (fs.existsSync(filePath)) {
-                const fileData = readJSON(filePath, null);
-                if (fileData !== null) {
-                    backupData.data.files[fileName] = fileData;
-                    backupData.stats.files++;
-                }
+            if (!fs.existsSync(filePath)) return;
+            const fileData = readJSON(filePath, null);
+            if (fileData !== null) {
+                backupData.data.files[fileName] = fileData;
+                backupData.stats.files++;
             }
-        }
+        }, 20);
 
         // 2. نسخ الرولات
         if (progressMessage) {
@@ -640,7 +1229,7 @@ async function createBackup(guild, creatorId, backupName, progressMessage = null
     }
 }
 
-// استعادة فائقة السرعة - عمليتين فقط: حذف موحد ثم إنشاء موحد
+// استعادة ذكية بالفروقات: تعديل الموجود + إنشاء الناقص + حذف الفائض فقط
 async function restoreBackup(backupFileName, guild, restoredBy, options, progressMessage = null) {
     try {
         const backupFilePath = path.join(backupsDir, backupFileName);
@@ -654,9 +1243,9 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
         }
 
         const stats = {
-            rolesDeleted: 0, rolesCreated: 0,
-            categoriesDeleted: 0, categoriesCreated: 0,
-            channelsDeleted: 0, channelsCreated: 0,
+            rolesDeleted: 0, rolesCreated: 0, rolesMatched: 0,
+            categoriesDeleted: 0, categoriesCreated: 0, categoriesMatched: 0,
+            channelsDeleted: 0, channelsCreated: 0, channelsMatched: 0,
             filesRestored: 0, messagesRestored: 0,
             threadsRestored: 0, bansRestored: 0,
             memberRolesRestored: 0, errors: []
@@ -668,103 +1257,143 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
 
         let currentStep = 0;
         // حساب عدد الخطوات الديناميكي بناءً على الخيارات
-        let totalSteps = 2; // الحذف والإنشاء دائماً موجودين
+        let totalSteps = 1; // استعادة ذكية بالفروقات
         if (options.includes('messages')) totalSteps++;
         if (options.includes('bans')) totalSteps++;
         if (options.includes('memberroles')) totalSteps++;
 
         // ═══════════════════════════════════════════════════════════════
-        // 🚀 الخطوة 1: حذف كل شيء مختار دفعة واحدة بالتوازي الكامل
+        // 🚀 الخطوة 1: استعادة ذكية بالفروقات (بدون حذف شامل)
         // ═══════════════════════════════════════════════════════════════
         if (progressMessage) {
-            await updateProgress(progressMessage, 'Backup Loading', ++currentStep, totalSteps, '🗑️ Deleting Everything...');
-        }
-
-        const deletePromises = [];
-
-        // جمع كل عمليات الحذف في مصفوفة واحدة
-        if (options.includes('roles')) {
-            const roles = Array.from(guild.roles.cache.filter(r => !r.managed && r.id !== guild.id).values());
-            stats.rolesDeleted = roles.length;
-            deletePromises.push(...roles.map(r => r.delete().catch(() => {})));
-        }
-
-        if (options.includes('channels') || options.includes('categories')) {
-            const channels = Array.from(guild.channels.cache.values());
-            stats.channelsDeleted = channels.length;
-            stats.categoriesDeleted = channels.filter(ch => ch.type === ChannelType.GuildCategory).length;
-            deletePromises.push(...channels.map(c => c.delete().catch(() => {})));
-        }
-
-        if (options.includes('emojis')) {
-            const emojis = Array.from(guild.emojis.cache.values());
-            deletePromises.push(...emojis.map(e => e.delete().catch(() => {})));
-        }
-
-        // تنفيذ جميع عمليات الحذف دفعة واحدة
-        await Promise.allSettled(deletePromises);
-
-        // ═══════════════════════════════════════════════════════════════
-        // 🚀 الخطوة 2: إنشاء كل شيء مختار بالتوازي الكامل
-        // ═══════════════════════════════════════════════════════════════
-        if (progressMessage) {
-            await updateProgress(progressMessage, 'Backup Loading', ++currentStep, totalSteps, '✨ Creating Everything...');
-        }
-
-        // استعادة إعدادات السيرفر
-        if (options.includes('serverinfo') && backupData.data.serverInfo) {
-            try {
-                const updates = {};
-                if (backupData.data.serverInfo.name) updates.name = backupData.data.serverInfo.name;
-                if (backupData.data.serverInfo.description) updates.description = backupData.data.serverInfo.description;
-                await guild.edit(updates);
-                await Promise.allSettled([
-                    backupData.data.serverInfo.icon ? guild.setIcon(backupData.data.serverInfo.icon) : Promise.resolve(),
-                    backupData.data.serverInfo.banner ? guild.setBanner(backupData.data.serverInfo.banner) : Promise.resolve()
-                ]);
-            } catch (err) {}
+            await updateProgress(progressMessage, 'Backup Loading', ++currentStep, totalSteps, '⚡ Smart Diff Restore...');
         }
 
         // استعادة الملفات
-        if (options.includes('files')) {
-            for (const [fileName, fileData] of Object.entries(backupData.data.files)) {
+        const restoreFilesTask = async () => {
+            if (!options.includes('files')) return;
+            for (const [fileName, fileData] of Object.entries(backupData.data.files || {})) {
                 if (saveJSON(path.join(dataDir, fileName), fileData)) stats.filesRestored++;
             }
-        }
+        };
 
-        // إنشاء الرولات بالتوازي الكامل
-        if (options.includes('roles')) {
-            const roleResults = await Promise.allSettled(
-                backupData.data.roles.map(async (roleData) => {
-                    try {
-                        const newRole = await guild.roles.create({
-                            name: roleData.name,
+        // استعادة معلومات السيرفر
+        const restoreServerInfoTask = async () => {
+            if (!options.includes('serverinfo') || !backupData.data.serverInfo) return;
+            try {
+                const updates = {};
+                if (backupData.data.serverInfo.name && backupData.data.serverInfo.name !== guild.name) {
+                    updates.name = backupData.data.serverInfo.name;
+                }
+                if (backupData.data.serverInfo.description !== undefined && backupData.data.serverInfo.description !== guild.description) {
+                    updates.description = backupData.data.serverInfo.description;
+                }
+
+                if (Object.keys(updates).length > 0) {
+                    await guild.edit(updates);
+                }
+
+                await Promise.allSettled([
+                    (backupData.data.serverInfo.icon && backupData.data.serverInfo.icon !== guild.iconURL({ size: 1024 }))
+                        ? guild.setIcon(backupData.data.serverInfo.icon)
+                        : Promise.resolve(),
+                    (backupData.data.serverInfo.banner && backupData.data.serverInfo.banner !== guild.bannerURL({ size: 1024 }))
+                        ? guild.setBanner(backupData.data.serverInfo.banner)
+                        : Promise.resolve()
+                ]);
+            } catch (err) {}
+        };
+
+        // مهمة الرولات (مطابقة الموجود + إنشاء الناقص + حذف الفائض)
+        const restoreRolesTask = async () => {
+            if (!options.includes('roles')) return;
+
+            const backupRoles = [...(backupData.data.roles || [])];
+            const existingRoles = Array.from(guild.roles.cache.values())
+                .filter(r => !r.managed && r.id !== guild.id);
+            const rolesByName = new Map();
+            const rolesById = new Map(existingRoles.map(role => [role.id, role]));
+
+            for (const role of existingRoles) {
+                const key = (role.name || '').toLowerCase();
+                if (!rolesByName.has(key)) rolesByName.set(key, []);
+                rolesByName.get(key).push(role);
+            }
+
+            const usedExistingIds = new Set();
+            const rolesToCreate = [];
+
+            // مرحلة المطابقة من الكاش
+            for (const roleData of backupRoles) {
+                const queue = rolesByName.get((roleData.name || '').toLowerCase()) || [];
+                const matchedById = rolesById.get(roleData.id);
+                const matched = (matchedById && !usedExistingIds.has(matchedById.id)) ? matchedById : queue.find(r => !usedExistingIds.has(r.id));
+
+                if (matched) {
+                    usedExistingIds.add(matched.id);
+                    roleMap.set(roleData.id, matched.id);
+                    stats.rolesMatched++;
+                } else {
+                    rolesToCreate.push(roleData);
+                }
+            }
+
+            // إنشاء الناقص دفعة واحدة بأعلى توازي
+            await executeParallel(rolesToCreate, async (roleData) => {
+                try {
+                    const newRole = await retryOperation(
+                        () => guild.roles.create({ name: roleData.name }),
+                        2,
+                        20,
+                        `Create role ${roleData.name}`
+                    );
+                    roleMap.set(roleData.id, newRole.id);
+                    stats.rolesCreated++;
+                } catch (err) {}
+            }, 40);
+
+            // حذف الرولات الزائدة غير الموجودة في النسخة
+            await executeParallel(existingRoles, async (role) => {
+                if (usedExistingIds.has(role.id)) return;
+                try {
+                    await role.delete('Smart diff restore - extra role').catch(() => {});
+                    stats.rolesDeleted++;
+                } catch (err) {}
+            }, 20);
+
+            // تطبيق خصائص الرولات بعد اكتمال الإنشاء/المطابقة
+            await executeParallel(backupRoles, async (roleData) => {
+                const newRoleId = roleMap.get(roleData.id);
+                if (!newRoleId) return;
+
+                const role = guild.roles.cache.get(newRoleId);
+                if (!role) return;
+
+                await Promise.allSettled([
+                    retryOperation(
+                        () => role.edit({
                             color: roleData.color,
                             permissions: BigInt(roleData.permissions),
                             hoist: roleData.hoist,
-                            mentionable: roleData.mentionable
-                        });
-                        roleMap.set(roleData.id, newRole.id);
-                        return newRole;
-                    } catch (err) { return null; }
-                })
-            );
-            stats.rolesCreated = roleResults.filter(r => r.status === 'fulfilled' && r.value).length;
-
-            // ترتيب الرولات بالتوازي
-            await Promise.allSettled(
-                backupData.data.roles.map(async (roleData) => {
-                    const newRoleId = roleMap.get(roleData.id);
-                    if (newRoleId) {
-                        const role = guild.roles.cache.get(newRoleId);
-                        if (role) await role.setPosition(roleData.position).catch(() => {});
-                    }
-                })
-            );
-        }
+                            mentionable: roleData.mentionable,
+                            name: roleData.name
+                        }),
+                        2,
+                        20,
+                        `Edit role ${roleData.name}`
+                    ).catch(() => {}),
+                    retryOperation(
+                        () => role.setPosition(roleData.position),
+                        2,
+                        20,
+                        `Set role position ${roleData.name}`
+                    ).catch(() => {})
+                ]);
+            }, 50);
+        };
 
         // دالة لتحويل الصلاحيات
-        const convertPermissions = (overwrites) => {
+        const convertPermissions = (overwrites = []) => {
             return overwrites.map(ow => {
                 if (ow.id === backupData.guildId || ow.type === 1) {
                     return { id: ow.type === 1 ? ow.id : guild.id, allow: BigInt(ow.allow), deny: BigInt(ow.deny) };
@@ -772,126 +1401,478 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                 const newRoleId = roleMap.get(ow.id);
                 if (!newRoleId) return null;
                 return { id: newRoleId, allow: BigInt(ow.allow), deny: BigInt(ow.deny) };
-            }).filter(ow => ow !== null);
+            }).filter(Boolean);
         };
 
-        // إنشاء الكاتوقريات والقنوات بالتوازي
-        if (options.includes('channels') || options.includes('categories')) {
-            // إنشاء جميع الكاتوقريات بالتوازي
-            const categoryResults = await Promise.allSettled(
-                backupData.data.categories.map(async (catData) => {
-                    try {
-                        const newCat = await guild.channels.create({
-                            name: catData.name,
-                            type: ChannelType.GuildCategory,
-                            position: catData.position,
-                            permissionOverwrites: convertPermissions(catData.permissionOverwrites)
-                        });
-                        categoryMap.set(catData.id, newCat.id);
-                        channelMap.set(catData.id, newCat.id);
-                        return { catData, newCat };
-                    } catch (err) { return null; }
-                })
-            );
-            stats.categoriesCreated = categoryResults.filter(r => r.status === 'fulfilled' && r.value).length;
+        const restoreChannelsTask = async (rolesTaskPromise) => {
+            if (!(options.includes('channels') || options.includes('categories'))) return;
 
-            // إنشاء جميع القنوات داخل الكاتوقريات بالتوازي الكامل
+            const backupCategories = backupData.data.categories || [];
+            const backupStandaloneChannels = backupData.data.channels || [];
+            const shouldRestoreCategories = options.includes('categories');
+            const shouldRestoreChannels = options.includes('channels');
+
+            const existingAllChannels = Array.from(guild.channels.cache.values());
+            const existingCategories = existingAllChannels.filter(ch => ch.type === ChannelType.GuildCategory);
+            const existingNonCategories = existingAllChannels.filter(ch => ch.type !== ChannelType.GuildCategory);
+            const categoriesByName = new Map();
+            const categoriesById = new Map(existingCategories.map(cat => [cat.id, cat]));
+            const channelsBySignature = new Map();
+            const channelsById = new Map(existingNonCategories.map(ch => [ch.id, ch]));
+            const channelsByNameType = new Map();
+
+            for (const cat of existingCategories) {
+                const key = (cat.name || '').toLowerCase();
+                if (!categoriesByName.has(key)) categoriesByName.set(key, []);
+                categoriesByName.get(key).push(cat);
+            }
+
+            const getChannelKey = (parentId, name, type) => `${parentId || 'root'}::${(name || '').toLowerCase()}::${type}`;
+            for (const ch of existingNonCategories) {
+                const key = getChannelKey(ch.parentId, ch.name, ch.type);
+                if (!channelsBySignature.has(key)) channelsBySignature.set(key, []);
+                channelsBySignature.get(key).push(ch);
+
+                const looseKey = `${(ch.name || '').toLowerCase()}::${ch.type}`;
+                if (!channelsByNameType.has(looseKey)) channelsByNameType.set(looseKey, []);
+                channelsByNameType.get(looseKey).push(ch);
+            }
+
+            const usedChannelIds = new Set();
+            const channelRestoreConcurrency = 24;
+            const categoryRestoreConcurrency = 30;
+            const safeRetryCount = 5;
+            const safeRetryDelay = 35;
+
+            // 1) مطابقة/إنشاء الكاتقريات
+            const categoriesToCreate = [];
+            if (shouldRestoreCategories) {
+                for (const catData of backupCategories) {
+                    const queue = categoriesByName.get((catData.name || '').toLowerCase()) || [];
+                    const matchedById = categoriesById.get(catData.id);
+                    const matched = (matchedById && !usedChannelIds.has(matchedById.id)) ? matchedById : queue.find(c => !usedChannelIds.has(c.id));
+
+                    if (matched) {
+                        usedChannelIds.add(matched.id);
+                        categoryMap.set(catData.id, matched.id);
+                        channelMap.set(catData.id, matched.id);
+                        stats.categoriesMatched++;
+                    } else {
+                        categoriesToCreate.push(catData);
+                    }
+                }
+
+                await executeParallel(categoriesToCreate, async (catData) => {
+                    try {
+                        const created = await retryOperation(
+                            () => guild.channels.create({
+                                name: catData.name,
+                                type: ChannelType.GuildCategory,
+                                position: catData.position
+                            }),
+                            safeRetryCount,
+                            safeRetryDelay,
+                            `Create category ${catData.name}`
+                        );
+                        usedChannelIds.add(created.id);
+                        categoryMap.set(catData.id, created.id);
+                        channelMap.set(catData.id, created.id);
+                        stats.categoriesCreated++;
+                    } catch (err) {}
+                }, categoryRestoreConcurrency);
+            }
+
+            // 2) مطابقة/إنشاء قنوات داخل الكاتقريات
             const allChannelsInCategories = [];
-            for (const catData of backupData.data.categories) {
-                const parentId = categoryMap.get(catData.id);
-                if (parentId) {
-                    for (const chData of catData.channels) {
-                        allChannelsInCategories.push({ ...chData, parentId });
-                    }
+            for (const catData of backupCategories) {
+                const parentId = categoryMap.get(catData.id) || (categoriesByName.get((catData.name || '').toLowerCase()) || [])[0]?.id || null;
+                for (const chData of catData.channels || []) {
+                    allChannelsInCategories.push({ ...chData, parentId });
                 }
             }
 
-            const channelResults = await Promise.allSettled(
-                allChannelsInCategories.map(async (chData) => {
-                    try {
-                        const opts = {
-                            name: chData.name,
-                            type: chData.type,
-                            parent: chData.parentId,
-                            position: chData.position,
-                            permissionOverwrites: convertPermissions(chData.permissionOverwrites)
-                        };
-                        if (chData.topic) opts.topic = chData.topic;
-                        if (chData.nsfw !== undefined) opts.nsfw = chData.nsfw;
-                        if (chData.rateLimitPerUser) opts.rateLimitPerUser = chData.rateLimitPerUser;
-                        if (chData.bitrate) opts.bitrate = chData.bitrate;
-                        if (chData.userLimit) opts.userLimit = chData.userLimit;
+            const backupLooseChannelKeys = new Set([
+                ...allChannelsInCategories.map(ch => `${(ch.name || '').toLowerCase()}::${ch.type}`),
+                ...backupStandaloneChannels.map(ch => `${(ch.name || '').toLowerCase()}::${ch.type}`)
+            ]);
+            const backupCategoryNames = new Set(backupCategories.map(cat => (cat.name || '').toLowerCase()));
 
-                        const newCh = await guild.channels.create(opts);
-                        channelMap.set(chData.id, newCh.id);
-                        return newCh;
-                    } catch (err) { return null; }
-                })
-            );
+            const restoreChannelsInCategoriesPromise = shouldRestoreChannels ? executeParallel(allChannelsInCategories, async (chData) => {
+                let targetParentId = chData.parentId;
 
-            // إنشاء القنوات خارج الكاتوقريات بالتوازي
-            const standaloneResults = await Promise.allSettled(
-                backupData.data.channels.map(async (chData) => {
-                    try {
-                        const opts = {
-                            name: chData.name,
-                            type: chData.type,
-                            position: chData.position,
-                            permissionOverwrites: convertPermissions(chData.permissionOverwrites)
-                        };
-                        if (chData.topic) opts.topic = chData.topic;
-                        if (chData.nsfw !== undefined) opts.nsfw = chData.nsfw;
-                        if (chData.rateLimitPerUser) opts.rateLimitPerUser = chData.rateLimitPerUser;
-                        if (chData.bitrate) opts.bitrate = chData.bitrate;
-                        if (chData.userLimit) opts.userLimit = chData.userLimit;
+                // محاولة إنقاذ الأب عند فقدان parentId
+                if (!targetParentId) {
+                    const guessedCategory = (categoriesByName.get((backupCategories.find(cat => (cat.channels || []).some(c => c.id === chData.id))?.name || '').toLowerCase()) || [])[0];
+                    targetParentId = guessedCategory?.id || null;
+                }
 
-                        const newCh = await guild.channels.create(opts);
-                        channelMap.set(chData.id, newCh.id);
-                        return newCh;
-                    } catch (err) { return null; }
-                })
-            );
+                const key = getChannelKey(targetParentId, chData.name, chData.type);
+                const queue = channelsBySignature.get(key) || [];
+                const looseQueue = channelsByNameType.get(`${(chData.name || '').toLowerCase()}::${chData.type}`) || [];
+                const matchedById = channelsById.get(chData.id);
+                const matched = (matchedById && !usedChannelIds.has(matchedById.id))
+                    ? matchedById
+                    : queue.find(ch => !usedChannelIds.has(ch.id));
 
-            stats.channelsCreated = channelResults.filter(r => r.status === 'fulfilled' && r.value).length +
-                                    standaloneResults.filter(r => r.status === 'fulfilled' && r.value).length;
+                if (matched) {
+                    usedChannelIds.add(matched.id);
+                    channelMap.set(chData.id, matched.id);
+                    stats.channelsMatched++;
+                    await retryOperation(
+                        () => matched.edit({ parent: targetParentId, position: chData.position }),
+                        safeRetryCount,
+                        safeRetryDelay,
+                        `Edit channel ${chData.name}`
+                    ).catch(() => {});
+                    return;
+                }
 
-            // 🎯 ترتيب الكاتوقريات والقنوات دفعة واحدة (طلب واحد) للحفاظ على الترتيب بأقصى سرعة
+                // إذا وجدنا روم بنفس الاسم/النوع لكن داخل كاتوقري غلط: نحذفه ثم ننشئ الصحيح
+                const stray = looseQueue.find(ch => !usedChannelIds.has(ch.id));
+
+                // لو ما عرفنا الأب نهائياً نسجل خطأ ونكمل
+                if (!targetParentId) {
+                    stats.errors.push(`تعذر تحديد الكاتوقري للروم ${chData.name} - تم التخطي`);
+                    return;
+                }
+
+                try {
+                    const opts = {
+                        name: chData.name,
+                        type: chData.type,
+                        parent: targetParentId,
+                        position: chData.position
+                    };
+                    if (chData.topic) opts.topic = chData.topic;
+                    if (chData.nsfw !== undefined) opts.nsfw = chData.nsfw;
+                    if (chData.rateLimitPerUser) opts.rateLimitPerUser = chData.rateLimitPerUser;
+                    if (chData.bitrate) opts.bitrate = chData.bitrate;
+                    if (chData.userLimit) opts.userLimit = chData.userLimit;
+
+                    const newCh = await retryOperation(() => guild.channels.create(opts), safeRetryCount, safeRetryDelay, `Create channel ${chData.name}`);
+                    usedChannelIds.add(newCh.id);
+                    channelMap.set(chData.id, newCh.id);
+                    stats.channelsCreated++;
+
+                    if (stray && stray.parentId !== targetParentId) {
+                        await stray.delete('Smart diff restore - recreate in correct category').catch(() => {});
+                        stats.channelsDeleted++;
+                    }
+                } catch (err) {
+                    if (stray) {
+                        usedChannelIds.add(stray.id);
+                        channelMap.set(chData.id, stray.id);
+                        stats.channelsMatched++;
+                    }
+                }
+            }, channelRestoreConcurrency) : Promise.resolve();
+
+            // 3) مطابقة/إنشاء القنوات خارج الكاتقريات
+            const restoreStandaloneChannelsPromise = shouldRestoreChannels ? executeParallel(backupStandaloneChannels, async (chData) => {
+                const key = getChannelKey(null, chData.name, chData.type);
+                const queue = channelsBySignature.get(key) || [];
+                const matchedById = channelsById.get(chData.id);
+                const matched = (matchedById && !usedChannelIds.has(matchedById.id))
+                    ? matchedById
+                    : queue.find(ch => !usedChannelIds.has(ch.id));
+
+                if (matched) {
+                    usedChannelIds.add(matched.id);
+                    channelMap.set(chData.id, matched.id);
+                    stats.channelsMatched++;
+                    await retryOperation(() => matched.edit({ position: chData.position }), safeRetryCount, safeRetryDelay, `Edit channel ${chData.name}`).catch(() => {});
+                    return;
+                }
+
+                try {
+                    const opts = {
+                        name: chData.name,
+                        type: chData.type,
+                        position: chData.position
+                    };
+                    if (chData.topic) opts.topic = chData.topic;
+                    if (chData.nsfw !== undefined) opts.nsfw = chData.nsfw;
+                    if (chData.rateLimitPerUser) opts.rateLimitPerUser = chData.rateLimitPerUser;
+                    if (chData.bitrate) opts.bitrate = chData.bitrate;
+                    if (chData.userLimit) opts.userLimit = chData.userLimit;
+
+                    const newCh = await retryOperation(() => guild.channels.create(opts), safeRetryCount, safeRetryDelay, `Create channel ${chData.name}`);
+                    usedChannelIds.add(newCh.id);
+                    channelMap.set(chData.id, newCh.id);
+                    stats.channelsCreated++;
+                } catch (err) {}
+            }, channelRestoreConcurrency) : Promise.resolve();
+
+            // 4) حذف الزوائد بالتوازي مع الاستعادة (بدون انتظار تسلسلي)
+            const deleteExtrasPromise = Promise.allSettled([
+                shouldRestoreChannels
+                    ? executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type !== ChannelType.GuildCategory), async (ch) => {
+                        if (usedChannelIds.has(ch.id)) return;
+                        const looseKey = `${(ch.name || '').toLowerCase()}::${ch.type}`;
+                        if (backupLooseChannelKeys.has(looseKey)) return;
+                        try {
+                            await ch.delete('Smart diff restore - extra channel').catch(() => {});
+                            stats.channelsDeleted++;
+                        } catch (err) {}
+                    }, 20)
+                    : Promise.resolve(),
+                shouldRestoreCategories
+                    ? executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type === ChannelType.GuildCategory), async (ch) => {
+                        if (usedChannelIds.has(ch.id)) return;
+                        const categoryName = (ch.name || '').toLowerCase();
+                        if (backupCategoryNames.has(categoryName)) return;
+                        try {
+                            await ch.delete('Smart diff restore - extra category').catch(() => {});
+                            stats.categoriesDeleted++;
+                        } catch (err) {}
+                    }, 12)
+                    : Promise.resolve()
+            ]);
+
+            await Promise.allSettled([
+                restoreChannelsInCategoriesPromise,
+                restoreStandaloneChannelsPromise,
+                deleteExtrasPromise
+            ]);
+
+            // 5) ترتيب نهائي
             const positions = [];
-            for (const catData of backupData.data.categories) {
+            for (const catData of backupCategories) {
                 const newCatId = categoryMap.get(catData.id);
-                if (newCatId) {
-                    positions.push({ channel: newCatId, position: catData.position });
-                }
-                for (const chData of catData.channels) {
+                if (shouldRestoreCategories && newCatId) positions.push({ channel: newCatId, position: catData.position });
+
+                if (shouldRestoreChannels) for (const chData of catData.channels || []) {
                     const newChId = channelMap.get(chData.id);
-                    if (newChId) {
-                        positions.push({ channel: newChId, position: chData.position });
-                    }
+                    if (newChId) positions.push({ channel: newChId, position: chData.position });
                 }
             }
-            for (const chData of backupData.data.channels) {
+            if (shouldRestoreChannels) for (const chData of backupStandaloneChannels) {
                 const newChId = channelMap.get(chData.id);
-                if (newChId) {
-                    positions.push({ channel: newChId, position: chData.position });
-                }
+                if (newChId) positions.push({ channel: newChId, position: chData.position });
             }
             if (positions.length > 0) {
                 await guild.channels.setPositions(positions).catch(() => {});
             }
-        }
 
-        // إنشاء الإيموجيز بالتوازي الكامل
-        if (options.includes('emojis') && backupData.data.emojis) {
-            await Promise.allSettled(
-                backupData.data.emojis.map(async (emojiData) => {
+            // برمشنات الرومات بعد اكتمال الرولات فقط
+            await rolesTaskPromise;
+
+            if (shouldRestoreCategories) await executeParallel(backupCategories, async (catData) => {
+                const newCatId = categoryMap.get(catData.id);
+                if (!newCatId) return;
+                const channel = guild.channels.cache.get(newCatId);
+                if (!channel) return;
+                await channel.permissionOverwrites.set(convertPermissions(catData.permissionOverwrites)).catch(() => {});
+            }, 20);
+
+            if (shouldRestoreChannels) await executeParallel(allChannelsInCategories, async (chData) => {
+                const newChId = channelMap.get(chData.id);
+                if (!newChId) return;
+                const channel = guild.channels.cache.get(newChId);
+                if (!channel) return;
+                await channel.permissionOverwrites.set(convertPermissions(chData.permissionOverwrites)).catch(() => {});
+            }, 20);
+
+            if (shouldRestoreChannels) await executeParallel(backupStandaloneChannels, async (chData) => {
+                const newChId = channelMap.get(chData.id);
+                if (!newChId) return;
+                const channel = guild.channels.cache.get(newChId);
+                if (!channel) return;
+                await channel.permissionOverwrites.set(convertPermissions(chData.permissionOverwrites)).catch(() => {});
+            }, 20);
+        };
+
+        const restoreEmojisTask = async () => {
+            if (!options.includes('emojis') || !backupData.data.emojis) return;
+
+            const existingEmojis = Array.from(guild.emojis.cache.values());
+            const usedEmojiIds = new Set();
+            const emojisByName = new Map();
+            const emojisById = new Map(existingEmojis.map(emoji => [emoji.id, emoji]));
+
+            for (const emoji of existingEmojis) {
+                const key = (emoji.name || '').toLowerCase();
+                if (!emojisByName.has(key)) emojisByName.set(key, []);
+                emojisByName.get(key).push(emoji);
+            }
+
+            await executeParallel(backupData.data.emojis, async (emojiData) => {
+                const queue = emojisByName.get((emojiData.name || '').toLowerCase()) || [];
+                const matchedById = emojisById.get(emojiData.id);
+                const matched = (matchedById && !usedEmojiIds.has(matchedById.id)) ? matchedById : queue.find(e => !usedEmojiIds.has(e.id));
+                if (matched) {
+                    usedEmojiIds.add(matched.id);
+                    return;
+                }
+                try {
+                    const newEmoji = await retryOperation(
+                        () => guild.emojis.create({ attachment: emojiData.url, name: emojiData.name }),
+                        2,
+                        25,
+                        `Create emoji ${emojiData.name}`
+                    );
+                    if (newEmoji) usedEmojiIds.add(newEmoji.id);
+                } catch (err) {}
+            }, 8);
+
+            await executeParallel(existingEmojis, async (emoji) => {
+                if (usedEmojiIds.has(emoji.id)) return;
+                await emoji.delete('Smart diff restore - extra emoji').catch(() => {});
+            }, 5);
+        };
+
+        const restoreBansTask = async () => {
+            if (!(options.includes('bans') && backupData.data.bans)) return;
+            const currentBans = await guild.bans.fetch();
+            const backupBanIds = new Set((backupData.data.bans || []).map(b => b.userId));
+            const currentBanIds = new Set(currentBans.keys());
+
+            await executeParallel(Array.from(currentBanIds), async (bannedUserId) => {
+                if (!backupBanIds.has(bannedUserId)) {
                     try {
-                        await guild.emojis.create({ attachment: emojiData.url, name: emojiData.name });
-                    } catch (err) {}
-                })
-            );
-        }
+                        await guild.members.unban(bannedUserId, 'Backup restore');
+                    } catch (err) {
+                        stats.errors.push(`فشل فك حظر ${bannedUserId}: ${err.message}`);
+                    }
+                }
+            }, 8);
 
-        // 🎯 STEP 3: استعادة الرسائل + الحظر + رولات الأعضاء (كلهم بالتوازي في خطوة واحدة)
+            const banResults = await executeParallel(backupData.data.bans || [], async (banData) => {
+                if (!currentBanIds.has(banData.userId)) {
+                    try {
+                        await guild.members.ban(banData.userId, { reason: `Backup restore: ${banData.reason}` });
+                        return true;
+                    } catch (err) {
+                        stats.errors.push(`فشل حظر ${banData.username}: ${err.message}`);
+                        return false;
+                    }
+                }
+                return true;
+            }, 8);
+
+            stats.bansRestored = banResults.filter(r => r.status === 'fulfilled' && r.value).length;
+        };
+
+        const restoreMemberRolesTask = async (rolesTaskPromise) => {
+            if (!(options.includes('memberroles') && backupData.data.members && backupData.data.members.length > 0)) return;
+
+            // رولات الأعضاء لا تبدأ إلا بعد اكتمال الرولات
+            await rolesTaskPromise;
+            await guild.members.fetch();
+
+            const managedRoleIds = new Set(
+                Array.from(guild.roles.cache.values()).filter(r => r.managed).map(r => r.id)
+            );
+            const restorableRoleIds = new Set(roleMap.values());
+
+            const memberResults = await executeParallel(backupData.data.members, async (memberData) => {
+                try {
+                    const member = guild.members.cache.get(memberData.userId);
+                    if (!member) return { success: false };
+
+                    const targetRoles = new Set(
+                        memberData.roles
+                            .map(oldRoleId => roleMap.get(oldRoleId) || oldRoleId)
+                            .filter(roleId => roleId && guild.roles.cache.has(roleId) && !managedRoleIds.has(roleId) && roleId !== guild.id)
+                    );
+
+                    const currentRestorableRoles = member.roles.cache
+                        .filter(role => role.id !== guild.id && !role.managed)
+                        .map(role => role.id)
+                        .filter(roleId => restorableRoleIds.has(roleId));
+
+                    const rolesToAdd = Array.from(targetRoles).filter(roleId => !member.roles.cache.has(roleId));
+                    const rolesToRemove = currentRestorableRoles.filter(roleId => !targetRoles.has(roleId));
+
+                    await Promise.allSettled([
+                        rolesToAdd.length > 0
+                            ? retryOperation(async () => member.roles.add(rolesToAdd), 3, 0, `Add roles to ${memberData.username}`)
+                            : Promise.resolve(),
+                        rolesToRemove.length > 0
+                            ? retryOperation(async () => member.roles.remove(rolesToRemove), 3, 0, `Remove roles from ${memberData.username}`)
+                            : Promise.resolve()
+                    ]);
+
+                    if (memberData.nickname !== undefined && memberData.nickname !== member.nickname) {
+                        await member.setNickname(memberData.nickname).catch(() => {});
+                    }
+
+                    return { success: true };
+                } catch (err) {
+                    return { success: false, error: err.message, username: memberData.username };
+                }
+            }, 25);
+
+            for (const result of memberResults) {
+                if (result.status === 'fulfilled' && result.value?.success) {
+                    stats.memberRolesRestored++;
+                } else if (result.status === 'fulfilled' && result.value?.error) {
+                    stats.errors.push(`فشل استعادة رولات ${result.value.username}: ${result.value.error}`);
+                }
+            }
+        };
+
+        const restoreMessagesTask = async () => {
+            if (!options.includes('messages')) return;
+
+            const messageChannels = Object.entries(backupData.data.messages || {});
+            await executeParallel(messageChannels, async ([oldChannelId, messages]) => {
+                const newChannelId = channelMap.get(oldChannelId);
+                const channel = newChannelId ? guild.channels.cache.get(newChannelId) : null;
+                if (!(channel && channel.type === ChannelType.GuildText && messages && messages.length > 0)) return;
+
+                const messagesToRestore = messages.slice(0, 100);
+                await executeParallel(messagesToRestore, async (messageData) => {
+                    try {
+                        const content = messageData.content || '';
+                        const embeds = messageData.embeds || [];
+                        if (content || embeds.length > 0) {
+                            await channel.send({ content: content.substring(0, 2000), embeds }).catch(() => {});
+                            stats.messagesRestored++;
+                        }
+                    } catch (error) {
+                        console.error(`فشل إرسال رسالة في ${channel.name}`);
+                    }
+                }, 5);
+            }, 8);
+
+            const threadChannels = Object.entries(backupData.data.threads || {});
+            await executeParallel(threadChannels, async ([oldChannelId, threads]) => {
+                const newChannelId = channelMap.get(oldChannelId);
+                const channel = newChannelId ? guild.channels.cache.get(newChannelId) : null;
+                if (!(channel && channel.type === ChannelType.GuildText && threads && threads.length > 0)) return;
+
+                await executeParallel(threads, async (threadData) => {
+                    try {
+                        const thread = await channel.threads.create({
+                            name: threadData.name,
+                            autoArchiveDuration: threadData.autoArchiveDuration || 1440,
+                            reason: 'Backup restore'
+                        });
+
+                        const threadMessages = (threadData.messages || []).slice(0, 100);
+                        await executeParallel(threadMessages, async (msg) => {
+                            try {
+                                const messageContent = msg.content || '';
+                                const embeds = msg.embeds || [];
+                                if (messageContent || embeds.length > 0) {
+                                    await thread.send({ content: messageContent, embeds });
+                                }
+                            } catch (error) {
+                                console.error(`فشل إرسال رسالة في ثريد ${thread.name}`);
+                            }
+                        }, 5);
+
+                        if (threadData.archived) await thread.setArchived(true);
+                        stats.threadsRestored++;
+                    } catch (error) {
+                        console.error(`فشل إنشاء ثريد ${threadData.name}:`, error);
+                    }
+                }, 5);
+            }, 5);
+        };
+
+
         const hasMessages = options.includes('messages');
         const hasBans = options.includes('bans');
         const hasMemberRoles = options.includes('memberroles') && backupData.data.members && backupData.data.members.length > 0;
@@ -906,198 +1887,35 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                 progressText += parts.join(' + ');
                 await updateProgress(progressMessage, 'Backup Loading', ++currentStep, totalSteps, progressText);
             }
-
-            // تنفيذ جميع العمليات بالتوازي الكامل
-            const parallelOperations = [];
-
-            // 🔹 عملية 1: استعادة الرسائل والثريدات
-            if (hasMessages) {
-                parallelOperations.push((async () => {
-                    const messageChannels = Object.entries(backupData.data.messages || {});
-                    await Promise.allSettled(
-                        messageChannels.map(async ([oldChannelId, messages]) => {
-                            const newChannelId = channelMap.get(oldChannelId);
-                            const channel = newChannelId ? guild.channels.cache.get(newChannelId) : null;
-
-                            if (channel && channel.type === ChannelType.GuildText && messages && messages.length > 0) {
-                                const messagesToRestore = messages.slice(0, 100);
-                                await Promise.allSettled(
-                                    messagesToRestore.map(async (messageData) => {
-                                        try {
-                                            const content = messageData.content || '';
-                                            const embeds = messageData.embeds || [];
-
-                                            if (content || embeds.length > 0) {
-                                                let senderName = 'Unknown User';
-                                                if (messageData.author && messageData.author.id) {
-                                                    const member = await guild.members.fetch(messageData.author.id).catch(() => null);
-                                                    senderName = member ? `<@${messageData.author.id}>` : (messageData.author.global_name || messageData.author.username || messageData.author.tag || `User#${messageData.author.id}`);
-                                                }
-
-                                                const messageContent = `**From :** ${senderName}\n${content}`;
-
-                                                await retryOperation(
-                                                    async () => await channel.send({ content: messageContent, embeds: embeds }),
-                                                    2,
-                                                    0,
-                                                    'Send Message'
-                                                );
-                                                stats.messagesRestored++;
-                                            }
-                                        } catch (error) {
-                                            console.error(`فشل إرسال رسالة في ${channel.name}`);
-                                        }
-                                    })
-                                );
-                            }
-                        })
-                    );
-
-                    // استعادة الثريدات
-                    const threadChannels = Object.entries(backupData.data.threads || {});
-                    await Promise.allSettled(
-                        threadChannels.map(async ([oldChannelId, threads]) => {
-                            const newChannelId = channelMap.get(oldChannelId);
-                            const channel = newChannelId ? guild.channels.cache.get(newChannelId) : null;
-
-                            if (channel && channel.type === ChannelType.GuildText && threads && threads.length > 0) {
-                                await Promise.allSettled(
-                                    threads.map(async (threadData) => {
-                                        try {
-                                            const thread = await retryOperation(
-                                                async () => await channel.threads.create({
-                                                    name: threadData.name,
-                                                    autoArchiveDuration: threadData.autoArchiveDuration,
-                                                    reason: 'Backup Loading'
-                                                }),
-                                                2,
-                                                0,
-                                                `Threads: ${threadData.name}`
-                                            );
-
-                                            await Promise.allSettled(
-                                                (threadData.messages || []).map(async (msgData) => {
-                                                    try {
-                                                        const content = msgData.content || '';
-                                                        const embeds = msgData.embeds || [];
-
-                                                        if (content || embeds.length > 0) {
-                                                            let senderName = 'Unknown User';
-                                                            if (msgData.author && msgData.author.id) {
-                                                                const member = await guild.members.fetch(msgData.author.id).catch(() => null);
-                                                                senderName = member ? `<@${msgData.author.id}>` : (msgData.author.global_name || msgData.author.username || msgData.author.tag || `User#${msgData.author.id}`);
-                                                            }
-
-                                                            const messageContent = `**From :** ${senderName}\n${content}`;
-                                                            await thread.send({ content: messageContent, embeds: embeds });
-                                                        }
-                                                    } catch (error) {
-                                                        console.error(`فشل إرسال رسالة في ثريد ${thread.name}`);
-                                                    }
-                                                })
-                                            );
-
-                                            if (threadData.archived) await thread.setArchived(true);
-                                            stats.threadsRestored++;
-                                        } catch (error) {
-                                            console.error(`فشل إنشاء ثريد ${threadData.name}:`, error);
-                                        }
-                                    })
-                                );
-                            }
-                        })
-                    );
-                })());
-            }
-
-            // 🔹 عملية 2: استعادة الحظر
-            if (hasBans) {
-                parallelOperations.push((async () => {
-                    const currentBans = await guild.bans.fetch();
-                    const backupBanIds = new Set((backupData.data.bans || []).map(b => b.userId));
-                    const currentBanIds = new Set(currentBans.keys());
-
-                    // فك الحظر بالتوازي
-                    await Promise.allSettled(
-                        Array.from(currentBanIds).map(async (bannedUserId) => {
-                            if (!backupBanIds.has(bannedUserId)) {
-                                try {
-                                    await guild.members.unban(bannedUserId, 'Backup restore');
-                                } catch (err) {
-                                    stats.errors.push(`فشل فك حظر ${bannedUserId}: ${err.message}`);
-                                }
-                            }
-                        })
-                    );
-
-                    // إضافة الحظر بالتوازي
-                    const banResults = await Promise.allSettled(
-                        (backupData.data.bans || []).map(async (banData) => {
-                            if (!currentBanIds.has(banData.userId)) {
-                                try {
-                                    await guild.members.ban(banData.userId, { reason: `Backup restore: ${banData.reason}` });
-                                    return true;
-                                } catch (err) {
-                                    stats.errors.push(`فشل حظر ${banData.username}: ${err.message}`);
-                                    return false;
-                                }
-                            }
-                            return true;
-                        })
-                    );
-
-                    stats.bansRestored = banResults.filter(r => r.status === 'fulfilled' && r.value).length;
-                })());
-            }
-
-            // 🔹 عملية 3: استعادة رولات الأعضاء
-            if (hasMemberRoles) {
-                parallelOperations.push((async () => {
-                    await guild.members.fetch({ limit: 1000 });
-
-                    const results = await Promise.allSettled(
-                        backupData.data.members.map(async (memberData) => {
-                            try {
-                                const member = guild.members.cache.get(memberData.userId);
-                                if (!member) return { success: false };
-
-                                const rolesToAdd = memberData.roles
-                                    .map(oldRoleId => roleMap.get(oldRoleId))
-                                    .filter(newRoleId => newRoleId && guild.roles.cache.has(newRoleId));
-
-                                if (rolesToAdd.length > 0) {
-                                    await retryOperation(
-                                        async () => await member.roles.add(rolesToAdd),
-                                        2,
-                                        0,
-                                        `Add roles to ${memberData.username}`
-                                    );
-                                }
-
-                                if (memberData.nickname) {
-                                    await member.setNickname(memberData.nickname).catch(() => {});
-                                }
-
-                                return { success: true };
-                            } catch (err) {
-                                return { success: false, error: err.message, username: memberData.username };
-                            }
-                        })
-                    );
-
-                    for (const result of results) {
-                        if (result.status === 'fulfilled' && result.value.success) {
-                            stats.memberRolesRestored++;
-                        } else if (result.status === 'fulfilled' && result.value.error) {
-                            stats.errors.push(`فشل استعادة رولات ${result.value.username}: ${result.value.error}`);
-                        }
-                    }
-                })());
-            }
-
-            // تنفيذ جميع العمليات بالتوازي الكامل
-            await Promise.allSettled(parallelOperations);
         }
+
+        // تشغيل كل العمليات المختارة معًا
+        const rolesTaskPromise = restoreRolesTask();
+        const channelsTask = restoreChannelsTask(rolesTaskPromise);
+        const memberRolesTask = restoreMemberRolesTask(rolesTaskPromise);
+
+        await Promise.allSettled([
+            rolesTaskPromise,
+            restoreFilesTask(),
+            restoreServerInfoTask(),
+            channelsTask,
+            restoreEmojisTask(),
+            restoreBansTask(),
+            memberRolesTask,
+            channelsTask.then(() => restoreMessagesTask())
+        ]);
+
+        // فحص نهائي للتأكد أنه لا يوجد نقص بعد الاستعادة
+        const verification = {
+            roles: !options.includes('roles') || roleMap.size >= (backupData.data.roles || []).length,
+            categories: !options.includes('categories') || categoryMap.size >= (backupData.data.categories || []).length,
+            channels: !options.includes('channels') || channelMap.size >= ((backupData.data.channels || []).length + (backupData.data.categories || []).reduce((sum, cat) => sum + (cat.channels?.length || 0), 0) + (options.includes('categories') ? (backupData.data.categories || []).length : 0)),
+            bans: !options.includes('bans') || stats.bansRestored >= (backupData.data.bans || []).length,
+            memberRoles: !options.includes('memberroles') || stats.memberRolesRestored >= (backupData.data.members || []).length
+        };
+        verification.allGood = Object.values(verification).every(Boolean);
+        stats.verification = verification;
+
 
 
         return {
@@ -1176,6 +1994,137 @@ function deleteBackup(backupFileName) {
     }
 }
 
+
+async function handleProtectUsersSub(message, args) {
+    const sub = (args[1] || 'list').toLowerCase();
+    const cfg = getGuildProtectionConfig(message.guild.id) || { trustedUsers: [] };
+
+    if (sub === 'add') {
+        const user = message.mentions.users.first();
+        if (!user) return message.channel.send({ embeds: [colorManager.createEmbed().setDescription('❌ منشن الشخص')] });
+        cfg.trustedUsers = Array.from(new Set([...(cfg.trustedUsers || []), user.id]));
+        setGuildProtectionConfig(message.guild.id, cfg);
+        if (cfg.enabled) await refreshProtectionStateFast(message.guild, cfg);
+        return message.channel.send({ embeds: [colorManager.createEmbed().setDescription(`✅ تمت إضافة <@${user.id}> للموثوقين`)] });
+    }
+
+    if (sub === 'remove') {
+        const user = message.mentions.users.first();
+        if (!user) return message.channel.send({ embeds: [colorManager.createEmbed().setDescription('❌ منشن الشخص')] });
+        cfg.trustedUsers = (cfg.trustedUsers || []).filter(id => id !== user.id);
+        setGuildProtectionConfig(message.guild.id, cfg);
+        if (cfg.enabled) await refreshProtectionStateFast(message.guild, cfg);
+        return message.channel.send({ embeds: [colorManager.createEmbed().setDescription(`✅ تمت إزالة <@${user.id}> من الموثوقين`)] });
+    }
+
+    const trusted = cfg.trustedUsers || [];
+    const text = trusted.length ? trusted.map(id => `• <@${id}> (${id})`).join('\n') : 'لا يوجد موثوقين';
+    return message.channel.send({ embeds: [colorManager.createEmbed().setTitle('Trusted Users').setDescription(text)] });
+}
+
+async function handleProtectSetup(message, client) {
+    ensureProtectionEngine(client);
+    const backups = getAllBackups().filter(backup => backup.guildId === message.guild.id).slice(0, 25);
+    if (!backups.length) {
+        return message.channel.send({ embeds: [colorManager.createEmbed().setDescription('❌ لا توجد نسخ') ]});
+    }
+
+    const backupMenu = new StringSelectMenuBuilder()
+        .setCustomId(`backup_protect_backup_${message.author.id}`)
+        .setPlaceholder('اختر النسخة الأساسية')
+        .setMinValues(1)
+        .setMaxValues(1)
+        .addOptions(backups.map(b => ({ label: b.name, description: `${new Date(b.createdAt).toLocaleString('en-US')}`, value: b.fileName })));
+
+    const typeMenu = new StringSelectMenuBuilder()
+        .setCustomId(`backup_protect_types_${message.author.id}`)
+        .setPlaceholder('اختر نوع الحماية')
+        .setMinValues(1)
+        .setMaxValues(4)
+        .addOptions([
+            { label: 'رومات وكاتقوري', value: 'channelsCategories', description: 'حماية القنوات والتصنيفات' },
+            { label: 'رولات وبرمشنات', value: 'rolesPermissions', description: 'حماية الرولات والصلاحيات' },
+            { label: 'طرد وباند', value: 'kickBan', description: 'حماية الطرد والحظر' },
+            { label: 'اعدادات السيرفر', value: 'serverSettings', description: 'حماية إعدادات السيرفر' }
+        ]);
+
+    const sent = await message.channel.send({
+        embeds: [colorManager.createEmbed().setTitle('Protect Setup').setDescription('اختر النسخة ثم نوع الحماية')],
+        components: [new ActionRowBuilder().addComponents(backupMenu), new ActionRowBuilder().addComponents(typeMenu)]
+    });
+
+    const state = { backupFile: null, types: [] };
+    const collector = sent.createMessageComponentCollector({ filter: i => i.user.id === message.author.id, time: 90000 });
+
+    const getTypeLabel = (value) => ({
+        channelsCategories: 'رومات وكاتقوري',
+        rolesPermissions: 'رولات وبرمشنات',
+        kickBan: 'طرد وباند',
+        serverSettings: 'اعدادات السيرفر'
+    }[value] || value);
+
+    collector.on('collect', async (interaction) => {
+        if (!interaction.isStringSelectMenu()) return;
+        if (interaction.customId.includes('_backup_')) state.backupFile = interaction.values[0];
+        if (interaction.customId.includes('_types_')) state.types = interaction.values;
+
+        const selectedBackupName = backups.find(b => b.fileName === state.backupFile)?.name || state.backupFile || 'غير محدد';
+        const selectedTypes = state.types.length ? state.types.map(getTypeLabel).join('، ') : 'غير محدد';
+
+        if (!state.backupFile || !state.types.length) {
+            await interaction.update({
+                embeds: [colorManager.createEmbed().setTitle('Protect Setup').setDescription(
+                    `اختر النسخة ثم نوع الحماية
+
+` +
+                    `• النسخة المختارة: **${selectedBackupName}**
+` +
+                    `• الأنواع المختارة: **${selectedTypes}**
+
+` +
+                    `✅ تم حفظ اختيارك الحالي، أكمل باقي الاختيارات.`
+                )],
+                components: [new ActionRowBuilder().addComponents(backupMenu), new ActionRowBuilder().addComponents(typeMenu)]
+            }).catch(() => {});
+            return;
+        }
+
+        const cfg = {
+            enabled: true,
+            backupFile: state.backupFile,
+            latestBackupFile: state.backupFile,
+            enabledBy: message.author.id,
+            enabledAt: Date.now(),
+            trustedUsers: getGuildProtectionConfig(message.guild.id)?.trustedUsers || [],
+            protectionTypes: {
+                channelsCategories: state.types.includes('channelsCategories'),
+                rolesPermissions: state.types.includes('rolesPermissions'),
+                kickBan: state.types.includes('kickBan'),
+                serverSettings: state.types.includes('serverSettings')
+            },
+            expectedChannels: getCurrentChannelCount(message.guild),
+            expectedRoles: getCurrentRoleCount(message.guild)
+        };
+
+        setGuildProtectionConfig(message.guild.id, cfg);
+
+        await refreshProtectionStateFast(message.guild, cfg);
+
+        await interaction.update({
+            embeds: [colorManager.createEmbed().setDescription(`✅ تم تفعيل الحماية
+النسخة: ${selectedBackupName}
+الأنواع: ${selectedTypes}`)],
+            components: []
+        }).catch(() => {});
+
+        collector.stop('done');
+    });
+
+    collector.on('end', () => {
+        sent.edit({ components: [] }).catch(() => {});
+    });
+}
+
 module.exports = {
     name: 'backup',
     description: 'نظام النسخ الاحتياطي الشامل للسيرفر',
@@ -1188,6 +2137,14 @@ module.exports = {
             const errorEmbed = colorManager.createEmbed()
                 .setDescription('❌ **من الميانه بس**');
             return message.channel.send({ embeds: [errorEmbed] });
+        }
+
+        const sub = (args[0] || '').toLowerCase();
+        if (sub === 'protect') {
+            return handleProtectSetup(message, client);
+        }
+        if (sub === 'users') {
+            return handleProtectUsersSub(message, args);
         }
 
         const mainEmbed = colorManager.createEmbed()
@@ -1247,7 +2204,7 @@ module.exports = {
                 await interaction.showModal(modal);
 
             } else if (interaction.customId === 'backup_restore') {
-                const allBackups = getAllBackups();
+                const allBackups = getAllBackups().filter(backup => backup.guildId === message.guild.id);
 
                 if (allBackups.length === 0) {
                     return interaction.editReply({
@@ -1277,7 +2234,7 @@ module.exports = {
                 });
 
             } else if (interaction.customId === 'backup_list') {
-                const backups = getAllBackups();
+                const backups = getAllBackups().filter(backup => backup.guildId === message.guild.id);
 
                 if (backups.length === 0) {
                     return interaction.editReply({
@@ -1365,7 +2322,7 @@ module.exports = {
                 if (!global.backupListPage) global.backupListPage = new Map();
 
                 let currentPage = global.backupListPage.get(interaction.user.id) || 0;
-                const backups = getAllBackups();
+                const backups = getAllBackups().filter(backup => backup.guildId === message.guild.id);
 
                 if (backups.length === 0) {
                     return interaction.editReply({ 
@@ -1454,7 +2411,7 @@ module.exports = {
                 }
 
             } else if (interaction.customId === 'backup_delete') {
-                const backups = getAllBackups();
+                const backups = getAllBackups().filter(backup => backup.guildId === message.guild.id);
 
                 if (backups.length === 0) {
                     return interaction.editReply({
@@ -1666,11 +2623,9 @@ module.exports = {
                         embeds: [colorManager.createEmbed().setDescription('✅ **Backup Deleted**')],
                         components: []
                     });
-                    setTimeout(async () => {
-                        try {
-                            await interaction.editReply({ embeds: [mainEmbed], components: [row] });
-                        } catch (e) {}
-                    }, 2000);
+                    try {
+                        await interaction.editReply({ embeds: [mainEmbed], components: [row] });
+                    } catch (e) {}
                 } else {
                     await interaction.editReply({
                         embeds: [colorManager.createEmbed().setDescription(`❌ ${result.error}`)],
@@ -1696,6 +2651,7 @@ module.exports.restoreBackup = restoreBackup;
 let modalHandlerRegistered = false;
 
 function registerBackupModalHandler(client) {
+    ensureProtectionEngine(client);
     if (modalHandlerRegistered) return;
 
     client.on('interactionCreate', async interaction => {
