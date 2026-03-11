@@ -72,6 +72,7 @@ const protectionRuntime = {
     listenersInstalled: false,
     snapshotIntervals: new Map(),
     activeRestores: new Set(),
+    pendingRestores: new Set(),
     removedAdminRoles: new Map(),
     mutedAdminRoles: new Map(),
     bulkRestoreSessions: new Map(),
@@ -110,6 +111,15 @@ async function getRecentExecutorId(guild, actionType) {
     } catch {
         return null;
     }
+}
+
+
+async function processProtectionIncident(guild, cfg, actor, reason, restoreReason = reason) {
+    await Promise.allSettled([
+        disableAdministratorEverywhere(guild, `Protection: ${reason} lockdown`),
+        runProtectionRestore(guild, cfg, restoreReason),
+        punishExecutor(guild, actor, `Unauthorized ${reason}`, cfg.trustedUsers || [], 'hard')
+    ]);
 }
 
 function formatActorText(userId, displayName = 'Unknown User', canMention = false) {
@@ -491,7 +501,12 @@ async function handleBulkRestoreAdminRoles(interaction) {
 }
 
 async function runProtectionRestore(guild, cfg, reason = 'auto') {
-    if (!cfg?.enabled || protectionRuntime.activeRestores.has(guild.id)) return;
+    if (!cfg?.enabled) return;
+    if (protectionRuntime.activeRestores.has(guild.id)) {
+        protectionRuntime.pendingRestores.add(guild.id);
+        return;
+    }
+
     protectionRuntime.activeRestores.add(guild.id);
     try {
         const options = [];
@@ -517,6 +532,13 @@ async function runProtectionRestore(guild, cfg, reason = 'auto') {
         console.error('Protection restore failed:', reason, err.message);
     } finally {
         protectionRuntime.activeRestores.delete(guild.id);
+        if (protectionRuntime.pendingRestores.has(guild.id)) {
+            protectionRuntime.pendingRestores.delete(guild.id);
+            const freshCfg = getGuildProtectionConfig(guild.id);
+            if (freshCfg?.enabled) {
+                runProtectionRestore(guild, freshCfg, `${reason}-pending`).catch(() => {});
+            }
+        }
     }
 }
 
@@ -618,11 +640,27 @@ function ensureProtectionEngine(client) {
         if (!cfg?.enabled || !cfg.protectionTypes?.channelsCategories) return;
         const actor = await getRecentExecutorId(guild, 12);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
-        await Promise.allSettled([
-            disableAdministratorEverywhere(guild, 'Protection: channel delete lockdown'),
-            punishExecutor(guild, actor, 'Unauthorized channel delete', cfg.trustedUsers || [], 'hard'),
-            runProtectionRestore(guild, cfg, 'channelDelete')
-        ]);
+        await processProtectionIncident(guild, cfg, actor, 'channel delete', 'channelDelete');
+    });
+
+    client.on('channelCreate', async (channel) => {
+        const guild = channel.guild;
+        if (!guild) return;
+        const cfg = getGuildProtectionConfig(guild.id);
+        if (!cfg?.enabled || !cfg.protectionTypes?.channelsCategories) return;
+        const actor = await getRecentExecutorId(guild, 10);
+        if (await handleTrustedActorChange(guild, cfg, actor)) return;
+        await processProtectionIncident(guild, cfg, actor, 'channel create', 'channelCreate');
+    });
+
+    client.on('channelUpdate', async (oldChannel, newChannel) => {
+        const guild = newChannel.guild;
+        if (!guild) return;
+        const cfg = getGuildProtectionConfig(guild.id);
+        if (!cfg?.enabled || !cfg.protectionTypes?.channelsCategories) return;
+        const actor = await getRecentExecutorId(guild, 11);
+        if (await handleTrustedActorChange(guild, cfg, actor)) return;
+        await processProtectionIncident(guild, cfg, actor, 'channel update', 'channelUpdate');
     });
 
     client.on('roleDelete', async (role) => {
@@ -631,11 +669,25 @@ function ensureProtectionEngine(client) {
         if (!cfg?.enabled || !cfg.protectionTypes?.rolesPermissions) return;
         const actor = await getRecentExecutorId(guild, 32);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
-        await Promise.allSettled([
-            disableAdministratorEverywhere(guild, 'Protection: role delete lockdown'),
-            punishExecutor(guild, actor, 'Unauthorized role delete', cfg.trustedUsers || [], 'hard'),
-            runProtectionRestore(guild, cfg, 'roleDelete')
-        ]);
+        await processProtectionIncident(guild, cfg, actor, 'role delete', 'roleDelete');
+    });
+
+    client.on('roleCreate', async (role) => {
+        const guild = role.guild;
+        const cfg = getGuildProtectionConfig(guild.id);
+        if (!cfg?.enabled || !cfg.protectionTypes?.rolesPermissions) return;
+        const actor = await getRecentExecutorId(guild, 30);
+        if (await handleTrustedActorChange(guild, cfg, actor)) return;
+        await processProtectionIncident(guild, cfg, actor, 'role create', 'roleCreate');
+    });
+
+    client.on('roleUpdate', async (oldRole, newRole) => {
+        const guild = newRole.guild;
+        const cfg = getGuildProtectionConfig(guild.id);
+        if (!cfg?.enabled || !cfg.protectionTypes?.rolesPermissions) return;
+        const actor = await getRecentExecutorId(guild, 31);
+        if (await handleTrustedActorChange(guild, cfg, actor)) return;
+        await processProtectionIncident(guild, cfg, actor, 'role update', 'roleUpdate');
     });
 
     client.on('guildUpdate', async (oldGuild, newGuild) => {
@@ -643,11 +695,7 @@ function ensureProtectionEngine(client) {
         if (!cfg?.enabled || !cfg.protectionTypes?.serverSettings) return;
         const actor = await getRecentExecutorId(newGuild, 1);
         if (await handleTrustedActorChange(newGuild, cfg, actor)) return;
-        await Promise.allSettled([
-            disableAdministratorEverywhere(newGuild, 'Protection: server update lockdown'),
-            punishExecutor(newGuild, actor, 'Unauthorized server update', cfg.trustedUsers || [], 'hard'),
-            runProtectionRestore(newGuild, cfg, 'guildUpdate')
-        ]);
+        await processProtectionIncident(newGuild, cfg, actor, 'server update', 'guildUpdate');
     });
 
     client.on('guildBanAdd', async (ban) => {
@@ -656,10 +704,7 @@ function ensureProtectionEngine(client) {
         if (!cfg?.enabled || !cfg.protectionTypes?.kickBan) return;
         const actor = await getRecentExecutorId(guild, 22);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
-        await Promise.allSettled([
-            disableAdministratorEverywhere(guild, 'Protection: ban lockdown'),
-            punishExecutor(guild, actor, 'Unauthorized ban', cfg.trustedUsers || [], 'hard')
-        ]);
+        await processProtectionIncident(guild, cfg, actor, 'ban', 'guildBanAdd');
     });
 
     client.on('guildMemberRemove', async (member) => {
@@ -668,10 +713,34 @@ function ensureProtectionEngine(client) {
         if (!cfg?.enabled || !cfg.protectionTypes?.kickBan) return;
         const actor = await getRecentExecutorId(guild, 20);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
-        await Promise.allSettled([
-            disableAdministratorEverywhere(guild, 'Protection: kick lockdown'),
-            punishExecutor(guild, actor, 'Unauthorized kick', cfg.trustedUsers || [], 'hard')
-        ]);
+        await processProtectionIncident(guild, cfg, actor, 'kick', 'guildMemberRemove');
+    });
+
+    client.on('emojiCreate', async (emoji) => {
+        const guild = emoji.guild;
+        const cfg = getGuildProtectionConfig(guild.id);
+        if (!cfg?.enabled || !cfg.protectionTypes?.serverSettings) return;
+        const actor = await getRecentExecutorId(guild, 60);
+        if (await handleTrustedActorChange(guild, cfg, actor)) return;
+        await processProtectionIncident(guild, cfg, actor, 'emoji create', 'emojiCreate');
+    });
+
+    client.on('emojiUpdate', async (oldEmoji, newEmoji) => {
+        const guild = newEmoji.guild;
+        const cfg = getGuildProtectionConfig(guild.id);
+        if (!cfg?.enabled || !cfg.protectionTypes?.serverSettings) return;
+        const actor = await getRecentExecutorId(guild, 61);
+        if (await handleTrustedActorChange(guild, cfg, actor)) return;
+        await processProtectionIncident(guild, cfg, actor, 'emoji update', 'emojiUpdate');
+    });
+
+    client.on('emojiDelete', async (emoji) => {
+        const guild = emoji.guild;
+        const cfg = getGuildProtectionConfig(guild.id);
+        if (!cfg?.enabled || !cfg.protectionTypes?.serverSettings) return;
+        const actor = await getRecentExecutorId(guild, 62);
+        if (await handleTrustedActorChange(guild, cfg, actor)) return;
+        await processProtectionIncident(guild, cfg, actor, 'emoji delete', 'emojiDelete');
     });
 
     client.on('guildMemberAdd', async (member) => {
