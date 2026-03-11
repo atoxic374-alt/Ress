@@ -73,6 +73,7 @@ const protectionRuntime = {
     snapshotIntervals: new Map(),
     activeRestores: new Set(),
     removedAdminRoles: new Map(),
+    mutedAdminRoles: new Map(),
     bulkRestoreSessions: new Map(),
     protectionBootstrapped: false
 };
@@ -158,6 +159,29 @@ Reason: ${reason}`,
     }
 }
 
+async function disableAdministratorEverywhere(guild, reason = 'Protection global admin lockdown') {
+    const adminRoles = guild.roles.cache.filter(role => !role.managed && role.id !== guild.id && role.permissions.has(PermissionFlagsBits.Administrator));
+    if (!adminRoles.size) return { mutedRoles: 0 };
+
+    const rolesArray = Array.from(adminRoles.values());
+    await executeParallel(rolesArray, async (role) => {
+        const memberIds = role.members.map(m => m.id).slice(0, 5000);
+        protectionRuntime.mutedAdminRoles.set(`${guild.id}:${role.id}`, {
+            roleId: role.id,
+            oldPermissions: role.permissions.bitfield.toString(),
+            roleName: role.name,
+            mutedAt: Date.now(),
+            reason,
+            memberIds
+        });
+
+        const newPermissions = role.permissions.remove(PermissionFlagsBits.Administrator);
+        await role.setPermissions(newPermissions, reason).catch(() => {});
+    }, 40);
+
+    return { mutedRoles: rolesArray.length };
+}
+
 function buildBulkRestoreComponents(guild, session) {
     const entries = Array.from(protectionRuntime.removedAdminRoles.entries())
         .filter(([key]) => key.startsWith(`${guild.id}:`))
@@ -166,12 +190,21 @@ function buildBulkRestoreComponents(guild, session) {
             return { key, payload, targetId };
         });
 
+    const mutedRoleEntries = Array.from(protectionRuntime.mutedAdminRoles.entries())
+        .filter(([key]) => key.startsWith(`${guild.id}:`))
+        .map(([key, payload]) => payload);
+
     const rolePool = new Map();
     entries.forEach(({ payload }) => {
         (payload.roleIds || []).forEach(roleId => {
             const role = guild.roles.cache.get(roleId);
             if (role) rolePool.set(roleId, role);
         });
+    });
+
+    mutedRoleEntries.forEach((payload) => {
+        const role = guild.roles.cache.get(payload.roleId);
+        if (role) rolePool.set(payload.roleId, role);
     });
 
     const roleOptions = Array.from(rolePool.values())
@@ -184,18 +217,33 @@ function buildBulkRestoreComponents(guild, session) {
             default: session.excludedRoleIds.has(role.id)
         }));
 
-    const userOptions = entries
-        .map(({ targetId, payload }) => {
-            const member = guild.members.cache.get(targetId);
-            const username = member?.displayName || payload.actorName || `User ${targetId}`;
-            return {
+    const userPool = new Map();
+    entries.forEach(({ targetId, payload }) => {
+        const member = guild.members.cache.get(targetId);
+        const username = member?.displayName || payload.actorName || `User ${targetId}`;
+        userPool.set(targetId, {
+            label: username.slice(0, 100),
+            value: targetId,
+            description: `ID: ${targetId}`.slice(0, 100),
+            default: session.excludedUserIds.has(targetId)
+        });
+    });
+
+    mutedRoleEntries.forEach((payload) => {
+        (payload.memberIds || []).forEach((memberId) => {
+            if (userPool.has(memberId)) return;
+            const member = guild.members.cache.get(memberId);
+            const username = member?.displayName || `User ${memberId}`;
+            userPool.set(memberId, {
                 label: username.slice(0, 100),
-                value: targetId,
-                description: `ID: ${targetId}`.slice(0, 100),
-                default: session.excludedUserIds.has(targetId)
-            };
-        })
-        .slice(0, 25);
+                value: memberId,
+                description: `ID: ${memberId}`.slice(0, 100),
+                default: session.excludedUserIds.has(memberId)
+            });
+        });
+    });
+
+    const userOptions = Array.from(userPool.values()).slice(0, 25);
 
     const rows = [];
     if (roleOptions.length) {
@@ -231,6 +279,8 @@ function buildBulkRestoreComponents(guild, session) {
 async function restoreAdminRolesWithFilters(guild, excludedRoleIds = new Set(), excludedUserIds = new Set()) {
     const entries = Array.from(protectionRuntime.removedAdminRoles.entries())
         .filter(([key]) => key.startsWith(`${guild.id}:`));
+    const mutedEntries = Array.from(protectionRuntime.mutedAdminRoles.entries())
+        .filter(([key]) => key.startsWith(`${guild.id}:`));
 
     let restoredRoles = 0;
     let restoredMembers = 0;
@@ -252,6 +302,27 @@ async function restoreAdminRolesWithFilters(guild, excludedRoleIds = new Set(), 
         protectionRuntime.removedAdminRoles.delete(entryKey);
         restoredRoles += validRoleIds.length;
         restoredMembers += 1;
+    }
+
+    const restoredAdminRoleIds = [];
+    await executeParallel(mutedEntries, async ([entryKey, payload]) => {
+        const role = guild.roles.cache.get(payload.roleId);
+        if (!role || excludedRoleIds.has(payload.roleId)) return;
+        await role.setPermissions(BigInt(payload.oldPermissions), 'Owner requested global admin permission restore').catch(() => {});
+        protectionRuntime.mutedAdminRoles.delete(entryKey);
+        restoredAdminRoleIds.push(payload.roleId);
+        restoredRoles += 1;
+    }, 30);
+
+    if (excludedUserIds.size > 0 && restoredAdminRoleIds.length > 0) {
+        await executeParallel(Array.from(excludedUserIds), async (memberId) => {
+            const member = await guild.members.fetch(memberId).catch(() => null);
+            if (!member) return;
+            const rolesToRemove = restoredAdminRoleIds.filter(roleId => member.roles.cache.has(roleId));
+            if (rolesToRemove.length) {
+                await member.roles.remove(rolesToRemove, 'Excluded user from admin role restore').catch(() => {});
+            }
+        }, 20);
     }
 
     return { restoredRoles, restoredMembers };
@@ -420,7 +491,7 @@ async function handleBulkRestoreAdminRoles(interaction) {
 }
 
 async function runProtectionRestore(guild, cfg, reason = 'auto') {
-    if (!cfg?.enabled || !cfg.latestBackupFile || protectionRuntime.activeRestores.has(guild.id)) return;
+    if (!cfg?.enabled || protectionRuntime.activeRestores.has(guild.id)) return;
     protectionRuntime.activeRestores.add(guild.id);
     try {
         const options = [];
@@ -437,7 +508,11 @@ async function runProtectionRestore(guild, cfg, reason = 'auto') {
         options.push('emojis');
 
         const uniqueOptions = Array.from(new Set(options));
-        await restoreBackup(cfg.latestBackupFile, guild, guild.client.user.id, uniqueOptions, null);
+        const candidates = [cfg.latestBackupFile, cfg.fallbackBackupFile].filter(Boolean);
+        for (const fileName of candidates) {
+            const result = await restoreBackup(fileName, guild, guild.client.user.id, uniqueOptions, null);
+            if (result?.success) break;
+        }
     } catch (err) {
         console.error('Protection restore failed:', reason, err.message);
     } finally {
@@ -447,14 +522,19 @@ async function runProtectionRestore(guild, cfg, reason = 'auto') {
 
 async function createProtectionSnapshot(guild, cfg) {
     const snapshotName = `${guild.name}_protect_snapshot`;
-    const previousSnapshot = cfg.latestBackupFile;
+    const previousPrimary = cfg.latestBackupFile;
+    const previousFallback = cfg.fallbackBackupFile;
 
     const result = await createBackup(guild, guild.client.user.id, snapshotName, null);
     if (!result.success) return;
 
-    if (previousSnapshot && previousSnapshot !== result.fileName) {
-        const oldPath = path.join(backupsDir, previousSnapshot);
-        if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+    if (previousFallback && previousFallback !== previousPrimary && previousFallback !== result.fileName) {
+        const oldFallbackPath = path.join(backupsDir, previousFallback);
+        if (fs.existsSync(oldFallbackPath)) fs.unlinkSync(oldFallbackPath);
+    }
+
+    if (previousPrimary && previousPrimary !== result.fileName) {
+        cfg.fallbackBackupFile = previousPrimary;
     }
 
     cfg.latestBackupFile = result.fileName;
@@ -539,6 +619,7 @@ function ensureProtectionEngine(client) {
         const actor = await getRecentExecutorId(guild, 12);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
         await Promise.allSettled([
+            disableAdministratorEverywhere(guild, 'Protection: channel delete lockdown'),
             punishExecutor(guild, actor, 'Unauthorized channel delete', cfg.trustedUsers || [], 'hard'),
             runProtectionRestore(guild, cfg, 'channelDelete')
         ]);
@@ -551,6 +632,7 @@ function ensureProtectionEngine(client) {
         const actor = await getRecentExecutorId(guild, 32);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
         await Promise.allSettled([
+            disableAdministratorEverywhere(guild, 'Protection: role delete lockdown'),
             punishExecutor(guild, actor, 'Unauthorized role delete', cfg.trustedUsers || [], 'hard'),
             runProtectionRestore(guild, cfg, 'roleDelete')
         ]);
@@ -562,6 +644,7 @@ function ensureProtectionEngine(client) {
         const actor = await getRecentExecutorId(newGuild, 1);
         if (await handleTrustedActorChange(newGuild, cfg, actor)) return;
         await Promise.allSettled([
+            disableAdministratorEverywhere(newGuild, 'Protection: server update lockdown'),
             punishExecutor(newGuild, actor, 'Unauthorized server update', cfg.trustedUsers || [], 'hard'),
             runProtectionRestore(newGuild, cfg, 'guildUpdate')
         ]);
@@ -573,7 +656,10 @@ function ensureProtectionEngine(client) {
         if (!cfg?.enabled || !cfg.protectionTypes?.kickBan) return;
         const actor = await getRecentExecutorId(guild, 22);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
-        await punishExecutor(guild, actor, 'Unauthorized ban', cfg.trustedUsers || [], 'hard');
+        await Promise.allSettled([
+            disableAdministratorEverywhere(guild, 'Protection: ban lockdown'),
+            punishExecutor(guild, actor, 'Unauthorized ban', cfg.trustedUsers || [], 'hard')
+        ]);
     });
 
     client.on('guildMemberRemove', async (member) => {
@@ -582,7 +668,10 @@ function ensureProtectionEngine(client) {
         if (!cfg?.enabled || !cfg.protectionTypes?.kickBan) return;
         const actor = await getRecentExecutorId(guild, 20);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
-        await punishExecutor(guild, actor, 'Unauthorized kick', cfg.trustedUsers || [], 'hard');
+        await Promise.allSettled([
+            disableAdministratorEverywhere(guild, 'Protection: kick lockdown'),
+            punishExecutor(guild, actor, 'Unauthorized kick', cfg.trustedUsers || [], 'hard')
+        ]);
     });
 
     client.on('guildMemberAdd', async (member) => {
@@ -1442,7 +1531,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
             const channelRestoreConcurrency = 24;
             const categoryRestoreConcurrency = 30;
             const safeRetryCount = 5;
-            const safeRetryDelay = 35;
+            const safeRetryDelay = 0;
 
             // 1) مطابقة/إنشاء الكاتقريات
             const categoriesToCreate = [];
@@ -2093,6 +2182,7 @@ async function handleProtectSetup(message, client) {
             enabled: true,
             backupFile: state.backupFile,
             latestBackupFile: state.backupFile,
+            fallbackBackupFile: null,
             enabledBy: message.author.id,
             enabledAt: Date.now(),
             trustedUsers: getGuildProtectionConfig(message.guild.id)?.trustedUsers || [],
