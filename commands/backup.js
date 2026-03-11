@@ -665,7 +665,7 @@ async function createBackup(guild, creatorId, backupName, progressMessage = null
     }
 }
 
-// استعادة فائقة السرعة - عمليتين فقط: حذف موحد ثم إنشاء موحد
+// استعادة ذكية بالفروقات: تعديل الموجود + إنشاء الناقص + حذف الفائض فقط
 async function restoreBackup(backupFileName, guild, restoredBy, options, progressMessage = null) {
     try {
         const backupFilePath = path.join(backupsDir, backupFileName);
@@ -679,9 +679,9 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
         }
 
         const stats = {
-            rolesDeleted: 0, rolesCreated: 0,
-            categoriesDeleted: 0, categoriesCreated: 0,
-            channelsDeleted: 0, channelsCreated: 0,
+            rolesDeleted: 0, rolesCreated: 0, rolesMatched: 0,
+            categoriesDeleted: 0, categoriesCreated: 0, categoriesMatched: 0,
+            channelsDeleted: 0, channelsCreated: 0, channelsMatched: 0,
             filesRestored: 0, messagesRestored: 0,
             threadsRestored: 0, bansRestored: 0,
             memberRolesRestored: 0, errors: []
@@ -693,47 +693,16 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
 
         let currentStep = 0;
         // حساب عدد الخطوات الديناميكي بناءً على الخيارات
-        let totalSteps = 2; // الحذف والإنشاء دائماً موجودين
+        let totalSteps = 1; // استعادة ذكية بالفروقات
         if (options.includes('messages')) totalSteps++;
         if (options.includes('bans')) totalSteps++;
         if (options.includes('memberroles')) totalSteps++;
 
         // ═══════════════════════════════════════════════════════════════
-        // 🚀 الخطوة 1: حذف كل شيء مختار دفعة واحدة بالتوازي الكامل
+        // 🚀 الخطوة 1: استعادة ذكية بالفروقات (بدون حذف شامل)
         // ═══════════════════════════════════════════════════════════════
         if (progressMessage) {
-            await updateProgress(progressMessage, 'Backup Loading', ++currentStep, totalSteps, '🗑️ Deleting Everything...');
-        }
-
-        const deletePromises = [];
-
-        // جمع كل عمليات الحذف في مصفوفة واحدة
-        if (options.includes('roles')) {
-            const roles = Array.from(guild.roles.cache.filter(r => !r.managed && r.id !== guild.id).values());
-            stats.rolesDeleted = roles.length;
-            deletePromises.push(...roles.map(r => r.delete().catch(() => {})));
-        }
-
-        if (options.includes('channels') || options.includes('categories')) {
-            const channels = Array.from(guild.channels.cache.values());
-            stats.channelsDeleted = channels.length;
-            stats.categoriesDeleted = channels.filter(ch => ch.type === ChannelType.GuildCategory).length;
-            deletePromises.push(...channels.map(c => c.delete().catch(() => {})));
-        }
-
-        if (options.includes('emojis')) {
-            const emojis = Array.from(guild.emojis.cache.values());
-            deletePromises.push(...emojis.map(e => e.delete().catch(() => {})));
-        }
-
-        // تنفيذ جميع عمليات الحذف دفعة واحدة
-        await Promise.allSettled(deletePromises);
-
-        // ═══════════════════════════════════════════════════════════════
-        // 🚀 الخطوة 2: إنشاء كل شيء مختار بالتوازي الكامل
-        // ═══════════════════════════════════════════════════════════════
-        if (progressMessage) {
-            await updateProgress(progressMessage, 'Backup Loading', ++currentStep, totalSteps, '✨ Creating Everything...');
+            await updateProgress(progressMessage, 'Backup Loading', ++currentStep, totalSteps, '⚡ Smart Diff Restore...');
         }
 
         // استعادة الملفات
@@ -759,24 +728,44 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
             } catch (err) {}
         };
 
-        // مهمة الرولات (تشغيلها مباشرة مع باقي العمليات)
+        // مهمة الرولات (مطابقة الموجود + إنشاء الناقص + حذف الفائض)
         const restoreRolesTask = async () => {
             if (!options.includes('roles')) return;
 
-            const roleResults = await executeParallel(backupData.data.roles, async (roleData) => {
-                try {
-                    const newRole = await guild.roles.create({ name: roleData.name });
-                    roleMap.set(roleData.id, newRole.id);
-                    return newRole;
-                } catch (err) {
-                    return null;
+            const backupRoles = [...(backupData.data.roles || [])];
+            const existingRoles = Array.from(guild.roles.cache.values())
+                .filter(r => !r.managed && r.id !== guild.id);
+
+            const usedExistingIds = new Set();
+
+            // مطابقة حسب الاسم أولاً
+            for (const roleData of backupRoles) {
+                const matched = existingRoles.find(r => r.name === roleData.name && !usedExistingIds.has(r.id));
+
+                if (matched) {
+                    usedExistingIds.add(matched.id);
+                    roleMap.set(roleData.id, matched.id);
+                    stats.rolesMatched++;
+                } else {
+                    try {
+                        const newRole = await guild.roles.create({ name: roleData.name });
+                        roleMap.set(roleData.id, newRole.id);
+                        stats.rolesCreated++;
+                    } catch (err) {}
                 }
+            }
+
+            // حذف الرولات الزائدة غير الموجودة في النسخة
+            await executeParallel(existingRoles, async (role) => {
+                if (usedExistingIds.has(role.id)) return;
+                try {
+                    await role.delete('Smart diff restore - extra role').catch(() => {});
+                    stats.rolesDeleted++;
+                } catch (err) {}
             }, 20);
 
-            stats.rolesCreated = roleResults.filter(r => r.status === 'fulfilled' && r.value).length;
-
-            // برمشنات/خصائص الرولات بعد اكتمال إنشائها بالكامل
-            await executeParallel(backupData.data.roles, async (roleData) => {
+            // تطبيق خصائص الرولات بعد اكتمال الإنشاء/المطابقة
+            await executeParallel(backupRoles, async (roleData) => {
                 const newRoleId = roleMap.get(roleData.id);
                 if (!newRoleId) return;
 
@@ -788,7 +777,8 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                         color: roleData.color,
                         permissions: BigInt(roleData.permissions),
                         hoist: roleData.hoist,
-                        mentionable: roleData.mentionable
+                        mentionable: roleData.mentionable,
+                        name: roleData.name
                     }).catch(() => {}),
                     role.setPosition(roleData.position).catch(() => {})
                 ]);
@@ -810,26 +800,43 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
         const restoreChannelsTask = async (rolesTaskPromise) => {
             if (!(options.includes('channels') || options.includes('categories'))) return;
 
-            // إنشاء الرومات/الكاتقريات فورًا بدون برمشنات (لتبدأ كل العمليات معًا)
-            const categoryResults = await executeParallel(backupData.data.categories || [], async (catData) => {
-                try {
-                    const newCat = await guild.channels.create({
-                        name: catData.name,
-                        type: ChannelType.GuildCategory,
-                        position: catData.position
-                    });
-                    categoryMap.set(catData.id, newCat.id);
-                    channelMap.set(catData.id, newCat.id);
-                    return newCat;
-                } catch (err) {
-                    return null;
+            const backupCategories = backupData.data.categories || [];
+            const backupStandaloneChannels = backupData.data.channels || [];
+
+            const existingAllChannels = Array.from(guild.channels.cache.values());
+            const existingCategories = existingAllChannels.filter(ch => ch.type === ChannelType.GuildCategory);
+            const existingNonCategories = existingAllChannels.filter(ch => ch.type !== ChannelType.GuildCategory);
+
+            const usedChannelIds = new Set();
+
+            // 1) مطابقة/إنشاء الكاتقريات
+            for (const catData of backupCategories) {
+                let matched = existingCategories.find(c => c.name === catData.name && !usedChannelIds.has(c.id));
+                if (!matched) {
+                    try {
+                        matched = await guild.channels.create({
+                            name: catData.name,
+                            type: ChannelType.GuildCategory,
+                            position: catData.position
+                        });
+                        stats.categoriesCreated++;
+                    } catch (err) {
+                        matched = null;
+                    }
+                } else {
+                    stats.categoriesMatched++;
                 }
-            }, 10);
 
-            stats.categoriesCreated = categoryResults.filter(r => r.status === 'fulfilled' && r.value).length;
+                if (matched) {
+                    usedChannelIds.add(matched.id);
+                    categoryMap.set(catData.id, matched.id);
+                    channelMap.set(catData.id, matched.id);
+                }
+            }
 
+            // 2) مطابقة/إنشاء قنوات داخل الكاتقريات
             const allChannelsInCategories = [];
-            for (const catData of backupData.data.categories || []) {
+            for (const catData of backupCategories) {
                 const parentId = categoryMap.get(catData.id);
                 if (!parentId) continue;
                 for (const chData of catData.channels || []) {
@@ -837,7 +844,22 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                 }
             }
 
-            const channelResults = await executeParallel(allChannelsInCategories, async (chData) => {
+            await executeParallel(allChannelsInCategories, async (chData) => {
+                const matched = existingNonCategories.find(ch =>
+                    ch.parentId === chData.parentId &&
+                    ch.name === chData.name &&
+                    ch.type === chData.type &&
+                    !usedChannelIds.has(ch.id)
+                );
+
+                if (matched) {
+                    usedChannelIds.add(matched.id);
+                    channelMap.set(chData.id, matched.id);
+                    stats.channelsMatched++;
+                    await matched.edit({ parent: chData.parentId, position: chData.position }).catch(() => {});
+                    return;
+                }
+
                 try {
                     const opts = {
                         name: chData.name,
@@ -852,14 +874,29 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                     if (chData.userLimit) opts.userLimit = chData.userLimit;
 
                     const newCh = await guild.channels.create(opts);
+                    usedChannelIds.add(newCh.id);
                     channelMap.set(chData.id, newCh.id);
-                    return newCh;
-                } catch (err) {
-                    return null;
-                }
+                    stats.channelsCreated++;
+                } catch (err) {}
             }, 10);
 
-            const standaloneResults = await executeParallel(backupData.data.channels || [], async (chData) => {
+            // 3) مطابقة/إنشاء القنوات خارج الكاتقريات
+            await executeParallel(backupStandaloneChannels, async (chData) => {
+                const matched = existingNonCategories.find(ch =>
+                    !ch.parentId &&
+                    ch.name === chData.name &&
+                    ch.type === chData.type &&
+                    !usedChannelIds.has(ch.id)
+                );
+
+                if (matched) {
+                    usedChannelIds.add(matched.id);
+                    channelMap.set(chData.id, matched.id);
+                    stats.channelsMatched++;
+                    await matched.edit({ position: chData.position }).catch(() => {});
+                    return;
+                }
+
                 try {
                     const opts = {
                         name: chData.name,
@@ -873,19 +910,32 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                     if (chData.userLimit) opts.userLimit = chData.userLimit;
 
                     const newCh = await guild.channels.create(opts);
+                    usedChannelIds.add(newCh.id);
                     channelMap.set(chData.id, newCh.id);
-                    return newCh;
-                } catch (err) {
-                    return null;
-                }
+                    stats.channelsCreated++;
+                } catch (err) {}
             }, 10);
 
-            stats.channelsCreated =
-                channelResults.filter(r => r.status === 'fulfilled' && r.value).length +
-                standaloneResults.filter(r => r.status === 'fulfilled' && r.value).length;
+            // 4) حذف القنوات/الكاتقريات الزائدة فقط (الفروقات)
+            await executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type !== ChannelType.GuildCategory), async (ch) => {
+                if (usedChannelIds.has(ch.id)) return;
+                try {
+                    await ch.delete('Smart diff restore - extra channel').catch(() => {});
+                    stats.channelsDeleted++;
+                } catch (err) {}
+            }, 10);
 
+            await executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type === ChannelType.GuildCategory), async (ch) => {
+                if (usedChannelIds.has(ch.id)) return;
+                try {
+                    await ch.delete('Smart diff restore - extra category').catch(() => {});
+                    stats.categoriesDeleted++;
+                } catch (err) {}
+            }, 10);
+
+            // 5) ترتيب نهائي
             const positions = [];
-            for (const catData of backupData.data.categories || []) {
+            for (const catData of backupCategories) {
                 const newCatId = categoryMap.get(catData.id);
                 if (newCatId) positions.push({ channel: newCatId, position: catData.position });
 
@@ -894,7 +944,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                     if (newChId) positions.push({ channel: newChId, position: chData.position });
                 }
             }
-            for (const chData of backupData.data.channels || []) {
+            for (const chData of backupStandaloneChannels) {
                 const newChId = channelMap.get(chData.id);
                 if (newChId) positions.push({ channel: newChId, position: chData.position });
             }
@@ -905,7 +955,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
             // برمشنات الرومات بعد اكتمال الرولات فقط
             await rolesTaskPromise;
 
-            await executeParallel(backupData.data.categories || [], async (catData) => {
+            await executeParallel(backupCategories, async (catData) => {
                 const newCatId = categoryMap.get(catData.id);
                 if (!newCatId) return;
                 const channel = guild.channels.cache.get(newCatId);
@@ -921,7 +971,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                 await channel.permissionOverwrites.set(convertPermissions(chData.permissionOverwrites)).catch(() => {});
             }, 10);
 
-            await executeParallel(backupData.data.channels || [], async (chData) => {
+            await executeParallel(backupStandaloneChannels, async (chData) => {
                 const newChId = channelMap.get(chData.id);
                 if (!newChId) return;
                 const channel = guild.channels.cache.get(newChId);
@@ -932,10 +982,25 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
 
         const restoreEmojisTask = async () => {
             if (!options.includes('emojis') || !backupData.data.emojis) return;
+
+            const existingEmojis = Array.from(guild.emojis.cache.values());
+            const usedEmojiIds = new Set();
+
             await executeParallel(backupData.data.emojis, async (emojiData) => {
+                const matched = existingEmojis.find(e => e.name === emojiData.name && !usedEmojiIds.has(e.id));
+                if (matched) {
+                    usedEmojiIds.add(matched.id);
+                    return;
+                }
                 try {
-                    await guild.emojis.create({ attachment: emojiData.url, name: emojiData.name });
+                    const newEmoji = await guild.emojis.create({ attachment: emojiData.url, name: emojiData.name });
+                    if (newEmoji) usedEmojiIds.add(newEmoji.id);
                 } catch (err) {}
+            }, 5);
+
+            await executeParallel(existingEmojis, async (emoji) => {
+                if (usedEmojiIds.has(emoji.id)) return;
+                await emoji.delete('Smart diff restore - extra emoji').catch(() => {});
             }, 5);
         };
 
@@ -1105,9 +1170,9 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
 
         // فحص نهائي للتأكد أنه لا يوجد نقص بعد الاستعادة
         const verification = {
-            roles: !options.includes('roles') || stats.rolesCreated >= (backupData.data.roles || []).length,
-            categories: !(options.includes('categories') || options.includes('channels')) || stats.categoriesCreated >= (backupData.data.categories || []).length,
-            channels: !(options.includes('channels') || options.includes('categories')) || stats.channelsCreated >= ((backupData.data.channels || []).length + (backupData.data.categories || []).reduce((sum, cat) => sum + (cat.channels?.length || 0), 0)),
+            roles: !options.includes('roles') || roleMap.size >= (backupData.data.roles || []).length,
+            categories: !(options.includes('categories') || options.includes('channels')) || categoryMap.size >= (backupData.data.categories || []).length,
+            channels: !(options.includes('channels') || options.includes('categories')) || channelMap.size >= ((backupData.data.channels || []).length + (backupData.data.categories || []).reduce((sum, cat) => sum + (cat.channels?.length || 0), 0) + (backupData.data.categories || []).length),
             bans: !options.includes('bans') || stats.bansRestored >= (backupData.data.bans || []).length,
             memberRoles: !options.includes('memberroles') || stats.memberRolesRestored >= (backupData.data.members || []).length
         };
