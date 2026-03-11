@@ -39,8 +39,43 @@ function saveWordData(data) {
     writeJson(DATA_PATH, data);
 }
 
+function buildWordActionRow() {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('word_create').setLabel('إنشاء').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('word_delete').setLabel('إزالة').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('word_edit').setLabel('تعديل').setStyle(ButtonStyle.Primary)
+    );
+}
+
 function normalizeWord(input) {
     return String(input || '').trim().toLowerCase();
+}
+
+function parseKeywordsInput(input) {
+    const raw = String(input || '').trim();
+    if (!raw) return { ok: false, error: '❌ **لازم تكتب كلمة واحدة على الأقل.**' };
+
+    const byComma = raw.includes('،') || raw.includes(',');
+    const splitPattern = byComma ? /[،,\n|]+/ : /\s+/;
+    const parts = raw.split(splitPattern).map(p => normalizeWord(p)).filter(Boolean);
+    const keywords = [...new Set(parts)];
+
+    if (keywords.length === 0) return { ok: false, error: '❌ **لازم تكتب كلمة واحدة على الأقل.**' };
+    if (keywords.length > 3) return { ok: false, error: '❌ **مسموح حتى 3 كلمات برفكس فقط.**' };
+
+    if (keywords.some(k => k.includes(' '))) {
+        return { ok: false, error: '❌ **كل برفكس لازم يكون كلمة واحدة فقط.**' };
+    }
+
+    return { ok: true, keywords };
+}
+
+function getEntryKeywords(entry) {
+    if (Array.isArray(entry.keywords) && entry.keywords.length > 0) {
+        return [...new Set(entry.keywords.map(normalizeWord).filter(Boolean))];
+    }
+    const single = normalizeWord(entry.keyword);
+    return single ? [single] : [];
 }
 
 function getAdminRoles() {
@@ -112,8 +147,7 @@ function isDangerousRole(role) {
         p.ManageWebhooks,
         p.BanMembers,
         p.KickMembers,
-        p.ModerateMembers,
-        p.MentionEveryone
+        p.ModerateMembers
     ];
 
     return dangerousFlags.some(flag => role.permissions.has(flag));
@@ -138,7 +172,11 @@ function upsertWord(guildId, wordEntry) {
     if (!all[guildId]) all[guildId] = { words: [] };
     if (!Array.isArray(all[guildId].words)) all[guildId].words = [];
 
-    const idx = all[guildId].words.findIndex(w => normalizeWord(w.keyword) === normalizeWord(wordEntry.keyword));
+    const incomingKeywords = getEntryKeywords(wordEntry);
+    const idx = all[guildId].words.findIndex(w => {
+        const existingKeywords = getEntryKeywords(w);
+        return incomingKeywords.some(k => existingKeywords.includes(k));
+    });
     if (idx >= 0) {
         all[guildId].words[idx] = { ...all[guildId].words[idx], ...wordEntry };
     } else {
@@ -149,6 +187,7 @@ function upsertWord(guildId, wordEntry) {
 }
 
 function buildWordPreview(entry, guild) {
+    const keywordsText = getEntryKeywords(entry).join(' ، ') || '—';
     const allowedText = entry.allowedMode === 'admin'
         ? 'جميع رولات الأدمن (adminRoles.json)'
         : entry.allowedRoleIds.map(id => guild.roles.cache.get(id)?.toString() || `\`${id}\``).join(' ، ') || '—';
@@ -157,7 +196,7 @@ function buildWordPreview(entry, guild) {
         .setTitle('**تم حفظ إعداد كلمة**')
         .setThumbnail(guild.iconURL({ size: 256 }) || null)
         .setDescription([
-            `**الكلمة :** ${entry.keyword}`,
+            `**الكلمات (Prefix):** ${keywordsText}`,
             '',
             `**الرول المربوط :** <@&${entry.targetRoleId}>`,
             '',
@@ -167,6 +206,60 @@ function buildWordPreview(entry, guild) {
             '',
             `**الرولات المسموح لها :** ${allowedText}`
         ].join('\n'));
+}
+
+function buildWordSystemEmbed(guild) {
+    const all = getWordData();
+    const guildData = all[guild.id];
+    const words = Array.isArray(guildData?.words) ? guildData.words : [];
+
+    const listText = words.length === 0
+        ? '**لا توجد كلمات مضافة حالياً.**'
+        : words.map((entry, index) => {
+            const prefixes = getEntryKeywords(entry).join(' ، ') || '—';
+            const allowedText = entry.allowedMode === 'admin'
+                ? 'adminRoles.json'
+                : `${(entry.allowedRoleIds || []).length} رول`;
+
+            return [
+                `**#${index + 1}**`,
+                `**Prefix:** ${prefixes}`,
+                `**Role:** <@&${entry.targetRoleId}>`,
+                `**Allowed:** ${allowedText}`
+            ].join('\n');
+        }).join('\n\n━━━━━━━━━━━━━━━━\n\n');
+
+    return colorManager.createEmbed()
+        .setTitle('**نظام word**')
+        .setThumbnail(guild.iconURL({ size: 256 }) || null)
+        .setDescription([
+            '**اختر العملية المطلوبة :**',
+            '',
+            '**• إنشاء**',
+            '**• إزالة**',
+            '**• تعديل**',
+            '',
+            `**إجمالي الإعدادات الحالية :** ${words.length}`,
+            '',
+            listText
+        ].join('\n'));
+}
+
+function extractPanelMessageId(customId, baseId) {
+    if (!customId.startsWith(`${baseId}:`)) return null;
+    return customId.slice(baseId.length + 1) || null;
+}
+
+async function refreshWordPanelMessage(interaction, panelMessageId) {
+    if (!panelMessageId || !interaction.channel) return;
+
+    const panelMessage = await interaction.channel.messages.fetch(panelMessageId).catch(() => null);
+    if (!panelMessage) return;
+
+    await panelMessage.edit({
+        embeds: [buildWordSystemEmbed(interaction.guild)],
+        components: [buildWordActionRow()]
+    }).catch(() => {});
 }
 
 async function promptAllowedRolesByMessage(interaction) {
@@ -200,16 +293,8 @@ async function execute(message, _args, { BOT_OWNERS }) {
         return message.reply('❌ **أمر word مخصص فقط لأونر البوت.**');
     }
 
-    const embed = colorManager.createEmbed()
-        .setTitle('**نظام word**')
-        .setThumbnail(message.guild.iconURL({ size: 256 }) || null)
-        .setDescription('**اختر العملية المطلوبة :**\n\n**• إنشاء**\n**• إزالة**\n**• تعديل**');
-
-    const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('word_create').setLabel('إنشاء').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId('word_delete').setLabel('إزالة').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('word_edit').setLabel('تعديل').setStyle(ButtonStyle.Primary)
-    );
+    const embed = buildWordSystemEmbed(message.guild);
+    const row = buildWordActionRow();
 
     await message.reply({ embeds: [embed], components: [row] });
 }
@@ -224,9 +309,9 @@ async function handleInteraction(interaction, context) {
     }
 
     if (interaction.isButton() && interaction.customId === 'word_create') {
-        const modal = new ModalBuilder().setCustomId('word_create_modal').setTitle('إنشاء كلمة');
+        const modal = new ModalBuilder().setCustomId(`word_create_modal:${interaction.message?.id || ''}`).setTitle('إنشاء كلمة');
         modal.addComponents(
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('keyword').setLabel('ضع الكلمة').setStyle(TextInputStyle.Short).setRequired(true)),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('keyword').setLabel('اكتب حتى 3 كلمات Prefix لنفس الرول').setStyle(TextInputStyle.Short).setRequired(true)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('targetRole').setLabel('ضع ID أو اسم الرول').setStyle(TextInputStyle.Short).setRequired(true)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('noPermMessage').setLabel('رسالة للي ما يملكون صلاحية (اختياري)').setStyle(TextInputStyle.Paragraph).setRequired(false)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('hasPermMessage').setLabel('رسالة للي يملكون صلاحية (اختياري)').setStyle(TextInputStyle.Paragraph).setRequired(false))
@@ -235,15 +320,29 @@ async function handleInteraction(interaction, context) {
         return true;
     }
 
-    if (interaction.isModalSubmit() && interaction.customId === 'word_create_modal') {
-        const keyword = normalizeWord(interaction.fields.getTextInputValue('keyword'));
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('word_create_modal')) {
+        const panelMessageId = extractPanelMessageId(interaction.customId, 'word_create_modal');
+        const keywordValidation = parseKeywordsInput(interaction.fields.getTextInputValue('keyword'));
         const targetRoleInput = interaction.fields.getTextInputValue('targetRole');
         const noPermMessage = interaction.fields.getTextInputValue('noPermMessage')?.trim() || '';
         const hasPermMessage = interaction.fields.getTextInputValue('hasPermMessage')?.trim() || '';
 
-        if (!keyword) {
-            await interaction.reply({ content: '❌ **الكلمة مطلوبة.**', flags: MessageFlags.Ephemeral });
+        if (!keywordValidation.ok) {
+            await interaction.reply({ content: keywordValidation.error, flags: MessageFlags.Ephemeral });
             return true;
+        }
+        const keywords = keywordValidation.keywords;
+
+        const all = getWordData();
+        const guildData = all[interaction.guild.id];
+        if (guildData?.words?.length) {
+            const collisionKeyword = keywords.find(k =>
+                guildData.words.some(w => getEntryKeywords(w).includes(k))
+            );
+            if (collisionKeyword) {
+                await interaction.reply({ content: `❌ **الكلمة \`${collisionKeyword}\` مستخدمة مسبقًا.**`, flags: MessageFlags.Ephemeral });
+                return true;
+            }
         }
 
         const targetRole = findClosestRole(interaction.guild, targetRoleInput);
@@ -261,7 +360,8 @@ async function handleInteraction(interaction, context) {
         }
 
         const payload = {
-            keyword,
+            keyword: keywords[0],
+            keywords,
             targetRoleId: targetRole.id,
             noPermMessage,
             hasPermMessage,
@@ -273,21 +373,23 @@ async function handleInteraction(interaction, context) {
 
         upsertWord(interaction.guild.id, payload);
         await interaction.editReply({ content: '', embeds: [buildWordPreview(payload, interaction.guild)], components: [] });
+        await refreshWordPanelMessage(interaction, panelMessageId);
         return true;
     }
 
     if (interaction.isButton() && interaction.customId === 'word_delete') {
-        const modal = new ModalBuilder().setCustomId('word_delete_modal').setTitle('حذف كلمة');
+        const modal = new ModalBuilder().setCustomId(`word_delete_modal:${interaction.message?.id || ''}`).setTitle('حذف كلمة');
         modal.addComponents(
             new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('keyword').setLabel('اكتب الكلمة المراد حذفها').setStyle(TextInputStyle.Short).setRequired(true)
+                new TextInputBuilder().setCustomId('keyword').setLabel('اكتب أي كلمة من كلمات البرفكس').setStyle(TextInputStyle.Short).setRequired(true)
             )
         );
         await interaction.showModal(modal);
         return true;
     }
 
-    if (interaction.isModalSubmit() && interaction.customId === 'word_delete_modal') {
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('word_delete_modal')) {
+        const panelMessageId = extractPanelMessageId(interaction.customId, 'word_delete_modal');
         const keyword = normalizeWord(interaction.fields.getTextInputValue('keyword'));
         const all = getWordData();
         const guildData = all[interaction.guild.id];
@@ -298,7 +400,7 @@ async function handleInteraction(interaction, context) {
         }
 
         const before = guildData.words.length;
-        guildData.words = guildData.words.filter(w => normalizeWord(w.keyword) !== keyword);
+        guildData.words = guildData.words.filter(w => !getEntryKeywords(w).includes(keyword));
 
         if (before === guildData.words.length) {
             await interaction.reply({ content: '❌ **الكلمة غير موجودة.**', flags: MessageFlags.Ephemeral });
@@ -307,14 +409,15 @@ async function handleInteraction(interaction, context) {
 
         saveWordData(all);
         await interaction.reply({ content: '✅ **تم حذف الكلمة بنجاح.**', flags: MessageFlags.Ephemeral });
+        await refreshWordPanelMessage(interaction, panelMessageId);
         return true;
     }
 
     if (interaction.isButton() && interaction.customId === 'word_edit') {
-        const modal = new ModalBuilder().setCustomId('word_edit_modal').setTitle('تعديل كلمة');
+        const modal = new ModalBuilder().setCustomId(`word_edit_modal:${interaction.message?.id || ''}`).setTitle('تعديل كلمة');
         modal.addComponents(
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('currentKeyword').setLabel('الكلمة الحالية').setStyle(TextInputStyle.Short).setRequired(true)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('newKeyword').setLabel('الكلمة الجديدة (اختياري)').setStyle(TextInputStyle.Short).setRequired(false)),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('currentKeyword').setLabel('كلمة حالية من كلمات البرفكس').setStyle(TextInputStyle.Short).setRequired(true)),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('newKeyword').setLabel('كلمات Prefix جديدة (حتى 3 - اختياري)').setStyle(TextInputStyle.Short).setRequired(false)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('newTargetRole').setLabel('الرول الجديد (اختياري)').setStyle(TextInputStyle.Short).setRequired(false)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('newNoPermMessage').setLabel('رسالة بدون صلاحية (اختياري)').setStyle(TextInputStyle.Paragraph).setRequired(false)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('newHasPermMessage').setLabel('رسالة مع صلاحية (اختياري)').setStyle(TextInputStyle.Paragraph).setRequired(false))
@@ -323,7 +426,8 @@ async function handleInteraction(interaction, context) {
         return true;
     }
 
-    if (interaction.isModalSubmit() && interaction.customId === 'word_edit_modal') {
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('word_edit_modal')) {
+        const panelMessageId = extractPanelMessageId(interaction.customId, 'word_edit_modal');
         const currentKeyword = normalizeWord(interaction.fields.getTextInputValue('currentKeyword'));
         const all = getWordData();
         const guildData = all[interaction.guild.id];
@@ -333,26 +437,35 @@ async function handleInteraction(interaction, context) {
             return true;
         }
 
-        const existing = guildData.words.find(w => normalizeWord(w.keyword) === currentKeyword);
+        const existing = guildData.words.find(w => getEntryKeywords(w).includes(currentKeyword));
         if (!existing) {
             await interaction.reply({ content: '❌ **الكلمة الحالية غير موجودة.**', flags: MessageFlags.Ephemeral });
             return true;
         }
 
-        const newKeywordRaw = normalizeWord(interaction.fields.getTextInputValue('newKeyword'));
+        const newKeywordInput = interaction.fields.getTextInputValue('newKeyword');
         const newTargetRoleRaw = interaction.fields.getTextInputValue('newTargetRole')?.trim();
         const newNoPerm = interaction.fields.getTextInputValue('newNoPermMessage')?.trim();
         const newHasPerm = interaction.fields.getTextInputValue('newHasPermMessage')?.trim();
 
-        if (newKeywordRaw) {
-            const hasCollision = guildData.words.some(w =>
-                w !== existing && normalizeWord(w.keyword) === newKeywordRaw
+        const newKeywordValidation = parseKeywordsInput(newKeywordInput);
+        const newKeywords = newKeywordValidation.ok ? newKeywordValidation.keywords : [];
+
+        if (newKeywordInput?.trim() && !newKeywordValidation.ok) {
+            await interaction.reply({ content: newKeywordValidation.error, flags: MessageFlags.Ephemeral });
+            return true;
+        }
+
+        if (newKeywords.length > 0) {
+            const hasCollisionKeyword = newKeywords.find(k =>
+                guildData.words.some(w => w !== existing && getEntryKeywords(w).includes(k))
             );
-            if (hasCollision) {
-                await interaction.reply({ content: '❌ **الكلمة الجديدة مستخدمة مسبقًا، اختر كلمة مختلفة.**', flags: MessageFlags.Ephemeral });
+            if (hasCollisionKeyword) {
+                await interaction.reply({ content: `❌ **الكلمة \`${hasCollisionKeyword}\` مستخدمة مسبقًا، اختر كلمة مختلفة.**`, flags: MessageFlags.Ephemeral });
                 return true;
             }
-            existing.keyword = newKeywordRaw;
+            existing.keywords = newKeywords;
+            existing.keyword = newKeywords[0];
         }
 
         if (newTargetRoleRaw) {
@@ -370,7 +483,11 @@ async function handleInteraction(interaction, context) {
 
         existing.updatedAt = Date.now();
 
-        await interaction.reply({ content: '⏳ **أرسل الآن رسالة بالرولات المسموح لها ( منشن / ID / اسم ) أو `0` لكل adminRoles.**\n**أو اكتب `-` للإبقاء عليها كما هي.**', flags: MessageFlags.Ephemeral });
+        await interaction.reply({
+            content: '⏳ **تم تطبيق التعديلات المبدئية.**\n**أرسل الآن رسالة بالرولات المسموح لها ( منشن / ID / اسم ) أو `0` لكل adminRoles.**\n**أو اكتب `-` للإبقاء عليها كما هي.**',
+            embeds: [buildWordPreview(existing, interaction.guild)],
+            flags: MessageFlags.Ephemeral
+        });
 
         const collected = await interaction.channel.awaitMessages({
             filter: m => m.author.id === interaction.user.id,
@@ -380,7 +497,10 @@ async function handleInteraction(interaction, context) {
         }).catch(() => null);
 
         if (!collected || !collected.first()) {
-            await interaction.editReply({ content: '⚠️ **انتهى الوقت، تم حفظ التعديلات الأخرى بدون تغيير رولات الاستخدام.**' });
+            await interaction.editReply({
+                content: '⚠️ **انتهى الوقت، تم حفظ التعديلات الأخرى بدون تغيير رولات الاستخدام.**',
+                embeds: [buildWordPreview(existing, interaction.guild)]
+            });
             saveWordData(all);
             return true;
         }
@@ -392,7 +512,10 @@ async function handleInteraction(interaction, context) {
         if (content !== '-') {
             const parsedAllowed = parseRolesFromMessage(interaction.guild, content);
             if (!parsedAllowed.ok) {
-                await interaction.editReply({ content: `${parsedAllowed.error}\n**تم حفظ بقية التعديلات بدون تحديث رولات الاستخدام.**` });
+                await interaction.editReply({
+                    content: `${parsedAllowed.error}\n**تم حفظ بقية التعديلات بدون تحديث رولات الاستخدام.**`,
+                    embeds: [buildWordPreview(existing, interaction.guild)]
+                });
                 saveWordData(all);
                 return true;
             }
@@ -402,6 +525,7 @@ async function handleInteraction(interaction, context) {
 
         saveWordData(all);
         await interaction.editReply({ content: '', embeds: [buildWordPreview(existing, interaction.guild)] });
+        await refreshWordPanelMessage(interaction, panelMessageId);
         return true;
     }
 
@@ -423,9 +547,16 @@ async function resolveTargetMember(message) {
 }
 
 function extractInvokedWord(content) {
-    const trimmed = String(content || '').trim();
+    const trimmed = normalizeWord(content);
     if (!trimmed) return '';
-    return normalizeWord(trimmed.split(/\s+/)[0]);
+    return trimmed.split(/\s+/)[0] || '';
+}
+
+function findInvokedEntry(entries, content) {
+    const invokedWord = extractInvokedWord(content);
+    if (!invokedWord) return null;
+
+    return entries.find(entry => getEntryKeywords(entry).includes(invokedWord)) || null;
 }
 
 async function handleMessage(message, context) {
@@ -435,8 +566,7 @@ async function handleMessage(message, context) {
     const guildData = all[message.guild.id];
     if (!guildData || !Array.isArray(guildData.words) || guildData.words.length === 0) return false;
 
-    const invokedWord = extractInvokedWord(message.content);
-    const entry = guildData.words.find(w => normalizeWord(w.keyword) === invokedWord);
+    const entry = findInvokedEntry(guildData.words, message.content);
     if (!entry) return false;
 
     const member = message.member;
