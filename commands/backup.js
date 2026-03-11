@@ -1439,8 +1439,8 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
             }
 
             const usedChannelIds = new Set();
-            const channelRestoreConcurrency = 8;
-            const categoryRestoreConcurrency = 6;
+            const channelRestoreConcurrency = 24;
+            const categoryRestoreConcurrency = 30;
             const safeRetryCount = 5;
             const safeRetryDelay = 35;
 
@@ -1523,10 +1523,6 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
 
                 // إذا وجدنا روم بنفس الاسم/النوع لكن داخل كاتوقري غلط: نحذفه ثم ننشئ الصحيح
                 const stray = looseQueue.find(ch => !usedChannelIds.has(ch.id));
-                if (stray && stray.parentId !== targetParentId) {
-                    await stray.delete('Smart diff restore - recreate in correct category').catch(() => {});
-                    stats.channelsDeleted++;
-                }
 
                 // لو ما عرفنا الأب نهائياً نسجل خطأ ونكمل
                 if (!targetParentId) {
@@ -1551,7 +1547,18 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                     usedChannelIds.add(newCh.id);
                     channelMap.set(chData.id, newCh.id);
                     stats.channelsCreated++;
-                } catch (err) {}
+
+                    if (stray && stray.parentId !== targetParentId) {
+                        await stray.delete('Smart diff restore - recreate in correct category').catch(() => {});
+                        stats.channelsDeleted++;
+                    }
+                } catch (err) {
+                    if (stray) {
+                        usedChannelIds.add(stray.id);
+                        channelMap.set(chData.id, stray.id);
+                        stats.channelsMatched++;
+                    }
+                }
             }, channelRestoreConcurrency);
 
             // 3) مطابقة/إنشاء القنوات خارج الكاتقريات
