@@ -1439,6 +1439,10 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
             }
 
             const usedChannelIds = new Set();
+            const channelRestoreConcurrency = 8;
+            const categoryRestoreConcurrency = 6;
+            const safeRetryCount = 5;
+            const safeRetryDelay = 35;
 
             // 1) مطابقة/إنشاء الكاتقريات
             const categoriesToCreate = [];
@@ -1466,8 +1470,8 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                                 type: ChannelType.GuildCategory,
                                 position: catData.position
                             }),
-                            2,
-                            20,
+                            safeRetryCount,
+                            safeRetryDelay,
                             `Create category ${catData.name}`
                         );
                         usedChannelIds.add(created.id);
@@ -1475,7 +1479,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                         channelMap.set(catData.id, created.id);
                         stats.categoriesCreated++;
                     } catch (err) {}
-                }, 30);
+                }, categoryRestoreConcurrency);
             }
 
             // 2) مطابقة/إنشاء قنوات داخل الكاتقريات
@@ -1510,8 +1514,8 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                     stats.channelsMatched++;
                     await retryOperation(
                         () => matched.edit({ parent: targetParentId, position: chData.position }),
-                        2,
-                        15,
+                        safeRetryCount,
+                        safeRetryDelay,
                         `Edit channel ${chData.name}`
                     ).catch(() => {});
                     return;
@@ -1543,12 +1547,12 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                     if (chData.bitrate) opts.bitrate = chData.bitrate;
                     if (chData.userLimit) opts.userLimit = chData.userLimit;
 
-                    const newCh = await retryOperation(() => guild.channels.create(opts), 3, 0, `Create channel ${chData.name}`);
+                    const newCh = await retryOperation(() => guild.channels.create(opts), safeRetryCount, safeRetryDelay, `Create channel ${chData.name}`);
                     usedChannelIds.add(newCh.id);
                     channelMap.set(chData.id, newCh.id);
                     stats.channelsCreated++;
                 } catch (err) {}
-            }, 24);
+            }, channelRestoreConcurrency);
 
             // 3) مطابقة/إنشاء القنوات خارج الكاتقريات
             if (shouldRestoreChannels) await executeParallel(backupStandaloneChannels, async (chData) => {
@@ -1563,7 +1567,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                     usedChannelIds.add(matched.id);
                     channelMap.set(chData.id, matched.id);
                     stats.channelsMatched++;
-                    await retryOperation(() => matched.edit({ position: chData.position }), 3, 0, `Edit channel ${chData.name}`).catch(() => {});
+                    await retryOperation(() => matched.edit({ position: chData.position }), safeRetryCount, safeRetryDelay, `Edit channel ${chData.name}`).catch(() => {});
                     return;
                 }
 
@@ -1579,29 +1583,37 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                     if (chData.bitrate) opts.bitrate = chData.bitrate;
                     if (chData.userLimit) opts.userLimit = chData.userLimit;
 
-                    const newCh = await retryOperation(() => guild.channels.create(opts), 3, 0, `Create channel ${chData.name}`);
+                    const newCh = await retryOperation(() => guild.channels.create(opts), safeRetryCount, safeRetryDelay, `Create channel ${chData.name}`);
                     usedChannelIds.add(newCh.id);
                     channelMap.set(chData.id, newCh.id);
                     stats.channelsCreated++;
                 } catch (err) {}
-            }, 24);
+            }, channelRestoreConcurrency);
 
             // 4) حذف القنوات/الكاتقريات الزائدة فقط (الفروقات)
-            if (shouldRestoreChannels) await executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type !== ChannelType.GuildCategory), async (ch) => {
+            const expectedChannelTargets = allChannelsInCategories.length + backupStandaloneChannels.length;
+            const mappedChannels = Array.from(channelMap.values()).filter(Boolean).length;
+            const hasHealthyChannelMapping = !shouldRestoreChannels || mappedChannels >= Math.floor(expectedChannelTargets * 0.8);
+
+            if (shouldRestoreChannels && hasHealthyChannelMapping) await executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type !== ChannelType.GuildCategory), async (ch) => {
                 if (usedChannelIds.has(ch.id)) return;
                 try {
                     await ch.delete('Smart diff restore - extra channel').catch(() => {});
                     stats.channelsDeleted++;
                 } catch (err) {}
-            }, 24);
+            }, 6);
 
-            if (shouldRestoreCategories) await executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type === ChannelType.GuildCategory), async (ch) => {
+            if (shouldRestoreCategories && hasHealthyChannelMapping) await executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type === ChannelType.GuildCategory), async (ch) => {
                 if (usedChannelIds.has(ch.id)) return;
                 try {
                     await ch.delete('Smart diff restore - extra category').catch(() => {});
                     stats.categoriesDeleted++;
                 } catch (err) {}
-            }, 24);
+            }, 4);
+
+            if ((shouldRestoreChannels || shouldRestoreCategories) && !hasHealthyChannelMapping) {
+                stats.errors.push('تم تخطي حذف الزوائد مؤقتًا لحماية البنية لأن المطابقة/الإنشاء لم تكتمل بشكل كافٍ.');
+            }
 
             // 5) ترتيب نهائي
             const positions = [];
