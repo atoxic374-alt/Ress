@@ -2024,13 +2024,36 @@ async function handleProtectSetup(message, client) {
     const state = { backupFile: null, types: [] };
     const collector = sent.createMessageComponentCollector({ filter: i => i.user.id === message.author.id, time: 90000 });
 
+    const getTypeLabel = (value) => ({
+        channelsCategories: 'رومات وكاتقوري',
+        rolesPermissions: 'رولات وبرمشنات',
+        kickBan: 'طرد وباند',
+        serverSettings: 'اعدادات السيرفر'
+    }[value] || value);
+
     collector.on('collect', async (interaction) => {
         if (!interaction.isStringSelectMenu()) return;
         if (interaction.customId.includes('_backup_')) state.backupFile = interaction.values[0];
         if (interaction.customId.includes('_types_')) state.types = interaction.values;
 
+        const selectedBackupName = backups.find(b => b.fileName === state.backupFile)?.name || state.backupFile || 'غير محدد';
+        const selectedTypes = state.types.length ? state.types.map(getTypeLabel).join('، ') : 'غير محدد';
+
         if (!state.backupFile || !state.types.length) {
-            await interaction.reply({ ephemeral: true, content: '✅ تم الحفظ.. أكمل الباقي' }).catch(() => {});
+            await interaction.update({
+                embeds: [colorManager.createEmbed().setTitle('Protect Setup').setDescription(
+                    `اختر النسخة ثم نوع الحماية
+
+` +
+                    `• النسخة المختارة: **${selectedBackupName}**
+` +
+                    `• الأنواع المختارة: **${selectedTypes}**
+
+` +
+                    `✅ تم حفظ اختيارك الحالي، أكمل باقي الاختيارات.`
+                )],
+                components: [new ActionRowBuilder().addComponents(backupMenu), new ActionRowBuilder().addComponents(typeMenu)]
+            }).catch(() => {});
             return;
         }
 
@@ -2057,8 +2080,8 @@ async function handleProtectSetup(message, client) {
 
         await interaction.update({
             embeds: [colorManager.createEmbed().setDescription(`✅ تم تفعيل الحماية
-النسخة: ${state.backupFile}
-الأنواع: ${state.types.join(', ')}`)],
+النسخة: ${selectedBackupName}
+الأنواع: ${selectedTypes}`)],
             components: []
         }).catch(() => {});
 
