@@ -344,7 +344,16 @@ async function handleInteraction(interaction, context) {
         const newNoPerm = interaction.fields.getTextInputValue('newNoPermMessage')?.trim();
         const newHasPerm = interaction.fields.getTextInputValue('newHasPermMessage')?.trim();
 
-        if (newKeywordRaw) existing.keyword = newKeywordRaw;
+        if (newKeywordRaw) {
+            const hasCollision = guildData.words.some(w =>
+                w !== existing && normalizeWord(w.keyword) === newKeywordRaw
+            );
+            if (hasCollision) {
+                await interaction.reply({ content: '❌ **الكلمة الجديدة مستخدمة مسبقًا، اختر كلمة مختلفة.**', flags: MessageFlags.Ephemeral });
+                return true;
+            }
+            existing.keyword = newKeywordRaw;
+        }
 
         if (newTargetRoleRaw) {
             const role = findClosestRole(interaction.guild, newTargetRoleRaw);
@@ -449,12 +458,22 @@ async function handleMessage(message, context) {
     }
 
     if (targetMember.roles.cache.has(entry.targetRoleId)) {
-        await targetMember.roles.remove(entry.targetRoleId).catch(() => {});
+        const removeResult = await targetMember.roles.remove(entry.targetRoleId).then(() => true).catch(() => false);
+        if (!removeResult) {
+            await message.reply('❌ **فشل إزالة الرول من الهدف (تحقق من صلاحيات البوت وترتيب الرولات).**').catch(() => {});
+            await message.react('❌').catch(() => {});
+            return true;
+        }
         await message.react('☑️').catch(() => {});
         return true;
     }
 
-    await targetMember.roles.add(entry.targetRoleId).catch(() => {});
+    const addResult = await targetMember.roles.add(entry.targetRoleId).then(() => true).catch(() => false);
+    if (!addResult) {
+        await message.reply('❌ **فشل إضافة الرول للهدف (تحقق من صلاحيات البوت وترتيب الرولات).**').catch(() => {});
+        await message.react('❌').catch(() => {});
+        return true;
+    }
 
     if (entry.hasPermMessage) {
         await message.reply(entry.hasPermMessage).catch(() => {});
