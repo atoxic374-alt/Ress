@@ -157,21 +157,21 @@ function buildWordPreview(entry, guild) {
         .setTitle('**تم حفظ إعداد كلمة**')
         .setThumbnail(guild.iconURL({ size: 256 }) || null)
         .setDescription([
-            `**الكلمة:** ${entry.keyword}`,
+            `**الكلمة :** ${entry.keyword}`,
             '',
-            `**الرول المربوط:** <@&${entry.targetRoleId}>`,
+            `**الرول المربوط :** <@&${entry.targetRoleId}>`,
             '',
-            `**رسالة بدون صلاحية:** ${entry.noPermMessage || 'غير محددة'}`,
+            `**رسالة بدون صلاحية :** ${entry.noPermMessage || 'غير محددة'}`,
             '',
-            `**رسالة مع صلاحية:** ${entry.hasPermMessage || 'غير محددة'}`,
+            `**رسالة مع صلاحية :** ${entry.hasPermMessage || 'غير محددة'}`,
             '',
-            `**الرولات المسموح لها:** ${allowedText}`
+            `**الرولات المسموح لها :** ${allowedText}`
         ].join('\n'));
 }
 
 async function promptAllowedRolesByMessage(interaction) {
     await interaction.editReply({
-        content: '✅ المدخلات صحيحة.\nأرسل الآن رسالة في نفس الشات تحتوي الرولات المسموح لها (منشن/ID/اسم) أو اكتب `0` لكل **adminRoles**.',
+        content: '✅ **المدخلات صحيحة.**\n**أرسل الآن رسالة في نفس الشات تحتوي الرولات المسموح لها ( منشن / ID / اسم ) أو اكتب `0` لكل adminRoles.**',
         components: []
     });
 
@@ -197,13 +197,13 @@ async function promptAllowedRolesByMessage(interaction) {
 
 async function execute(message, _args, { BOT_OWNERS }) {
     if (!isBotOwner(message.author.id, BOT_OWNERS)) {
-        return message.reply('❌ أمر word مخصص فقط لأونر البوت.');
+        return message.reply('❌ **أمر word مخصص فقط لأونر البوت.**');
     }
 
     const embed = colorManager.createEmbed()
         .setTitle('**نظام word**')
         .setThumbnail(message.guild.iconURL({ size: 256 }) || null)
-        .setDescription('**اختر العملية المطلوبة:**\n\n**• إنشاء**\n**• إزالة**\n**• تعديل**');
+        .setDescription('**اختر العملية المطلوبة :**\n\n**• إنشاء**\n**• إزالة**\n**• تعديل**');
 
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('word_create').setLabel('إنشاء').setStyle(ButtonStyle.Success),
@@ -219,7 +219,7 @@ async function handleInteraction(interaction, context) {
     if (!interaction.guild) return false;
 
     if (!isBotOwner(interaction.user.id, BOT_OWNERS)) {
-        await interaction.reply({ content: '❌ أمر word مخصص فقط لأونر البوت.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: '❌ **أمر word مخصص فقط لأونر البوت.**', flags: MessageFlags.Ephemeral });
         return true;
     }
 
@@ -242,7 +242,7 @@ async function handleInteraction(interaction, context) {
         const hasPermMessage = interaction.fields.getTextInputValue('hasPermMessage')?.trim() || '';
 
         if (!keyword) {
-            await interaction.reply({ content: '❌ الكلمة مطلوبة.', flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: '❌ **الكلمة مطلوبة.**', flags: MessageFlags.Ephemeral });
             return true;
         }
 
@@ -253,7 +253,7 @@ async function handleInteraction(interaction, context) {
             return true;
         }
 
-        await interaction.reply({ content: '⏳ جاري انتظار رسالة الرولات المسموح لها...', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: '⏳ **جاري انتظار رسالة الرولات المسموح لها...**', flags: MessageFlags.Ephemeral });
         const allowed = await promptAllowedRolesByMessage(interaction);
         if (!allowed.ok) {
             await interaction.editReply({ content: allowed.error, components: [] });
@@ -293,7 +293,7 @@ async function handleInteraction(interaction, context) {
         const guildData = all[interaction.guild.id];
 
         if (!guildData || !Array.isArray(guildData.words)) {
-            await interaction.reply({ content: '❌ لا يوجد كلمات محفوظة.', flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: '❌ **لا يوجد كلمات محفوظة.**', flags: MessageFlags.Ephemeral });
             return true;
         }
 
@@ -301,12 +301,12 @@ async function handleInteraction(interaction, context) {
         guildData.words = guildData.words.filter(w => normalizeWord(w.keyword) !== keyword);
 
         if (before === guildData.words.length) {
-            await interaction.reply({ content: '❌ الكلمة غير موجودة.', flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: '❌ **الكلمة غير موجودة.**', flags: MessageFlags.Ephemeral });
             return true;
         }
 
         saveWordData(all);
-        await interaction.reply({ content: '✅ تم حذف الكلمة بنجاح.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: '✅ **تم حذف الكلمة بنجاح.**', flags: MessageFlags.Ephemeral });
         return true;
     }
 
@@ -329,13 +329,13 @@ async function handleInteraction(interaction, context) {
         const guildData = all[interaction.guild.id];
 
         if (!guildData || !Array.isArray(guildData.words)) {
-            await interaction.reply({ content: '❌ لا يوجد كلمات محفوظة.', flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: '❌ **لا يوجد كلمات محفوظة.**', flags: MessageFlags.Ephemeral });
             return true;
         }
 
         const existing = guildData.words.find(w => normalizeWord(w.keyword) === currentKeyword);
         if (!existing) {
-            await interaction.reply({ content: '❌ الكلمة الحالية غير موجودة.', flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: '❌ **الكلمة الحالية غير موجودة.**', flags: MessageFlags.Ephemeral });
             return true;
         }
 
@@ -361,7 +361,7 @@ async function handleInteraction(interaction, context) {
 
         existing.updatedAt = Date.now();
 
-        await interaction.reply({ content: '⏳ أرسل الآن رسالة بالرولات المسموح لها (منشن/ID/اسم) أو `0` لكل adminRoles.\nأو اكتب `-` للإبقاء عليها كما هي.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: '⏳ **أرسل الآن رسالة بالرولات المسموح لها ( منشن / ID / اسم ) أو `0` لكل adminRoles.**\n**أو اكتب `-` للإبقاء عليها كما هي.**', flags: MessageFlags.Ephemeral });
 
         const collected = await interaction.channel.awaitMessages({
             filter: m => m.author.id === interaction.user.id,
@@ -371,7 +371,7 @@ async function handleInteraction(interaction, context) {
         }).catch(() => null);
 
         if (!collected || !collected.first()) {
-            await interaction.editReply({ content: '⚠️ انتهى الوقت، تم حفظ التعديلات الأخرى بدون تغيير رولات الاستخدام.' });
+            await interaction.editReply({ content: '⚠️ **انتهى الوقت، تم حفظ التعديلات الأخرى بدون تغيير رولات الاستخدام.**' });
             saveWordData(all);
             return true;
         }
@@ -383,7 +383,7 @@ async function handleInteraction(interaction, context) {
         if (content !== '-') {
             const parsedAllowed = parseRolesFromMessage(interaction.guild, content);
             if (!parsedAllowed.ok) {
-                await interaction.editReply({ content: `${parsedAllowed.error}\nتم حفظ بقية التعديلات بدون تحديث رولات الاستخدام.` });
+                await interaction.editReply({ content: `${parsedAllowed.error}\n**تم حفظ بقية التعديلات بدون تحديث رولات الاستخدام.**` });
                 saveWordData(all);
                 return true;
             }
