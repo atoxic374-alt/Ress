@@ -311,16 +311,15 @@ async function createBackup(guild, creatorId, backupName, progressMessage = null
             await updateProgress(progressMessage, 'Backup Loading', ++currentStep, totalSteps, 'Json Copied...');
         }
 
-        for (const fileName of FILES_TO_BACKUP) {
+        await executeParallel(FILES_TO_BACKUP, async (fileName) => {
             const filePath = path.join(dataDir, fileName);
-            if (fs.existsSync(filePath)) {
-                const fileData = readJSON(filePath, null);
-                if (fileData !== null) {
-                    backupData.data.files[fileName] = fileData;
-                    backupData.stats.files++;
-                }
+            if (!fs.existsSync(filePath)) return;
+            const fileData = readJSON(filePath, null);
+            if (fileData !== null) {
+                backupData.data.files[fileName] = fileData;
+                backupData.stats.files++;
             }
-        }
+        }, 20);
 
         // 2. نسخ الرولات
         if (progressMessage) {
@@ -718,12 +717,24 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
             if (!options.includes('serverinfo') || !backupData.data.serverInfo) return;
             try {
                 const updates = {};
-                if (backupData.data.serverInfo.name) updates.name = backupData.data.serverInfo.name;
-                if (backupData.data.serverInfo.description) updates.description = backupData.data.serverInfo.description;
-                await guild.edit(updates);
+                if (backupData.data.serverInfo.name && backupData.data.serverInfo.name !== guild.name) {
+                    updates.name = backupData.data.serverInfo.name;
+                }
+                if (backupData.data.serverInfo.description !== undefined && backupData.data.serverInfo.description !== guild.description) {
+                    updates.description = backupData.data.serverInfo.description;
+                }
+
+                if (Object.keys(updates).length > 0) {
+                    await guild.edit(updates);
+                }
+
                 await Promise.allSettled([
-                    backupData.data.serverInfo.icon ? guild.setIcon(backupData.data.serverInfo.icon) : Promise.resolve(),
-                    backupData.data.serverInfo.banner ? guild.setBanner(backupData.data.serverInfo.banner) : Promise.resolve()
+                    (backupData.data.serverInfo.icon && backupData.data.serverInfo.icon !== guild.iconURL({ size: 1024 }))
+                        ? guild.setIcon(backupData.data.serverInfo.icon)
+                        : Promise.resolve(),
+                    (backupData.data.serverInfo.banner && backupData.data.serverInfo.banner !== guild.bannerURL({ size: 1024 }))
+                        ? guild.setBanner(backupData.data.serverInfo.banner)
+                        : Promise.resolve()
                 ]);
             } catch (err) {}
         };
@@ -1043,20 +1054,40 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
             await rolesTaskPromise;
             await guild.members.fetch();
 
+            const managedRoleIds = new Set(
+                Array.from(guild.roles.cache.values()).filter(r => r.managed).map(r => r.id)
+            );
+            const restorableRoleIds = new Set(roleMap.values());
+
             const memberResults = await executeParallel(backupData.data.members, async (memberData) => {
                 try {
                     const member = guild.members.cache.get(memberData.userId);
                     if (!member) return { success: false };
 
-                    const rolesToAdd = memberData.roles
-                        .map(oldRoleId => roleMap.get(oldRoleId))
-                        .filter(newRoleId => newRoleId && guild.roles.cache.has(newRoleId));
+                    const targetRoles = new Set(
+                        memberData.roles
+                            .map(oldRoleId => roleMap.get(oldRoleId) || oldRoleId)
+                            .filter(roleId => roleId && guild.roles.cache.has(roleId) && !managedRoleIds.has(roleId) && roleId !== guild.id)
+                    );
 
-                    if (rolesToAdd.length > 0) {
-                        await retryOperation(async () => member.roles.add(rolesToAdd), 2, 20, `Add roles to ${memberData.username}`);
-                    }
+                    const currentRestorableRoles = member.roles.cache
+                        .filter(role => role.id !== guild.id && !role.managed)
+                        .map(role => role.id)
+                        .filter(roleId => restorableRoleIds.has(roleId));
 
-                    if (memberData.nickname) {
+                    const rolesToAdd = Array.from(targetRoles).filter(roleId => !member.roles.cache.has(roleId));
+                    const rolesToRemove = currentRestorableRoles.filter(roleId => !targetRoles.has(roleId));
+
+                    await Promise.allSettled([
+                        rolesToAdd.length > 0
+                            ? retryOperation(async () => member.roles.add(rolesToAdd), 2, 20, `Add roles to ${memberData.username}`)
+                            : Promise.resolve(),
+                        rolesToRemove.length > 0
+                            ? retryOperation(async () => member.roles.remove(rolesToRemove), 2, 20, `Remove roles from ${memberData.username}`)
+                            : Promise.resolve()
+                    ]);
+
+                    if (memberData.nickname !== undefined && memberData.nickname !== member.nickname) {
                         await member.setNickname(memberData.nickname).catch(() => {});
                     }
 
