@@ -746,12 +746,20 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
             const backupRoles = [...(backupData.data.roles || [])];
             const existingRoles = Array.from(guild.roles.cache.values())
                 .filter(r => !r.managed && r.id !== guild.id);
+            const rolesByName = new Map();
+
+            for (const role of existingRoles) {
+                const key = role.name || '';
+                if (!rolesByName.has(key)) rolesByName.set(key, []);
+                rolesByName.get(key).push(role);
+            }
 
             const usedExistingIds = new Set();
 
             // مطابقة حسب الاسم أولاً
             for (const roleData of backupRoles) {
-                const matched = existingRoles.find(r => r.name === roleData.name && !usedExistingIds.has(r.id));
+                const queue = rolesByName.get(roleData.name || '') || [];
+                const matched = queue.find(r => !usedExistingIds.has(r.id));
 
                 if (matched) {
                     usedExistingIds.add(matched.id);
@@ -759,7 +767,12 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                     stats.rolesMatched++;
                 } else {
                     try {
-                        const newRole = await guild.roles.create({ name: roleData.name });
+                        const newRole = await retryOperation(
+                            () => guild.roles.create({ name: roleData.name }),
+                            2,
+                            25,
+                            `Create role ${roleData.name}`
+                        );
                         roleMap.set(roleData.id, newRole.id);
                         stats.rolesCreated++;
                     } catch (err) {}
@@ -784,16 +797,26 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                 if (!role) return;
 
                 await Promise.allSettled([
-                    role.edit({
-                        color: roleData.color,
-                        permissions: BigInt(roleData.permissions),
-                        hoist: roleData.hoist,
-                        mentionable: roleData.mentionable,
-                        name: roleData.name
-                    }).catch(() => {}),
-                    role.setPosition(roleData.position).catch(() => {})
+                    retryOperation(
+                        () => role.edit({
+                            color: roleData.color,
+                            permissions: BigInt(roleData.permissions),
+                            hoist: roleData.hoist,
+                            mentionable: roleData.mentionable,
+                            name: roleData.name
+                        }),
+                        2,
+                        20,
+                        `Edit role ${roleData.name}`
+                    ).catch(() => {}),
+                    retryOperation(
+                        () => role.setPosition(roleData.position),
+                        2,
+                        20,
+                        `Set role position ${roleData.name}`
+                    ).catch(() => {})
                 ]);
-            }, 20);
+            }, 30);
         };
 
         // دالة لتحويل الصلاحيات
@@ -817,19 +840,40 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
             const existingAllChannels = Array.from(guild.channels.cache.values());
             const existingCategories = existingAllChannels.filter(ch => ch.type === ChannelType.GuildCategory);
             const existingNonCategories = existingAllChannels.filter(ch => ch.type !== ChannelType.GuildCategory);
+            const categoriesByName = new Map();
+            const channelsBySignature = new Map();
+
+            for (const cat of existingCategories) {
+                const key = cat.name || '';
+                if (!categoriesByName.has(key)) categoriesByName.set(key, []);
+                categoriesByName.get(key).push(cat);
+            }
+
+            const getChannelKey = (parentId, name, type) => `${parentId || 'root'}::${name || ''}::${type}`;
+            for (const ch of existingNonCategories) {
+                const key = getChannelKey(ch.parentId, ch.name, ch.type);
+                if (!channelsBySignature.has(key)) channelsBySignature.set(key, []);
+                channelsBySignature.get(key).push(ch);
+            }
 
             const usedChannelIds = new Set();
 
             // 1) مطابقة/إنشاء الكاتقريات
             for (const catData of backupCategories) {
-                let matched = existingCategories.find(c => c.name === catData.name && !usedChannelIds.has(c.id));
+                const queue = categoriesByName.get(catData.name || '') || [];
+                let matched = queue.find(c => !usedChannelIds.has(c.id));
                 if (!matched) {
                     try {
-                        matched = await guild.channels.create({
-                            name: catData.name,
-                            type: ChannelType.GuildCategory,
-                            position: catData.position
-                        });
+                        matched = await retryOperation(
+                            () => guild.channels.create({
+                                name: catData.name,
+                                type: ChannelType.GuildCategory,
+                                position: catData.position
+                            }),
+                            2,
+                            25,
+                            `Create category ${catData.name}`
+                        );
                         stats.categoriesCreated++;
                     } catch (err) {
                         matched = null;
@@ -856,18 +900,20 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
             }
 
             await executeParallel(allChannelsInCategories, async (chData) => {
-                const matched = existingNonCategories.find(ch =>
-                    ch.parentId === chData.parentId &&
-                    ch.name === chData.name &&
-                    ch.type === chData.type &&
-                    !usedChannelIds.has(ch.id)
-                );
+                const key = getChannelKey(chData.parentId, chData.name, chData.type);
+                const queue = channelsBySignature.get(key) || [];
+                const matched = queue.find(ch => !usedChannelIds.has(ch.id));
 
                 if (matched) {
                     usedChannelIds.add(matched.id);
                     channelMap.set(chData.id, matched.id);
                     stats.channelsMatched++;
-                    await matched.edit({ parent: chData.parentId, position: chData.position }).catch(() => {});
+                    await retryOperation(
+                        () => matched.edit({ parent: chData.parentId, position: chData.position }),
+                        2,
+                        15,
+                        `Edit channel ${chData.name}`
+                    ).catch(() => {});
                     return;
                 }
 
@@ -884,27 +930,24 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                     if (chData.bitrate) opts.bitrate = chData.bitrate;
                     if (chData.userLimit) opts.userLimit = chData.userLimit;
 
-                    const newCh = await guild.channels.create(opts);
+                    const newCh = await retryOperation(() => guild.channels.create(opts), 2, 25, `Create channel ${chData.name}`);
                     usedChannelIds.add(newCh.id);
                     channelMap.set(chData.id, newCh.id);
                     stats.channelsCreated++;
                 } catch (err) {}
-            }, 10);
+            }, 14);
 
             // 3) مطابقة/إنشاء القنوات خارج الكاتقريات
             await executeParallel(backupStandaloneChannels, async (chData) => {
-                const matched = existingNonCategories.find(ch =>
-                    !ch.parentId &&
-                    ch.name === chData.name &&
-                    ch.type === chData.type &&
-                    !usedChannelIds.has(ch.id)
-                );
+                const key = getChannelKey(null, chData.name, chData.type);
+                const queue = channelsBySignature.get(key) || [];
+                const matched = queue.find(ch => !usedChannelIds.has(ch.id));
 
                 if (matched) {
                     usedChannelIds.add(matched.id);
                     channelMap.set(chData.id, matched.id);
                     stats.channelsMatched++;
-                    await matched.edit({ position: chData.position }).catch(() => {});
+                    await retryOperation(() => matched.edit({ position: chData.position }), 2, 15, `Edit channel ${chData.name}`).catch(() => {});
                     return;
                 }
 
@@ -920,12 +963,12 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                     if (chData.bitrate) opts.bitrate = chData.bitrate;
                     if (chData.userLimit) opts.userLimit = chData.userLimit;
 
-                    const newCh = await guild.channels.create(opts);
+                    const newCh = await retryOperation(() => guild.channels.create(opts), 2, 25, `Create channel ${chData.name}`);
                     usedChannelIds.add(newCh.id);
                     channelMap.set(chData.id, newCh.id);
                     stats.channelsCreated++;
                 } catch (err) {}
-            }, 10);
+            }, 14);
 
             // 4) حذف القنوات/الكاتقريات الزائدة فقط (الفروقات)
             await executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type !== ChannelType.GuildCategory), async (ch) => {
@@ -934,7 +977,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                     await ch.delete('Smart diff restore - extra channel').catch(() => {});
                     stats.channelsDeleted++;
                 } catch (err) {}
-            }, 10);
+            }, 14);
 
             await executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type === ChannelType.GuildCategory), async (ch) => {
                 if (usedChannelIds.has(ch.id)) return;
@@ -942,7 +985,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                     await ch.delete('Smart diff restore - extra category').catch(() => {});
                     stats.categoriesDeleted++;
                 } catch (err) {}
-            }, 10);
+            }, 14);
 
             // 5) ترتيب نهائي
             const positions = [];
@@ -988,7 +1031,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                 const channel = guild.channels.cache.get(newChId);
                 if (!channel) return;
                 await channel.permissionOverwrites.set(convertPermissions(chData.permissionOverwrites)).catch(() => {});
-            }, 10);
+            }, 14);
         };
 
         const restoreEmojisTask = async () => {
@@ -996,18 +1039,31 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
 
             const existingEmojis = Array.from(guild.emojis.cache.values());
             const usedEmojiIds = new Set();
+            const emojisByName = new Map();
+
+            for (const emoji of existingEmojis) {
+                const key = emoji.name || '';
+                if (!emojisByName.has(key)) emojisByName.set(key, []);
+                emojisByName.get(key).push(emoji);
+            }
 
             await executeParallel(backupData.data.emojis, async (emojiData) => {
-                const matched = existingEmojis.find(e => e.name === emojiData.name && !usedEmojiIds.has(e.id));
+                const queue = emojisByName.get(emojiData.name || '') || [];
+                const matched = queue.find(e => !usedEmojiIds.has(e.id));
                 if (matched) {
                     usedEmojiIds.add(matched.id);
                     return;
                 }
                 try {
-                    const newEmoji = await guild.emojis.create({ attachment: emojiData.url, name: emojiData.name });
+                    const newEmoji = await retryOperation(
+                        () => guild.emojis.create({ attachment: emojiData.url, name: emojiData.name }),
+                        2,
+                        25,
+                        `Create emoji ${emojiData.name}`
+                    );
                     if (newEmoji) usedEmojiIds.add(newEmoji.id);
                 } catch (err) {}
-            }, 5);
+            }, 8);
 
             await executeParallel(existingEmojis, async (emoji) => {
                 if (usedEmojiIds.has(emoji.id)) return;
