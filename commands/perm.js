@@ -261,30 +261,42 @@ function getOrderedMentionIds(content) {
 
 function getOrderedChannelRefs(content) {
   const refs = [];
-  const tokenRegex = /<#(\d{17,19})>|https?:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/channels\/(\d{17,19})\/(\d{17,19})|\b(\d{17,19})\b/g;
+  const roleMentionRanges = [];
+  const tokenRegex = /<#(\d{17,19})>|<@&(\d{17,19})>|https?:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/channels\/(\d{17,19})\/(\d{17,19})|\b(\d{17,19})\b/g;
   let match;
 
   while ((match = tokenRegex.exec(content)) !== null) {
+    if (match[2]) {
+      roleMentionRanges.push({ start: match.index, end: match.index + match[0].length });
+      continue;
+    }
+
     if (match[1]) {
       refs.push({ id: match[1], index: match.index });
       continue;
     }
 
-    if (match[3]) {
-      refs.push({ id: match[3], index: match.index });
+    if (match[4]) {
+      refs.push({ id: match[4], index: match.index });
       continue;
     }
 
-    if (match[4]) {
+    if (match[5]) {
       const before = content[match.index - 1] || '';
-      const after = content[match.index + match[4].length] || '';
+      const after = content[match.index + match[5].length] || '';
       if (before === '<' || before === '@' || before === '&' || before === '#' || before === '!') {
         continue;
       }
       if (after === '>') {
         continue;
       }
-      refs.push({ id: match[4], index: match.index });
+
+      const insideRoleMention = roleMentionRanges.some(range => match.index >= range.start && match.index < range.end);
+      if (insideRoleMention) {
+        continue;
+      }
+
+      refs.push({ id: match[5], index: match.index });
     }
   }
 
@@ -508,37 +520,35 @@ async function execute(message, args, { client, BOT_OWNERS }) {
     if (isChannelRangeSubcommand) {
       const { orderedRoles } = getOrderedMentionIds(message.content || '');
       const orderedChannelRefs = getOrderedChannelRefs(message.content || '');
-      const resolvedRangeChannels = [];
-      const invalidRangeRefs = [];
+      const firstChannelRef = orderedChannelRefs[0];
+      const lastChannelRef = orderedChannelRefs[1];
 
-      for (const channelId of orderedChannelRefs) {
-        const channel = await message.guild.channels.fetch(channelId).catch(() => null);
-        if (!channel) {
-          invalidRangeRefs.push(channelId);
-          continue;
-        }
-        if (!isSupportedChannelType(channel)) {
-          invalidRangeRefs.push(channelId);
-          continue;
-        }
-        if (!resolvedRangeChannels.some(ch => ch.id === channel.id)) {
-          resolvedRangeChannels.push(channel);
-        }
-      }
-
-      const firstChannel = resolvedRangeChannels[0];
-      const lastChannel = resolvedRangeChannels[1];
-
-      if (!firstChannel) {
+      if (!firstChannelRef) {
         const embed = colorManager.createEmbed()
           .setDescription('❌ **حدد أول روم منشن/رابط/ID أولاً باستخدام `perm chn`.**');
         await message.channel.send({ embeds: [embed] });
         return;
       }
 
-      if (!lastChannel) {
+      if (!lastChannelRef) {
         const embed = colorManager.createEmbed()
           .setDescription('❌ **بعدها حدد آخر روم (منشن/رابط/ID) لتحديد نهاية النطاق.**');
+        await message.channel.send({ embeds: [embed] });
+        return;
+      }
+
+      const firstChannel = await message.guild.channels.fetch(firstChannelRef).catch(() => null);
+      if (!firstChannel || !isSupportedChannelType(firstChannel)) {
+        const embed = colorManager.createEmbed()
+          .setDescription('❌ **مرجع أول روم غير صالح. لازم يكون روم شات/فويس صحيح.**');
+        await message.channel.send({ embeds: [embed] });
+        return;
+      }
+
+      const lastChannel = await message.guild.channels.fetch(lastChannelRef).catch(() => null);
+      if (!lastChannel || !isSupportedChannelType(lastChannel)) {
+        const embed = colorManager.createEmbed()
+          .setDescription('❌ **مرجع آخر روم غير صالح. لازم يكون روم شات/فويس صحيح.**');
         await message.channel.send({ embeds: [embed] });
         return;
       }
@@ -570,9 +580,6 @@ async function execute(message, args, { client, BOT_OWNERS }) {
       usersToEdit = [];
       mentionedChannels = channelsInRange;
 
-      for (const invalidId of invalidRangeRefs) {
-        if (!unknownIds.includes(invalidId)) unknownIds.push(invalidId);
-      }
 
       if (!rolesToEdit.length) {
         const embed = colorManager.createEmbed()
