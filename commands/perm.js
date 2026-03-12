@@ -319,9 +319,9 @@ function buildLimitedFieldValue(items, formatter, {
   return lines.join('\n');
 }
 
-function getChannelsBetween(guild, firstChannelId, lastChannelId) {
+function getChannelsBetween(guild, firstChannelId, lastChannelId, { channelType = null } = {}) {
   const orderedChannels = guild.channels.cache
-    .filter(ch => isSupportedChannelType(ch))
+    .filter(ch => isSupportedChannelType(ch) && (!channelType || ch.type === channelType))
     .map(ch => ch)
     .sort((a, b) => {
       if (a.rawPosition !== b.rawPosition) return a.rawPosition - b.rawPosition;
@@ -531,6 +531,13 @@ async function execute(message, args, { client, BOT_OWNERS }) {
         return;
       }
 
+      if (firstChannel.type !== lastChannel.type) {
+        const embed = colorManager.createEmbed()
+          .setDescription('❌ **لازم يكون أول وآخر روم من نفس النوع (كلهم شات أو كلهم فويس) عشان يتحدد النطاق بدقة.**');
+        await message.channel.send({ embeds: [embed] });
+        return;
+      }
+
       if (!orderedRoles.length) {
         const embed = colorManager.createEmbed()
           .setDescription('❌ **بعد تحديد الرومين، لازم منشن الرولات المطلوبة.**');
@@ -538,7 +545,7 @@ async function execute(message, args, { client, BOT_OWNERS }) {
         return;
       }
 
-      const channelsInRange = getChannelsBetween(message.guild, firstChannel.id, lastChannel.id);
+      const channelsInRange = getChannelsBetween(message.guild, firstChannel.id, lastChannel.id, { channelType: firstChannel.type });
       if (!channelsInRange.length) {
         const embed = colorManager.createEmbed()
           .setDescription('❌ **تعذر تحديد الرومات بين الرومين المحددين.**');
