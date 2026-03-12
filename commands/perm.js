@@ -238,6 +238,48 @@ function getSessionStore(client) {
   return client.permSessions;
 }
 
+function isSupportedChannelType(channel) {
+  return channel && (channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildVoice);
+}
+
+function getOrderedMentionIds(content) {
+  const orderedChannels = [];
+  const orderedRoles = [];
+  const mentionRegex = /<#(\d{17,19})>|<@&(\d{17,19})>/g;
+  let match;
+
+  while ((match = mentionRegex.exec(content)) !== null) {
+    if (match[1]) {
+      orderedChannels.push(match[1]);
+    } else if (match[2]) {
+      orderedRoles.push(match[2]);
+    }
+  }
+
+  return { orderedChannels, orderedRoles };
+}
+
+function getChannelsBetween(guild, firstChannelId, lastChannelId) {
+  const orderedChannels = guild.channels.cache
+    .filter(ch => isSupportedChannelType(ch))
+    .map(ch => ch)
+    .sort((a, b) => {
+      if (a.rawPosition !== b.rawPosition) return a.rawPosition - b.rawPosition;
+      return a.id.localeCompare(b.id);
+    });
+
+  const firstIndex = orderedChannels.findIndex(ch => ch.id === firstChannelId);
+  const lastIndex = orderedChannels.findIndex(ch => ch.id === lastChannelId);
+
+  if (firstIndex === -1 || lastIndex === -1) {
+    return [];
+  }
+
+  const start = Math.min(firstIndex, lastIndex);
+  const end = Math.max(firstIndex, lastIndex);
+  return orderedChannels.slice(start, end + 1);
+}
+
 /**
  * Initialize the interaction router for the perm command.
  * Registers only the command handler; global interaction routing is
@@ -341,6 +383,8 @@ async function execute(message, args, { client, BOT_OWNERS }) {
       return;
     }
 
+    const isChannelRangeSubcommand = (args?.[0] || '').toLowerCase() === 'chn';
+
     // Extract mentioned roles and channels from the message.  In addition to
     // mentions, parse bare IDs and determine whether they represent roles
     // or channels.  Unknown IDs will be reported back to the user.
@@ -388,6 +432,63 @@ async function execute(message, args, { client, BOT_OWNERS }) {
     rolesToEdit = Array.from(new Map(rolesToEdit.map(role => [role.id, role])).values());
     usersToEdit = Array.from(new Map(usersToEdit.map(member => [member.id, member])).values());
     mentionedChannels = Array.from(new Map(mentionedChannels.map(channel => [channel.id, channel])).values());
+
+    if (isChannelRangeSubcommand) {
+      const { orderedChannels, orderedRoles } = getOrderedMentionIds(message.content || '');
+      const firstChannelId = orderedChannels[0];
+      const lastChannelId = orderedChannels[1];
+
+      if (!firstChannelId) {
+        const embed = colorManager.createEmbed()
+          .setDescription('❌ **منشن أول روم أولاً باستخدام `perm chn`.**');
+        await message.channel.send({ embeds: [embed] });
+        return;
+      }
+
+      if (!lastChannelId) {
+        const embed = colorManager.createEmbed()
+          .setDescription('❌ **بعدها منشن آخر روم لتحديد نهاية النطاق.**');
+        await message.channel.send({ embeds: [embed] });
+        return;
+      }
+
+      if (!orderedRoles.length) {
+        const embed = colorManager.createEmbed()
+          .setDescription('❌ **بعد تحديد الرومين، لازم منشن الرولات المطلوبة.**');
+        await message.channel.send({ embeds: [embed] });
+        return;
+      }
+
+      const firstChannel = await message.guild.channels.fetch(firstChannelId).catch(() => null);
+      const lastChannel = await message.guild.channels.fetch(lastChannelId).catch(() => null);
+
+      if (!isSupportedChannelType(firstChannel) || !isSupportedChannelType(lastChannel)) {
+        const embed = colorManager.createEmbed()
+          .setDescription('❌ **لازم منشن رومين نص/صوت صحيحين لبداية ونهاية النطاق.**');
+        await message.channel.send({ embeds: [embed] });
+        return;
+      }
+
+      const channelsInRange = getChannelsBetween(message.guild, firstChannel.id, lastChannel.id);
+      if (!channelsInRange.length) {
+        const embed = colorManager.createEmbed()
+          .setDescription('❌ **تعذر تحديد الرومات بين الرومين المحددين.**');
+        await message.channel.send({ embeds: [embed] });
+        return;
+      }
+
+      const rangeRoleIds = orderedRoles.filter(id => message.guild.roles.cache.has(id));
+      rolesToEdit = Array.from(new Map(rangeRoleIds.map(id => [id, message.guild.roles.cache.get(id)])).values()).filter(Boolean);
+      usersToEdit = [];
+      mentionedChannels = channelsInRange;
+
+      if (!rolesToEdit.length) {
+        const embed = colorManager.createEmbed()
+          .setDescription('❌ **منشن الرولات بشكل صحيح بعد الرومين.**');
+        await message.channel.send({ embeds: [embed] });
+        return;
+      }
+    }
     // If no roles were provided via mention or ID, abort with message
     if ((!rolesToEdit || rolesToEdit.length === 0) && (!usersToEdit || usersToEdit.length === 0)) {
       const embed = colorManager.createEmbed()
@@ -421,6 +522,15 @@ async function execute(message, args, { client, BOT_OWNERS }) {
         .setTitle('معالجة الـ IDs')
         .setDescription('**تم تحديد العناصر التالية من الرسالة:**')
         .addFields(summaryFields);
+
+      if (isChannelRangeSubcommand && mentionedChannels.length > 0) {
+        summaryEmbed.addFields({
+          name: 'نطاق الرومات',
+          value: `من <#${mentionedChannels[0].id}> إلى <#${mentionedChannels[mentionedChannels.length - 1].id}>\nالعدد: **${mentionedChannels.length}**`,
+          inline: false
+        });
+      }
+
       await message.channel.send({ embeds: [summaryEmbed] });
     }
 
