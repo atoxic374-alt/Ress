@@ -27,6 +27,14 @@ function readJson(filePath, defaultValue = {}) {
 // عداد للعمليات المتعلقة بالملفات لتجنب race conditions
 const fileLocks = new Map();
 
+function safeStableStringify(value) {
+    try {
+        return JSON.stringify(value, Object.keys(value || {}).sort());
+    } catch (_) {
+        return JSON.stringify(value);
+    }
+}
+
 function writeJson(filePath, data) {
     try {
         const dir = path.dirname(filePath);
@@ -100,6 +108,7 @@ class DownManager {
         this.botRestorationTracking = new Set();
         this.expiredDownProcessing = new Set();
         this.memberLifecycleLocks = new Map();
+        this.recentLogDispatches = new Map();
     }
 
     getMemberKey(member) {
@@ -537,10 +546,24 @@ class DownManager {
     // Logging
     logAction(type, data) {
         const logs = readJson(downLogsPath, []);
+        const now = Date.now();
+
+        // منع تكرار نفس السجل مرتين عند وصول نفس التفاعل بسرعة (ازدواجية المعالجات)
+        const lastLog = logs[logs.length - 1];
+        const isImmediateDuplicate =
+            lastLog &&
+            lastLog.type === type &&
+            now - (lastLog.timestamp || 0) <= 2500 &&
+            safeStableStringify(lastLog.data) === safeStableStringify(data);
+
+        if (isImmediateDuplicate) {
+            return;
+        }
+
         logs.push({
             type,
             data,
-            timestamp: Date.now()
+            timestamp: now
         });
 
         // Keep only last 1000 logs
@@ -554,6 +577,17 @@ class DownManager {
     async sendLogMessage(guild, client, type, data) {
         const settings = this.getSettings();
         if (!settings.logChannel) return;
+
+        const now = Date.now();
+        const dispatchKey = `${guild?.id || 'unknown'}:${settings.logChannel}:${type}:${safeStableStringify(data)}`;
+        const previousDispatch = this.recentLogDispatches.get(dispatchKey);
+
+        if (previousDispatch && now - previousDispatch <= 2500) {
+            return;
+        }
+
+        this.recentLogDispatches.set(dispatchKey, now);
+        setTimeout(() => this.recentLogDispatches.delete(dispatchKey), 10000);
 
         try {
             const channel = await guild.channels.fetch(settings.logChannel);
