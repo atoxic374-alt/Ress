@@ -346,11 +346,23 @@ function buildLimitedFieldValue(items, formatter, {
   return lines.join('\n');
 }
 
+function compareChannelsByPosition(a, b) {
+  if (a && typeof a.comparePositionTo === 'function') {
+    return a.comparePositionTo(b);
+  }
+
+  const aPos = Number.isFinite(a?.rawPosition) ? a.rawPosition : (Number.isFinite(a?.position) ? a.position : 0);
+  const bPos = Number.isFinite(b?.rawPosition) ? b.rawPosition : (Number.isFinite(b?.position) ? b.position : 0);
+
+  if (aPos !== bPos) return aPos - bPos;
+  return String(a?.id || '').localeCompare(String(b?.id || ''));
+}
+
 function getChannelsBetween(guild, firstChannelId, lastChannelId, { channelType = null } = {}) {
   const orderedChannels = guild.channels.cache
     .filter(ch => isSupportedChannelType(ch) && (!channelType || ch.type === channelType))
     .map(ch => ch)
-    .sort((a, b) => a.comparePositionTo(b));
+    .sort(compareChannelsByPosition);
 
   const firstIndex = orderedChannels.findIndex(ch => ch.id === firstChannelId);
   const lastIndex = orderedChannels.findIndex(ch => ch.id === lastChannelId);
