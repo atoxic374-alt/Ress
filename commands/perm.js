@@ -347,14 +347,15 @@ function buildLimitedFieldValue(items, formatter, {
 }
 
 function compareChannelsByPosition(a, b) {
-  if (a && typeof a.comparePositionTo === 'function') {
-    return a.comparePositionTo(b);
-  }
-
   const aPos = Number.isFinite(a?.rawPosition) ? a.rawPosition : (Number.isFinite(a?.position) ? a.position : 0);
   const bPos = Number.isFinite(b?.rawPosition) ? b.rawPosition : (Number.isFinite(b?.position) ? b.position : 0);
 
   if (aPos !== bPos) return aPos - bPos;
+
+  const aParentPos = Number.isFinite(a?.parent?.rawPosition) ? a.parent.rawPosition : (Number.isFinite(a?.parent?.position) ? a.parent.position : 0);
+  const bParentPos = Number.isFinite(b?.parent?.rawPosition) ? b.parent.rawPosition : (Number.isFinite(b?.parent?.position) ? b.parent.position : 0);
+  if (aParentPos !== bParentPos) return aParentPos - bParentPos;
+
   return String(a?.id || '').localeCompare(String(b?.id || ''));
 }
 
