@@ -287,6 +287,38 @@ function getOrderedChannelRefs(content) {
   return ordered;
 }
 
+function buildLimitedFieldValue(items, formatter, {
+  maxLength = 900,
+  maxItems = 40,
+  emptyValue = '—'
+} = {}) {
+  if (!Array.isArray(items) || items.length === 0) return emptyValue;
+
+  const lines = [];
+  let consumed = 0;
+  const effectiveMaxItems = Math.max(1, maxItems);
+
+  for (const item of items) {
+    if (consumed >= effectiveMaxItems) break;
+    const line = formatter(item);
+    const next = lines.length ? `${lines.join('\n')}\n${line}` : line;
+    if (next.length > maxLength) break;
+    lines.push(line);
+    consumed++;
+  }
+
+  if (!lines.length) {
+    return `• ${items.length} عنصر`;
+  }
+
+  const remaining = items.length - consumed;
+  if (remaining > 0) {
+    lines.push(`... و ${remaining} أكثر`);
+  }
+
+  return lines.join('\n');
+}
+
 function getChannelsBetween(guild, firstChannelId, lastChannelId) {
   const orderedChannels = guild.channels.cache
     .filter(ch => isSupportedChannelType(ch))
@@ -541,21 +573,21 @@ async function execute(message, args, { client, BOT_OWNERS }) {
     const summaryFields = [];
     // Roles field
     if (rolesToEdit.length > 0) {
-      const rolesStr = rolesToEdit.map(r => `<@&${r.id}>`).join('\n');
+      const rolesStr = buildLimitedFieldValue(rolesToEdit, role => `<@&${role.id}>`, { maxLength: 900, maxItems: 35 });
       summaryFields.push({ name: 'الرولات', value: rolesStr, inline: false });
     }
     if (usersToEdit.length > 0) {
-      const usersStr = usersToEdit.map(u => `<@${u.id}>`).join('\n');
+      const usersStr = buildLimitedFieldValue(usersToEdit, user => `<@${user.id}>`, { maxLength: 900, maxItems: 35 });
       summaryFields.push({ name: 'الأعضاء', value: usersStr, inline: false });
     }
     // Channels field
     if (mentionedChannels.length > 0) {
-      const channelsStr = mentionedChannels.map(c => `<#${c.id}>`).join('\n');
+      const channelsStr = buildLimitedFieldValue(mentionedChannels, channel => `<#${channel.id}>`, { maxLength: 900, maxItems: 35 });
       summaryFields.push({ name: 'الرومات', value: channelsStr, inline: false });
     }
     // Unknown IDs field
     if (unknownIds.length > 0) {
-      const idsStr = unknownIds.join(', ');
+      const idsStr = buildLimitedFieldValue(unknownIds, id => `\`${id}\``, { maxLength: 900, maxItems: 40 });
       summaryFields.push({ name: 'IDs غير معروفة', value: idsStr, inline: false });
     }
     if (summaryFields.length > 0) {
