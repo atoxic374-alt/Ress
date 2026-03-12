@@ -261,16 +261,30 @@ function getOrderedMentionIds(content) {
 
 function getOrderedChannelRefs(content) {
   const refs = [];
-  const patterns = [
-    /<#(\d{17,19})>/g,
-    /https?:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/channels\/\d+\/(\d{17,19})/g,
-    /\b(\d{17,19})\b/g
-  ];
+  const tokenRegex = /<#(\d{17,19})>|https?:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/channels\/(\d{17,19})\/(\d{17,19})|\b(\d{17,19})\b/g;
+  let match;
 
-  for (const pattern of patterns) {
-    let match;
-    while ((match = pattern.exec(content)) !== null) {
+  while ((match = tokenRegex.exec(content)) !== null) {
+    if (match[1]) {
       refs.push({ id: match[1], index: match.index });
+      continue;
+    }
+
+    if (match[3]) {
+      refs.push({ id: match[3], index: match.index });
+      continue;
+    }
+
+    if (match[4]) {
+      const before = content[match.index - 1] || '';
+      const after = content[match.index + match[4].length] || '';
+      if (before === '<' || before === '@' || before === '&' || before === '#' || before === '!') {
+        continue;
+      }
+      if (after === '>') {
+        continue;
+      }
+      refs.push({ id: match[4], index: match.index });
     }
   }
 
@@ -286,6 +300,7 @@ function getOrderedChannelRefs(content) {
 
   return ordered;
 }
+
 
 function buildLimitedFieldValue(items, formatter, {
   maxLength = 900,
@@ -323,10 +338,7 @@ function getChannelsBetween(guild, firstChannelId, lastChannelId, { channelType 
   const orderedChannels = guild.channels.cache
     .filter(ch => isSupportedChannelType(ch) && (!channelType || ch.type === channelType))
     .map(ch => ch)
-    .sort((a, b) => {
-      if (a.rawPosition !== b.rawPosition) return a.rawPosition - b.rawPosition;
-      return a.id.localeCompare(b.id);
-    });
+    .sort((a, b) => a.comparePositionTo(b));
 
   const firstIndex = orderedChannels.findIndex(ch => ch.id === firstChannelId);
   const lastIndex = orderedChannels.findIndex(ch => ch.id === lastChannelId);
@@ -548,7 +560,7 @@ async function execute(message, args, { client, BOT_OWNERS }) {
       const channelsInRange = getChannelsBetween(message.guild, firstChannel.id, lastChannel.id, { channelType: firstChannel.type });
       if (!channelsInRange.length) {
         const embed = colorManager.createEmbed()
-          .setDescription('❌ **تعذر تحديد الرومات بين الرومين المحددين.**');
+          .setDescription('❌ **تعذر تحديد نطاق دقيق بين الرومين. تأكد أنهما بنفس القسم/الترتيب المطلوب.**');
         await message.channel.send({ embeds: [embed] });
         return;
       }
