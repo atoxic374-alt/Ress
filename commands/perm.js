@@ -347,14 +347,17 @@ function buildLimitedFieldValue(items, formatter, {
 }
 
 function compareChannelsByPosition(a, b) {
-  const aPos = Number.isFinite(a?.rawPosition) ? a.rawPosition : (Number.isFinite(a?.position) ? a.position : 0);
-  const bPos = Number.isFinite(b?.rawPosition) ? b.rawPosition : (Number.isFinite(b?.position) ? b.position : 0);
+  const aParentPos = Number.isFinite(a?.parent?.rawPosition) ? a.parent.rawPosition : -1;
+  const bParentPos = Number.isFinite(b?.parent?.rawPosition) ? b.parent.rawPosition : -1;
+  if (aParentPos !== bParentPos) return aParentPos - bParentPos;
 
+  const aPos = Number.isFinite(a?.position) ? a.position : (Number.isFinite(a?.rawPosition) ? a.rawPosition : 0);
+  const bPos = Number.isFinite(b?.position) ? b.position : (Number.isFinite(b?.rawPosition) ? b.rawPosition : 0);
   if (aPos !== bPos) return aPos - bPos;
 
-  const aParentPos = Number.isFinite(a?.parent?.rawPosition) ? a.parent.rawPosition : (Number.isFinite(a?.parent?.position) ? a.parent.position : 0);
-  const bParentPos = Number.isFinite(b?.parent?.rawPosition) ? b.parent.rawPosition : (Number.isFinite(b?.parent?.position) ? b.parent.position : 0);
-  if (aParentPos !== bParentPos) return aParentPos - bParentPos;
+  const aRaw = Number.isFinite(a?.rawPosition) ? a.rawPosition : 0;
+  const bRaw = Number.isFinite(b?.rawPosition) ? b.rawPosition : 0;
+  if (aRaw !== bRaw) return aRaw - bRaw;
 
   return String(a?.id || '').localeCompare(String(b?.id || ''));
 }
@@ -372,9 +375,11 @@ function getChannelsBetween(guild, firstChannelId, lastChannelId, { channelType 
     return [];
   }
 
-  const start = Math.min(firstIndex, lastIndex);
-  const end = Math.max(firstIndex, lastIndex);
-  return orderedChannels.slice(start, end + 1);
+  if (firstIndex > lastIndex) {
+    return null;
+  }
+
+  return orderedChannels.slice(firstIndex, lastIndex + 1);
 }
 
 /**
@@ -581,6 +586,13 @@ async function execute(message, args, { client, BOT_OWNERS }) {
       }
 
       const channelsInRange = getChannelsBetween(message.guild, firstChannel.id, lastChannel.id, { channelType: firstChannel.type });
+      if (channelsInRange === null) {
+        const embed = colorManager.createEmbed()
+          .setDescription('❌ **ترتيب الرومين غير صحيح: لازم يكون آخر روم أسفل أول روم في القائمة.**');
+        await message.channel.send({ embeds: [embed] });
+        return;
+      }
+
       if (!channelsInRange.length) {
         const embed = colorManager.createEmbed()
           .setDescription('❌ **تعذر تحديد نطاق دقيق بين الرومين. تأكد أنهما بنفس القسم/الترتيب المطلوب.**');
