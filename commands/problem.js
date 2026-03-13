@@ -154,6 +154,33 @@ function loadActiveProblemsFromDisk() {
           for (const [canonicalKey, problemValue] of normalizedProblems.entries()) {
             activeProblems.set(canonicalKey, problemValue);
           }
+
+          // Remove any legacy (guild-less) duplicates when we already have a
+          // guild-scoped record for the same pair. This avoids processing the
+          // same violation twice for a single guild.
+          const scopedPairs = new Set();
+          for (const value of activeProblems.values()) {
+            if (!value || !value.firstId || !value.secondId || !value.guildId) continue;
+            const pairKey = [value.firstId, value.secondId].sort().join('|');
+            scopedPairs.add(pairKey);
+          }
+
+          if (scopedPairs.size > 0) {
+            let removedAnyLegacyDuplicate = false;
+            for (const [mapKey, value] of activeProblems.entries()) {
+              if (!value || !value.firstId || !value.secondId) continue;
+              if (value.guildId) continue;
+              const pairKey = [value.firstId, value.secondId].sort().join('|');
+              if (scopedPairs.has(pairKey)) {
+                activeProblems.delete(mapKey);
+                removedAnyLegacyDuplicate = true;
+              }
+            }
+
+            if (removedAnyLegacyDuplicate) {
+              saveActiveProblemsToDisk();
+            }
+          }
         }
       } catch (err) {
         console.error('Failed to load activeProblems from disk:', err);
@@ -542,8 +569,11 @@ async function execute(message, args, context) {
     // flow rather than silently closing problems.
   }
 
-  // Register global listeners if not already done
-  registerProblemListeners(client);
+  // NOTE:
+  // This project already dispatches problem handlers from the global bot
+  // listeners in bot.js (messageCreate / voiceStateUpdate / guildMemberUpdate).
+  // Registering local listeners here would duplicate processing and lead to
+  // repeated DMs/logs and double-delete attempts.
 
   // Register interaction router handler for problem prefix.  Use a flag on the
   // client to ensure this is only done once per client instance.  We need
@@ -771,6 +801,15 @@ async function createProblems(interaction, session, context) {
   const timestamp = Date.now();
   const isMultiParty = session.firstParties.length > 1 || session.secondParties.length > 1;
   let createdProblemsCount = 0;
+  // Collect DM notices per user so each recipient gets one combined message
+  // even when the same creation action produces multiple pair problems.
+  const pendingDmNotices = new Map();
+  const queueDmNotice = (recipientId, otherId) => {
+    if (!pendingDmNotices.has(recipientId)) {
+      pendingDmNotices.set(recipientId, new Set());
+    }
+    pendingDmNotices.get(recipientId).add(otherId);
+  };
 
   // Iterate through each combination of selected first and second parties.
   for (const firstId of session.firstParties) {
@@ -811,37 +850,9 @@ async function createProblems(interaction, session, context) {
       // Persist new problem to disk
       saveActiveProblemsToDisk();
 
-      // Send DM notifications only for newly-created problems
-      try {
-        const firstUser = await client.users.fetch(firstId);
-        const description = [
-          '**تم تسجيل بروبلم**',
-          `**الطرف الآخر : <@${secondId}>**`,
-          `**السبب : ${session.reason}**`,
-          `**المسؤول : <@${session.moderatorId}>**`,
-          '**يرجى عدم التواصل مع الطرف الآخر حتى انتهاء المشكلة.**'
-        ].join('\n');
-        await firstUser.send({
-          embeds: [buildProblemEmbed('Problem Notice', description, firstUser.displayAvatarURL?.({ dynamic: true }))]
-        });
-      } catch (err) {
-        console.error('Failed to DM first party:', err);
-      }
-      try {
-        const secondUser = await client.users.fetch(secondId);
-        const description = [
-          '**تم تسجيل بروبلم**',
-          `**الطرف الآخر : <@${firstId}>**`,
-          `**السبب : ${session.reason}**`,
-          `**المسؤول : <@${session.moderatorId}>**`,
-          '**يرجى عدم التواصل مع الطرف الآخر حتى انتهاء المشكلة.**'
-        ].join('\n');
-        await secondUser.send({
-          embeds: [buildProblemEmbed('Problem Notice', description, secondUser.displayAvatarURL?.({ dynamic: true }))]
-        });
-      } catch (err) {
-        console.error('Failed to DM second party:', err);
-      }
+      // Queue DM notifications (sent as one combined DM per user after loop)
+      queueDmNotice(firstId, secondId);
+      queueDmNotice(secondId, firstId);
 
       // Post log to logs channel if defined (single pair mode)
       if (logsChannel && !isMultiParty) {
@@ -865,6 +876,30 @@ async function createProblems(interaction, session, context) {
           logsChannel.send({ files }).catch(() => {});
         }
       }
+    }
+  }
+
+  // Send one DM per affected user with all opposite parties in this action.
+  for (const [recipientId, otherPartyIdsSet] of pendingDmNotices.entries()) {
+    const otherPartyIds = Array.from(otherPartyIdsSet);
+    if (otherPartyIds.length === 0) continue;
+    try {
+      const recipientUser = await client.users.fetch(recipientId);
+      const otherPartiesText = otherPartyIds.map((id) => `<@${id}>`).join('\n');
+      const description = [
+        '**تم تسجيل بروبلم**',
+        otherPartyIds.length === 1
+          ? `**الطرف الآخر : ${otherPartiesText}**`
+          : `**الأطراف الأخرى :\n${otherPartiesText}**`,
+        `**السبب : ${session.reason}**`,
+        `**المسؤول : <@${session.moderatorId}>**`,
+        '**يرجى عدم التواصل مع الطرف الآخر حتى انتهاء المشكلة.**'
+      ].join('\n');
+      await recipientUser.send({
+        embeds: [buildProblemEmbed('Problem Notice', description, recipientUser.displayAvatarURL?.({ dynamic: true }))]
+      });
+    } catch (err) {
+      console.error('Failed to send combined problem DM:', err);
     }
   }
 
@@ -1022,7 +1057,11 @@ async function handleMessage(message, client) {
             await message.delete();
             deletedMessage = true;
           } catch (err) {
-            console.error('Failed to delete violating message:', err);
+            // Ignore races where another handler/process already deleted the
+            // same message.
+            if (!(err && (err.code === 10008 || err.status === 404))) {
+              console.error('Failed to delete violating message:', err);
+            }
           }
         }
         const desc = deletedMessage
