@@ -68,6 +68,80 @@ function saveConfig(config) {
     return saveAllConfigs(all);
 }
 
+function resolveButtonStyle(input, fallback = 'Secondary') {
+    if (!input) return ButtonStyle[fallback];
+    const key = String(input).trim().toLowerCase();
+    const map = {
+        primary: ButtonStyle.Primary,
+        secondary: ButtonStyle.Secondary,
+        success: ButtonStyle.Success,
+        danger: ButtonStyle.Danger
+    };
+    return map[key] || ButtonStyle[fallback];
+}
+
+async function askWizardQuestion(message, text, { optional = false, timeout = 180000 } = {}) {
+    await message.channel.send(text);
+    const collected = await message.channel.awaitMessages({
+        filter: m => m.author.id === message.author.id,
+        max: 1,
+        time: timeout,
+        errors: ['time']
+    });
+    const value = collected.first().content.trim();
+    if (!optional && !value) throw new Error('EMPTY_ANSWER');
+    return value;
+}
+
+
+async function collectOpenImages(message, configKey) {
+    const images = [];
+    await message.channel.send(`10) أرسل الصور/الروابط **واحدة واحدة**. عند الانتهاء اكتب \`done\` أو \`تم\`.\n- اكتب \`skip\` لتخطي الصور.\n- اكتب \`cancel\` للإلغاء.`);
+
+    while (true) {
+        const collected = await message.channel.awaitMessages({
+            filter: m => m.author.id === message.author.id,
+            max: 1,
+            time: 300000,
+            errors: ['time']
+        });
+
+        const msg = collected.first();
+        const text = (msg.content || '').trim();
+        const lower = text.toLowerCase();
+
+        if (lower === 'cancel') return { cancelled: true, images: [] };
+        if (lower === 'skip') return { cancelled: false, images: [] };
+        if (lower === 'done' || text === 'تم') {
+            return { cancelled: false, images };
+        }
+
+        const attachmentUrl = msg.attachments?.first()?.url || null;
+        const rawUrl = attachmentUrl || text;
+
+        if (!/^https?:\/\//i.test(rawUrl)) {
+            await message.channel.send('⚠️ صيغة غير صحيحة. أرسل صورة مرفوعة أو رابط مباشر يبدأ بـ http/https، أو اكتب `done`.');
+            continue;
+        }
+
+        const ext = rawUrl.split('.').pop().split(/[?#]/)[0] || 'png';
+        const filename = `${configKey}_open_${Date.now()}_${images.length}.${ext}`;
+        const localPath = await downloadImage(rawUrl, filename);
+
+        if (!localPath) {
+            await message.channel.send('⚠️ تعذر تحميل هذه الصورة، أرسل صورة أخرى أو اكتب `done`.');
+            continue;
+        }
+
+        images.push({
+            imageUrl: rawUrl,
+            localImagePath: filename
+        });
+
+        await message.channel.send(`✅ تم حفظ الصورة رقم ${images.length}.`);
+    }
+}
+
 module.exports = {
     name: 'map-setup',
     description: 'إعدادات خريطة السيرفر',
@@ -77,6 +151,71 @@ module.exports = {
             if (!isOwner) {
                 await message.react('❌').catch(() => {});
                 return;
+            }
+
+            if (args[0] && args[0].toLowerCase() === 'open') {
+                const targetForOpen = message.mentions.channels.first() || (args[1] && message.guild.channels.cache.get(args[1])) || null;
+                const openConfigKey = targetForOpen ? `channel_${targetForOpen.id}` : 'global';
+                const allConfigsForOpen = loadAllConfigs();
+                const baseConfig = allConfigsForOpen[openConfigKey] || { enabled: false, imageUrl: 'https://i.ibb.co/pP9GzD7/default-map.png', welcomeMessage: '', buttons: [] };
+
+                await message.channel.send('🧭 **إعداد map-setup open (سريع)**\nاكتب `cancel` في أي خطوة للإلغاء.');
+
+                const roleId = await askWizardQuestion(message, '1) أرسل **ID الرول** المطلوب لفك الرومات (إجباري):');
+                if (roleId.toLowerCase() === 'cancel') return await message.reply('❌ تم إلغاء الإعداد.');
+                if (!/^\d{17,19}$/.test(roleId)) {
+                    return await message.reply('❌ ID الرول غير صالح.');
+                }
+
+                const grantMessage = await askWizardQuestion(message, '2) رسالة الإعطاء (أو `default`):', { optional: true });
+                if (grantMessage.toLowerCase() === 'cancel') return await message.reply('❌ تم إلغاء الإعداد.');
+
+                const removeMessage = await askWizardQuestion(message, '3) رسالة الإزالة (أو `default`):', { optional: true });
+                if (removeMessage.toLowerCase() === 'cancel') return await message.reply('❌ تم إلغاء الإعداد.');
+
+                const openLabel = await askWizardQuestion(message, '4) اسم زر Open (أو `default`):', { optional: true });
+                if (openLabel.toLowerCase() === 'cancel') return await message.reply('❌ تم إلغاء الإعداد.');
+
+                const openStyleRaw = await askWizardQuestion(message, '5) لون زر Open: `primary` / `secondary` / `success` / `danger` (أو `default`):', { optional: true });
+                if (openStyleRaw.toLowerCase() === 'cancel') return await message.reply('❌ تم إلغاء الإعداد.');
+
+                const openEmoji = await askWizardQuestion(message, '6) إيموجي زر Open (اختياري - اكتب `skip` للتخطي):', { optional: true });
+                if (openEmoji.toLowerCase() === 'cancel') return await message.reply('❌ تم إلغاء الإعداد.');
+
+                const counterModeRaw = await askWizardQuestion(message, `7) طريقة العداد (اكتب 1 أو 2):\n1) الطريقة الحالية (أرقام كإيموجي داخل الزر)\n2) أرقام عادية داخل نص الزر بدون إيموجي`, { optional: true });
+                if (counterModeRaw.toLowerCase() === 'cancel') return await message.reply('❌ تم إلغاء الإعداد.');
+                const counterMode = (counterModeRaw === '2' || counterModeRaw.toLowerCase() === 'number') ? 'label_number' : 'emoji_digits';
+
+                const counterStyleRaw = await askWizardQuestion(message, '8) لون زر العداد: `primary` / `secondary` / `success` / `danger` (أو `default`):', { optional: true });
+                if (counterStyleRaw.toLowerCase() === 'cancel') return await message.reply('❌ تم إلغاء الإعداد.');
+
+                const imagesResult = await collectOpenImages(message, openConfigKey);
+                if (imagesResult.cancelled) return await message.reply('❌ تم إلغاء الإعداد.');
+
+                baseConfig.open = {
+                    enabled: true,
+                    roleId,
+                    grantMessage: (!grantMessage || grantMessage.toLowerCase() === 'default') ? '✅ تم اعطائك رول الاوبن الان يمكنك رؤيه الرومات.' : grantMessage,
+                    removeMessage: (!removeMessage || removeMessage.toLowerCase() === 'default') ? '✅ تم ازالة رول الاوبن ولم يعد بإمكانك رؤية الرومات.' : removeMessage,
+                    images: imagesResult.images,
+                    imageUrls: imagesResult.images.map(img => img.imageUrl),
+                    openButton: {
+                        label: (!openLabel || openLabel.toLowerCase() === 'default') ? 'Open' : openLabel,
+                        style: resolveButtonStyle(openStyleRaw, 'Success'),
+                        emoji: (openEmoji && openEmoji.toLowerCase() !== 'skip') ? openEmoji : null
+                    },
+                    counterButton: {
+                        mode: counterMode,
+                        label: 'المتفعّلين',
+                        style: resolveButtonStyle(counterStyleRaw, 'Secondary'),
+                        emoji: null
+                    }
+                };
+
+                allConfigsForOpen[openConfigKey] = baseConfig;
+                saveAllConfigs(allConfigsForOpen);
+
+                return await message.reply(`✅ تم حفظ إعدادات **map open** بنجاح ${targetForOpen ? `لهذه القناة: ${targetForOpen}` : 'عالمياً'}.\nاستخدم: \`map open\``);
             }
 
             // تحديد القناة المستهدفة (من المنشن أو الأيدي أو القناة الحالية)

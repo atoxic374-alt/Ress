@@ -3636,6 +3636,97 @@ if ((interaction.isButton() || interaction.isModalSubmit()) && customId.startsWi
         }
     }
 
+    // 3. Handle map_open_ interactions
+    if (interaction.isButton() && interaction.customId.startsWith('map_open_')) {
+        const configPath = DATA_FILES.serverMapConfig;
+        if (!fs.existsSync(configPath)) {
+            ensureDataFiles();
+            return interaction.reply({ content: '⚠️ حدث خطأ في الإعدادات، يرجى المحاولة مرة أخرى.', ephemeral: true });
+        }
+
+        const allConfigs = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+        if (interaction.customId.startsWith('map_open_count_')) {
+            return interaction.reply({ content: 'ℹ️ هذا زر عداد فقط وغير قابل للتفعيل.', ephemeral: true });
+        }
+
+        if (interaction.customId.startsWith('map_open_toggle_')) {
+            const rawKey = interaction.customId.replace('map_open_toggle_', '');
+            const configKey = rawKey === 'global' ? 'global' : (rawKey.startsWith('channel_') ? rawKey : `channel_${rawKey}`);
+            const config = allConfigs[configKey] || allConfigs.global;
+
+            if (!config?.open?.enabled) {
+                return interaction.reply({ content: '⚠️ نظام open غير مفعل حالياً.', ephemeral: true });
+            }
+
+            if (!interaction.guild) {
+                return interaction.reply({ content: '❌ هذا الزر يعمل داخل السيرفر فقط.', ephemeral: true });
+            }
+
+            const roleId = config.open.roleId;
+            if (!roleId || !/^\d{17,19}$/.test(roleId)) {
+                return interaction.reply({ content: '❌ إعدادات الرول غير صحيحة، يرجى ضبط map-setup open.', ephemeral: true });
+            }
+
+            let member = interaction.guild.members.cache.get(interaction.user.id);
+            if (!member) member = await interaction.guild.members.fetch(interaction.user.id);
+
+            let role = interaction.guild.roles.cache.get(roleId);
+            if (!role) role = await interaction.guild.roles.fetch(roleId).catch(() => null);
+
+            if (!role) {
+                return interaction.reply({ content: '❌ لم يتم العثور على الرول المحدد.', ephemeral: true });
+            }
+
+            const activeUsers = Array.isArray(config.open.activeUsers) ? config.open.activeUsers : [];
+            const hadRole = member.roles.cache.has(role.id);
+
+            if (hadRole) {
+                await member.roles.remove(role, 'إزالة رول Open عبر map open');
+                config.open.activeUsers = activeUsers.filter(id => id !== member.id);
+            } else {
+                await member.roles.add(role, 'إعطاء رول Open عبر map open');
+                if (!activeUsers.includes(member.id)) activeUsers.push(member.id);
+                config.open.activeUsers = activeUsers;
+            }
+
+            allConfigs[configKey] = config;
+            fs.writeFileSync(configPath, JSON.stringify(allConfigs, null, 2));
+
+            const counterMode = config.open?.counterButton?.mode === 'label_number' ? 'label_number' : 'emoji_digits';
+            const digitMap = { '0': '0️⃣', '1': '1️⃣', '2': '2️⃣', '3': '3️⃣', '4': '4️⃣', '5': '5️⃣', '6': '6️⃣', '7': '7️⃣', '8': '8️⃣', '9': '9️⃣' };
+            const countEmoji = String(config.open.activeUsers.length).split('').map(d => digitMap[d] || d).join('');
+            const formattedCount = config.open.activeUsers.length.toLocaleString('en-US');
+
+            try {
+                const row = interaction.message.components?.[0];
+                if (row) {
+                    const updatedRow = ActionRowBuilder.from(row);
+                    const counterIndex = updatedRow.components.findIndex(c => c.data?.custom_id?.startsWith('map_open_count_'));
+                    if (counterIndex !== -1) {
+                        let updatedCounter = ButtonBuilder.from(updatedRow.components[counterIndex]).setDisabled(true);
+                        if (counterMode === 'label_number') {
+                            updatedCounter = updatedCounter
+                                .setLabel(`المتفعّلين: ${formattedCount}`);
+                        } else {
+                            updatedCounter = updatedCounter
+                                .setLabel('المتفعّلين')
+                                .setEmoji(countEmoji);
+                        }
+                        updatedRow.components[counterIndex] = updatedCounter;
+                        await interaction.message.edit({ components: [updatedRow] });
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to update open counter button:', e.message);
+            }
+
+            const grantMsg = config.open.grantMessage || '✅ تم اعطائك رول الاوبن الان يمكنك رؤيه الرومات.';
+            const removeMsg = config.open.removeMessage || '✅ تم ازالة رول الاوبن ولم يعد بإمكانك رؤية الرومات.';
+            return interaction.reply({ content: hadRole ? removeMsg : grantMsg, ephemeral: true });
+        }
+    }
+
     // 3. Handle map_btn_ interactions
     if (interaction.isButton() && interaction.customId.startsWith('map_btn_')) {
         const configPath = DATA_FILES.serverMapConfig;
