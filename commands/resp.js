@@ -87,55 +87,96 @@ function getImageNameFromUrl(url) {
     }
 }
 
+function normalizeImageUrl(url) {
+    if (!url || typeof url !== 'string') return url;
+
+    try {
+        const parsed = new URL(url);
+        const host = parsed.hostname.toLowerCase();
+        const isDiscordCdn = host.includes('discordapp.com') || host.includes('discordapp.net') || host.includes('discord.com');
+
+        if (isDiscordCdn) {
+            parsed.search = '';
+            parsed.hash = '';
+
+            if (host === 'media.discordapp.net' && parsed.pathname.includes('/attachments/')) {
+                parsed.hostname = 'cdn.discordapp.com';
+            }
+        }
+
+        return parsed.toString();
+    } catch (_) {
+        return url;
+    }
+}
+
 async function createImageAttachment(url) {
     try {
-        const parsedUrl = new URL(url);
+        const normalizedUrl = normalizeImageUrl(url);
+        const candidateUrls = [...new Set([normalizedUrl, url].filter(Boolean))];
+        let response = null;
+        let parsedUrl = null;
+        let lastError = null;
 
-        if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-            console.log('⚠️ تم رفض رابط صورة ببروتوكول غير مسموح');
-            return null;
-        }
+        for (const candidateUrl of candidateUrls) {
+            try {
+                parsedUrl = new URL(candidateUrl);
 
-        const hostname = parsedUrl.hostname.toLowerCase();
-        if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
-            console.log('⚠️ تم رفض رابط صورة يشير إلى localhost');
-            return null;
-        }
+                if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+                    console.log('⚠️ تم رفض رابط صورة ببروتوكول غير مسموح');
+                    return null;
+                }
 
-        const isPrivateIp = (ip) => {
-            if (!net.isIP(ip)) return false;
-            if (ip === '127.0.0.1' || ip === '::1') return true;
-            if (ip.startsWith('10.') || ip.startsWith('192.168.')) return true;
-            if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(ip)) return true;
-            if (ip.startsWith('169.254.')) return true;
-            if (ip.startsWith('fc') || ip.startsWith('fd') || ip.startsWith('fe80')) return true;
-            return false;
-        };
+                const hostname = parsedUrl.hostname.toLowerCase();
+                if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
+                    console.log('⚠️ تم رفض رابط صورة يشير إلى localhost');
+                    return null;
+                }
 
-        if (net.isIP(hostname) && isPrivateIp(hostname)) {
-            console.log('⚠️ تم رفض رابط صورة يشير إلى عنوان IP داخلي');
-            return null;
-        }
+                const isPrivateIp = (ip) => {
+                    if (!net.isIP(ip)) return false;
+                    if (ip === '127.0.0.1' || ip === '::1') return true;
+                    if (ip.startsWith('10.') || ip.startsWith('192.168.')) return true;
+                    if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(ip)) return true;
+                    if (ip.startsWith('169.254.')) return true;
+                    if (ip.startsWith('fc') || ip.startsWith('fd') || ip.startsWith('fe80')) return true;
+                    return false;
+                };
 
-        if (!net.isIP(hostname)) {
-            const records = await dns.lookup(hostname, { all: true }).catch(() => []);
-            if (!records.length || records.some((record) => isPrivateIp(record.address))) {
-                console.log('⚠️ تم رفض رابط صورة بسبب DNS غير موثوق/داخلي');
-                return null;
+                if (net.isIP(hostname) && isPrivateIp(hostname)) {
+                    console.log('⚠️ تم رفض رابط صورة يشير إلى عنوان IP داخلي');
+                    return null;
+                }
+
+                if (!net.isIP(hostname)) {
+                    const records = await dns.lookup(hostname, { all: true }).catch(() => []);
+                    if (!records.length || records.some((record) => isPrivateIp(record.address))) {
+                        console.log('⚠️ تم رفض رابط صورة بسبب DNS غير موثوق/داخلي');
+                        return null;
+                    }
+                }
+
+                response = await axios.get(candidateUrl, {
+                    responseType: 'arraybuffer',
+                    timeout: 10000,
+                    maxRedirects: 5,
+                    maxContentLength: 8 * 1024 * 1024,
+                    maxBodyLength: 8 * 1024 * 1024,
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (compatible; RespBot/1.0)',
+                        'Accept': 'image/*,*/*'
+                    }
+                });
+
+                if (response) break;
+            } catch (error) {
+                lastError = error;
             }
         }
 
-        const response = await axios.get(url, {
-            responseType: 'arraybuffer',
-            timeout: 10000,
-            maxRedirects: 5,
-            maxContentLength: 8 * 1024 * 1024,
-            maxBodyLength: 8 * 1024 * 1024,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (compatible; RespBot/1.0)',
-                'Accept': 'image/*,*/*'
-            }
-        });
+        if (!response || !parsedUrl) {
+            throw lastError || new Error('Unable to fetch image');
+        }
 
         const contentType = String(response.headers?.['content-type'] || '').toLowerCase();
         if (!contentType.startsWith('image/')) {
@@ -143,7 +184,7 @@ async function createImageAttachment(url) {
             return null;
         }
 
-        const fileName = getImageNameFromUrl(url);
+        const fileName = getImageNameFromUrl(parsedUrl.toString());
         return new AttachmentBuilder(Buffer.from(response.data), { name: fileName });
     } catch (error) {
         console.log(`⚠️ تعذر تحميل صورة المسؤوليات كرابط مرفق: ${error.message}`);
@@ -1261,7 +1302,8 @@ if (subCommand === 'delete' && args[1] === 'all') {
         .awaitReactions({ filter, max: 1, time: 15000 })
         .catch(() => null);
 
-    if (!collected || collected.first().emoji.name === '❌') {
+    const firstReaction = collected?.first?.();
+    if (!firstReaction || firstReaction.emoji?.name === '❌') {
         return confirmMsg.edit('**❌ تم إلغاء العملية.**');
     }
 
@@ -1271,7 +1313,9 @@ if (subCommand === 'delete' && args[1] === 'all') {
 
     for (const respName in currentResps) {
         const resp = currentResps[respName];
-        const roleId = resp.roleId;
+        const roleIds = Array.isArray(resp.roles)
+            ? resp.roles.filter(Boolean)
+            : (resp.roleId ? [resp.roleId] : []);
 
         // توحيد المصدر
         const members = resp.responsibles || resp.members || [];
@@ -1281,9 +1325,13 @@ if (subCommand === 'delete' && args[1] === 'all') {
                 totalRemoved++;
                 try {
                     const member = await message.guild.members.fetch(userId).catch(() => null);
-                    if (member && roleId && member.roles.cache.has(roleId)) {
-                        await member.roles.remove(roleId).catch(() => {});
-                        totalRolesRemoved++;
+                    if (member && roleIds.length > 0) {
+                        for (const roleId of roleIds) {
+                            if (member.roles.cache.has(roleId)) {
+                                await member.roles.remove(roleId).catch(() => {});
+                                totalRolesRemoved++;
+                            }
+                        }
                     }
                 } catch (_) {}
             }
@@ -1332,13 +1380,14 @@ if (subCommand === 'delete' && args[1] === 'all') {
     // جلب الصورة (مرفوعة أو رابط)
     const attachment = message.attachments.first();
     const imageUrl = attachment?.url || args[2];
+    const safeImageUrl = normalizeImageUrl(imageUrl);
 
     if (!imageUrl) {
         return message.reply({ content: '❌ يرجى إرفاق صورة أو وضع رابطها.' });
     }
 
     // فحص بسيط للصورة
-    const isImage = attachment || isValidImageUrl(imageUrl);
+    const isImage = attachment || isValidImageUrl(safeImageUrl);
 
     if (!isImage) {
         return message.reply({ content: '❌ الرابط المقدم لا يبدو أنه صورة صالحة.' });
@@ -1355,13 +1404,13 @@ if (subCommand === 'delete' && args[1] === 'all') {
         }
 
         for (const name of respKeys) {
-            currentResps[name].image = imageUrl;
+            currentResps[name].image = safeImageUrl;
         }
 
         // حفظ الصورة العامة لنظام التقديم التفاعلي
         const configData = readJSONFile(DATA_FILES.respConfig, { guilds: {} });
         if (!configData.guilds[guildId]) configData.guilds[guildId] = {};
-        configData.guilds[guildId].globalImageUrl = imageUrl;
+        configData.guilds[guildId].globalImageUrl = safeImageUrl;
         writeJSONFile(DATA_FILES.respConfig, configData);
 
         writeJSONFile(DATA_FILES.responsibilities, currentResps);
@@ -1378,7 +1427,7 @@ if (subCommand === 'delete' && args[1] === 'all') {
                 }
                 await dbManager.run(
                     'UPDATE responsibilities SET image = ?',
-                    [imageUrl]
+                    [safeImageUrl]
                 );
             }
         } catch (_) {}
@@ -1397,7 +1446,7 @@ if (subCommand === 'delete' && args[1] === 'all') {
         });
     }
 
-    currentResps[respName].image = imageUrl;
+    currentResps[respName].image = safeImageUrl;
 
     writeJSONFile(DATA_FILES.responsibilities, currentResps);
     global.responsibilities = currentResps;
@@ -1412,7 +1461,7 @@ if (subCommand === 'delete' && args[1] === 'all') {
             }
             await dbManager.run(
                 'UPDATE responsibilities SET image = ? WHERE name = ?',
-                [imageUrl, respName]
+                [safeImageUrl, respName]
             );
         }
     } catch (_) {}
