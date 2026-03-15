@@ -32,6 +32,73 @@ function toDigitEmoji(num) {
     return normalized.split('').map(d => map[d] || d).join('');
 }
 
+function buildOpenPanelRows(config, configKey, activeCount) {
+    const counterMode = config.open?.counterButton?.mode === 'label_number' ? 'label_number' : 'emoji_digits';
+
+    const openButton = new ButtonBuilder()
+        .setCustomId(`map_open_toggle_${configKey}`)
+        .setLabel((config.open?.openButton?.label || 'اوبن').slice(0, 80))
+        .setStyle(config.open?.openButton?.style || ButtonStyle.Success)
+        .setDisabled(!config.open?.roleId || !/^\d{17,19}$/.test(config.open.roleId));
+
+    if (config.open?.openButton?.emoji) {
+        openButton.setEmoji(config.open.openButton.emoji);
+    }
+
+    const counterStyle = config.open?.counterButton?.style || ButtonStyle.Secondary;
+    const rows = [];
+
+    if (counterMode === 'label_number') {
+        const counterButton = new ButtonBuilder()
+            .setCustomId(`map_open_count_${configKey}`)
+            .setStyle(counterStyle)
+            .setDisabled(true)
+            .setLabel(activeCount.toLocaleString('en-US'));
+
+        if (config.open?.counterButton?.emoji) {
+            counterButton.setEmoji(config.open.counterButton.emoji);
+        }
+
+        rows.push(new ActionRowBuilder().addComponents(openButton, counterButton));
+        return rows;
+    }
+
+    const digits = String(Math.max(0, Number(activeCount) || 0)).split('');
+    let digitIndex = 0;
+
+    const firstRow = new ActionRowBuilder().addComponents(openButton);
+    while (digitIndex < digits.length && firstRow.components.length < 5) {
+        const digitEmoji = toDigitEmoji(digits[digitIndex]);
+        firstRow.addComponents(
+            new ButtonBuilder()
+                .setCustomId(`map_open_count_${configKey}_${digitIndex}`)
+                .setStyle(counterStyle)
+                .setDisabled(true)
+                .setEmoji(digitEmoji)
+        );
+        digitIndex += 1;
+    }
+    rows.push(firstRow);
+
+    while (digitIndex < digits.length) {
+        const row = new ActionRowBuilder();
+        while (digitIndex < digits.length && row.components.length < 5) {
+            const digitEmoji = toDigitEmoji(digits[digitIndex]);
+            row.addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`map_open_count_${configKey}_${digitIndex}`)
+                    .setStyle(counterStyle)
+                    .setDisabled(true)
+                    .setEmoji(digitEmoji)
+            );
+            digitIndex += 1;
+        }
+        rows.push(row);
+    }
+
+    return rows;
+}
+
 function resolveMapConfig(message, allConfigs) {
     const selectedConfigKey = (message.isGlobalOnly || !message.guild)
         ? 'global'
@@ -64,13 +131,15 @@ async function syncOpenActiveUsers(config, guild) {
         return [];
     }
 
-    const role = guild.roles.cache.get(roleId);
+    let role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
     if (role) {
-        const cachedRoleMembers = role.members.map(m => m.id);
-        if (cachedRoleMembers.length > 0) {
-            config.open.activeUsers = cachedRoleMembers;
-            return cachedRoleMembers;
+        if (guild.members.cache.size < guild.memberCount) {
+            await guild.members.fetch().catch(() => null);
+            role = guild.roles.cache.get(roleId) || role;
         }
+        const roleMembers = role.members.map(m => m.id);
+        config.open.activeUsers = roleMembers;
+        return roleMembers;
     }
 
     config.open.activeUsers = stored;
@@ -159,36 +228,8 @@ module.exports = {
                     await saveAllConfigs(allConfigs);
                 }
 
-                const counterMode = config.open?.counterButton?.mode === 'label_number' ? 'label_number' : 'emoji_digits';
-                const openButton = new ButtonBuilder()
-                    .setCustomId(`map_open_toggle_${configKey}`)
-                    .setLabel((config.open?.openButton?.label || 'اوبن').slice(0, 80))
-                    .setStyle(config.open?.openButton?.style || ButtonStyle.Success)
-                    .setDisabled(!config.open?.roleId || !/^\d{17,19}$/.test(config.open.roleId));
-
-                if (config.open?.openButton?.emoji) {
-                    openButton.setEmoji(config.open.openButton.emoji);
-                }
-
-                const counterBaseLabel = 'المفّعليين';
-                const counterButton = new ButtonBuilder()
-                    .setCustomId(`map_open_count_${configKey}`)
-                    .setStyle(config.open?.counterButton?.style || ButtonStyle.Secondary)
-                    .setDisabled(true);
-
-                if (counterMode === 'label_number') {
-                    counterButton.setLabel(`${counterBaseLabel} : ${activeUsers.length.toLocaleString('en-US')}`);
-                    if (config.open?.counterButton?.emoji) {
-                        counterButton.setEmoji(config.open.counterButton.emoji);
-                    }
-                } else {
-                    counterButton
-                        .setEmoji(toDigitEmoji(activeUsers.length));
-                }
-
-                const row = new ActionRowBuilder().addComponents(openButton, counterButton);
                 const panelPayload = {
-                    components: [row]
+                    components: buildOpenPanelRows(config, configKey, activeUsers.length)
                 };
 
                 const buttonsImage = imagesToSend[buttonImageIndex] || imagesToSend[imagesToSend.length - 1];

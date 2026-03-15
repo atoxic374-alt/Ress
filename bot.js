@@ -3537,31 +3537,93 @@ async function handleMapOpenInteraction(interaction) {
     if (hadRole) config.open.activeUsers = currentActive.filter(id => id !== member.id);
     else if (!currentActive.includes(member.id)) config.open.activeUsers = [...currentActive, member.id];
 
+    if (interaction.guild.members.cache.size < interaction.guild.memberCount) {
+        await interaction.guild.members.fetch().catch(() => null);
+    }
+    const refreshedRole = interaction.guild.roles.cache.get(role.id) || await interaction.guild.roles.fetch(role.id).catch(() => null);
+    if (refreshedRole) {
+        config.open.activeUsers = refreshedRole.members.map(m => m.id);
+    }
+
     allConfigs[configKey] = config;
     await writeMapConfigsQueued(allConfigs);
 
     const counterMode = config.open?.counterButton?.mode === 'label_number' ? 'label_number' : 'emoji_digits';
-    const digitMap = { '0': '0️⃣', '1': '1️⃣', '2': '2️⃣', '3': '3️⃣', '4': '4️⃣', '5': '5️⃣', '6': '6️⃣', '7': '7️⃣', '8': '8️⃣', '9': '9️⃣' };
-    const countEmoji = String(config.open.activeUsers.length).split('').map(d => digitMap[d] || d).join('');
-    const formattedCount = config.open.activeUsers.length.toLocaleString('en-US');
+    const digitMap = {
+        '0': '<:emoji_27:1482578058199302195>',
+        '1': '<:emoji_27:1482578008542937159>',
+        '2': '<:emoji_28:1482578088511672320>',
+        '3': '<:emoji_29:1482578116374433833>',
+        '4': '<:emoji_29:1482578165485277295>',
+        '5': '<:emoji_31:1482578227611435079>',
+        '6': '<:emoji_32:1482578278966366208>',
+        '7': '<:emoji_33:1482578299426177115>',
+        '8': '<:emoji_35:1482578353771905157>',
+        '9': '<:emoji_35:1482578379185324124>'
+    };
+    const activeCount = config.open.activeUsers.length;
+
+    const openButton = new ButtonBuilder()
+        .setCustomId(`map_open_toggle_${configKey}`)
+        .setLabel((config.open?.openButton?.label || 'اوبن').slice(0, 80))
+        .setStyle(config.open?.openButton?.style || ButtonStyle.Success)
+        .setDisabled(!config.open?.roleId || !/^\d{17,19}$/.test(config.open.roleId));
+    if (config.open?.openButton?.emoji) openButton.setEmoji(config.open.openButton.emoji);
+
+    const counterStyle = config.open?.counterButton?.style || ButtonStyle.Secondary;
+    const rebuiltRows = [];
+
+    if (counterMode === 'label_number') {
+        const formattedCount = activeCount.toLocaleString('en-US');
+        const counterButton = new ButtonBuilder()
+            .setCustomId(`map_open_count_${configKey}`)
+            .setStyle(counterStyle)
+            .setDisabled(true)
+            .setLabel(formattedCount);
+
+        if (config.open?.counterButton?.emoji) counterButton.setEmoji(config.open.counterButton.emoji);
+        rebuiltRows.push(new ActionRowBuilder().addComponents(openButton, counterButton));
+    } else {
+        const digits = String(Math.max(0, Number(activeCount) || 0)).split('');
+        let digitIndex = 0;
+
+        const firstRow = new ActionRowBuilder().addComponents(openButton);
+        while (digitIndex < digits.length && firstRow.components.length < 5) {
+            const emoji = digitMap[digits[digitIndex]];
+            if (emoji) {
+                firstRow.addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(`map_open_count_${configKey}_${digitIndex}`)
+                        .setStyle(counterStyle)
+                        .setDisabled(true)
+                        .setEmoji(emoji)
+                );
+            }
+            digitIndex += 1;
+        }
+        rebuiltRows.push(firstRow);
+
+        while (digitIndex < digits.length) {
+            const row = new ActionRowBuilder();
+            while (digitIndex < digits.length && row.components.length < 5) {
+                const emoji = digitMap[digits[digitIndex]];
+                if (emoji) {
+                    row.addComponents(
+                        new ButtonBuilder()
+                            .setCustomId(`map_open_count_${configKey}_${digitIndex}`)
+                            .setStyle(counterStyle)
+                            .setDisabled(true)
+                            .setEmoji(emoji)
+                    );
+                }
+                digitIndex += 1;
+            }
+            if (row.components.length > 0) rebuiltRows.push(row);
+        }
+    }
 
     try {
-        const row = interaction.message.components?.[0];
-        if (row) {
-            const updatedRow = ActionRowBuilder.from(row);
-            const counterIndex = updatedRow.components.findIndex(c => c.data?.custom_id?.startsWith('map_open_count_'));
-            if (counterIndex !== -1) {
-                let updatedCounter = ButtonBuilder.from(updatedRow.components[counterIndex]).setDisabled(true);
-                if (counterMode === 'label_number') {
-                    updatedCounter = updatedCounter.setLabel(`المتفعّلين : ${formattedCount}`);
-                    if (config.open?.counterButton?.emoji) updatedCounter = updatedCounter.setEmoji(config.open.counterButton.emoji);
-                } else {
-                    updatedCounter = updatedCounter.setLabel('المتفعّلين').setEmoji(countEmoji);
-                }
-                updatedRow.components[counterIndex] = updatedCounter;
-                await interaction.message.edit({ components: [updatedRow] });
-            }
-        }
+        await interaction.message.edit({ components: rebuiltRows });
     } catch (e) {
         console.error('Failed to update open counter button:', e.message);
     }
