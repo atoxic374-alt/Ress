@@ -33,6 +33,7 @@ const vacationManager = require('./utils/vacationManager');
 const promoteManager = require('./utils/promoteManager');
 const { getRoleEntry, addRoleEntry, getGuildRoles, findRoleByOwner, deleteRoleEntry } = require('./utils/customRolesSystem.js');
 const interactionRouter = require('./utils/interactionRouter');
+const { loadMapConfigsSync, writeMapConfigsQueued } = require('./utils/mapConfigStore');
 const { handleAdminApplicationInteraction } = require('./commands/admin-apply.js');
 const { restoreTopSchedules, restorePanelCleanups, handlePanelMessageDelete } = require('./commands/roles-settings.js');
 const { handleChannelDelete, handleRoleDelete } = require('./utils/protectionManager.js');
@@ -86,6 +87,8 @@ function ensureDataFiles() {
     }
 }
 ensureDataFiles();
+
+
 
 if (!global.adminRoleGrantBypass) {
     global.adminRoleGrantBypass = new Set();
@@ -940,7 +943,7 @@ client.on(Events.InviteDelete, (invite) => {
             if (!member.user.bot) {
                 const configPath = DATA_FILES.serverMapConfig;
                 if (fs.existsSync(configPath)) {
-                    const allConfigs = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                    const allConfigs = loadMapConfigsSync();
                     const config = allConfigs.global || allConfigs;
                     
                     if (config && config.enabled) {
@@ -2559,6 +2562,43 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
             addRoleEntry(roleId, roleEntry);
         }
 
+        // مزامنة نظام map open عند التعديل اليدوي للرولات
+        if (addedRoles.size > 0 || removedRoles.size > 0) {
+            try {
+                if (fs.existsSync(DATA_FILES.serverMapConfig)) {
+                    const mapConfigs = loadMapConfigsSync();
+                    let changed = false;
+
+                    for (const key of Object.keys(mapConfigs)) {
+                        const cfg = mapConfigs[key];
+                        if (!cfg?.open?.enabled || !cfg.open.roleId) continue;
+
+                        const roleId = cfg.open.roleId;
+                        const roleWasAdded = addedRoles.has(roleId);
+                        const roleWasRemoved = removedRoles.has(roleId);
+                        if (!roleWasAdded && !roleWasRemoved) continue;
+
+                        const currentActive = Array.isArray(cfg.open.activeUsers) ? cfg.open.activeUsers : [];
+                        if (roleWasAdded && !currentActive.includes(userId)) {
+                            currentActive.push(userId);
+                            cfg.open.activeUsers = currentActive;
+                            changed = true;
+                        }
+                        if (roleWasRemoved && currentActive.includes(userId)) {
+                            cfg.open.activeUsers = currentActive.filter(id => id !== userId);
+                            changed = true;
+                        }
+                    }
+
+                    if (changed) {
+                        await writeMapConfigsQueued(mapConfigs);
+                    }
+                }
+            } catch (mapSyncErr) {
+                console.error('❌ خطأ في مزامنة map open مع التعديل اليدوي للرول:', mapSyncErr);
+            }
+        }
+
         // 1. حماية نظام الداون
         const activeDowns = downManager.getActiveDowns();
         const userActiveDowns = Object.values(activeDowns).filter(down => down.userId === userId);
@@ -3430,6 +3470,113 @@ async function checkExpiredReports() {
     }
 }
 
+
+
+async function handleMapOpenInteraction(interaction) {
+    const configPath = DATA_FILES.serverMapConfig;
+    if (!fs.existsSync(configPath)) {
+        ensureDataFiles();
+        await interaction.reply({ content: '⚠️ حدث خطأ في الإعدادات، يرجى المحاولة مرة أخرى.', ephemeral: true }).catch(() => {});
+        return true;
+    }
+
+    const allConfigs = loadMapConfigsSync();
+
+    if (interaction.customId.startsWith('map_open_count_')) {
+        await interaction.reply({ content: 'ℹ️ هذا زر عداد فقط وغير قابل للتفعيل.', ephemeral: true }).catch(() => {});
+        return true;
+    }
+
+    if (!interaction.customId.startsWith('map_open_toggle_')) return false;
+
+    const rawKey = interaction.customId.replace('map_open_toggle_', '');
+    const configKey = rawKey === 'global' ? 'global' : (rawKey.startsWith('channel_') ? rawKey : `channel_${rawKey}`);
+    const config = allConfigs[configKey] || allConfigs.global;
+
+    if (!config?.open?.enabled) {
+        await interaction.reply({ content: '⚠️ نظام open غير مفعل حالياً.', ephemeral: true }).catch(() => {});
+        return true;
+    }
+
+    if (!interaction.guild) {
+        await interaction.reply({ content: '❌ هذا الزر يعمل داخل السيرفر فقط.', ephemeral: true }).catch(() => {});
+        return true;
+    }
+
+    const roleId = config.open.roleId;
+    if (!roleId || !/^\d{17,19}$/.test(roleId)) {
+        await interaction.reply({ content: '❌ إعدادات الرول غير صحيحة، يرجى ضبط map-setup open.', ephemeral: true }).catch(() => {});
+        return true;
+    }
+
+    let member = interaction.guild.members.cache.get(interaction.user.id);
+    if (!member) member = await interaction.guild.members.fetch(interaction.user.id);
+
+    let role = interaction.guild.roles.cache.get(roleId);
+    if (!role) role = await interaction.guild.roles.fetch(roleId).catch(() => null);
+
+    if (!role) {
+        await interaction.reply({ content: '❌ لم يتم العثور على الرول المحدد. تأكد أن الرول ما انحذف.', ephemeral: true }).catch(() => {});
+        return true;
+    }
+
+    const hadRole = member.roles.cache.has(role.id);
+
+    try {
+        if (hadRole) await member.roles.remove(role, 'إزالة رول Open عبر map open');
+        else await member.roles.add(role, 'إعطاء رول Open عبر map open');
+    } catch (roleManageErr) {
+        const msg = roleManageErr?.code === 50013
+            ? '❌ ما أقدر أعدل هذا الرول. تأكد أن رتبة البوت أعلى من الرول ومعه صلاحية Manage Roles.'
+            : `❌ فشل تعديل الرول: ${roleManageErr.message || 'خطأ غير معروف'}`;
+        await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
+        return true;
+    }
+
+    const currentActive = Array.isArray(config.open.activeUsers) ? config.open.activeUsers : [];
+    if (hadRole) config.open.activeUsers = currentActive.filter(id => id !== member.id);
+    else if (!currentActive.includes(member.id)) config.open.activeUsers = [...currentActive, member.id];
+
+    allConfigs[configKey] = config;
+    await writeMapConfigsQueued(allConfigs);
+
+    const counterMode = config.open?.counterButton?.mode === 'label_number' ? 'label_number' : 'emoji_digits';
+    const digitMap = { '0': '0️⃣', '1': '1️⃣', '2': '2️⃣', '3': '3️⃣', '4': '4️⃣', '5': '5️⃣', '6': '6️⃣', '7': '7️⃣', '8': '8️⃣', '9': '9️⃣' };
+    const countEmoji = String(config.open.activeUsers.length).split('').map(d => digitMap[d] || d).join('');
+    const formattedCount = config.open.activeUsers.length.toLocaleString('en-US');
+
+    try {
+        const row = interaction.message.components?.[0];
+        if (row) {
+            const updatedRow = ActionRowBuilder.from(row);
+            const counterIndex = updatedRow.components.findIndex(c => c.data?.custom_id?.startsWith('map_open_count_'));
+            if (counterIndex !== -1) {
+                let updatedCounter = ButtonBuilder.from(updatedRow.components[counterIndex]).setDisabled(true);
+                if (counterMode === 'label_number') {
+                    updatedCounter = updatedCounter.setLabel(`المتفعّلين: ${formattedCount}`);
+                    if (config.open?.counterButton?.emoji) updatedCounter = updatedCounter.setEmoji(config.open.counterButton.emoji);
+                } else {
+                    updatedCounter = updatedCounter.setLabel('المتفعّلين').setEmoji(countEmoji);
+                }
+                updatedRow.components[counterIndex] = updatedCounter;
+                await interaction.message.edit({ components: [updatedRow] });
+            }
+        }
+    } catch (e) {
+        console.error('Failed to update open counter button:', e.message);
+    }
+
+    const grantMsg = config.open.grantMessage || '✅ تم اعطائك رول الاوبن الان يمكنك رؤيه الرومات.';
+    const removeMsg = config.open.removeMessage || '✅ تم ازالة رول الاوبن ولم يعد بإمكانك رؤية الرومات.';
+    await interaction.reply({ content: hadRole ? removeMsg : grantMsg, ephemeral: true }).catch(() => {});
+    return true;
+}
+
+interactionRouter.register('map_open_', async (interaction) => {
+    if (!interaction.isButton()) return false;
+    return await handleMapOpenInteraction(interaction);
+}, { name: 'map_open', priority: 90, types: ['button'] });
+
 // معالج التفاعلات المحسن للأداء
 client.on('interactionCreate', async (interaction) => {
     if (interaction.replied || interaction.deferred) return;
@@ -3635,7 +3782,6 @@ if ((interaction.isButton() || interaction.isModalSubmit()) && customId.startsWi
             }
         }
     }
-
     // 3. Handle map_btn_ interactions
     if (interaction.isButton() && interaction.customId.startsWith('map_btn_')) {
         const configPath = DATA_FILES.serverMapConfig;

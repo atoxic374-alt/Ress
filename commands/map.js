@@ -2,18 +2,106 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBu
 const { createCanvas, loadImage } = require('canvas');
 const fs = require('fs');
 const path = require('path');
-
-const configPath = path.join(__dirname, '..', 'data', 'serverMapConfig.json');
+const { loadMapConfigsSync, writeMapConfigsQueued } = require('../utils/mapConfigStore');
 
 function loadAllConfigs() {
-    try {
-        if (fs.existsSync(configPath)) {
-            const data = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-            if (data.imageUrl && !data.global) return { global: data };
-            return data;
+    const data = loadMapConfigsSync();
+    return Object.keys(data).length > 0
+        ? data
+        : { global: { enabled: false, imageUrl: 'https://i.ibb.co/pP9GzD7/default-map.png', welcomeMessage: 'مرحباً بك!', buttons: [] } };
+}
+
+async function saveAllConfigs(allConfigs) {
+    return await writeMapConfigsQueued(allConfigs);
+}
+
+function toDigitEmoji(num) {
+    const normalized = Math.max(0, Number(num) || 0).toString();
+    const map = {
+        '0': '0️⃣',
+        '1': '1️⃣',
+        '2': '2️⃣',
+        '3': '3️⃣',
+        '4': '4️⃣',
+        '5': '5️⃣',
+        '6': '6️⃣',
+        '7': '7️⃣',
+        '8': '8️⃣',
+        '9': '9️⃣'
+    };
+    return normalized.split('').map(d => map[d] || d).join('');
+}
+
+function resolveMapConfig(message, allConfigs) {
+    const selectedConfigKey = (message.isGlobalOnly || !message.guild)
+        ? 'global'
+        : (allConfigs[`channel_${message.channel.id}`] ? `channel_${message.channel.id}` : 'global');
+
+    return {
+        configKey: selectedConfigKey,
+        config: allConfigs[selectedConfigKey]
+    };
+}
+
+
+async function syncOpenActiveUsers(config, guild) {
+    if (!config?.open) return [];
+
+    const stored = Array.isArray(config.open.activeUsers)
+        ? [...new Set(config.open.activeUsers.filter(id => /^\d{17,19}$/.test(String(id))))]
+        : [];
+
+    // لا نُصفّر العداد خارج السيرفر، نحافظ على القيمة المخزنة
+    if (!guild) {
+        config.open.activeUsers = stored;
+        return stored;
+    }
+
+    // مزامنة خفيفة بدون جلب كل الأعضاء (أداء أعلى)
+    const roleId = config.open.roleId;
+    if (!roleId || !/^\d{17,19}$/.test(roleId)) {
+        config.open.activeUsers = [];
+        return [];
+    }
+
+    const role = guild.roles.cache.get(roleId);
+    if (role) {
+        const cachedRoleMembers = role.members.map(m => m.id);
+        if (cachedRoleMembers.length > 0) {
+            config.open.activeUsers = cachedRoleMembers;
+            return cachedRoleMembers;
         }
-    } catch (e) { console.error('Error loading map config:', e.message); }
-    return { global: { enabled: false, imageUrl: 'https://i.ibb.co/pP9GzD7/default-map.png', welcomeMessage: 'مرحباً بك!', buttons: [] } };
+    }
+
+    config.open.activeUsers = stored;
+    return stored;
+}
+
+function buildClassicRows(config, configKey) {
+    const rows = [];
+    if (config.buttons && config.buttons.length > 0) {
+        let currentRow = new ActionRowBuilder();
+        config.buttons.slice(0, 25).forEach((btn, index) => {
+            if ((index > 0 && index % 5 === 0) || (btn.newline && currentRow.components.length > 0)) {
+                rows.push(currentRow);
+                currentRow = new ActionRowBuilder();
+            }
+
+            const mapScope = configKey === 'global' ? 'g' : `c${configKey.replace('channel_', '')}`;
+            const button = new ButtonBuilder()
+                .setCustomId(`map_btn_${mapScope}_${index}`)
+                .setLabel(btn.label || 'زر بدون اسم')
+                .setStyle(btn.style || ButtonStyle.Secondary);
+
+            if (btn.emoji) {
+                button.setEmoji(btn.emoji);
+            }
+
+            currentRow.addComponents(button);
+        });
+        if (currentRow.components.length > 0) rows.push(currentRow);
+    }
+    return rows;
 }
 
 module.exports = {
@@ -21,36 +109,103 @@ module.exports = {
     description: 'عرض خريطة السيرفر التفاعلية',
     async execute(message, args, { client, BOT_OWNERS }) {
         try {
-            // التحقق من أن BOT_OWNERS موجودة كـ Array
             const owners = Array.isArray(BOT_OWNERS) ? BOT_OWNERS : [];
             const isOwner = message.author ? owners.includes(message.author.id) : false;
-            
-            // إذا كان الطلب من نظام الترحيب (تلقائي) أو من الأونر
             const isAutomatic = message.isAutomatic === true;
 
             if (!isOwner && !isAutomatic) {
                 if (message.react) await message.react('❌').catch(() => {});
                 return;
             }
-            
+
             const allConfigs = loadAllConfigs();
-            // إذا كان طلباً تلقائياً أو إجبارياً للعالمية، نستخدم global، وإلا نستخدم القناة الحالية
-            const selectedConfigKey = (message.isGlobalOnly || !message.guild)
-                ? 'global'
-                : (allConfigs[`channel_${message.channel.id}`] ? `channel_${message.channel.id}` : 'global');
-            const config = allConfigs[selectedConfigKey];
+            const { configKey, config } = resolveMapConfig(message, allConfigs);
+
+            const isOpenMode = args[0] && args[0].toLowerCase() === 'open';
+            if (isOpenMode) {
+                if (!config?.open?.enabled) {
+                    return message.reply('⚠️ نظام map open غير مفعل حالياً.').catch(() => {});
+                }
+
+                const openImages = Array.isArray(config.open.images) ? config.open.images : [];
+                const localImages = openImages
+                    .map(img => img?.localImagePath)
+                    .filter(Boolean)
+                    .map(localName => path.join(__dirname, '..', 'attached_assets', 'map_images', localName))
+                    .filter(localPath => fs.existsSync(localPath));
+
+                const remoteImages = Array.isArray(config.open.imageUrls)
+                    ? config.open.imageUrls.filter(u => /^https?:\/\//i.test(u))
+                    : [];
+
+                const imagesToSend = localImages.length > 0
+                    ? localImages
+                    : (remoteImages.length > 0 ? remoteImages : [config.imageUrl].filter(Boolean));
+
+                if (imagesToSend.length > 1) {
+                    for (const url of imagesToSend.slice(0, -1)) {
+                        await message.channel.send({ files: [url] }).catch(() => {});
+                    }
+                }
+
+                const previousActive = Array.isArray(config.open.activeUsers) ? [...new Set(config.open.activeUsers)] : [];
+                const activeUsers = await syncOpenActiveUsers(config, message.guild);
+                const prevKey = previousActive.slice().sort().join(',');
+                const nextKey = [...new Set(activeUsers)].slice().sort().join(',');
+                if (prevKey !== nextKey) {
+                    allConfigs[configKey] = config;
+                    await saveAllConfigs(allConfigs);
+                }
+
+                const counterMode = config.open?.counterButton?.mode === 'label_number' ? 'label_number' : 'emoji_digits';
+                const openButton = new ButtonBuilder()
+                    .setCustomId(`map_open_toggle_${configKey}`)
+                    .setLabel(config.open?.openButton?.label || 'Open')
+                    .setStyle(config.open?.openButton?.style || ButtonStyle.Success)
+                    .setDisabled(!config.open?.roleId || !/^\d{17,19}$/.test(config.open.roleId));
+
+                if (config.open?.openButton?.emoji) {
+                    openButton.setEmoji(config.open.openButton.emoji);
+                }
+
+                const counterBaseLabel = 'المتفعّلين';
+                const counterButton = new ButtonBuilder()
+                    .setCustomId(`map_open_count_${configKey}`)
+                    .setStyle(config.open?.counterButton?.style || ButtonStyle.Secondary)
+                    .setDisabled(true);
+
+                if (counterMode === 'label_number') {
+                    counterButton.setLabel(`${counterBaseLabel}: ${activeUsers.length.toLocaleString('en-US')}`);
+                    if (config.open?.counterButton?.emoji) {
+                        counterButton.setEmoji(config.open.counterButton.emoji);
+                    }
+                } else {
+                    counterButton
+                        .setLabel(counterBaseLabel)
+                        .setEmoji(toDigitEmoji(activeUsers.length));
+                }
+
+                const row = new ActionRowBuilder().addComponents(openButton, counterButton);
+                const panelPayload = {
+                    components: [row]
+                };
+
+                const lastImage = imagesToSend[imagesToSend.length - 1];
+                if (lastImage) panelPayload.files = [lastImage];
+
+                await message.channel.send(panelPayload);
+                return;
+            }
 
             if (!config || (!config.enabled && !args.includes('--force'))) {
                 return message.reply('⚠️ نظام الخريطة معطل حالياً.').catch(() => {});
             }
 
-            // التحقق من صلاحيات البوت في القناة (تخطي في حالة الإرسال التلقائي للخاص)
             if (!isAutomatic && !message.channel.permissionsFor(client.user).has(['SendMessages', 'AttachFiles', 'EmbedLinks'])) {
                 return console.log(`🚫 نقص في الصلاحيات لإرسال الخريطة في قناة: ${message.channel.name}`);
             }
 
-            // إنشاء الصورة باستخدام Canvas
-            const canvas = createCanvas(1280, 720); // جودة عالية
+            const canvas = createCanvas(1280, 720);
             const ctx = canvas.getContext('2d');
 
             try {
@@ -61,16 +216,14 @@ module.exports = {
                         bg = await loadImage(localPath);
                     }
                 }
-                
+
                 if (!bg) {
                     bg = await loadImage(config.imageUrl || 'https://i.ibb.co/pP9GzD7/default-map.png');
                 }
-                
+
                 ctx.drawImage(bg, 0, 0, 1280, 720);
-                
-                // تمت إزالة تأثيرات الاسم والخلفية السوداء بناءً على طلب المستخدم
             } catch (e) {
-                console.error("Error drawing map image:", e.message);
+                console.error('Error drawing map image:', e.message);
                 ctx.fillStyle = '#23272a';
                 ctx.fillRect(0, 0, 1280, 720);
                 ctx.font = 'bold 60px Arial';
@@ -80,32 +233,7 @@ module.exports = {
             }
 
             const attachment = new AttachmentBuilder(canvas.toBuffer(), { name: 'server-map.png' });
-
-            // إنشاء الأزرار مع التحقق من العدد (الحد الأقصى 25 زر في 5 صفوف)
-            const rows = [];
-            if (config.buttons && config.buttons.length > 0) {
-                let currentRow = new ActionRowBuilder();
-                config.buttons.slice(0, 25).forEach((btn, index) => {
-                    // إذا كان الزر يحتاج سطر جديد أو وصلنا لـ 5 أزرار في الصف
-                    if ((index > 0 && index % 5 === 0) || (btn.newline && currentRow.components.length > 0)) {
-                        rows.push(currentRow);
-                        currentRow = new ActionRowBuilder();
-                    }
-                    
-                    const mapScope = selectedConfigKey === 'global' ? 'g' : `c${selectedConfigKey.replace('channel_', '')}`;
-                    const button = new ButtonBuilder()
-                        .setCustomId(`map_btn_${mapScope}_${index}`)
-                        .setLabel(btn.label || 'زر بدون اسم')
-                        .setStyle(btn.style || ButtonStyle.Secondary);
-                    
-                    if (btn.emoji) {
-                        button.setEmoji(btn.emoji);
-                    }
-                    
-                    currentRow.addComponents(button);
-                });
-                if (currentRow.components.length > 0) rows.push(currentRow);
-            }
+            const rows = buildClassicRows(config, configKey);
 
             const sendOptions = {
                 content: (config.welcomeMessage && config.welcomeMessage.trim() !== '') ? config.welcomeMessage : null,
@@ -127,5 +255,6 @@ module.exports = {
         } catch (error) {
             console.error('❌ خطأ في تنفيذ أمر الخريطة:', error.message);
         }
-    }
+    },
+    saveAllConfigs
 };

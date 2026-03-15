@@ -1,9 +1,9 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder, RoleSelectMenuBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const { loadMapConfigsSync, writeMapConfigsQueued } = require('../utils/mapConfigStore');
 
-const configPath = path.join(__dirname, '..', 'data', 'serverMapConfig.json');
 const imagesDir = path.join(__dirname, '..', 'attached_assets', 'map_images');
 
 // التأكد من وجود مجلد الصور
@@ -32,29 +32,15 @@ async function downloadImage(url, filename) {
 }
 
 function loadAllConfigs() {
-    try {
-        if (fs.existsSync(configPath)) {
-            const data = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-            // تحويل التنسيق القديم (object واحد) إلى الجديد (multi-config) إذا لزم الأمر
-            if (data.imageUrl && !data.global) {
-                return { global: data };
-            }
-            return data;
-        }
-    } catch (e) {
-        console.error('Error loading map config in setup:', e.message);
-    }
-    return { global: { enabled: false, imageUrl: 'https://i.ibb.co/pP9GzD7/default-map.png', welcomeMessage: '** Welcome **', buttons: [] } };
+    const data = loadMapConfigsSync();
+    return Object.keys(data).length > 0
+        ? data
+        : { global: { enabled: false, imageUrl: 'https://i.ibb.co/pP9GzD7/default-map.png', welcomeMessage: '** Welcome **', buttons: [] } };
 }
 
 function saveAllConfigs(allConfigs) {
-    try {
-        fs.writeFileSync(configPath, JSON.stringify(allConfigs, null, 2));
-        return true;
-    } catch (e) {
-        console.error('Error saving map config:', e.message);
-        return false;
-    }
+    writeMapConfigsQueued(allConfigs);
+    return true;
 }
 
 function loadConfig() {
@@ -68,6 +54,124 @@ function saveConfig(config) {
     return saveAllConfigs(all);
 }
 
+function resolveButtonStyle(input, fallback = 'Secondary') {
+    if (!input) return ButtonStyle[fallback];
+    const key = String(input).trim().toLowerCase();
+    const map = {
+        primary: ButtonStyle.Primary,
+        secondary: ButtonStyle.Secondary,
+        success: ButtonStyle.Success,
+        danger: ButtonStyle.Danger,
+        'أزرق': ButtonStyle.Primary,
+        'ازرق': ButtonStyle.Primary,
+        'رمادي': ButtonStyle.Secondary,
+        'رصاصي': ButtonStyle.Secondary,
+        'اخضر': ButtonStyle.Success,
+        'أخضر': ButtonStyle.Success,
+        'احمر': ButtonStyle.Danger,
+        'أحمر': ButtonStyle.Danger
+    };
+    return map[key] || ButtonStyle[fallback];
+}
+
+
+
+
+
+function styleToName(styleValue) {
+    const entry = Object.entries(ButtonStyle).find(([, v]) => v === styleValue);
+    return entry ? entry[0].toLowerCase() : 'secondary';
+}
+function normalizeOpenConfig(openConfig) {
+    const fallback = {
+        enabled: false,
+        roleId: null,
+        grantMessage: '✅ تم اعطائك رول الاوبن الان يمكنك رؤيه الرومات.',
+        removeMessage: '✅ تم ازالة رول الاوبن ولم يعد بإمكانك رؤية الرومات.',
+        images: [],
+        imageUrls: [],
+        openButton: { label: 'Open', style: ButtonStyle.Success, emoji: null },
+        counterButton: { mode: 'emoji_digits', label: 'المتفعّلين', style: ButtonStyle.Secondary, emoji: null }
+    };
+
+    const src = openConfig || {};
+    return {
+        enabled: src.enabled === true,
+        roleId: src.roleId || null,
+        grantMessage: src.grantMessage || fallback.grantMessage,
+        removeMessage: src.removeMessage || fallback.removeMessage,
+        images: Array.isArray(src.images) ? src.images : [],
+        imageUrls: Array.isArray(src.imageUrls) ? src.imageUrls : [],
+        openButton: {
+            label: src.openButton?.label || fallback.openButton.label,
+            style: src.openButton?.style || fallback.openButton.style,
+            emoji: src.openButton?.emoji || null
+        },
+        counterButton: {
+            mode: src.counterButton?.mode === 'label_number' ? 'label_number' : 'emoji_digits',
+            label: 'المتفعّلين',
+            style: src.counterButton?.style || fallback.counterButton.style,
+            emoji: src.counterButton?.emoji || null
+        }
+    };
+}
+
+function buildOpenSetupEmbed(openConfig, targetChannel) {
+    const colorManager = require('../utils/colorManager.js');
+    const imagesList = openConfig.images
+        .map((img, idx) => `${idx + 1}) ${img.imageUrl}`)
+        .slice(0, 10)
+        .join('\n') || 'لا توجد صور محددة.';
+
+    const openStyleName = Object.keys(ButtonStyle).find(k => ButtonStyle[k] === openConfig.openButton.style) || 'Secondary';
+    const counterStyleName = Object.keys(ButtonStyle).find(k => ButtonStyle[k] === openConfig.counterButton.style) || 'Secondary';
+
+    const embed = new EmbedBuilder()
+        .setTitle(targetChannel ? `🧭 إعداد Open لروم: ${targetChannel.name}` : '🧭 إعداد Open العام')
+        .setColor(colorManager.getColor('primary'))
+        .setDescription(
+            `**الحالة:** ${openConfig.enabled ? '✅ مفعل' : '❌ معطل'}\n` +
+            `**الرول:** ${openConfig.roleId ? `<@&${openConfig.roleId}>` : 'غير محدد'}\n` +
+            `**زر Open:** ${openConfig.openButton.label} (${openStyleName})\n` +
+            `**طريقة العداد:** ${openConfig.counterButton.mode === 'label_number' ? 'أرقام عادية داخل الزر' : 'أرقام كإيموجي'}\n` +
+            `**لون العداد:** ${counterStyleName}\n` +
+            `**إيموجي العداد النصي:** ${openConfig.counterButton.emoji || 'لا يوجد'}\n` +
+            `**عدد الصور:** ${openConfig.images.length}`
+        )
+        .addFields(
+            { name: 'رسالة الإعطاء', value: openConfig.grantMessage.slice(0, 1024) || '-', inline: false },
+            { name: 'رسالة الإزالة', value: openConfig.removeMessage.slice(0, 1024) || '-', inline: false },
+            { name: 'الصور المحددة', value: imagesList.slice(0, 1024), inline: false }
+        )
+        .setFooter({ text: 'تلميح: الألوان تقبل عربي/إنجليزي مثل اخضر أو success' });
+
+    const lastImageUrl = openConfig.images[openConfig.images.length - 1]?.imageUrl;
+    if (lastImageUrl) embed.setImage(lastImageUrl);
+    return embed;
+}
+
+function buildOpenSetupRows(openConfig) {
+    return [
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('open_setup_toggle').setLabel(openConfig.enabled ? 'تعطيل النظام' : 'تفعيل النظام').setStyle(openConfig.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('open_setup_role').setLabel('تحديد الرول').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('open_setup_messages').setLabel('تعديل الرسائل').setStyle(ButtonStyle.Secondary)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('open_setup_open_btn').setLabel('تعديل زر Open').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('open_setup_counter_mode').setLabel('تبديل طريقة العداد').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('open_setup_counter_style').setLabel('لون العداد').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('open_setup_counter_emoji').setLabel('إيموجي العداد النصي').setStyle(ButtonStyle.Secondary)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('open_setup_add_image').setLabel('إضافة صورة').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('open_setup_clear_images').setLabel('مسح الصور').setStyle(ButtonStyle.Danger).setDisabled(openConfig.images.length === 0),
+            new ButtonBuilder().setCustomId('open_setup_view_settings').setLabel('عرض الإعدادات الحالي').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('open_setup_view_details').setLabel('تفاصيل موسعة').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('open_setup_save_close').setLabel('حفظ وإغلاق').setStyle(ButtonStyle.Primary)
+        )
+    ];
+}
 module.exports = {
     name: 'map-setup',
     description: 'إعدادات خريطة السيرفر',
@@ -76,6 +180,248 @@ module.exports = {
             const isOwner = BOT_OWNERS.includes(message.author.id);
             if (!isOwner) {
                 await message.react('❌').catch(() => {});
+                return;
+            }
+
+            if (args[0] && args[0].toLowerCase() === 'open') {
+                const targetForOpen = message.mentions.channels.first() || (args[1] && message.guild.channels.cache.get(args[1])) || null;
+                const openConfigKey = targetForOpen ? `channel_${targetForOpen.id}` : 'global';
+
+                const allConfigsForOpen = loadAllConfigs();
+                const baseConfig = allConfigsForOpen[openConfigKey] || { enabled: false, imageUrl: 'https://i.ibb.co/pP9GzD7/default-map.png', welcomeMessage: '', buttons: [] };
+                let openConfig = normalizeOpenConfig(baseConfig.open);
+
+                const openEmbed = buildOpenSetupEmbed(openConfig, targetForOpen);
+                const openRows = buildOpenSetupRows(openConfig);
+                const openSetupMsg = await message.reply({ embeds: [openEmbed], components: openRows });
+
+                const persistOpenConfig = () => {
+                    const latest = loadAllConfigs();
+                    const currentBase = latest[openConfigKey] || baseConfig;
+                    currentBase.open = openConfig;
+                    latest[openConfigKey] = currentBase;
+                    return saveAllConfigs(latest);
+                };
+
+                const refreshOpenPanel = async (interaction = null) => {
+                    const embed = buildOpenSetupEmbed(openConfig, targetForOpen);
+                    const rows = buildOpenSetupRows(openConfig);
+                    if (interaction) return interaction.update({ embeds: [embed], components: rows });
+                    return openSetupMsg.edit({ embeds: [embed], components: rows });
+                };
+
+                const openCollector = openSetupMsg.createMessageComponentCollector({
+                    filter: i => i.user.id === message.author.id,
+                    time: 600000
+                });
+
+                openCollector.on('collect', async i => {
+                    try {
+                        if (i.customId === 'open_setup_toggle') {
+                            if (!openConfig.enabled && (!openConfig.roleId || !/^\d{17,19}$/.test(openConfig.roleId))) {
+                                return await i.reply({ content: '❌ لا يمكن التفعيل الآن: لازم تحدد رول صحيح أولاً من زر (تحديد الرول).', ephemeral: true });
+                            }
+                            openConfig.enabled = !openConfig.enabled;
+                            persistOpenConfig();
+                            return await refreshOpenPanel(i);
+                        }
+
+                        if (i.customId === 'open_setup_role') {
+                            const roleMenu = new RoleSelectMenuBuilder().setCustomId('open_setup_role_select').setPlaceholder('اختر الرول المطلوب').setMaxValues(1).setMinValues(1);
+                            const backBtn = new ButtonBuilder().setCustomId('open_setup_back').setLabel('رجوع').setStyle(ButtonStyle.Secondary);
+                            return await i.update({
+                                content: 'اختر الرول من القائمة:',
+                                embeds: [buildOpenSetupEmbed(openConfig, targetForOpen)],
+                                components: [new ActionRowBuilder().addComponents(roleMenu), new ActionRowBuilder().addComponents(backBtn)]
+                            });
+                        }
+
+                        if (i.isRoleSelectMenu() && i.customId === 'open_setup_role_select') {
+                            const selectedRoleId = i.values[0] || null;
+                            if (!selectedRoleId || !/^\d{17,19}$/.test(selectedRoleId)) {
+                                return await i.reply({ content: '❌ الرول المحدد غير صالح.', ephemeral: true });
+                            }
+                            openConfig.roleId = selectedRoleId;
+                            persistOpenConfig();
+                            return await refreshOpenPanel(i);
+                        }
+
+                        if (i.customId === 'open_setup_back') {
+                            return await refreshOpenPanel(i);
+                        }
+
+                        if (i.customId === 'open_setup_messages') {
+                            const modal = new ModalBuilder().setCustomId(`open_setup_modal_messages_${openConfigKey}`).setTitle('تعديل رسائل Open');
+                            const grantInput = new TextInputBuilder().setCustomId('grant_msg').setLabel('رسالة الإعطاء').setStyle(TextInputStyle.Paragraph).setRequired(true).setValue(openConfig.grantMessage);
+                            const removeInput = new TextInputBuilder().setCustomId('remove_msg').setLabel('رسالة الإزالة').setStyle(TextInputStyle.Paragraph).setRequired(true).setValue(openConfig.removeMessage);
+                            modal.addComponents(new ActionRowBuilder().addComponents(grantInput), new ActionRowBuilder().addComponents(removeInput));
+                            return await i.showModal(modal);
+                        }
+
+                        if (i.customId === 'open_setup_open_btn') {
+                            const modal = new ModalBuilder().setCustomId(`open_setup_modal_openbtn_${openConfigKey}`).setTitle('تعديل زر Open');
+                            const labelInput = new TextInputBuilder().setCustomId('open_label').setLabel('اسم الزر').setStyle(TextInputStyle.Short).setRequired(true).setValue(openConfig.openButton.label);
+                            const emojiInput = new TextInputBuilder().setCustomId('open_emoji').setLabel('إيموجي الزر (اختياري)').setStyle(TextInputStyle.Short).setRequired(false).setValue(openConfig.openButton.emoji || '');
+                            const styleInput = new TextInputBuilder().setCustomId('open_style').setLabel('اللون: primary/secondary/success/danger أو بالعربي').setStyle(TextInputStyle.Short).setRequired(false).setValue(styleToName(openConfig.openButton.style));
+                            modal.addComponents(new ActionRowBuilder().addComponents(labelInput), new ActionRowBuilder().addComponents(emojiInput), new ActionRowBuilder().addComponents(styleInput));
+                            return await i.showModal(modal);
+                        }
+
+                        if (i.customId === 'open_setup_counter_mode') {
+                            openConfig.counterButton.mode = openConfig.counterButton.mode === 'label_number' ? 'emoji_digits' : 'label_number';
+                            persistOpenConfig();
+                            return await refreshOpenPanel(i);
+                        }
+
+                        if (i.customId === 'open_setup_counter_style') {
+                            const modal = new ModalBuilder().setCustomId(`open_setup_modal_counterstyle_${openConfigKey}`).setTitle('تعديل لون العداد');
+                            const styleInput = new TextInputBuilder().setCustomId('counter_style').setLabel('اللون: primary/secondary/success/danger أو بالعربي').setStyle(TextInputStyle.Short).setRequired(false).setValue(styleToName(openConfig.counterButton.style));
+                            modal.addComponents(new ActionRowBuilder().addComponents(styleInput));
+                            return await i.showModal(modal);
+                        }
+
+                        if (i.customId === 'open_setup_counter_emoji') {
+                            const modal = new ModalBuilder().setCustomId(`open_setup_modal_counteremoji_${openConfigKey}`).setTitle('تعديل إيموجي العداد النصي');
+                            const emojiInput = new TextInputBuilder().setCustomId('counter_emoji').setLabel('إيموجي العداد (اختياري)').setStyle(TextInputStyle.Short).setRequired(false).setValue(openConfig.counterButton.emoji || '').setPlaceholder('مثال: ✅ أو :name:');
+                            modal.addComponents(new ActionRowBuilder().addComponents(emojiInput));
+                            return await i.showModal(modal);
+                        }
+
+                        if (i.customId === 'open_setup_add_image') {
+                            const modal = new ModalBuilder().setCustomId(`open_setup_modal_addimage_${openConfigKey}`).setTitle('إضافة صورة Open');
+                            const imgInput = new TextInputBuilder().setCustomId('image_url').setLabel('رابط الصورة').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('https://...');
+                            modal.addComponents(new ActionRowBuilder().addComponents(imgInput));
+                            return await i.showModal(modal);
+                        }
+
+                        if (i.customId === 'open_setup_clear_images') {
+                            openConfig.images = [];
+                            openConfig.imageUrls = [];
+                            persistOpenConfig();
+                            return await refreshOpenPanel(i);
+                        }
+
+                        if (i.customId === 'open_setup_view_settings') {
+                            const quick = `**الحالة:** ${openConfig.enabled ? '✅ مفعل' : '❌ معطل'}
+**الرول:** ${openConfig.roleId ? `<@&${openConfig.roleId}>` : 'غير محدد'}
+**زر Open:** ${openConfig.openButton.label}
+**العداد:** ${openConfig.counterButton.mode === 'label_number' ? 'نصي' : 'إيموجي'}
+**الصور:** ${openConfig.images.length}`;
+                            return await i.reply({ content: quick, ephemeral: true });
+                        }
+
+                        if (i.customId === 'open_setup_view_details') {
+                            const detailsEmbed = buildOpenSetupEmbed(openConfig, targetForOpen);
+                            return await i.reply({ embeds: [detailsEmbed], ephemeral: true });
+                        }
+
+                        if (i.customId === 'open_setup_save_close') {
+                            persistOpenConfig();
+                            openCollector.stop('saved');
+                            return await i.update({ embeds: [buildOpenSetupEmbed(openConfig, targetForOpen)], components: [] });
+                        }
+                    } catch (e) {
+                        console.error('open setup interaction error:', e.message);
+                        if (!i.replied && !i.deferred) await i.reply({ content: '❌ حدث خطأ أثناء معالجة الطلب.', ephemeral: true }).catch(() => {});
+                    }
+                });
+
+                const openModalHandler = async mi => {
+                    if (!mi.isModalSubmit() || mi.user.id !== message.author.id) return;
+
+                    try {
+                        if (mi.customId === `open_setup_modal_messages_${openConfigKey}`) {
+                            openConfig.grantMessage = mi.fields.getTextInputValue('grant_msg').trim() || openConfig.grantMessage;
+                            openConfig.removeMessage = mi.fields.getTextInputValue('remove_msg').trim() || openConfig.removeMessage;
+                            persistOpenConfig();
+                            await mi.reply({ content: '✅ تم تحديث الرسائل.', ephemeral: true });
+                            await refreshOpenPanel();
+                            return;
+                        }
+
+                        if (mi.customId === `open_setup_modal_openbtn_${openConfigKey}`) {
+                            const label = mi.fields.getTextInputValue('open_label').trim();
+                            const emoji = mi.fields.getTextInputValue('open_emoji').trim();
+                            const styleRaw = mi.fields.getTextInputValue('open_style').trim();
+                            if (label.length > 80) {
+                                return await mi.reply({ content: '❌ اسم الزر طويل جداً (الحد 80 حرف).', ephemeral: true });
+                            }
+                            if (emoji.length > 100) {
+                                return await mi.reply({ content: '❌ الإيموجي غير صالح.', ephemeral: true });
+                            }
+                            openConfig.openButton.label = label || 'Open';
+                            openConfig.openButton.emoji = emoji || null;
+                            if (styleRaw && !['primary','secondary','success','danger','ازرق','أزرق','رمادي','رصاصي','اخضر','أخضر','احمر','أحمر'].includes(styleRaw.toLowerCase())) {
+                                return await mi.reply({ content: '❌ لون زر Open غير صالح. مثال: اخضر / أحمر / primary.', ephemeral: true });
+                            }
+                            openConfig.openButton.style = resolveButtonStyle(styleRaw, 'Success');
+                            persistOpenConfig();
+                            await mi.reply({ content: '✅ تم تحديث زر Open.', ephemeral: true });
+                            await refreshOpenPanel();
+                            return;
+                        }
+
+                        if (mi.customId === `open_setup_modal_counterstyle_${openConfigKey}`) {
+                            const styleRaw = mi.fields.getTextInputValue('counter_style').trim();
+                            if (styleRaw && !['primary','secondary','success','danger','ازرق','أزرق','رمادي','رصاصي','اخضر','أخضر','احمر','أحمر'].includes(styleRaw.toLowerCase())) {
+                                return await mi.reply({ content: '❌ لون غير صالح. استخدم: اخضر/أحمر/رمادي/أزرق أو primary/secondary/success/danger', ephemeral: true });
+                            }
+                            openConfig.counterButton.style = resolveButtonStyle(styleRaw, 'Secondary');
+                            persistOpenConfig();
+                            await mi.reply({ content: '✅ تم تحديث لون العداد.', ephemeral: true });
+                            await refreshOpenPanel();
+                            return;
+                        }
+
+                        if (mi.customId === `open_setup_modal_counteremoji_${openConfigKey}`) {
+                            const emojiRaw = mi.fields.getTextInputValue('counter_emoji').trim();
+                            if (emojiRaw.length > 100) {
+                                return await mi.reply({ content: '❌ الإيموجي غير صالح.', ephemeral: true });
+                            }
+                            openConfig.counterButton.emoji = emojiRaw || null;
+                            persistOpenConfig();
+                            await mi.reply({ content: '✅ تم تحديث إيموجي العداد النصي.', ephemeral: true });
+                            await refreshOpenPanel();
+                            return;
+                        }
+
+                        if (mi.customId === `open_setup_modal_addimage_${openConfigKey}`) {
+                            const imageUrl = mi.fields.getTextInputValue('image_url').trim();
+                            if (!/^https?:\/\//i.test(imageUrl)) {
+                                return await mi.reply({ content: '❌ رابط الصورة غير صالح. استخدم رابط مباشر يبدأ بـ http أو https لصورة.', ephemeral: true });
+                            }
+                            if (openConfig.images.length >= 20) {
+                                return await mi.reply({ content: '❌ وصلت للحد الأقصى للصور (20).', ephemeral: true });
+                            }
+                            if (openConfig.images.some(img => img.imageUrl === imageUrl)) {
+                                return await mi.reply({ content: '⚠️ هذه الصورة مضافة مسبقاً.', ephemeral: true });
+                            }
+                            const ext = imageUrl.split('.').pop().split(/[?#]/)[0] || 'png';
+                            const filename = `${openConfigKey}_open_${Date.now()}.${ext}`;
+                            await mi.deferReply({ ephemeral: true });
+                            const localPath = await downloadImage(imageUrl, filename);
+                            if (!localPath) {
+                                return await mi.editReply({ content: '❌ فشل تحميل الصورة. تأكد أن الرابط مباشر وأن الموقع يسمح بالتحميل.' });
+                            }
+                            openConfig.images.push({ imageUrl, localImagePath: filename });
+                            openConfig.imageUrls = openConfig.images.map(img => img.imageUrl);
+                            persistOpenConfig();
+                            await mi.editReply({ content: `✅ تم إضافة الصورة رقم ${openConfig.images.length}.` });
+                            await refreshOpenPanel();
+                            return;
+                        }
+                    } catch (err) {
+                        console.error('open setup modal error:', err.message);
+                    }
+                };
+
+                message.client.on('interactionCreate', openModalHandler);
+
+                openCollector.on('end', async () => {
+                    message.client.off('interactionCreate', openModalHandler);
+                    await openSetupMsg.edit({ components: [] }).catch(() => {});
+                });
+
                 return;
             }
 
