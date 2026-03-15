@@ -79,39 +79,61 @@ function resolveButtonStyle(input, fallback = 'Secondary') {
 
 
 function styleToName(styleValue) {
-    const entry = Object.entries(ButtonStyle).find(([, v]) => v === styleValue);
-    return entry ? entry[0].toLowerCase() : 'secondary';
+    const map = {
+        [ButtonStyle.Primary]: 'أزرق',
+        [ButtonStyle.Secondary]: 'رمادي',
+        [ButtonStyle.Success]: 'أخضر',
+        [ButtonStyle.Danger]: 'أحمر'
+    };
+    return map[styleValue] || 'رمادي';
 }
+
+function clampText(value, maxLen, fallback = '') {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (!text) return fallback;
+    return text.slice(0, maxLen);
+}
+
 function normalizeOpenConfig(openConfig) {
     const fallback = {
         enabled: false,
         roleId: null,
-        grantMessage: '✅ تم اعطائك رول الاوبن الان يمكنك رؤيه الرومات.',
-        removeMessage: '✅ تم ازالة رول الاوبن ولم يعد بإمكانك رؤية الرومات.',
+        grantMessage: '✅ تم إعطاؤك رول الأوبن، الآن يمكنك رؤية الرومات.',
+        removeMessage: '✅ تمت إزالة رول الأوبن، ولم يعد بإمكانك رؤية الرومات.',
         images: [],
         imageUrls: [],
-        openButton: { label: 'Open', style: ButtonStyle.Success, emoji: null },
+        buttonImageIndex: -1,
+        openButton: { label: 'اوبن', style: ButtonStyle.Success, emoji: null },
         counterButton: { mode: 'emoji_digits', label: 'المتفعّلين', style: ButtonStyle.Secondary, emoji: null }
     };
 
     const src = openConfig || {};
+    const images = Array.isArray(src.images)
+        ? src.images.filter(img => img && typeof img.imageUrl === 'string').slice(0, 20)
+        : [];
+
+    let buttonImageIndex = Number.isInteger(src.buttonImageIndex) ? src.buttonImageIndex : -1;
+    if (images.length === 0) buttonImageIndex = -1;
+    else if (buttonImageIndex < 0 || buttonImageIndex >= images.length) buttonImageIndex = images.length - 1;
+
     return {
         enabled: src.enabled === true,
         roleId: src.roleId || null,
-        grantMessage: src.grantMessage || fallback.grantMessage,
-        removeMessage: src.removeMessage || fallback.removeMessage,
-        images: Array.isArray(src.images) ? src.images : [],
-        imageUrls: Array.isArray(src.imageUrls) ? src.imageUrls : [],
+        grantMessage: clampText(src.grantMessage, 1500, fallback.grantMessage),
+        removeMessage: clampText(src.removeMessage, 1500, fallback.removeMessage),
+        images,
+        imageUrls: Array.isArray(src.imageUrls) ? src.imageUrls.slice(0, 20) : images.map(img => img.imageUrl),
+        buttonImageIndex,
         openButton: {
-            label: src.openButton?.label || fallback.openButton.label,
+            label: clampText(src.openButton?.label, 80, fallback.openButton.label),
             style: src.openButton?.style || fallback.openButton.style,
-            emoji: src.openButton?.emoji || null
+            emoji: clampText(src.openButton?.emoji || '', 100, '') || null
         },
         counterButton: {
             mode: src.counterButton?.mode === 'label_number' ? 'label_number' : 'emoji_digits',
             label: 'المتفعّلين',
             style: src.counterButton?.style || fallback.counterButton.style,
-            emoji: src.counterButton?.emoji || null
+            emoji: clampText(src.counterButton?.emoji || '', 100, '') || null
         }
     };
 }
@@ -119,34 +141,49 @@ function normalizeOpenConfig(openConfig) {
 function buildOpenSetupEmbed(openConfig, targetChannel) {
     const colorManager = require('../utils/colorManager.js');
     const imagesList = openConfig.images
-        .map((img, idx) => `${idx + 1}) ${img.imageUrl}`)
+        .map((img, idx) => {
+            const isButtonImage = idx === openConfig.buttonImageIndex;
+            return `${idx + 1}) ${isButtonImage ? '⭐ ' : ''}${img.imageUrl}`;
+        })
         .slice(0, 10)
         .join('\n') || 'لا توجد صور محددة.';
 
-    const openStyleName = Object.keys(ButtonStyle).find(k => ButtonStyle[k] === openConfig.openButton.style) || 'Secondary';
-    const counterStyleName = Object.keys(ButtonStyle).find(k => ButtonStyle[k] === openConfig.counterButton.style) || 'Secondary';
-
     const embed = new EmbedBuilder()
-        .setTitle(targetChannel ? `🧭 إعداد Open لروم: ${targetChannel.name}` : '🧭 إعداد Open العام')
+        .setTitle(targetChannel ? `🧭 إعداد **الأوبن** للروم : ${targetChannel.name}` : '🧭 إعداد **الأوبن** العام')
         .setColor(colorManager.getColor('primary'))
         .setDescription(
-            `**الحالة:** ${openConfig.enabled ? '✅ مفعل' : '❌ معطل'}\n` +
-            `**الرول:** ${openConfig.roleId ? `<@&${openConfig.roleId}>` : 'غير محدد'}\n` +
-            `**زر Open:** ${openConfig.openButton.label} (${openStyleName})\n` +
-            `**طريقة العداد:** ${openConfig.counterButton.mode === 'label_number' ? 'أرقام عادية داخل الزر' : 'أرقام كإيموجي'}\n` +
-            `**لون العداد:** ${counterStyleName}\n` +
-            `**إيموجي العداد النصي:** ${openConfig.counterButton.emoji || 'لا يوجد'}\n` +
-            `**عدد الصور:** ${openConfig.images.length}`
+            `**الحالة :** ${openConfig.enabled ? '✅ مفعل' : '❌ معطل'}
+
+` +
+            `**الرول :** ${openConfig.roleId ? `<@&${openConfig.roleId}>` : 'غير محدد'}
+
+` +
+            `**زر الأوبن :** ${openConfig.openButton.label} (${styleToName(openConfig.openButton.style)})
+
+` +
+            `**طريقة العداد :** ${openConfig.counterButton.mode === 'label_number' ? 'أرقام داخل الزر' : 'أرقام كإيموجي'}
+
+` +
+            `**لون العداد :** ${styleToName(openConfig.counterButton.style)}
+
+` +
+            `**إيموجي العداد النصي :** ${openConfig.counterButton.emoji || 'لا يوجد'}
+
+` +
+            `**عدد الصور :** ${openConfig.images.length}
+
+` +
+            `**صورة الأزرار :** ${openConfig.buttonImageIndex >= 0 ? `رقم ${openConfig.buttonImageIndex + 1}` : 'لا يوجد'}`
         )
         .addFields(
-            { name: 'رسالة الإعطاء', value: openConfig.grantMessage.slice(0, 1024) || '-', inline: false },
-            { name: 'رسالة الإزالة', value: openConfig.removeMessage.slice(0, 1024) || '-', inline: false },
-            { name: 'الصور المحددة', value: imagesList.slice(0, 1024), inline: false }
+            { name: '**رسالة الإعطاء :**', value: `> ${openConfig.grantMessage.slice(0, 1000)}`, inline: false },
+            { name: '**رسالة الإزالة :**', value: `> ${openConfig.removeMessage.slice(0, 1000)}`, inline: false },
+            { name: '**الصور المحددة :**', value: imagesList.slice(0, 1024), inline: false }
         )
-        .setFooter({ text: 'تلميح: الألوان تقبل عربي/إنجليزي مثل اخضر أو success' });
+        .setFooter({ text: 'By Ahmed' });
 
-    const lastImageUrl = openConfig.images[openConfig.images.length - 1]?.imageUrl;
-    if (lastImageUrl) embed.setImage(lastImageUrl);
+    const previewImage = openConfig.images[openConfig.buttonImageIndex]?.imageUrl || openConfig.images[openConfig.images.length - 1]?.imageUrl;
+    if (previewImage) embed.setImage(previewImage);
     return embed;
 }
 
@@ -158,16 +195,20 @@ function buildOpenSetupRows(openConfig) {
             new ButtonBuilder().setCustomId('open_setup_messages').setLabel('تعديل الرسائل').setStyle(ButtonStyle.Secondary)
         ),
         new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('open_setup_open_btn').setLabel('تعديل زر Open').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('open_setup_open_btn').setLabel('تعديل زر الأوبن').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('open_setup_counter_mode').setLabel('تبديل طريقة العداد').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('open_setup_counter_style').setLabel('لون العداد').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('open_setup_counter_emoji').setLabel('إيموجي العداد النصي').setStyle(ButtonStyle.Secondary)
         ),
         new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('open_setup_add_image').setLabel('إضافة صورة').setStyle(ButtonStyle.Success),
-            new ButtonBuilder().setCustomId('open_setup_clear_images').setLabel('مسح الصور').setStyle(ButtonStyle.Danger).setDisabled(openConfig.images.length === 0),
+            new ButtonBuilder().setCustomId('open_setup_reorder_images').setLabel('ترتيب الصور').setStyle(ButtonStyle.Secondary).setDisabled(openConfig.images.length < 2),
+            new ButtonBuilder().setCustomId('open_setup_button_image').setLabel('تحديد صورة الأزرار').setStyle(ButtonStyle.Secondary).setDisabled(openConfig.images.length === 0),
+            new ButtonBuilder().setCustomId('open_setup_clear_images').setLabel('مسح الصور').setStyle(ButtonStyle.Danger).setDisabled(openConfig.images.length === 0)
+        ),
+        new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('open_setup_view_settings').setLabel('عرض الإعدادات الحالي').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('open_setup_view_details').setLabel('تفاصيل موسعة').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('open_setup_preview').setLabel('معاينة').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId('open_setup_save_close').setLabel('حفظ وإغلاق').setStyle(ButtonStyle.Primary)
         )
     ];
@@ -251,7 +292,7 @@ module.exports = {
                         }
 
                         if (i.customId === 'open_setup_messages') {
-                            const modal = new ModalBuilder().setCustomId(`open_setup_modal_messages_${openConfigKey}`).setTitle('تعديل رسائل Open');
+                            const modal = new ModalBuilder().setCustomId(`open_setup_modal_messages_${openConfigKey}`).setTitle('تعديل رسائل الأوبن');
                             const grantInput = new TextInputBuilder().setCustomId('grant_msg').setLabel('رسالة الإعطاء').setStyle(TextInputStyle.Paragraph).setRequired(true).setValue(openConfig.grantMessage);
                             const removeInput = new TextInputBuilder().setCustomId('remove_msg').setLabel('رسالة الإزالة').setStyle(TextInputStyle.Paragraph).setRequired(true).setValue(openConfig.removeMessage);
                             modal.addComponents(new ActionRowBuilder().addComponents(grantInput), new ActionRowBuilder().addComponents(removeInput));
@@ -259,10 +300,10 @@ module.exports = {
                         }
 
                         if (i.customId === 'open_setup_open_btn') {
-                            const modal = new ModalBuilder().setCustomId(`open_setup_modal_openbtn_${openConfigKey}`).setTitle('تعديل زر Open');
+                            const modal = new ModalBuilder().setCustomId(`open_setup_modal_openbtn_${openConfigKey}`).setTitle('تعديل زر الأوبن');
                             const labelInput = new TextInputBuilder().setCustomId('open_label').setLabel('اسم الزر').setStyle(TextInputStyle.Short).setRequired(true).setValue(openConfig.openButton.label);
                             const emojiInput = new TextInputBuilder().setCustomId('open_emoji').setLabel('إيموجي الزر (اختياري)').setStyle(TextInputStyle.Short).setRequired(false).setValue(openConfig.openButton.emoji || '');
-                            const styleInput = new TextInputBuilder().setCustomId('open_style').setLabel('اللون: primary/secondary/success/danger أو بالعربي').setStyle(TextInputStyle.Short).setRequired(false).setValue(styleToName(openConfig.openButton.style));
+                            const styleInput = new TextInputBuilder().setCustomId('open_style').setLabel('اللون : أحمر / رمادي / أخضر / أزرق').setStyle(TextInputStyle.Short).setRequired(false).setValue(styleToName(openConfig.openButton.style));
                             modal.addComponents(new ActionRowBuilder().addComponents(labelInput), new ActionRowBuilder().addComponents(emojiInput), new ActionRowBuilder().addComponents(styleInput));
                             return await i.showModal(modal);
                         }
@@ -275,7 +316,7 @@ module.exports = {
 
                         if (i.customId === 'open_setup_counter_style') {
                             const modal = new ModalBuilder().setCustomId(`open_setup_modal_counterstyle_${openConfigKey}`).setTitle('تعديل لون العداد');
-                            const styleInput = new TextInputBuilder().setCustomId('counter_style').setLabel('اللون: primary/secondary/success/danger أو بالعربي').setStyle(TextInputStyle.Short).setRequired(false).setValue(styleToName(openConfig.counterButton.style));
+                            const styleInput = new TextInputBuilder().setCustomId('counter_style').setLabel('اللون : أحمر / رمادي / أخضر / أزرق').setStyle(TextInputStyle.Short).setRequired(false).setValue(styleToName(openConfig.counterButton.style));
                             modal.addComponents(new ActionRowBuilder().addComponents(styleInput));
                             return await i.showModal(modal);
                         }
@@ -288,8 +329,8 @@ module.exports = {
                         }
 
                         if (i.customId === 'open_setup_add_image') {
-                            const modal = new ModalBuilder().setCustomId(`open_setup_modal_addimage_${openConfigKey}`).setTitle('إضافة صورة Open');
-                            const imgInput = new TextInputBuilder().setCustomId('image_url').setLabel('رابط الصورة').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('https://...');
+                            const modal = new ModalBuilder().setCustomId(`open_setup_modal_addimage_${openConfigKey}`).setTitle('إضافة صورة للأوبن');
+                            const imgInput = new TextInputBuilder().setCustomId('image_url').setLabel('رابط الصورة').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('https://example.com/image.png');
                             modal.addComponents(new ActionRowBuilder().addComponents(imgInput));
                             return await i.showModal(modal);
                         }
@@ -297,22 +338,62 @@ module.exports = {
                         if (i.customId === 'open_setup_clear_images') {
                             openConfig.images = [];
                             openConfig.imageUrls = [];
+                            openConfig.buttonImageIndex = -1;
                             persistOpenConfig();
                             return await refreshOpenPanel(i);
                         }
 
                         if (i.customId === 'open_setup_view_settings') {
-                            const quick = `**الحالة:** ${openConfig.enabled ? '✅ مفعل' : '❌ معطل'}
-**الرول:** ${openConfig.roleId ? `<@&${openConfig.roleId}>` : 'غير محدد'}
-**زر Open:** ${openConfig.openButton.label}
-**العداد:** ${openConfig.counterButton.mode === 'label_number' ? 'نصي' : 'إيموجي'}
-**الصور:** ${openConfig.images.length}`;
+                            const quick = `**الحالة :** ${openConfig.enabled ? '✅ مفعل' : '❌ معطل'}
+
+**الرول :** ${openConfig.roleId ? `<@&${openConfig.roleId}>` : 'غير محدد'}
+
+**زر الأوبن :** ${openConfig.openButton.label}
+
+**العداد :** ${openConfig.counterButton.mode === 'label_number' ? 'نصي' : 'إيموجي'}
+
+**عدد الصور :** ${openConfig.images.length}
+
+**صورة الأزرار :** ${openConfig.buttonImageIndex >= 0 ? openConfig.buttonImageIndex + 1 : 'غير محددة'}`;
                             return await i.reply({ content: quick, ephemeral: true });
                         }
 
-                        if (i.customId === 'open_setup_view_details') {
-                            const detailsEmbed = buildOpenSetupEmbed(openConfig, targetForOpen);
-                            return await i.reply({ embeds: [detailsEmbed], ephemeral: true });
+                        if (i.customId === 'open_setup_reorder_images') {
+                            const modal = new ModalBuilder().setCustomId(`open_setup_modal_reorder_${openConfigKey}`).setTitle('ترتيب الصور');
+                            const orderExample = openConfig.images.map((_, idx) => idx + 1).join(' ');
+                            const input = new TextInputBuilder().setCustomId('images_order').setLabel('اكتب الترتيب بالأرقام (مثال)').setStyle(TextInputStyle.Short).setRequired(true).setValue(orderExample).setPlaceholder('مثال : 3 1 2');
+                            modal.addComponents(new ActionRowBuilder().addComponents(input));
+                            return await i.showModal(modal);
+                        }
+
+                        if (i.customId === 'open_setup_button_image') {
+                            const modal = new ModalBuilder().setCustomId(`open_setup_modal_buttonimage_${openConfigKey}`).setTitle('تحديد صورة الأزرار');
+                            const current = openConfig.buttonImageIndex >= 0 ? String(openConfig.buttonImageIndex + 1) : '1';
+                            const input = new TextInputBuilder().setCustomId('button_image_index').setLabel('رقم الصورة التي تحمل الأزرار').setStyle(TextInputStyle.Short).setRequired(true).setValue(current).setPlaceholder(`من 1 إلى ${Math.max(1, openConfig.images.length)}`);
+                            modal.addComponents(new ActionRowBuilder().addComponents(input));
+                            return await i.showModal(modal);
+                        }
+
+                        if (i.customId === 'open_setup_preview') {
+                            const mapCommand = i.client.commands.get('map');
+                            if (!mapCommand) {
+                                return await i.reply({ content: '❌ تعذر العثور على أمر المعاينة.', ephemeral: true });
+                            }
+                            await i.deferReply({ ephemeral: true });
+                            const fakeMsg = {
+                                guild: i.guild,
+                                channel: i.channel,
+                                author: i.user,
+                                client: i.client,
+                                isAutomatic: true,
+                                isGlobalOnly: targetForOpen ? false : true,
+                                react: async () => {},
+                                reply: async () => {},
+                                send: null
+                            };
+                            await mapCommand.execute(fakeMsg, ['open'], { client: i.client, BOT_OWNERS });
+                            await i.editReply({ content: '✅ تمت المعاينة في نفس القناة، وتقدر تتأكد من ترتيب الصور وصورة الأزرار.' }).catch(() => {});
+                            return;
                         }
 
                         if (i.customId === 'open_setup_save_close') {
@@ -322,7 +403,7 @@ module.exports = {
                         }
                     } catch (e) {
                         console.error('open setup interaction error:', e.message);
-                        if (!i.replied && !i.deferred) await i.reply({ content: '❌ حدث خطأ أثناء معالجة الطلب.', ephemeral: true }).catch(() => {});
+                        if (!i.replied && !i.deferred) await i.reply({ content: '❌ حدث خطأ أثناء معالجة الطلب. تأكد من طول النصوص وصحة القيم، ثم حاول مرة أخرى.', ephemeral: true }).catch(() => {});
                     }
                 });
 
@@ -349,14 +430,14 @@ module.exports = {
                             if (emoji.length > 100) {
                                 return await mi.reply({ content: '❌ الإيموجي غير صالح.', ephemeral: true });
                             }
-                            openConfig.openButton.label = label || 'Open';
+                            openConfig.openButton.label = (label || 'اوبن').slice(0, 80);
                             openConfig.openButton.emoji = emoji || null;
                             if (styleRaw && !['primary','secondary','success','danger','ازرق','أزرق','رمادي','رصاصي','اخضر','أخضر','احمر','أحمر'].includes(styleRaw.toLowerCase())) {
-                                return await mi.reply({ content: '❌ لون زر Open غير صالح. مثال: اخضر / أحمر / primary.', ephemeral: true });
+                                return await mi.reply({ content: '❌ لون زر الأوبن غير صالح. مثال : أخضر / أحمر / رمادي / أزرق.', ephemeral: true });
                             }
                             openConfig.openButton.style = resolveButtonStyle(styleRaw, 'Success');
                             persistOpenConfig();
-                            await mi.reply({ content: '✅ تم تحديث زر Open.', ephemeral: true });
+                            await mi.reply({ content: '✅ تم تحديث زر الأوبن.', ephemeral: true });
                             await refreshOpenPanel();
                             return;
                         }
@@ -364,7 +445,7 @@ module.exports = {
                         if (mi.customId === `open_setup_modal_counterstyle_${openConfigKey}`) {
                             const styleRaw = mi.fields.getTextInputValue('counter_style').trim();
                             if (styleRaw && !['primary','secondary','success','danger','ازرق','أزرق','رمادي','رصاصي','اخضر','أخضر','احمر','أحمر'].includes(styleRaw.toLowerCase())) {
-                                return await mi.reply({ content: '❌ لون غير صالح. استخدم: اخضر/أحمر/رمادي/أزرق أو primary/secondary/success/danger', ephemeral: true });
+                                return await mi.reply({ content: '❌ لون غير صالح. استخدم : أخضر / أحمر / رمادي / أزرق.', ephemeral: true });
                             }
                             openConfig.counterButton.style = resolveButtonStyle(styleRaw, 'Secondary');
                             persistOpenConfig();
@@ -381,6 +462,43 @@ module.exports = {
                             openConfig.counterButton.emoji = emojiRaw || null;
                             persistOpenConfig();
                             await mi.reply({ content: '✅ تم تحديث إيموجي العداد النصي.', ephemeral: true });
+                            await refreshOpenPanel();
+                            return;
+                        }
+
+                        if (mi.customId === `open_setup_modal_reorder_${openConfigKey}`) {
+                            const raw = mi.fields.getTextInputValue('images_order').trim();
+                            const parts = raw.split(/\s+/).map(v => parseInt(v, 10)).filter(n => Number.isInteger(n));
+                            const size = openConfig.images.length;
+                            const expected = new Set(Array.from({ length: size }, (_, i) => i + 1));
+                            const provided = new Set(parts);
+                            if (parts.length !== size || provided.size !== size || [...provided].some(n => !expected.has(n))) {
+                                return await mi.reply({ content: `❌ الترتيب غير صالح. يجب كتابة كل الأرقام مرة واحدة من 1 إلى ${size}.`, ephemeral: true });
+                            }
+                            const oldImages = [...openConfig.images];
+                            const oldButtonIdx = openConfig.buttonImageIndex;
+                            const oldButtonImage = oldButtonIdx >= 0 ? oldImages[oldButtonIdx] : null;
+                            openConfig.images = parts.map(n => oldImages[n - 1]);
+                            openConfig.imageUrls = openConfig.images.map(img => img.imageUrl);
+                            if (oldButtonImage) {
+                                openConfig.buttonImageIndex = openConfig.images.findIndex(img => img.imageUrl === oldButtonImage.imageUrl && img.localImagePath === oldButtonImage.localImagePath);
+                            }
+                            if (openConfig.buttonImageIndex < 0) openConfig.buttonImageIndex = openConfig.images.length - 1;
+                            persistOpenConfig();
+                            await mi.reply({ content: '✅ تم ترتيب الصور بنجاح.', ephemeral: true });
+                            await refreshOpenPanel();
+                            return;
+                        }
+
+                        if (mi.customId === `open_setup_modal_buttonimage_${openConfigKey}`) {
+                            const raw = mi.fields.getTextInputValue('button_image_index').trim();
+                            const oneBased = parseInt(raw, 10);
+                            if (!Number.isInteger(oneBased) || oneBased < 1 || oneBased > openConfig.images.length) {
+                                return await mi.reply({ content: `❌ رقم الصورة غير صالح. اختر رقم من 1 إلى ${openConfig.images.length}.`, ephemeral: true });
+                            }
+                            openConfig.buttonImageIndex = oneBased - 1;
+                            persistOpenConfig();
+                            await mi.reply({ content: `✅ تم تحديد الصورة رقم ${oneBased} كصورة الأزرار.`, ephemeral: true });
                             await refreshOpenPanel();
                             return;
                         }
@@ -405,6 +523,7 @@ module.exports = {
                             }
                             openConfig.images.push({ imageUrl, localImagePath: filename });
                             openConfig.imageUrls = openConfig.images.map(img => img.imageUrl);
+                            if (openConfig.buttonImageIndex < 0) openConfig.buttonImageIndex = openConfig.images.length - 1;
                             persistOpenConfig();
                             await mi.editReply({ content: `✅ تم إضافة الصورة رقم ${openConfig.images.length}.` });
                             await refreshOpenPanel();

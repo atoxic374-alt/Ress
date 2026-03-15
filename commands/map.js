@@ -124,7 +124,7 @@ module.exports = {
             const isOpenMode = args[0] && args[0].toLowerCase() === 'open';
             if (isOpenMode) {
                 if (!config?.open?.enabled) {
-                    return message.reply('⚠️ نظام map open غير مفعل حالياً.').catch(() => {});
+                    return message.reply('⚠️ نظام **الخريطة - الأوبن** غير مفعل حالياً.').catch(() => {});
                 }
 
                 const openImages = Array.isArray(config.open.images) ? config.open.images : [];
@@ -142,10 +142,12 @@ module.exports = {
                     ? localImages
                     : (remoteImages.length > 0 ? remoteImages : [config.imageUrl].filter(Boolean));
 
-                if (imagesToSend.length > 1) {
-                    for (const url of imagesToSend.slice(0, -1)) {
-                        await message.channel.send({ files: [url] }).catch(() => {});
-                    }
+                let buttonImageIndex = Number.isInteger(config.open?.buttonImageIndex) ? config.open.buttonImageIndex : (imagesToSend.length - 1);
+                if (buttonImageIndex < 0 || buttonImageIndex >= imagesToSend.length) buttonImageIndex = imagesToSend.length - 1;
+
+                const imagesBeforeButtons = imagesToSend.filter((_, idx) => idx !== buttonImageIndex);
+                for (const url of imagesBeforeButtons) {
+                    await message.channel.send({ files: [url] }).catch(() => {});
                 }
 
                 const previousActive = Array.isArray(config.open.activeUsers) ? [...new Set(config.open.activeUsers)] : [];
@@ -160,7 +162,7 @@ module.exports = {
                 const counterMode = config.open?.counterButton?.mode === 'label_number' ? 'label_number' : 'emoji_digits';
                 const openButton = new ButtonBuilder()
                     .setCustomId(`map_open_toggle_${configKey}`)
-                    .setLabel(config.open?.openButton?.label || 'Open')
+                    .setLabel((config.open?.openButton?.label || 'اوبن').slice(0, 80))
                     .setStyle(config.open?.openButton?.style || ButtonStyle.Success)
                     .setDisabled(!config.open?.roleId || !/^\d{17,19}$/.test(config.open.roleId));
 
@@ -175,7 +177,7 @@ module.exports = {
                     .setDisabled(true);
 
                 if (counterMode === 'label_number') {
-                    counterButton.setLabel(`${counterBaseLabel}: ${activeUsers.length.toLocaleString('en-US')}`);
+                    counterButton.setLabel(`${counterBaseLabel} : ${activeUsers.length.toLocaleString('en-US')}`);
                     if (config.open?.counterButton?.emoji) {
                         counterButton.setEmoji(config.open.counterButton.emoji);
                     }
@@ -190,8 +192,9 @@ module.exports = {
                     components: [row]
                 };
 
-                const lastImage = imagesToSend[imagesToSend.length - 1];
-                if (lastImage) panelPayload.files = [lastImage];
+                const buttonsImage = imagesToSend[buttonImageIndex] || imagesToSend[imagesToSend.length - 1];
+
+                if (buttonsImage) panelPayload.files = [buttonsImage];
 
                 await message.channel.send(panelPayload);
                 return;

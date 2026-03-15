@@ -3553,7 +3553,7 @@ async function handleMapOpenInteraction(interaction) {
             if (counterIndex !== -1) {
                 let updatedCounter = ButtonBuilder.from(updatedRow.components[counterIndex]).setDisabled(true);
                 if (counterMode === 'label_number') {
-                    updatedCounter = updatedCounter.setLabel(`المتفعّلين: ${formattedCount}`);
+                    updatedCounter = updatedCounter.setLabel(`المتفعّلين : ${formattedCount}`);
                     if (config.open?.counterButton?.emoji) updatedCounter = updatedCounter.setEmoji(config.open.counterButton.emoji);
                 } else {
                     updatedCounter = updatedCounter.setLabel('المتفعّلين').setEmoji(countEmoji);
