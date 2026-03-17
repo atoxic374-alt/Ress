@@ -90,6 +90,15 @@ async function storeImageLocally(url, guildId, slotKey, previousValue = null) {
   return `local:${fileName}`;
 }
 
+
+function formatSettingValue(value, fallback = 'غير مضبوط') {
+  if (value === null || value === undefined || value === '') return fallback;
+  const text = String(value);
+  if (text.startsWith('local:')) return `محلي (${text.slice(6)})`;
+  if (/^https?:\/\//i.test(text)) return text.length > 90 ? `${text.slice(0, 90)}...` : text;
+  return text.length > 90 ? `${text.slice(0, 90)}...` : text;
+}
+
 function baseConfig() {
   return {
     ticketNameMode: 'counter',
@@ -190,11 +199,12 @@ function countClaimedByAdmin(tickets, adminId) {
 
 function hasStaffAccess(member, config) {
   const adminRoles = getAdminRoles(config);
-  const roleIds = member?.roles?.cache
-    ? [...member.roles.cache.keys()]
-    : Array.isArray(member?.roles)
-      ? member.roles
-      : (member?.roles?.valueOf ? member.roles.valueOf() : []);
+  let roleIds = [];
+
+  if (member?.roles?.cache) roleIds = [...member.roles.cache.keys()];
+  else if (Array.isArray(member?.roles)) roleIds = member.roles;
+  else if (Array.isArray(member?.roles?.value)) roleIds = member.roles.value;
+  else if (Array.isArray(member?.roles?.ids)) roleIds = member.roles.ids;
 
   const hasRole = roleIds.some((id) => adminRoles.includes(id) || (config.responsibleRoleIds || []).includes(id));
   const isAdmin = member?.permissions?.has?.(PermissionFlagsBits.Administrator) || false;
@@ -371,7 +381,15 @@ async function handleOpenRequest(interaction, guildId, reasonKey) {
   );
 
   if (config.messages.acceptance) await targetChannel.send({ content: config.messages.acceptance });
-  if (config.claimFromDedicatedChannel && config.claimChannelSeparator) await targetChannel.send({ content: config.claimChannelSeparator });
+  if (config.claimFromDedicatedChannel && config.claimChannelSeparator) {
+    const separatorValue = config.claimChannelSeparator;
+    const separatorImage = resolveImageForSend(separatorValue);
+    if (separatorImage && (String(separatorValue).startsWith('local:') || /^https?:\/\//i.test(String(separatorValue)))) {
+      await targetChannel.send({ files: [separatorImage] }).catch(() => {});
+    } else {
+      await targetChannel.send({ content: separatorValue }).catch(() => {});
+    }
+  }
 
   await targetChannel.send({
     content: `**طلب تكت :** <@${interaction.user.id}>\n**السبب :** ${config.reasons?.[reasonKey]?.name || `سبب ${reasonKey}`}`,
@@ -445,7 +463,14 @@ async function handleClaimFromRequest(interaction, reqId) {
     return;
   }
 
-  const channel = await createTicketChannel({ guild: interaction.guild, member, config, reasonKey: req.reasonKey, tickets, pendingRequests });
+  let channel;
+  try {
+    channel = await createTicketChannel({ guild: interaction.guild, member, config, reasonKey: req.reasonKey, tickets, pendingRequests });
+  } catch (error) {
+    console.error('ticket claimreq create channel error:', error?.message || error);
+    await interaction.reply({ content: '**فشل انشاء التكت من طلب الاستلام، تأكد من صلاحيات البوت والكاتوقري.**', ephemeral: true });
+    return;
+  }
   tickets[channel.id].claimedBy = interaction.user.id;
 
   if (config.hideOnClaim) {
@@ -657,13 +682,13 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         .setDescription([
           `**الاسم:** ${reason.name || `سبب ${idx}`}`,
           `**اسم التكت:** ${reason.ticketName || 'افتراضي'}`,
-          `**صورة الفتح:** ${reason.openImage ? 'مضبوطة' : 'غير مضبوطة'}`,
-          `**الايموجي:** ${reason.emoji || '🎫'}`,
+          `**صورة الفتح:** ${formatSettingValue(reason.openImage)}`,
+          `**الايموجي:** ${formatSettingValue(reason.emoji || '🎫')}`,
           `**الكاتوقري:** ${reason.categoryId ? `<#${reason.categoryId}>` : 'افتراضي'}`,
-          `**صورة الاستلام:** ${reason.claimImage ? 'مضبوطة' : 'غير مضبوطة'}`,
-          `**قبل الصورة:** ${reason.beforeImage ? 'مضبوطة' : 'غير مضبوطة'}`,
-          `**بعد الصورة:** ${reason.afterImage ? 'مضبوطة' : 'غير مضبوطة'}`,
-          `**وصف المنيو:** ${reason.description ? 'مضبوط' : 'غير مضبوط'}`
+          `**صورة الاستلام:** ${formatSettingValue(reason.claimImage)}`,
+          `**قبل الصورة:** ${formatSettingValue(reason.beforeImage)}`,
+          `**بعد الصورة:** ${formatSettingValue(reason.afterImage)}`,
+          `**وصف المنيو:** ${formatSettingValue(reason.description)}`
         ].join('\n'));
 
       await setupMessage.edit({
@@ -743,10 +768,10 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       const state = new EmbedBuilder()
         .setTitle('**اعدادات الرسائل**')
         .setDescription([
-          `**1) رسالة القبول :** ${config.messages.acceptance ? 'مضبوطة' : 'غير مضبوطة'}`,
-          `**2) قبل الصورة :** ${config.messages.beforeImage ? 'مضبوطة' : 'غير مضبوطة'}`,
-          `**3) صورة التكت :** ${config.messages.ticketImage ? 'مضبوطة' : 'غير مضبوطة'}`,
-          `**4) بعد الصورة :** ${config.messages.afterImage ? 'مضبوطة' : 'غير مضبوطة'}`
+          `**1) رسالة القبول :** ${formatSettingValue(config.messages.acceptance)}`,
+          `**2) قبل الصورة :** ${formatSettingValue(config.messages.beforeImage)}`,
+          `**3) صورة التكت :** ${formatSettingValue(config.messages.ticketImage)}`,
+          `**4) بعد الصورة :** ${formatSettingValue(config.messages.afterImage)}`
         ].join('\n'));
 
       await setupMessage.edit({
@@ -953,8 +978,22 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
             return;
           }
           config.claimChannelId = askedChannel;
-          const sep = await ask('**ارسل : فاصلة شات الاستلام (0 للتفريغ)**');
-          config.claimChannelSeparator = sep === '0' ? '' : (sep || config.claimChannelSeparator);
+          const sep = await ask('**ارسل : فاصلة شات الاستلام (نص او صورة) - 0 للتفريغ**');
+          if (sep === '0') {
+            removeStoredImage(config.claimChannelSeparator);
+            config.claimChannelSeparator = '';
+          } else if (sep) {
+            if (/^https?:\/\//i.test(sep)) {
+              try {
+                config.claimChannelSeparator = await storeImageLocally(sep, message.guild.id, 'claim_separator', config.claimChannelSeparator);
+              } catch {
+                config.claimChannelSeparator = sep;
+              }
+            } else {
+              removeStoredImage(config.claimChannelSeparator);
+              config.claimChannelSeparator = sep;
+            }
+          }
         }
         await refresh( `**تم التحديث : ${config.claimFromDedicatedChannel ? 'مفعل' : 'مقفل'}**`);
         return;
