@@ -1,5 +1,6 @@
 const {
   EmbedBuilder,
+  AttachmentBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -20,9 +21,13 @@ const aliases = ['تكت'];
 const dataPath = path.join(__dirname, '..', 'data', 'ticketConfig.json');
 const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
 const ticketImagesDir = path.join(__dirname, '..', 'data', 'ticket_images');
+const pointsPath = path.join(__dirname, '..', 'data', 'points.json');
 
 let handlersRegistered = false;
 const pingCooldowns = new Map();
+const ticketClaimLocks = new Set();
+const activeTicketSetupSessions = new Map();
+const recentTicketCommandMessages = new Set();
 
 function makeTicketEmbed(title, description, options = {}) {
   const embed = colorManager.createEmbed().setTitle(title).setDescription(description || null);
@@ -54,6 +59,66 @@ function buildMentionChunks(roleIds = [], maxLen = 1800) {
   return chunks;
 }
 
+function resolveButtonStyle(styleValue) {
+  const safe = String(styleValue || 'primary').toLowerCase();
+  if (safe === 'success') return ButtonStyle.Success;
+  if (safe === 'danger') return ButtonStyle.Danger;
+  if (safe === 'secondary') return ButtonStyle.Secondary;
+  return ButtonStyle.Primary;
+}
+
+function loadPoints() {
+  try {
+    if (!fs.existsSync(pointsPath)) return {};
+    const parsed = JSON.parse(fs.readFileSync(pointsPath, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePoints(points) {
+  fs.writeFileSync(pointsPath, JSON.stringify(points, null, 2), 'utf8');
+}
+
+async function buildTicketTranscript(channel, maxMessages = 200) {
+  try {
+    const lines = [];
+    let lastId = null;
+    let fetchedTotal = 0;
+
+    while (fetchedTotal < maxMessages) {
+      const remaining = Math.min(100, maxMessages - fetchedTotal);
+      const batch = await channel.messages.fetch({ limit: remaining, before: lastId }).catch(() => null);
+      if (!batch || batch.size === 0) break;
+
+      const ordered = [...batch.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+      for (const msg of ordered) {
+        const ts = new Date(msg.createdTimestamp).toISOString();
+        const author = msg.author?.tag || msg.author?.username || msg.author?.id || 'unknown';
+        const content = (msg.content || '').replace(/\n/g, ' ').trim();
+        const atts = msg.attachments?.size
+          ? ` [attachments:${[...msg.attachments.values()].map((a) => a.url).join(' , ')}]`
+          : '';
+        const embedText = msg.embeds?.length
+          ? ` [embeds:${msg.embeds.map((e) => `${e.title || ''} ${e.description || ''}`.trim()).join(' | ')}]`
+          : '';
+        lines.push(`[${ts}] ${author}: ${content || '(empty)'}${atts}${embedText}`);
+      }
+
+      fetchedTotal += batch.size;
+      lastId = ordered[0]?.id;
+      if (!lastId) break;
+    }
+
+    if (lines.length === 0) return null;
+    const fileName = `transcript-${channel.id}.txt`;
+    return new AttachmentBuilder(Buffer.from(lines.join('\n'), 'utf8'), { name: fileName });
+  } catch {
+    return null;
+  }
+}
+
 async function sendClaimAnnounce({ channel, config, ticket, claimerId, claimImage }) {
   const adminRoleIds = getAdminRoles(config)
     .map((id) => String(id || '').trim())
@@ -67,8 +132,14 @@ async function sendClaimAnnounce({ channel, config, ticket, claimerId, claimImag
 
   const claimEmbed = makeTicketEmbed(
     'Ticket claimed',
-    `**Ticket claimed by :** <@${claimerId}>\n**Reason :** ${reasonName}`
+    `**Ticket claimed by :** <@${claimerId}>\n**Reason :** ${reasonName}${ticket.memberId ? `\n**Member :** <@${ticket.memberId}>` : ''}`
   );
+
+  const modalAnswers = ticket.openModalAnswers && typeof ticket.openModalAnswers === 'object' ? ticket.openModalAnswers : {};
+  const modalFields = Object.entries(modalAnswers).slice(0, 10);
+  for (const [label, value] of modalFields) {
+    claimEmbed.addFields({ name: label.slice(0, 256), value: String(value || '-').slice(0, 1024), inline: false });
+  }
 
   if (claimImage) {
     await channel.send({ files: [claimImage], embeds: [claimEmbed] }).catch(() => {});
@@ -77,12 +148,13 @@ async function sendClaimAnnounce({ channel, config, ticket, claimerId, claimImag
   }
 }
 
-function buildPostCloseControls(guildId, channelId, ticket = {}) {
+function buildPostCloseControls(guildId, panelId, channelId, ticket = {}) {
   const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`ticket_down_${guildId}_${channelId}`).setLabel('-1').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`ticket_delete_${guildId}_${channelId}`).setLabel('حذف').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId(`ticket_up1_${guildId}_${channelId}`).setLabel('1').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`ticket_up2_${guildId}_${channelId}`).setLabel('2').setStyle(ButtonStyle.Success)
+    new ButtonBuilder().setCustomId(`ticket_down2_${guildId}_${panelId}_${channelId}`).setLabel('-2').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`ticket_down_${guildId}_${panelId}_${channelId}`).setLabel('-1').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`ticket_delete_${guildId}_${panelId}_${channelId}`).setLabel('حذف').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`ticket_up1_${guildId}_${panelId}_${channelId}`).setLabel('1').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`ticket_up2_${guildId}_${panelId}_${channelId}`).setLabel('2').setStyle(ButtonStyle.Success)
   );
 
   const memberHidden = ticket.memberHidden !== false;
@@ -196,6 +268,7 @@ function baseConfig() {
     claimChannelId: null,
     claimChannelSeparator: '────────────────',
     keepClosedTickets: false,
+    deleteClaimMessageOnClaim: false,
     messages: {
       acceptance: '',
       beforeImage: '',
@@ -257,6 +330,16 @@ function getPanelData(guildId, panelId = 'default') {
   return { config, tickets, pendingRequests };
 }
 
+function findTicketPanel(guildId, channelId, preferredPanelId = 'default') {
+  const { guild } = getGuildData(guildId);
+  if (guild.panels?.[preferredPanelId]?.tickets?.[channelId]) return preferredPanelId;
+  const entries = Object.entries(guild.panels || {});
+  for (const [pid, panel] of entries) {
+    if (panel?.tickets?.[channelId]) return pid;
+  }
+  return preferredPanelId;
+}
+
 function normalizeId(input) {
   if (!input) return null;
   const match = String(input).trim().match(/^(?:<@&?|<#)?(\d{16,20})>?$/);
@@ -269,6 +352,48 @@ function extractChannelId(input) {
   if (normalized) return normalized;
   const any = String(input).match(/(\d{16,20})/);
   return any ? any[1] : null;
+}
+
+function normalizeResponsibilityInput(input) {
+  return String(input || '')
+    .replace(/[\u0640]/g, '')
+    .replace(/[\u061F\?\!\,\.\:\;\-\_\=]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function extractResponsibilityNameFromInput(input) {
+  const normalized = normalizeResponsibilityInput(input);
+  if (!normalized) return null;
+
+  const patterns = [
+    /^مسؤول(?:ية|يه)?\s+(.*)$/i,
+    /^المسؤول(?:ية|يه)?\s+(.*)$/i,
+    /^responsibility\s+(.*)$/i,
+    /^resp\s+(.*)$/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (match && match[1]) return match[1].trim();
+  }
+  return normalized;
+}
+
+function findResponsibilityByName(rawName, responsibilities = {}) {
+  const candidate = extractResponsibilityNameFromInput(rawName);
+  if (!candidate) return null;
+  const entries = Object.entries(responsibilities || {});
+  if (!entries.length) return null;
+
+  const exact = entries.find(([name]) => normalizeResponsibilityInput(name) === candidate);
+  if (exact) return exact[0];
+
+  const contains = entries.find(([name]) => normalizeResponsibilityInput(name).includes(candidate));
+  if (contains) return contains[0];
+
+  return null;
 }
 
 function createMainEmbed(config, guildName) {
@@ -299,10 +424,10 @@ function createMainEmbed(config, guildName) {
 }
 
 function getAdminRoles(config) {
-  if (!config.useGlobalAdminRoles) return config.adminRoleIds || [];
+  if (!config.useGlobalAdminRoles) return (config.adminRoleIds || []).map((id) => String(id));
   try {
     const fromFile = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'data', 'adminRoles.json'), 'utf8'));
-    return Array.isArray(fromFile) ? fromFile : [];
+    return Array.isArray(fromFile) ? fromFile.map((id) => String(id)) : [];
   } catch {
     return [];
   }
@@ -312,12 +437,30 @@ function countOpenMemberTickets(tickets, userId) {
   return Object.values(tickets).filter((t) => t.status === 'open' && t.memberId === userId).length;
 }
 
+function countPendingMemberRequests(pendingRequests, userId) {
+  return Object.values(pendingRequests || {}).filter((req) => req?.userId === userId).length;
+}
+
 function countClaimedByAdmin(tickets, adminId) {
   return Object.values(tickets).filter((t) => t.status === 'open' && t.claimedBy === adminId).length;
 }
 
+function prunePendingRequests(pendingRequests, maxAgeMs = 2 * 60 * 60 * 1000) {
+  const now = Date.now();
+  let changed = false;
+  for (const [reqId, req] of Object.entries(pendingRequests || {})) {
+    const createdAt = Number(req?.createdAt || 0);
+    if (!createdAt || now - createdAt > maxAgeMs) {
+      delete pendingRequests[reqId];
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function hasStaffAccess(member, config) {
   const adminRoles = getAdminRoles(config);
+  const responsibleRoles = (config.responsibleRoleIds || []).map((id) => String(id));
   let roleIds = [];
 
   if (member?.roles?.cache) roleIds = [...member.roles.cache.keys()];
@@ -325,14 +468,21 @@ function hasStaffAccess(member, config) {
   else if (Array.isArray(member?.roles?.value)) roleIds = member.roles.value;
   else if (Array.isArray(member?.roles?.ids)) roleIds = member.roles.ids;
 
-  const hasRole = roleIds.some((id) => adminRoles.includes(id) || (config.responsibleRoleIds || []).includes(id));
-  const isAdmin = member?.permissions?.has?.(PermissionFlagsBits.Administrator) || false;
-  return hasRole || isAdmin;
+  roleIds = roleIds.map((id) => String(id));
+  const hasRole = roleIds.some((id) => adminRoles.includes(id) || responsibleRoles.includes(id));
+  return hasRole;
 }
 
 function canManageTicket(interaction, ticket, config) {
   if (interaction.user.id === ticket.claimedBy) return true;
-  return hasStaffAccess(interaction.member, config);
+  return isAdminOnly(interaction, config);
+}
+
+function isAdminOnly(interaction, config) {
+  const adminRoles = getAdminRoles(config);
+  const roleIds = interaction.member?.roles?.cache ? [...interaction.member.roles.cache.keys()] : [];
+  const hasAdminRole = roleIds.some((id) => adminRoles.includes(id));
+  return hasAdminRole;
 }
 
 function sanitizeName(input) {
@@ -350,7 +500,8 @@ async function buildTicketControls(guildId, panelId, channelId, config, options 
   if (includeClaimButton) row1Buttons.push(new ButtonBuilder().setCustomId(`ticket_claim_${guildId}_${panelId}_${channelId}`).setLabel('استلام').setStyle(ButtonStyle.Success));
   row1Buttons.push(
     new ButtonBuilder().setCustomId(`ticket_close_${guildId}_${panelId}_${channelId}`).setLabel('اقفال').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId(`ticket_rename_${guildId}_${panelId}_${channelId}`).setLabel('تغيير الاسم').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId(`ticket_rename_${guildId}_${panelId}_${channelId}`).setLabel('تغيير الاسم').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`ticket_reassign_${guildId}_${panelId}_${channelId}`).setLabel('تغيير المستلم').setStyle(ButtonStyle.Success)
   );
   const row1 = new ActionRowBuilder().addComponents(row1Buttons);
 
@@ -363,7 +514,16 @@ async function buildTicketControls(guildId, panelId, channelId, config, options 
   const responsibilities = loadResponsibilities();
   const responsibilityNames = Object.keys(responsibilities).slice(0, 25);
   const responsibilityOptions = responsibilityNames
-    .map((respName, index) => ({ label: respName.slice(0, 100), value: `respidx_${index}` }));
+    .map((respName, index) => {
+      const count = Array.isArray(responsibilities?.[respName]?.responsibles)
+        ? responsibilities[respName].responsibles.length
+        : 0;
+      return {
+        label: respName.slice(0, 100),
+        value: `respidx_${index}`,
+        description: `عدد المسؤولين: ${count}`
+      };
+    });
 
   const row3 = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
@@ -376,7 +536,7 @@ async function buildTicketControls(guildId, panelId, channelId, config, options 
   return [row1, row2, row3];
 }
 
-async function createTicketChannel({ guild, member, config, reasonKey, tickets, pendingRequests, includeClaimButton = true, panelId = 'default' }) {
+async function createTicketChannel({ guild, member, config, reasonKey, tickets, pendingRequests, includeClaimButton = true, panelId = 'default', openModalAnswers = null }) {
   const reason = config.reasons?.[reasonKey] || {};
   const prefix = sanitizeName(reason.ticketName || config.ticketNamePrefix || 'ticket') || 'ticket';
   const memberId = member?.id || member?.user?.id || null;
@@ -418,6 +578,8 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
   if (openImage) {
     await channel.send({ files: [openImage] }).catch(() => {});
   }
+  const outroText = renderTicketText(reason.afterImage || config.messages.afterImage, memberId);
+  if (outroText) await channel.send({ content: outroText }).catch(() => {});
 
   await channel.send({ components: controls });
 
@@ -431,6 +593,7 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
     claimedBy: null,
     status: 'open',
     extraMembers: [],
+    openModalAnswers: openModalAnswers && typeof openModalAnswers === 'object' ? openModalAnswers : undefined,
     createdAt: Date.now()
   };
 
@@ -439,14 +602,26 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
 }
 
 async function applyHideOnClaim(channel, guild, config, claimerId, memberId, extraMembers = []) {
-  const adminRoles = getAdminRoles(config);
-  const visibleStaffRoles = [...new Set([...adminRoles, ...(config.responsibleRoleIds || [])])];
+  const adminRoles = getAdminRoles(config)
+    .map((id) => String(id || '').trim())
+    .filter((id) => /^\d{16,20}$/.test(id) && guild.roles.cache.has(id));
+  const visibleStaffRoles = [...new Set([...(config.responsibleRoleIds || [])])]
+    .map((id) => String(id || '').trim())
+    .filter((id) => /^\d{16,20}$/.test(id) && guild.roles.cache.has(id));
+  const allStaffRoles = [...new Set([...adminRoles, ...visibleStaffRoles])];
 
-  for (const roleId of visibleStaffRoles) {
+  await channel.permissionOverwrites.edit(guild.roles.everyone.id, {
+    ViewChannel: false,
+    SendMessages: false,
+    ReadMessageHistory: false
+  }).catch(() => {});
+
+  for (const roleId of allStaffRoles) {
+    const shouldSee = visibleStaffRoles.includes(roleId);
     await channel.permissionOverwrites.edit(roleId, {
-      ViewChannel: true,
-      SendMessages: true,
-      ReadMessageHistory: true
+      ViewChannel: shouldSee,
+      SendMessages: shouldSee,
+      ReadMessageHistory: shouldSee
     }).catch(() => {});
   }
 
@@ -475,16 +650,29 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
   await interaction.deferReply({ ephemeral: true }).catch(() => {});
   const guild = interaction.guild;
   const { config, tickets, pendingRequests } = getPanelData(guildId, panelId || 'default');
+  const pruned = prunePendingRequests(pendingRequests);
+  if (pruned) setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
+
+  if (!config.autoCreateOnRequest && !config.claimFromDedicatedChannel && !interaction.channelId) {
+    await interaction.editReply({ embeds: [makeTicketEmbed('خطأ', '**لا يمكن إنشاء طلب الاستلام بدون شات صالح.**', 0xED4245)] });
+    return;
+  }
+
+  if (!config.autoCreateOnRequest && config.claimFromDedicatedChannel && !config.claimChannelId) {
+    await interaction.editReply({ embeds: [makeTicketEmbed('خطأ', '**لا يمكن فتح الطلب الآن: شات الاستلام المخصص غير محدد.**', 0xED4245)] });
+    return;
+  }
 
   const openCount = countOpenMemberTickets(tickets, interaction.user.id);
-  if (openCount >= (config.memberOpenLimit || 1)) {
+  const pendingCount = countPendingMemberRequests(pendingRequests, interaction.user.id);
+  if ((openCount + pendingCount) >= (config.memberOpenLimit || 1)) {
     await interaction.editReply({ embeds: [makeTicketEmbed('تنبيه', `**الحد : وصلت لاقصى تكت مفتوح (${config.memberOpenLimit}).**`, 0xED4245)] });
     return;
   }
 
   if (config.autoCreateOnRequest) {
     try {
-      const channel = await createTicketChannel({ guild, member: interaction.member, config, reasonKey, tickets, pendingRequests, panelId: panelId || 'default' });
+      const channel = await createTicketChannel({ guild, member: interaction.member, config, reasonKey, tickets, pendingRequests, panelId: panelId || 'default', openModalAnswers: interaction.ticketModalAnswers || null });
       await interaction.editReply({ embeds: [makeTicketEmbed('تم', `**تم انشاء التكت :** <#${channel.id}>`, 0x57F287)] });
     } catch (error) {
       console.error('ticket open create channel error:', error?.message || error);
@@ -494,7 +682,21 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
   }
 
   const reqId = `${guildId}_${panelId || 'default'}_${interaction.user.id}_${Date.now()}`;
-  pendingRequests[reqId] = { guildId, panelId: panelId || 'default', userId: interaction.user.id, reasonKey, sourceChannelId: interaction.channelId, createdAt: Date.now() };
+  const duplicateRequest = Object.values(pendingRequests)
+    .find((req) => req.userId === interaction.user.id && req.panelId === (panelId || 'default'));
+  if (duplicateRequest) {
+    await interaction.editReply({ embeds: [makeTicketEmbed('تنبيه', '**لديك طلب استلام معلّق بالفعل، انتظر حتى تتم معالجته.**', 0xED4245)] });
+    return;
+  }
+  pendingRequests[reqId] = {
+    guildId,
+    panelId: panelId || 'default',
+    userId: interaction.user.id,
+    reasonKey,
+    sourceChannelId: interaction.channelId,
+    openModalAnswers: interaction.ticketModalAnswers || null,
+    createdAt: Date.now()
+  };
 
   const targetChannelId = config.claimFromDedicatedChannel ? config.claimChannelId : interaction.channelId;
   const targetChannel = await guild.channels.fetch(targetChannelId).catch(() => null);
@@ -511,10 +713,12 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
 
   const reasonImage = resolveImageForSend(config.reasons?.[reasonKey]?.openImage || config.messages.ticketImage);
 
-  if (!reasonImage && config.messages.acceptance) {
-    await targetChannel.send({ embeds: [makeTicketEmbed('قبول التكت', config.messages.acceptance)] });
+  const mentionChunks = buildMentionChunks(getAdminRoles(config));
+
+  if (config.messages.acceptance) {
+    await targetChannel.send({ embeds: [makeTicketEmbed('قبول التكت', config.messages.acceptance)] }).catch(() => {});
   }
-  if (!reasonImage && config.claimFromDedicatedChannel && config.claimChannelSeparator) {
+  if (config.claimFromDedicatedChannel && config.claimChannelSeparator) {
     const separatorValue = config.claimChannelSeparator;
     const separatorImage = resolveImageForSend(separatorValue);
     if (separatorImage && (String(separatorValue).startsWith('local:') || /^https?:\/\//i.test(String(separatorValue)))) {
@@ -524,16 +728,17 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
     }
   }
 
-  const mentionChunks = buildMentionChunks(getAdminRoles(config));
   for (const chunk of mentionChunks) {
     await targetChannel.send({ content: chunk }).catch(() => {});
   }
 
+  const requestSummary = `**العضو :** <@${interaction.user.id}>\n**السبب :** ${config.reasons?.[reasonKey]?.name || `سبب ${reasonKey}`}`;
+
   if (reasonImage) {
-    await targetChannel.send({ files: [reasonImage], components: [row] });
+    await targetChannel.send({ content: requestSummary, files: [reasonImage], components: [row] });
   } else {
     await targetChannel.send({
-      embeds: [makeTicketEmbed('طلب تكت', `**العضو :** <@${interaction.user.id}>\n**السبب :** ${config.reasons?.[reasonKey]?.name || `سبب ${reasonKey}`}`)],
+      embeds: [makeTicketEmbed('طلب تكت', requestSummary)],
       components: [row]
     });
   }
@@ -543,7 +748,14 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
 }
 
 async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
-  await interaction.deferReply().catch(() => {});
+  await interaction.deferReply({ ephemeral: true }).catch(() => {});
+  const lockKey = `claim:${guildId}:${panelId || 'default'}:${channelId}`;
+  if (ticketClaimLocks.has(lockKey)) {
+    await interaction.editReply({ embeds: [makeTicketEmbed('تنبيه', '**جاري معالجة الاستلام، حاول بعد لحظات.**', { user: interaction.user })] });
+    return;
+  }
+  ticketClaimLocks.add(lockKey);
+  try {
   const { config, tickets, pendingRequests } = getPanelData(guildId, panelId || 'default');
   const ticket = tickets[channelId];
   if (!ticket || ticket.status !== 'open' || interaction.channelId !== channelId) {
@@ -597,12 +809,16 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
     const mentionChunks = buildMentionChunks(getAdminRoles(config));
     const firstChunk = mentionChunks.shift() || null;
 
-    await interaction.message.edit({
-      content: firstChunk,
-      embeds: [claimEmbed],
-      files: claimImage ? [claimImage] : [],
-      components: updatedRows
-    }).catch(() => {});
+    if (config.deleteClaimMessageOnClaim) {
+      await interaction.message.delete().catch(() => {});
+    } else {
+      await interaction.message.edit({
+        content: firstChunk,
+        embeds: [claimEmbed],
+        files: claimImage ? [claimImage] : [],
+        components: updatedRows
+      }).catch(() => {});
+    }
 
     for (const chunk of mentionChunks) {
       await interaction.channel.send({ content: chunk }).catch(() => {});
@@ -610,16 +826,28 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
   }
 
   await interaction.editReply({ embeds: [makeTicketEmbed('تم', '**تم استلام التكت بنجاح.**', { user: interaction.user })] });
+  } finally {
+    ticketClaimLocks.delete(lockKey);
+  }
 }
 
 async function handleClaimFromRequest(interaction, reqId) {
-  await interaction.deferReply().catch(() => {});
+  await interaction.deferReply({ ephemeral: true }).catch(() => {});
+  const lockKey = `claimreq:${reqId}`;
+  if (ticketClaimLocks.has(lockKey)) {
+    await interaction.editReply({ embeds: [makeTicketEmbed('تنبيه', '**جاري معالجة هذا الطلب، حاول بعد لحظات.**', { user: interaction.user })] });
+    return;
+  }
+  ticketClaimLocks.add(lockKey);
+  try {
   const [guildId, panelId = 'default'] = reqId.split('_');
   const { config, tickets, pendingRequests } = getPanelData(guildId, panelId);
+  const pruned = prunePendingRequests(pendingRequests);
+  if (pruned) setGuildData(guildId, config, tickets, pendingRequests, panelId);
   const req = pendingRequests[reqId];
 
   if (!req) {
-    await interaction.editReply({ embeds: [makeTicketEmbed('تنبيه', '**انتهى الطلب.**', { user: interaction.user })] });
+    await interaction.editReply({ embeds: [makeTicketEmbed('تنبيه', '**انتهى الطلب.**', { user: interaction.user })], ephemeral: true });
     return;
   }
 
@@ -644,7 +872,17 @@ async function handleClaimFromRequest(interaction, reqId) {
 
   let channel;
   try {
-    channel = await createTicketChannel({ guild: interaction.guild, member, config, reasonKey: req.reasonKey, tickets, pendingRequests, includeClaimButton: false, panelId: req.panelId || panelId });
+    channel = await createTicketChannel({
+      guild: interaction.guild,
+      member,
+      config,
+      reasonKey: req.reasonKey,
+      tickets,
+      pendingRequests,
+      includeClaimButton: false,
+      panelId: req.panelId || panelId,
+      openModalAnswers: req.openModalAnswers || null
+    });
   } catch (error) {
     console.error('ticket claimreq create channel error:', error?.message || error);
     await interaction.editReply({ embeds: [makeTicketEmbed('خطأ', '**فشل انشاء التكت من طلب الاستلام، تأكد من صلاحيات البوت والكاتوقري.**', { user: interaction.user })] });
@@ -660,9 +898,34 @@ async function handleClaimFromRequest(interaction, reqId) {
   const claimImage = resolveImageForSend(config.reasons?.[createdTicket.reasonKey]?.claimImage);
   await sendClaimAnnounce({ channel, config, ticket: createdTicket, claimerId: interaction.user.id, claimImage });
 
+  if (interaction.message?.editable) {
+    const reason = config.reasons?.[createdTicket.reasonKey] || {};
+    const claimEmbed = makeTicketEmbed(
+      'Ticket claimed',
+      `**Ticket claimed by :** <@${interaction.user.id}>\n**Reason :** ${reason.name || `سبب ${createdTicket.reasonKey}`}\n**Member :** <@${createdTicket.memberId}>`
+    );
+    const updatedRows = interaction.message.components.map((row) => {
+      const components = row.components.map((component) => {
+        if (component.customId?.startsWith('ticket_claimreq_')) {
+          return ButtonBuilder.from(component).setDisabled(true).setLabel('تم الاستلام');
+        }
+        return component;
+      });
+      return new ActionRowBuilder().addComponents(components);
+    });
+    if (config.deleteClaimMessageOnClaim) {
+      await interaction.message.delete().catch(() => {});
+    } else {
+      await interaction.message.edit({ embeds: [claimEmbed], components: updatedRows }).catch(() => {});
+    }
+  }
+
   delete pendingRequests[reqId];
   setGuildData(guildId, config, tickets, pendingRequests, panelId);
   await interaction.editReply({ embeds: [makeTicketEmbed('تم استلام التكت', `**تم الاستلام والانشاء :** <#${channel.id}>`)] });
+  } finally {
+    ticketClaimLocks.delete(lockKey);
+  }
 }
 
 async function handleClose(interaction, guildId, panelId, channelId) {
@@ -678,18 +941,24 @@ async function handleClose(interaction, guildId, panelId, channelId) {
     return;
   }
 
-  ticket.status = 'closed';
   if (ticket.closedAt) {
     await interaction.reply({ embeds: [makeTicketEmbed('تنبيه', '**التكت مقفل مسبقاً.**', 0xED4245)], ephemeral: true });
     return;
   }
+
+  ticket.status = 'closed';
   ticket.closedAt = Date.now();
   ticket.memberHidden = true;
   ticket.claimerHidden = true;
 
+  const transcriptFile = await buildTicketTranscript(interaction.channel).catch(() => null);
+
   if (!config.keepClosedTickets) {
     delete tickets[channelId];
     setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
+    if (transcriptFile) {
+      await interaction.channel.send({ files: [transcriptFile], content: 'Transcript before delete' }).catch(() => {});
+    }
     await interaction.reply({ embeds: [makeTicketEmbed('اقفال', '**سيتم حذف التكت خلال 3 ثواني.**', 0xED4245)], ephemeral: true });
     setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
     return;
@@ -718,11 +987,167 @@ async function handleClose(interaction, guildId, panelId, channelId) {
 
   await interaction.channel.send({
     embeds: [makeTicketEmbed('التكت مقفل', '**تم إقفال التكت، يمكنك استخدام أزرار الإدارة بالأسفل.**', 0xED4245)],
-    components: buildPostCloseControls(guildId, channelId, ticket)
+    components: buildPostCloseControls(guildId, panelId || 'default', channelId, ticket)
   }).catch(() => {});
+
+  if (transcriptFile) {
+    await interaction.channel.send({ files: [transcriptFile], content: 'Transcript on close' }).catch(() => {});
+  }
 
   setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
   await interaction.reply({ embeds: [makeTicketEmbed('اقفال', '**تم اقفال التكت والاحتفاظ به.**', 0xED4245)], ephemeral: true });
+}
+
+async function handleReassignRequest(interaction, guildId, panelId, channelId) {
+  const { config, tickets, pendingRequests } = getPanelData(guildId, panelId || 'default');
+  const ticket = tickets[channelId];
+  if (!ticket || interaction.channelId !== channelId) {
+    await interaction.reply({ content: '**لا توجد بيانات لهذا التكت.**', ephemeral: true });
+    return;
+  }
+  if (!isAdminOnly(interaction, config)) {
+    await interaction.reply({ content: '**ليس لديك صلاحية تغيير المستلم.**', ephemeral: true });
+    return;
+  }
+  if (ticket.status !== 'open') {
+    await interaction.reply({ content: '**تغيير المستلم متاح فقط قبل إغلاق التكت.**', ephemeral: true });
+    return;
+  }
+
+  const previousClaimer = ticket.claimedBy || null;
+  if (ticket.reassignPendingAt) {
+    await interaction.reply({ content: '**يوجد طلب تغيير مستلم معلّق بالفعل.**', ephemeral: true });
+    return;
+  }
+
+  const targetChannelId = config.claimFromDedicatedChannel ? config.claimChannelId : interaction.channelId;
+  const targetChannel = await interaction.guild.channels.fetch(targetChannelId).catch(() => null);
+  if (!targetChannel || targetChannel.type !== ChannelType.GuildText) {
+    await interaction.reply({ content: '**شات القبول غير صالح أو غير متاح.**', ephemeral: true });
+    return;
+  }
+
+  ticket.claimedBy = null;
+  ticket.reassignPendingAt = Date.now();
+
+  if (interaction.user.id) {
+    await interaction.channel.permissionOverwrites.edit(interaction.user.id, {
+      ViewChannel: false,
+      SendMessages: false
+    }).catch(() => {});
+  }
+  if (previousClaimer && previousClaimer !== interaction.user.id) {
+    await interaction.channel.permissionOverwrites.edit(previousClaimer, {
+      ViewChannel: false,
+      SendMessages: false
+    }).catch(() => {});
+  }
+
+  const mentionChunks = buildMentionChunks(getAdminRoles(config));
+  for (const chunk of mentionChunks) {
+    await targetChannel.send({ content: chunk }).catch(() => {});
+  }
+
+  const requestRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`ticket_reassign_claim_${guildId}_${panelId || 'default'}_${channelId}`)
+      .setLabel('استلام المستلم الجديد')
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  const reason = config.reasons?.[ticket.reasonKey] || {};
+  const reasonImage = resolveImageForSend(reason.openImage || config.messages.ticketImage);
+  const requestText = `**العضو :** <@${ticket.memberId}>\n**السبب :** ${reason.name || `سبب ${ticket.reasonKey}`}\n**التكت :** <#${channelId}>`;
+  if (reasonImage) {
+    await targetChannel.send({ content: requestText, files: [reasonImage], components: [requestRow] }).catch(() => {});
+  } else {
+    await targetChannel.send({ embeds: [makeTicketEmbed('طلب استلام جديد', requestText)], components: [requestRow] }).catch(() => {});
+  }
+
+  setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
+  await interaction.reply({ embeds: [makeTicketEmbed('تم', '**تم إخراجك من التكت وإرسال طلب استلام جديد.**', 0x57F287)], ephemeral: true });
+}
+
+async function handleReassignClaim(interaction, guildId, panelId, channelId) {
+  await interaction.deferReply({ ephemeral: true }).catch(() => {});
+  const lockKey = `reassign_claim:${guildId}:${panelId || 'default'}:${channelId}`;
+  if (ticketClaimLocks.has(lockKey)) {
+    await interaction.editReply({ content: '**جاري معالجة الطلب، حاول بعد لحظات.**' }).catch(() => {});
+    return;
+  }
+  ticketClaimLocks.add(lockKey);
+  try {
+  const { config, tickets, pendingRequests } = getPanelData(guildId, panelId || 'default');
+  const ticket = tickets[channelId];
+  if (!ticket) {
+    await interaction.editReply({ content: '**لا توجد بيانات لهذا التكت.**' });
+    return;
+  }
+  if (!hasStaffAccess(interaction.member, config)) {
+    await interaction.editReply({ content: '**ليس لديك صلاحية الاستلام.**' });
+    return;
+  }
+  const claimedCount = countClaimedByAdmin(tickets, interaction.user.id);
+  if (claimedCount >= (config.adminClaimLimit || 1)) {
+    await interaction.editReply({ content: `**الحد :** لا يمكنك استلام أكثر من ${config.adminClaimLimit} تكت مفتوح.` });
+    return;
+  }
+  if (ticket.claimedBy && ticket.claimedBy !== interaction.user.id) {
+    await interaction.editReply({ content: `**تم الاستلام بالفعل بواسطة :** <@${ticket.claimedBy}>` });
+    return;
+  }
+  if (!ticket.reassignPendingAt) {
+    await interaction.editReply({ content: '**لا يوجد طلب تغيير مستلم نشط لهذا التكت.**' }).catch(() => {});
+    return;
+  }
+
+  const ticketChannel = interaction.guild.channels.cache.get(channelId)
+    || await interaction.guild.channels.fetch(channelId).catch(() => null);
+  if (!ticketChannel || ticketChannel.type !== ChannelType.GuildText) {
+    await interaction.editReply({ content: '**تعذر العثور على روم التكت.**' }).catch(() => {});
+    return;
+  }
+
+  ticket.claimedBy = interaction.user.id;
+  delete ticket.reassignPendingAt;
+  await ticketChannel.permissionOverwrites.edit(interaction.user.id, {
+    ViewChannel: true,
+    SendMessages: true,
+    ReadMessageHistory: true
+  }).catch(() => {});
+
+  const reason = config.reasons?.[ticket.reasonKey] || {};
+  const claimImage = resolveImageForSend(reason.claimImage);
+  const claimEmbed = makeTicketEmbed(
+    'Ticket claimed',
+    `**Ticket claimed by :** <@${interaction.user.id}>\n**Reason :** ${reason.name || `سبب ${ticket.reasonKey}`}\n**Member :** <@${ticket.memberId}>`
+  );
+
+  if (interaction.message?.editable) {
+    const rows = interaction.message.components.map((row) => {
+      const comps = row.components.map((component) => {
+        if (component.customId?.startsWith('ticket_reassign_claim_')) {
+          return ButtonBuilder.from(component).setDisabled(true).setLabel('تم الاستلام');
+        }
+        return component;
+      });
+      return new ActionRowBuilder().addComponents(comps);
+    });
+    if (config.deleteClaimMessageOnClaim) {
+      await interaction.message.delete().catch(() => {});
+    } else {
+      await interaction.message.edit({ components: rows }).catch(() => {});
+    }
+  }
+
+  if (claimImage) await ticketChannel.send({ files: [claimImage], embeds: [claimEmbed] }).catch(() => {});
+  else await ticketChannel.send({ embeds: [claimEmbed] }).catch(() => {});
+
+  setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
+  await interaction.editReply({ embeds: [makeTicketEmbed('تم', '**تم استلام التكت بالمستلم الجديد.**', 0x57F287)] });
+  } finally {
+    ticketClaimLocks.delete(lockKey);
+  }
 }
 
 function createReasonComponents(config, guildId, panelId = 'default') {
@@ -735,11 +1160,13 @@ function createReasonComponents(config, guildId, panelId = 'default') {
   }
 
   const maxButtons = Math.max(1, Math.min(25, (config.buttonRows || 2) * 5));
-  const entries = (reasons.length ? reasons : [['0', { name: 'فتح تكت', emoji: '🎫' }]]).slice(0, maxButtons);
+  const entries = (reasons.length ? reasons : [['0', { name: 'فتح تكت', emoji: '🎫' }]])
+    .sort((a, b) => Number(a[1]?.buttonOrder || a[0]) - Number(b[1]?.buttonOrder || b[0]))
+    .slice(0, maxButtons);
   const buttons = entries.map(([k, v]) => new ButtonBuilder()
     .setCustomId(`ticket_open_btn_${guildId}_${panelId}_${k}`)
     .setLabel((v.name || `سبب ${k}`).slice(0, 80))
-    .setStyle(ButtonStyle.Primary)
+    .setStyle(resolveButtonStyle(v.buttonStyle))
     .setEmoji(v.emoji || '🎫'));
 
   const rows = [];
@@ -748,10 +1175,22 @@ function createReasonComponents(config, guildId, panelId = 'default') {
 }
 
 async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
+  const dedupeKey = `${message.guild?.id || 'dm'}:${message.id}`;
+  if (recentTicketCommandMessages.has(dedupeKey)) return;
+  recentTicketCommandMessages.add(dedupeKey);
+  setTimeout(() => recentTicketCommandMessages.delete(dedupeKey), 60 * 1000);
+
+  const setupSessionKey = `${message.guild.id}:${message.author.id}`;
+  const existingSession = activeTicketSetupSessions.get(setupSessionKey);
+  if (existingSession && (Date.now() - existingSession.startedAt) < (30 * 60 * 1000)) {
+    await message.reply('**لديك جلسة إعداد تكت قيد العمل بالفعل.**').catch(() => {});
+    return;
+  }
+
   const member = await message.guild.members.fetch(message.author.id);
   const isOwner = BOT_OWNERS.includes(message.author.id) || message.guild.ownerId === message.author.id;
   const hasAdminRole = member.roles.cache.some((r) => ADMIN_ROLES.includes(r.id));
-  if (!isOwner && !hasAdminRole && !member.permissions.has(PermissionFlagsBits.Administrator)) {
+  if (!isOwner && !hasAdminRole) {
     await message.react('❌');
     return;
   }
@@ -839,6 +1278,10 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     const responsiblesMentions = (config.responsibleRoleIds || []).length
       ? (config.responsibleRoleIds || []).map((id) => `<@&${id}>`).join(' ')
       : 'غير معين';
+    const adminRolesResolved = getAdminRoles(config);
+    const adminRolesMentions = adminRolesResolved.length
+      ? adminRolesResolved.map((id) => `<@&${id}>`).join(' ')
+      : 'غير معين';
     const reasonsNamesRaw = Object.entries(config.reasons || {})
       .sort((a, b) => Number(a[0]) - Number(b[0]))
       .map(([k, v]) => `**${k})** ${v.name || `سبب ${k}`}`)
@@ -859,10 +1302,10 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         { name: 'اسم التكت', value: `${config.ticketNamePrefix} - ${config.ticketNameMode}`, inline: true },
         { name: 'كاتوقري الفتح', value: config.openCategoryId ? `<#${config.openCategoryId}>` : 'غير معين', inline: true },
         { name: 'المسؤولين', value: responsiblesMentions.slice(0, 1024), inline: false },
-        { name: 'رولات الادمن', value: config.useGlobalAdminRoles ? 'adminRoles العامة' : String(config.adminRoleIds.length), inline: true },
+        { name: 'رولات الادمن', value: adminRolesMentions.slice(0, 1024), inline: false },
         { name: 'طريقة العرض', value: config.displayMode, inline: true },
         { name: 'حدود النظام', value: `حد الاستلام: ${config.adminClaimLimit}\nحد الفتح: ${config.memberOpenLimit}`, inline: true },
-        { name: 'حالة التبديلات', value: `انشاء قبل الاستلام: ${config.autoCreateOnRequest ? 'مفعل' : 'مقفل'}\nاخفاء عند الاستلام: ${config.hideOnClaim ? 'مفعل' : 'مقفل'}\nشات استلام مخصص: ${config.claimFromDedicatedChannel ? 'مفعل' : 'مقفل'}\nالاحتفاظ بعد الاغلاق: ${config.keepClosedTickets ? 'مفعل' : 'مقفل'}`, inline: false },
+        { name: 'حالة التبديلات', value: `انشاء قبل الاستلام: ${config.autoCreateOnRequest ? 'مفعل' : 'مقفل'}\nاخفاء عند الاستلام: ${config.hideOnClaim ? 'مفعل' : 'مقفل'}\nشات استلام مخصص: ${config.claimFromDedicatedChannel ? 'مفعل' : 'مقفل'}\nالاحتفاظ بعد الاغلاق: ${config.keepClosedTickets ? 'مفعل' : 'مقفل'}\nحذف رسالة الاستلام بعد التنفيذ: ${config.deleteClaimMessageOnClaim ? 'مفعل' : 'مقفل'}`, inline: false },
         { name: `الاسباب (${reasonsCount})`, value: reasonsNames, inline: false },
         { name: 'جاهزية النظام', value: setupStatus.slice(0, 1024), inline: false }
       )
@@ -881,6 +1324,10 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 
     if (config.claimFromDedicatedChannel && !config.claimChannelId) {
       issues.push('**تفعيل شات الاستلام يحتاج تعيين شات الاستلام**');
+    }
+
+    if (!config.autoCreateOnRequest && !config.claimChannelId) {
+      issues.push('**عند تعطيل الانشاء المباشر يجب تعيين شات الاستلام**');
     }
 
     if (config.displayMode === 'buttons') {
@@ -919,6 +1366,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         { label: '13) تعيين الاسباب', value: 'set_reasons', description: 'تعديل أسماء/وصف/كاتوقري الأسباب' },
         { label: '14) طريقة العرض', value: 'set_display_mode', description: 'الاختيار بين buttons أو menu' },
         { label: '15) ارسال بانل التكت', value: 'send_panel_now', description: 'إرسال بانل الفتح للروم المحدد' },
+        { label: '16) حذف رسالة الاستلام بعد التنفيذ', value: 'toggle_delete_claim_msg', description: 'حذف رسالة القبول بعد الاستلام' },
         { label: 'انهاء الاعداد', value: 'finish', description: 'حفظ الإعدادات وإغلاق الجلسة' }
       ]);
 
@@ -928,6 +1376,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
   await message.channel.send('**سيتم ضبط الاعدادات هنا، ومدخلاتك النصية ستحذف تلقائياً للحفاظ على الخصوصية.**').catch(() => {});
 
   setupMessage = await controlChannel.send({ embeds: [buildSetupEmbed()], components: buildMenuComponents() });
+  activeTicketSetupSessions.set(setupSessionKey, { startedAt: Date.now(), messageId: setupMessage.id });
 
   const collector = setupMessage.createMessageComponentCollector({
     filter: (i) => i.user.id === message.author.id && i.customId.startsWith('ticket_setup_menu_'),
@@ -966,7 +1415,10 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           `**الكاتوقري:** ${reason.categoryId ? `<#${reason.categoryId}>` : 'افتراضي'}`,
           `**رسالة قبل الصورة:** ${formatSettingValue(reason.beforeImage)}`,
           `**رسالة بعد الصورة:** ${formatSettingValue(reason.afterImage)}`,
-          `**وصف المنيو:** ${formatSettingValue(reason.description)}`
+          `**وصف المنيو:** ${formatSettingValue(reason.description)}`,
+          `**لون الزر:** ${formatSettingValue(reason.buttonStyle || 'primary')}`,
+          `**ترتيب الزر:** ${formatSettingValue(reason.buttonOrder || idx)}`,
+          `**مودال مخصص عند الفتح:** ${reason.openModal?.enabled ? 'مفعل' : 'غير مفعل'}`
         ].join('\n'));
 
       await setupMessage.edit({
@@ -984,6 +1436,9 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
               { label: '5) رسالة قبل الصورة', value: 'r5' },
               { label: '6) رسالة بعد الصورة', value: 'r6' },
               { label: '7) وصف السبب (للمنيو)', value: 'r7' },
+              { label: '8) لون الزر', value: 'r8' },
+              { label: '9) ترتيب الزر', value: 'r9' },
+              { label: '10) مودال السبب', value: 'r10' },
               { label: 'انهاء', value: 'finish' }
             ])
         )]
@@ -1007,6 +1462,47 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       if (c === 'r5') { const v = await ask('**رسالة قبل الصورة : (0 لاعادة التعيين)**'); reason.beforeImage = v === '0' ? '' : (v || reason.beforeImage); }
       if (c === 'r6') { const v = await ask('**رسالة بعد الصورة : (0 لاعادة التعيين)**'); reason.afterImage = v === '0' ? '' : (v || reason.afterImage); }
       if (c === 'r7') { const v = await ask('**وصف السبب (يظهر في منيو الفتح) : (0 لاعادة التعيين)**'); reason.description = v === '0' ? '' : (v || reason.description || ''); }
+      if (c === 'r8') {
+        const v = ((await ask('**لون الزر: primary / secondary / success / danger (0 لاعادة التعيين)**')) || '').toLowerCase();
+        if (v === '0') reason.buttonStyle = 'primary';
+        else if (['primary', 'secondary', 'success', 'danger'].includes(v)) reason.buttonStyle = v;
+      }
+      if (c === 'r9') {
+        const v = Number(await ask('**ترتيب الزر (رقم من 1 الى 999 - 0 لاعادة التعيين)**'));
+        if (v === 0) reason.buttonOrder = idx;
+        else if (Number.isFinite(v) && v >= 1 && v <= 999) reason.buttonOrder = v;
+      }
+      if (c === 'r10') {
+        const enabled = ((await ask('**تفعيل مودال السبب؟ yes/no**')) || '').toLowerCase();
+        if (!reason.openModal || typeof reason.openModal !== 'object') {
+          reason.openModal = { enabled: false, title: '', description: '', fields: [] };
+        }
+        if (enabled === 'yes' || enabled === 'y' || enabled === 'نعم') {
+          reason.openModal.enabled = true;
+          const title = await ask('**عنوان المودال (0 لاعادة التعيين)**');
+          if (title === '0') reason.openModal.title = '';
+          else if (title) reason.openModal.title = title.slice(0, 45);
+
+          const desc = await ask('**شرح المودال (0 لاعادة التعيين)**');
+          if (desc === '0') reason.openModal.description = '';
+          else if (desc) reason.openModal.description = desc.slice(0, 200);
+
+          const labelsRaw = await ask('**حقول المودال (افصل بينهم |) مثال: المعرف|الوصف|المدة (0 لاعادة التعيين)**');
+          if (labelsRaw === '0') {
+            reason.openModal.fields = [];
+          } else {
+            const labels = String(labelsRaw || '')
+              .split('|')
+              .map((x) => x.trim())
+              .filter(Boolean)
+              .slice(0, 5)
+              .map((label) => ({ label: label.slice(0, 45), placeholder: '', style: 'short', required: true }));
+            reason.openModal.fields = labels;
+          }
+        } else {
+          reason.openModal = { enabled: false, title: '', description: '', fields: [] };
+        }
+      }
 
       config.reasons[key] = reason;
     }
@@ -1263,15 +1759,25 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       }
 
       if (choice === 'set_responsibles') {
-        const v = await ask('**ارسل : رولات المسؤولين (منشن/ايدي) او file او 0**');
+        const v = await ask([
+          '**تحديد المسؤولين - اختر طريقة واحدة:**',
+          '**0 = رولات الادمن العامة**',
+          '**اسم مسؤولية = مسؤولية معينة** (مثال: مسؤولية الدعم / المسؤولية الدعم)',
+          '**منشن رولات = رولات محددة**'
+        ].join('\n'));
         if (v === '0') config.responsibleRoleIds = [];
-        else if ((v || '').toLowerCase() === 'file') {
+        else if (findResponsibilityByName(v, loadResponsibilities())) {
           const resp = loadResponsibilities();
-          const set = new Set();
-          for (const item of Object.values(resp || {})) {
-            for (const role of (item.roles || [])) set.add(role);
-          }
+          const foundName = findResponsibilityByName(v, resp);
+          const selected = foundName ? resp[foundName] : null;
+          const set = new Set((selected?.roles || []).map((id) => String(id || '').trim()).filter((id) => /^\d{16,20}$/.test(id)));
           config.responsibleRoleIds = [...set];
+          if (config.responsibleRoleIds.length === 0) {
+            await refresh(`**تنبيه : المسؤولية \"${foundName}\" لا تحتوي رولات صالحة.**`);
+            return;
+          }
+          await refresh(`**تم تعيين المسؤولين من المسؤولية : ${foundName}**`);
+          return;
         } else {
           config.responsibleRoleIds = (v || '').split(/\s+/).map(normalizeId).filter(Boolean);
         }
@@ -1416,13 +1922,31 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         const text = mode === 'image' ? '' : await ask('**النص : (0 لتخطي)**');
         const image = mode === 'text' ? '' : await ask('**الصورة : رابط مباشر او ارفاق صورة (0 لتخطي)**');
 
-        await panelChannel.send({
+        const payload = {
           content: text && text !== '0' ? text : null,
-          files: image && image !== '0' ? [image] : [],
           components: createReasonComponents(config, message.guild.id, panelId)
-        });
+        };
+
+        if (image && image !== '0') {
+          try {
+            await panelChannel.send({ ...payload, files: [image] });
+          } catch {
+            const fallback = /^https?:\/\//i.test(String(image || '').trim())
+              ? { embeds: [makeTicketEmbed('بانل التكت', `**صورة البانل:** ${String(image).trim()}`)] }
+              : {};
+            await panelChannel.send({ ...payload, ...fallback }).catch(() => {});
+          }
+        } else {
+          await panelChannel.send(payload);
+        }
 
         await refresh( '**تم ارسال البانل بنجاح.**');
+        return;
+      }
+
+      if (choice === 'toggle_delete_claim_msg') {
+        config.deleteClaimMessageOnClaim = !config.deleteClaimMessageOnClaim;
+        await refresh(`**تم التحديث : ${config.deleteClaimMessageOnClaim ? 'مفعل' : 'مقفل'}**`);
         return;
       }
 
@@ -1437,12 +1961,17 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     setGuildData(message.guild.id, config, tickets, pendingRequests, panelId);
     await setupMessage.edit({ embeds: [buildSetupEmbed()], components: [] }).catch(() => {});
     await controlChannel.send('**تم حفظ اعدادات التكت.**').catch(() => {});
+    activeTicketSetupSessions.delete(setupSessionKey);
   });
 }
 
 async function handleTransferResponsibility(interaction, guildId, panelId, channelId, value) {
+  if (!interaction.deferred && !interaction.replied) {
+    await interaction.deferReply({ ephemeral: true }).catch(() => {});
+  }
+
   if (!value || value === 'resp_none') {
-    await interaction.reply({ content: '**لا توجد مسؤولية صالحة.**', ephemeral: true });
+    await interaction.editReply({ content: '**لا توجد مسؤولية صالحة.**' }).catch(() => {});
     return;
   }
 
@@ -1460,34 +1989,37 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   }
 
   if (!respName) {
-    await interaction.reply({ content: '**لا توجد مسؤولية صالحة.**', ephemeral: true });
+    await interaction.editReply({ content: '**لا توجد مسؤولية صالحة.**' }).catch(() => {});
     return;
   }
 
   const { config, tickets, pendingRequests } = getPanelData(guildId, panelId || 'default');
   const ticket = tickets[channelId];
   if (!ticket || interaction.channelId !== channelId) {
-    await interaction.reply({ content: '**لا توجد بيانات لهذا التكت.**', ephemeral: true });
+    await interaction.editReply({ content: '**لا توجد بيانات لهذا التكت.**' }).catch(() => {});
     return;
   }
 
   if (!canManageTicket(interaction, ticket, config)) {
-    await interaction.reply({ content: '**ليس لديك صلاحية التحويل.**', ephemeral: true });
+    await interaction.editReply({ content: '**ليس لديك صلاحية التحويل.**' }).catch(() => {});
     return;
   }
 
   const selected = responsibilities[respName];
   if (!selected) {
-    await interaction.reply({ content: '**المسؤولية غير موجودة.**', ephemeral: true });
+    await interaction.editReply({ content: '**المسؤولية غير موجودة.**' }).catch(() => {});
     return;
   }
 
   const previousClaimer = ticket.claimedBy;
   ticket.claimedBy = null;
+  ticket.transferredTo = respName;
 
-  const targetRoles = selected.roles || [];
+  const targetRoles = (selected.roles || [])
+    .map((id) => String(id || '').trim())
+    .filter((id) => /^\d{16,20}$/.test(id) && interaction.guild.roles.cache.has(id));
   const adminRoles = getAdminRoles(config);
-  const allKnownRoles = [...new Set([...(config.responsibleRoleIds || []), ...targetRoles])];
+  const allKnownRoles = [...new Set([...(config.responsibleRoleIds || []).map((id) => String(id)), ...targetRoles])];
 
   for (const roleId of allKnownRoles) {
     const shouldSee = targetRoles.includes(roleId) || adminRoles.includes(roleId);
@@ -1501,21 +2033,33 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   config.responsibleRoleIds = [...targetRoles];
   setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
 
+  const responsibleUsers = (selected.responsibles || [])
+    .map((id) => String(id || '').trim())
+    .filter((id) => /^\d{16,20}$/.test(id));
+
   const mentions = [
-    ...(selected.roles || []).map((id) => `<@&${id}>`),
-    ...(selected.responsibles || []).map((id) => `<@${id}>`)
+    ...targetRoles.map((id) => `<@&${id}>`),
+    ...responsibleUsers.map((id) => `<@${id}>`)
   ];
+
+  const onlineResponsibleMentions = responsibleUsers
+    .filter((uid) => {
+      const member = interaction.guild.members.cache.get(uid);
+      const status = member?.presence?.status;
+      return status && status !== 'offline';
+    })
+    .map((uid) => `<@${uid}>`);
 
   if (previousClaimer) {
     await interaction.channel.permissionOverwrites.edit(previousClaimer, { ViewChannel: false, SendMessages: false }).catch(() => {});
   }
   const dmEmbed = makeTicketEmbed('تحويل تكت', `يوجد تكت تم تحويله لمسؤوليتكم في <#${channelId}>`, 0x5865F2);
-  for (const uid of (selected.responsibles || [])) {
+  for (const uid of responsibleUsers) {
     const user = await interaction.client.users.fetch(uid).catch(() => null);
     if (user) await user.send({ embeds: [dmEmbed] }).catch(() => {});
   }
 
-  const mentionChunks = buildMentionChunks(selected.roles || []);
+  const mentionChunks = buildMentionChunks(targetRoles);
   for (const chunk of mentionChunks) {
     await interaction.channel.send({ content: chunk }).catch(() => {});
   }
@@ -1523,9 +2067,10 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   const renamed = `مسؤولين-${sanitizeName(respName)}`.slice(0, 90);
   await interaction.channel.setName(renamed).catch(() => {});
 
-  await interaction.reply({
-    embeds: [makeTicketEmbed('تحويل', `**تم تحويل التكت لمسؤولين : ${respName}**\n${mentions.join(' ') || '**لا يوجد منشن محدد**'}`)]
-  });
+  await interaction.editReply({
+    content: mentions.join(' ') || null,
+    embeds: [makeTicketEmbed('تحويل', `**تم تحويل التكت لمسؤولين : ${respName}**\n**المتصلون الآن:** ${onlineResponsibleMentions.join(' ') || 'لا يوجد'}\n**الرولات:** ${targetRoles.map((id) => `<@&${id}>`).join(' ') || 'لا يوجد'}`)]
+  }).catch(() => {});
 }
 
 async function showInputModal(interaction, customId, title, label, placeholder = '') {
@@ -1542,12 +2087,59 @@ async function showInputModal(interaction, customId, title, label, placeholder =
   await interaction.showModal(modal);
 }
 
+async function handleOpenWithReasonModal(interaction, guildId, panelId, reasonKey, client) {
+  const { config } = getPanelData(guildId, panelId || 'default');
+  const reason = config.reasons?.[reasonKey] || {};
+  const modalCfg = reason.openModal && typeof reason.openModal === 'object' ? reason.openModal : null;
+  if (!modalCfg?.enabled) {
+    await handleOpenRequest(interaction, guildId, panelId, reasonKey);
+    return;
+  }
+
+  const fields = Array.isArray(modalCfg.fields) ? modalCfg.fields.filter((f) => f?.label).slice(0, 5) : [];
+  if (fields.length === 0) {
+    await handleOpenRequest(interaction, guildId, panelId, reasonKey);
+    return;
+  }
+
+  const nonce = `${interaction.user.id}_${Date.now()}`;
+  const customId = `ticket_open_reason_modal_${guildId}_${panelId}_${reasonKey}_${nonce}`;
+  const modal = new ModalBuilder()
+    .setCustomId(customId)
+    .setTitle((modalCfg.title || `نموذج ${reason.name || `سبب ${reasonKey}`}`).slice(0, 45));
+
+  for (let i = 0; i < fields.length; i += 1) {
+    const field = fields[i];
+    const input = new TextInputBuilder()
+      .setCustomId(`f_${i}`)
+      .setLabel(String(field.label).slice(0, 45))
+      .setStyle((field.style || 'short') === 'paragraph' ? TextInputStyle.Paragraph : TextInputStyle.Short)
+      .setRequired(field.required !== false)
+      .setMaxLength(400)
+      .setPlaceholder(String(field.placeholder || modalCfg.description || '').slice(0, 100));
+    modal.addComponents(new ActionRowBuilder().addComponents(input));
+  }
+
+  if (!client.ticketOpenModalData) client.ticketOpenModalData = new Map();
+  client.ticketOpenModalData.set(customId, { guildId, panelId, reasonKey, fields, createdAt: Date.now() });
+  await interaction.showModal(modal);
+}
+
 function registerHandlers(client) {
   if (handlersRegistered) return;
   handlersRegistered = true;
 
   registerTicketInteractionRouter(async (interaction) => {
     try {
+      if (client.ticketOpenModalData && client.ticketOpenModalData.size > 0) {
+        const now = Date.now();
+        for (const [key, value] of client.ticketOpenModalData.entries()) {
+          if (!value?.createdAt || now - value.createdAt > 15 * 60 * 1000) {
+            client.ticketOpenModalData.delete(key);
+          }
+        }
+      }
+
       if (interaction.isButton() || interaction.isStringSelectMenu()) {
         const id = interaction.customId || '';
 
@@ -1556,7 +2148,7 @@ function registerHandlers(client) {
           const guildId = parts[3];
           const panelId = parts.length >= 6 ? parts[4] : 'default';
           const reasonKey = parts.length >= 6 ? parts[5] : parts[4];
-          await handleOpenRequest(interaction, guildId, panelId, reasonKey);
+          await handleOpenWithReasonModal(interaction, guildId, panelId, reasonKey, client);
           return;
         }
 
@@ -1565,7 +2157,7 @@ function registerHandlers(client) {
           const [guildId, panelId = 'default'] = raw.split('_');
           const value = interaction.values?.[0] || 'reason_0';
           const reasonKey = value.replace('reason_', '');
-          await handleOpenRequest(interaction, guildId, panelId, reasonKey);
+          await handleOpenWithReasonModal(interaction, guildId, panelId, reasonKey, client);
           return;
         }
 
@@ -1593,38 +2185,105 @@ function registerHandlers(client) {
           return;
         }
 
+        if (id.startsWith('ticket_reassign_claim_')) {
+          const parts = id.split('_');
+          const guildId = parts[3];
+          const panelId = parts.length >= 6 ? parts[4] : 'default';
+          const channelId = parts.length >= 6 ? parts[5] : parts[4];
+          await handleReassignClaim(interaction, guildId, panelId, channelId);
+          return;
+        }
+
+        if (id.startsWith('ticket_reassign_')) {
+          const parts = id.split('_');
+          const guildId = parts[2];
+          const panelId = parts.length >= 5 ? parts[3] : 'default';
+          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          await handleReassignRequest(interaction, guildId, panelId, channelId);
+          return;
+        }
+
         if (id.startsWith('ticket_delete_')) {
-          const [, , guildId, channelId] = id.split('_');
-          const { guild: g } = getGuildData(guildId);
-          const ticket = g.tickets[channelId];
+          const parts = id.split('_');
+          const guildId = parts[2];
+          const panelId = parts.length >= 5 ? parts[3] : findTicketPanel(guildId, parts[3], 'default');
+          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          const { config, tickets, pendingRequests } = getPanelData(guildId, panelId);
+          const ticket = tickets[channelId];
           if (!ticket || interaction.channelId !== channelId) {
             await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**لا توجد بيانات لهذا التكت.**', 0xED4245)], ephemeral: true });
             return;
           }
-          if (!hasStaffAccess(interaction.member, g.config)) {
+          if (ticket.status !== 'closed') {
+            await interaction.reply({ embeds: [makeTicketEmbed('تنبيه', '**هذا الزر متاح بعد الإغلاق فقط.**', 0xED4245)], ephemeral: true });
+            return;
+          }
+          if (!isAdminOnly(interaction, config)) {
             await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**ليس لديك صلاحية الحذف.**', 0xED4245)], ephemeral: true });
             return;
           }
-          delete g.tickets[channelId];
-          setGuildData(guildId, g.config, g.tickets, g.pendingRequests || {});
+          const transcriptFile = await buildTicketTranscript(interaction.channel).catch(() => null);
+          if (transcriptFile) {
+            await interaction.channel.send({ files: [transcriptFile], content: 'Transcript before manual delete' }).catch(() => {});
+          }
+          delete tickets[channelId];
+          setGuildData(guildId, config, tickets, pendingRequests || {}, panelId);
           await interaction.reply({ embeds: [makeTicketEmbed('حذف', '**سيتم حذف التكت خلال 3 ثواني.**', 0xED4245)], ephemeral: true });
           setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
           return;
         }
 
-        if (id.startsWith('ticket_down_') || id.startsWith('ticket_up1_') || id.startsWith('ticket_up2_')) {
-          const [, , guildId, channelId] = id.split('_');
-          const { guild: g } = getGuildData(guildId);
-          const ticket = g.tickets[channelId];
+        if (id.startsWith('ticket_down2_') || id.startsWith('ticket_down_') || id.startsWith('ticket_up1_') || id.startsWith('ticket_up2_')) {
+          const parts = id.split('_');
+          const guildId = parts[2];
+          const panelId = parts.length >= 5 ? parts[3] : findTicketPanel(guildId, parts[3], 'default');
+          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          const { config, tickets, pendingRequests } = getPanelData(guildId, panelId);
+          const ticket = tickets[channelId];
           if (!ticket || interaction.channelId !== channelId) {
             await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**لا توجد بيانات لهذا التكت.**', 0xED4245)], ephemeral: true });
             return;
           }
-          if (!hasStaffAccess(interaction.member, g.config)) {
+          if (ticket.status !== 'closed') {
+            await interaction.reply({ embeds: [makeTicketEmbed('تنبيه', '**أزرار النقاط متاحة بعد إغلاق التكت فقط.**', 0xED4245)], ephemeral: true });
+            return;
+          }
+          if (!isAdminOnly(interaction, config)) {
             await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**ليس لديك صلاحية النقاط.**', 0xED4245)], ephemeral: true });
             return;
           }
-          await interaction.reply({ embeds: [makeTicketEmbed('تم', '**تم تنفيذ الإجراء.**', 0x57F287)], ephemeral: true });
+
+          const delta = id.startsWith('ticket_down2_') ? -2
+            : id.startsWith('ticket_down_') ? -1
+              : id.startsWith('ticket_up1_') ? 1 : 2;
+          const reasonName = config.reasons?.[ticket.reasonKey]?.name;
+          const respName = ticket.transferredTo || reasonName || 'ticket';
+          const targetId = ticket.claimedBy;
+          if (!targetId) {
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**لا يوجد مستلم مرتبط بهذا التكت للنقاط.**', 0xED4245)], ephemeral: true });
+            return;
+          }
+
+          const points = loadPoints();
+          const now = Date.now().toString();
+          if (!points[respName] || typeof points[respName] !== 'object') points[respName] = {};
+          const existing = points[respName][targetId];
+          const total = typeof existing === 'object'
+            ? Object.values(existing).reduce((s, v) => s + Number(v || 0), 0)
+            : Number(existing || 0);
+          const next = Math.max(0, total + delta);
+          const actualDelta = next - total;
+          if (typeof existing === 'object' && existing !== null) {
+            points[respName][targetId][now] = actualDelta;
+          } else if (existing !== undefined) {
+            points[respName][targetId] = { [now]: actualDelta };
+          } else {
+            points[respName][targetId] = { [now]: actualDelta };
+          }
+          savePoints(points);
+
+          setGuildData(guildId, config, tickets, pendingRequests || {}, panelId);
+          await interaction.reply({ embeds: [makeTicketEmbed('تم', `**تم تعديل النقاط (${delta > 0 ? '+' : ''}${delta}) للمستلم.**`, 0x57F287)], ephemeral: true });
           return;
         }
 
@@ -1632,13 +2291,18 @@ function registerHandlers(client) {
           const parts = id.split('_');
           const guildId = parts[3];
           const channelId = parts[4];
-          const { guild: g } = getGuildData(guildId);
-          const ticket = g.tickets[channelId];
+          const panelId = findTicketPanel(guildId, channelId, 'default');
+          const { config, tickets, pendingRequests } = getPanelData(guildId, panelId);
+          const ticket = tickets[channelId];
           if (!ticket || interaction.channelId !== channelId) {
             await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**لا توجد بيانات لهذا التكت.**', 0xED4245)], ephemeral: true });
             return;
           }
-          if (!hasStaffAccess(interaction.member, g.config)) {
+          if (ticket.status !== 'closed') {
+            await interaction.reply({ embeds: [makeTicketEmbed('تنبيه', '**هذه الأزرار متاحة بعد إغلاق التكت فقط.**', 0xED4245)], ephemeral: true });
+            return;
+          }
+          if (!isAdminOnly(interaction, config)) {
             await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**ليس لديك صلاحية هذا الإجراء.**', 0xED4245)], ephemeral: true });
             return;
           }
@@ -1658,8 +2322,8 @@ function registerHandlers(client) {
             ReadMessageHistory: true
           }).catch(() => {});
 
-          setGuildData(guildId, g.config, g.tickets, g.pendingRequests || {});
-          await interaction.update({ components: buildPostCloseControls(guildId, channelId, ticket) });
+          setGuildData(guildId, config, tickets, pendingRequests || {}, panelId);
+          await interaction.update({ components: buildPostCloseControls(guildId, panelId, channelId, ticket) });
           return;
         }
 
@@ -1723,6 +2387,10 @@ function registerHandlers(client) {
             await interaction.reply({ content: '**ليس لديك صلاحية الاستدعاء.**', ephemeral: true });
             return;
           }
+          if (ticket.status !== 'open') {
+            await interaction.reply({ content: '**لا يمكن الاستدعاء بعد إقفال التكت.**', ephemeral: true });
+            return;
+          }
           const cooldownKey = `${interaction.guild.id}:${channelId}:${interaction.user.id}`;
           const last = pingCooldowns.get(cooldownKey) || 0;
           const now = Date.now();
@@ -1757,6 +2425,24 @@ function registerHandlers(client) {
 
       if (interaction.isModalSubmit() && interaction.customId.startsWith('ticket_')) {
         const modalId = interaction.customId;
+
+        if (modalId.startsWith('ticket_open_reason_modal_')) {
+          const data = client.ticketOpenModalData?.get(modalId);
+          if (!data) {
+            await interaction.reply({ content: '**انتهت صلاحية نموذج فتح التكت، حاول مرة أخرى.**', ephemeral: true });
+            return;
+          }
+
+          const answers = {};
+          for (let i = 0; i < data.fields.length; i += 1) {
+            const label = data.fields[i].label || `حقل ${i + 1}`;
+            answers[label] = interaction.fields.getTextInputValue(`f_${i}`);
+          }
+          client.ticketOpenModalData.delete(modalId);
+          interaction.ticketModalAnswers = answers;
+          await handleOpenRequest(interaction, data.guildId, data.panelId, data.reasonKey);
+          return;
+        }
 
         if (modalId.startsWith('ticket_rename_modal_')) {
           const [, , , guildId, panelId = 'default', channelId] = modalId.split('_');
