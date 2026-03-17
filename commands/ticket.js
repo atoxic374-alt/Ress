@@ -17,6 +17,7 @@ const name = 'ticket';
 const aliases = ['تكت'];
 const dataPath = path.join(__dirname, '..', 'data', 'ticketConfig.json');
 const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
+const ticketImagesDir = path.join(__dirname, '..', 'data', 'ticket_images');
 
 let handlersRegistered = false;
 
@@ -42,6 +43,51 @@ function loadResponsibilities() {
   } catch {
     return {};
   }
+}
+
+function ensureTicketImagesDir() {
+  if (!fs.existsSync(ticketImagesDir)) fs.mkdirSync(ticketImagesDir, { recursive: true });
+}
+
+function removeStoredImage(value) {
+  if (!value || typeof value !== 'string' || !value.startsWith('local:')) return;
+  const fileName = value.slice('local:'.length);
+  const absolute = path.join(ticketImagesDir, fileName);
+  if (fs.existsSync(absolute)) fs.unlinkSync(absolute);
+}
+
+function resolveImageForSend(value) {
+  if (!value || typeof value !== 'string') return null;
+  if (!value.startsWith('local:')) return value;
+  const fileName = value.slice('local:'.length);
+  const absolute = path.join(ticketImagesDir, fileName);
+  return fs.existsSync(absolute) ? absolute : null;
+}
+
+async function storeImageLocally(url, guildId, slotKey, previousValue = null) {
+  const safe = String(url || '').trim();
+  if (!/^https?:\/\//i.test(safe)) throw new Error('الرابط غير صالح');
+  const parsed = new URL(safe);
+  const response = await fetch(parsed.toString());
+  if (!response.ok) throw new Error(`فشل تحميل الصورة (${response.status})`);
+
+  const contentType = (response.headers.get('content-type') || '').toLowerCase();
+  if (!contentType.startsWith('image/')) throw new Error('الرابط لا يشير إلى صورة');
+
+  ensureTicketImagesDir();
+  const extFromType = contentType.includes('png') ? '.png'
+    : contentType.includes('jpeg') || contentType.includes('jpg') ? '.jpg'
+      : contentType.includes('webp') ? '.webp'
+        : contentType.includes('gif') ? '.gif'
+          : path.extname(parsed.pathname || '') || '.png';
+
+  const fileName = `${guildId}_${slotKey}_${Date.now()}${extFromType}`;
+  const absolute = path.join(ticketImagesDir, fileName);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  fs.writeFileSync(absolute, bytes);
+
+  removeStoredImage(previousValue);
+  return `local:${fileName}`;
 }
 
 function baseConfig() {
@@ -222,8 +268,9 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
   if (reason.beforeImage || config.messages.beforeImage) {
     await channel.send({ content: reason.beforeImage || config.messages.beforeImage });
   }
-  if (reason.openImage || config.messages.ticketImage) {
-    await channel.send({ files: [reason.openImage || config.messages.ticketImage] }).catch(() => {});
+  const openImage = resolveImageForSend(reason.openImage || config.messages.ticketImage);
+  if (openImage) {
+    await channel.send({ files: [openImage] }).catch(() => {});
   }
   if (reason.afterImage || config.messages.afterImage) {
     await channel.send({ content: reason.afterImage || config.messages.afterImage });
@@ -354,7 +401,8 @@ async function handleClaimInTicket(interaction, guildId, channelId) {
   }
 
   const reason = config.reasons?.[ticket.reasonKey] || {};
-  if (reason.claimImage) await interaction.channel.send({ files: [reason.claimImage] }).catch(() => {});
+  const claimImage = resolveImageForSend(reason.claimImage);
+  if (claimImage) await interaction.channel.send({ files: [claimImage] }).catch(() => {});
 
   setGuildData(guildId, config, tickets, pendingRequests);
   await interaction.reply({ content: `**تم الاستلام :** <@${interaction.user.id}>` });
@@ -398,7 +446,8 @@ async function handleClaimFromRequest(interaction, reqId) {
   }
 
   const reason = config.reasons?.[req.reasonKey] || {};
-  if (reason.claimImage) await channel.send({ files: [reason.claimImage] }).catch(() => {});
+  const claimImage = resolveImageForSend(reason.claimImage);
+  if (claimImage) await channel.send({ files: [claimImage] }).catch(() => {});
 
   delete pendingRequests[reqId];
   setGuildData(guildId, config, tickets, pendingRequests);
@@ -471,16 +520,18 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
   const { guild: g } = getGuildData(message.guild.id);
   const { config, tickets, pendingRequests } = g;
 
-  let controlChannel = message.channel;
+  const controlChannel = message.channel;
 
   const ask = async (prompt, timeout = 180000) => {
-    await controlChannel.send({ content: prompt });
-    const collected = await message.channel.awaitMessages({
+    const promptMessage = await controlChannel.send({ content: prompt });
+    const collected = await controlChannel.awaitMessages({
       filter: (m) => m.author.id === message.author.id,
       max: 1,
       time: timeout
     });
     const first = collected.first();
+    await promptMessage.delete().catch(() => {});
+    if (first) await first.delete().catch(() => {});
     return first ? first.content.trim() : null;
   };
 
@@ -561,13 +612,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     return [new ActionRowBuilder().addComponents(menu)];
   };
 
-  const dm = await message.author.createDM().catch(() => null);
-  if (dm) {
-    controlChannel = dm;
-    await message.channel.send('**تم فتح الاعدادات بالخاص للحفاظ على الخصوصية.**').catch(() => {});
-  } else {
-    await message.channel.send('**تعذر فتح الخاص، سيتم الاعداد هنا.**').catch(() => {});
-  }
+  await message.channel.send('**سيتم ضبط الاعدادات هنا، ومدخلاتك النصية ستحذف تلقائياً للحفاظ على الخصوصية.**').catch(() => {});
 
   const setupMessage = await controlChannel.send({ embeds: [buildSetupEmbed()], components: buildMenuComponents() });
 
@@ -714,7 +759,20 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         const c = await ask('**الرسائل : 1 قبول - 2 قبل الصورة - 3 صورة - 4 بعد الصورة**');
         if (c === '1') { const v = await ask('**رسالة القبول : (0 لاعادة التعيين)**'); config.messages.acceptance = v === '0' ? '' : (v || ''); }
         if (c === '2') { const v = await ask('**قبل الصورة : (0 لاعادة التعيين)**'); config.messages.beforeImage = v === '0' ? '' : (v || ''); }
-        if (c === '3') { const v = await ask('**رابط الصورة : (0 لاعادة التعيين)**'); config.messages.ticketImage = v === '0' ? '' : (v || ''); }
+        if (c === '3') {
+          const v = await ask('**رابط الصورة : (0 لاعادة التعيين)**');
+          if (v === '0') {
+            removeStoredImage(config.messages.ticketImage);
+            config.messages.ticketImage = '';
+          } else if (v) {
+            try {
+              config.messages.ticketImage = await storeImageLocally(v, message.guild.id, 'global_ticket_image', config.messages.ticketImage);
+            } catch {
+              await refresh(interaction, '**فشل تحميل الصورة، تأكد أن الرابط مباشر لصورة.**');
+              return;
+            }
+          }
+        }
         if (c === '4') { const v = await ask('**بعد الصورة : (0 لاعادة التعيين)**'); config.messages.afterImage = v === '0' ? '' : (v || ''); }
         await refresh(interaction, '**تم تحديث الرسائل.**');
         return;
@@ -743,10 +801,36 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           const c = await ask('**السبب : 1 الاسم - 2 اسم التكت - 3 صورة فتح - 4 ايموجي - 5 كاتوقري - 6 صورة استلام - 7 قبل/بعد**');
           if (c === '1') { const v = await ask('**اسم السبب : (0 لاعادة التعيين)**'); reason.name = v === '0' ? `سبب ${idx}` : (v || reason.name); }
           if (c === '2') { const v = await ask('**اسم التكت : (0 لاعادة التعيين)**'); reason.ticketName = v === '0' ? '' : (v || reason.ticketName); }
-          if (c === '3') { const v = await ask('**صورة الفتح : (0 لاعادة التعيين)**'); reason.openImage = v === '0' ? '' : (v || reason.openImage); }
+          if (c === '3') {
+            const v = await ask('**صورة الفتح : (0 لاعادة التعيين)**');
+            if (v === '0') {
+              removeStoredImage(reason.openImage);
+              reason.openImage = '';
+            } else if (v) {
+              try {
+                reason.openImage = await storeImageLocally(v, message.guild.id, `reason_${key}_open`, reason.openImage);
+              } catch {
+                await refresh(interaction, '**فشل تحميل صورة الفتح، تأكد أن الرابط مباشر لصورة.**');
+                return;
+              }
+            }
+          }
           if (c === '4') { const v = await ask('**ايموجي : (0 لاعادة التعيين)**'); reason.emoji = v === '0' ? '🎫' : (v || reason.emoji); }
           if (c === '5') { const v = await ask('**كاتوقري : (0 لاعادة التعيين)**'); reason.categoryId = v === '0' ? null : normalizeId(v); }
-          if (c === '6') { const v = await ask('**صورة الاستلام : (0 لاعادة التعيين)**'); reason.claimImage = v === '0' ? '' : (v || reason.claimImage); }
+          if (c === '6') {
+            const v = await ask('**صورة الاستلام : (0 لاعادة التعيين)**');
+            if (v === '0') {
+              removeStoredImage(reason.claimImage);
+              reason.claimImage = '';
+            } else if (v) {
+              try {
+                reason.claimImage = await storeImageLocally(v, message.guild.id, `reason_${key}_claim`, reason.claimImage);
+              } catch {
+                await refresh(interaction, '**فشل تحميل صورة الاستلام، تأكد أن الرابط مباشر لصورة.**');
+                return;
+              }
+            }
+          }
           if (c === '7') {
             const b = await ask('**قبل الصورة : (0 لاعادة التعيين)**');
             const a = await ask('**بعد الصورة : (0 لاعادة التعيين)**');
