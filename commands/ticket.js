@@ -248,7 +248,7 @@ function setGuildData(guildId, config, tickets, pendingRequests = {}, panelId = 
 
 function getPanelData(guildId, panelId = 'default') {
   const { guild } = getGuildData(guildId);
-  const panel = guild.panels[panelId] || guild.panels.default;
+  const panel = guild.panels[panelId] || { config: baseConfig(), tickets: {}, pendingRequests: {} };
   const config = { ...baseConfig(), ...(panel?.config || {}) };
   config.messages = { ...baseConfig().messages, ...(panel?.config?.messages || {}) };
   config.reasons = panel?.config?.reasons || {};
@@ -411,15 +411,7 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
     await channel.send({ files: [openImage] }).catch(() => {});
   }
 
-  await channel.send({
-    embeds: [
-      makeTicketEmbed(
-        'التكت : تم الانشاء',
-        `**التكت :** ${reason.name || `سبب ${reasonKey}`}\n**العضو :** <@${memberId}>`
-      )
-    ],
-    components: controls
-  });
+  await channel.send({ components: controls });
 
   if (config.ticketNameMode !== 'user') config.counter = (config.counter || 1) + 1;
 
@@ -588,11 +580,27 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
       });
       return new ActionRowBuilder().addComponents(updatedComponents);
     });
-    await interaction.message.edit({ components: updatedRows }).catch(() => {});
+    const reason = config.reasons?.[ticket.reasonKey] || {};
+    const claimImage = resolveImageForSend(reason.claimImage);
+    const claimEmbed = makeTicketEmbed(
+      'Ticket claimed',
+      `**Ticket claimed by :** <@${interaction.user.id}>\n**Reason :** ${reason.name || `سبب ${ticket.reasonKey}`}\n**Member :** <@${ticket.memberId}>`
+    );
+    const mentionChunks = buildMentionChunks(getAdminRoles(config));
+    const firstChunk = mentionChunks.shift() || null;
+
+    await interaction.message.edit({
+      content: firstChunk,
+      embeds: [claimEmbed],
+      files: claimImage ? [claimImage] : [],
+      components: updatedRows
+    }).catch(() => {});
+
+    for (const chunk of mentionChunks) {
+      await interaction.channel.send({ content: chunk }).catch(() => {});
+    }
   }
-  const reason = config.reasons?.[ticket.reasonKey] || {};
-  const claimImage = resolveImageForSend(reason.claimImage);
-  await sendClaimAnnounce({ channel: interaction.channel, config, ticket, claimerId: interaction.user.id, claimImage });
+
   await interaction.editReply({ embeds: [makeTicketEmbed('تم', '**تم استلام التكت بنجاح.**', { user: interaction.user })] });
 }
 
@@ -820,6 +828,14 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 
   const buildSetupEmbed = () => {
     const reasonsCount = Object.keys(config.reasons || {}).length;
+    const responsiblesMentions = (config.responsibleRoleIds || []).length
+      ? (config.responsibleRoleIds || []).map((id) => `<@&${id}>`).join(' ')
+      : 'غير معين';
+    const reasonsNames = Object.entries(config.reasons || {})
+      .sort((a, b) => Number(a[0]) - Number(b[0]))
+      .map(([k, v]) => `**${k})** ${v.name || `سبب ${k}`}`)
+      .join('\n') || 'لا يوجد';
+
     return colorManager.createEmbed()
       .setColor(colorManager.getColor())
       .setTitle(`**اعدادات التكت : ${message.guild.name}**`)
@@ -836,11 +852,12 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         '• **تعيين الاسباب:** اسم السبب + الإيموجي + وصف المنيو + كاتوقري السبب.',
         '• **طريقة العرض:** أزرار أو منيو.',
         '',
-        '**الحالة الحالية:**',
+        '## **الحالة الحالية**',
+        '',
         `**روم الإعداد الحالي :** <#${panelId}>`,
         `**اسم التكت :** ${config.ticketNamePrefix} - ${config.ticketNameMode}`,
         `**كاتوقري الفتح :** ${config.openCategoryId ? `<#${config.openCategoryId}>` : 'غير معين'}`,
-        `**المسؤولين :** ${config.responsibleRoleIds.length}`,
+        `**المسؤولين :**\n${responsiblesMentions}`,
         `**رولات الادمن :** ${config.useGlobalAdminRoles ? 'adminRoles العامة' : config.adminRoleIds.length}`,
         `**حد استلام الاداري :** ${config.adminClaimLimit}`,
         `**حد فتح العضو :** ${config.memberOpenLimit}`,
@@ -850,6 +867,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         `**الاحتفاظ بعد الاغلاق :** ${config.keepClosedTickets ? 'مفعل' : 'مقفل'}`,
         `**طريقة العرض :** ${config.displayMode}`,
         `**عدد الاسباب :** ${reasonsCount}`,
+        `**قائمة الاسباب :**\n${reasonsNames}`,
         `**جاهزية النظام :** ${getSetupIssues().length === 0 ? 'مكتمل' : 'ناقص'}${getSetupIssues().length ? `\n${getSetupIssues().map((i) => `- ${i.replace(/\*\*/g, '')}`).join('\n')}` : ''}`
       ].join('\n'))
       .setFooter({ text: 'Ticket Settings • لوحة منظمة وسهلة القراءة' });
@@ -1468,6 +1486,7 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     return;
   }
 
+  const previousClaimer = ticket.claimedBy;
   ticket.claimedBy = null;
 
   const targetRoles = selected.roles || [];
@@ -1491,8 +1510,8 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     ...(selected.responsibles || []).map((id) => `<@${id}>`)
   ];
 
-  if (ticket.claimedBy) {
-    await interaction.channel.permissionOverwrites.edit(ticket.claimedBy, { ViewChannel: false, SendMessages: false }).catch(() => {});
+  if (previousClaimer) {
+    await interaction.channel.permissionOverwrites.edit(previousClaimer, { ViewChannel: false, SendMessages: false }).catch(() => {});
   }
   const dmEmbed = makeTicketEmbed('تحويل تكت', `يوجد تكت تم تحويله لمسؤوليتكم في <#${channelId}>`, 0x5865F2);
   for (const uid of (selected.responsibles || [])) {
@@ -1500,8 +1519,16 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     if (user) await user.send({ embeds: [dmEmbed] }).catch(() => {});
   }
 
+  const mentionChunks = buildMentionChunks(selected.roles || []);
+  for (const chunk of mentionChunks) {
+    await interaction.channel.send({ content: chunk }).catch(() => {});
+  }
+
+  const renamed = `مسؤولين-${sanitizeName(respName)}`.slice(0, 90);
+  await interaction.channel.setName(renamed).catch(() => {});
+
   await interaction.reply({
-    embeds: [makeTicketEmbed('تحويل', `**تم تحويل التكت لمسؤولين : ${respName}**\n${mentions.join(' ') || '**لا يوجد منشن محدد**'}`, 0x5865F2)]
+    embeds: [makeTicketEmbed('تحويل', `**تم تحويل التكت لمسؤولين : ${respName}**\n${mentions.join(' ') || '**لا يوجد منشن محدد**'}`)]
   });
 }
 
