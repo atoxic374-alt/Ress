@@ -212,18 +212,49 @@ function baseConfig() {
 function getGuildData(guildId) {
   const store = loadStore();
   const existing = store[guildId] || {};
-  const config = { ...baseConfig(), ...(existing.config || {}) };
-  config.messages = { ...baseConfig().messages, ...(existing.config?.messages || {}) };
-  config.reasons = existing.config?.reasons || {};
-  const tickets = existing.tickets || {};
-  const pendingRequests = existing.pendingRequests || {};
-  return { store, guild: { config, tickets, pendingRequests } };
+  const panels = existing.panels && typeof existing.panels === 'object' ? existing.panels : {};
+
+  if (!panels.default) {
+    const legacyConfig = { ...baseConfig(), ...(existing.config || {}) };
+    legacyConfig.messages = { ...baseConfig().messages, ...(existing.config?.messages || {}) };
+    legacyConfig.reasons = existing.config?.reasons || {};
+    panels.default = {
+      config: legacyConfig,
+      tickets: existing.tickets || {},
+      pendingRequests: existing.pendingRequests || {}
+    };
+  }
+
+  const defaultPanel = panels.default || { config: baseConfig(), tickets: {}, pendingRequests: {} };
+  return {
+    store,
+    guild: {
+      panels,
+      config: defaultPanel.config,
+      tickets: defaultPanel.tickets || {},
+      pendingRequests: defaultPanel.pendingRequests || {}
+    }
+  };
 }
 
-function setGuildData(guildId, config, tickets, pendingRequests = {}) {
+function setGuildData(guildId, config, tickets, pendingRequests = {}, panelId = 'default') {
   const store = loadStore();
-  store[guildId] = { config, tickets, pendingRequests };
+  const existing = store[guildId] || {};
+  const panels = existing.panels && typeof existing.panels === 'object' ? existing.panels : {};
+  panels[panelId] = { config, tickets, pendingRequests };
+  store[guildId] = { panels };
   saveStore(store);
+}
+
+function getPanelData(guildId, panelId = 'default') {
+  const { guild } = getGuildData(guildId);
+  const panel = guild.panels[panelId] || guild.panels.default;
+  const config = { ...baseConfig(), ...(panel?.config || {}) };
+  config.messages = { ...baseConfig().messages, ...(panel?.config?.messages || {}) };
+  config.reasons = panel?.config?.reasons || {};
+  const tickets = panel?.tickets || {};
+  const pendingRequests = panel?.pendingRequests || {};
+  return { config, tickets, pendingRequests };
 }
 
 function normalizeId(input) {
@@ -305,20 +336,20 @@ function sanitizeName(input) {
     .slice(0, 90);
 }
 
-async function buildTicketControls(guildId, channelId, config, options = {}) {
+async function buildTicketControls(guildId, panelId, channelId, config, options = {}) {
   const includeClaimButton = options.includeClaimButton !== false;
   const row1Buttons = [];
-  if (includeClaimButton) row1Buttons.push(new ButtonBuilder().setCustomId(`ticket_claim_${guildId}_${channelId}`).setLabel('استلام').setStyle(ButtonStyle.Success));
+  if (includeClaimButton) row1Buttons.push(new ButtonBuilder().setCustomId(`ticket_claim_${guildId}_${panelId}_${channelId}`).setLabel('استلام').setStyle(ButtonStyle.Success));
   row1Buttons.push(
-    new ButtonBuilder().setCustomId(`ticket_close_${guildId}_${channelId}`).setLabel('اقفال').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId(`ticket_rename_${guildId}_${channelId}`).setLabel('تغيير الاسم').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId(`ticket_close_${guildId}_${panelId}_${channelId}`).setLabel('اقفال').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`ticket_rename_${guildId}_${panelId}_${channelId}`).setLabel('تغيير الاسم').setStyle(ButtonStyle.Secondary)
   );
   const row1 = new ActionRowBuilder().addComponents(row1Buttons);
 
   const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`ticket_add_${guildId}_${channelId}`).setLabel('اضافة شخص').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId(`ticket_remove_${guildId}_${channelId}`).setLabel('ازالة شخص').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`ticket_ping_${guildId}_${channelId}`).setLabel('استدعاء العضو').setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId(`ticket_add_${guildId}_${panelId}_${channelId}`).setLabel('اضافة شخص').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`ticket_remove_${guildId}_${panelId}_${channelId}`).setLabel('ازالة شخص').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`ticket_ping_${guildId}_${panelId}_${channelId}`).setLabel('استدعاء العضو').setStyle(ButtonStyle.Primary)
   );
 
   const responsibilities = loadResponsibilities();
@@ -328,7 +359,7 @@ async function buildTicketControls(guildId, channelId, config, options = {}) {
 
   const row3 = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId(`ticket_transfer_${guildId}_${channelId}`)
+      .setCustomId(`ticket_transfer_${guildId}_${panelId}_${channelId}`)
       .setPlaceholder('اختر مسؤولية لتحويل التكت')
       .addOptions(responsibilityOptions.length ? responsibilityOptions : [{ label: 'لا توجد مسؤوليات', value: 'resp_none' }])
       .setDisabled(responsibilityOptions.length === 0)
@@ -337,7 +368,7 @@ async function buildTicketControls(guildId, channelId, config, options = {}) {
   return [row1, row2, row3];
 }
 
-async function createTicketChannel({ guild, member, config, reasonKey, tickets, pendingRequests, includeClaimButton = true }) {
+async function createTicketChannel({ guild, member, config, reasonKey, tickets, pendingRequests, includeClaimButton = true, panelId = 'default' }) {
   const reason = config.reasons?.[reasonKey] || {};
   const prefix = sanitizeName(reason.ticketName || config.ticketNamePrefix || 'ticket') || 'ticket';
   const memberId = member?.id || member?.user?.id || null;
@@ -371,7 +402,7 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
     permissionOverwrites
   });
 
-  const controls = await buildTicketControls(guild.id, channel.id, config, { includeClaimButton });
+  const controls = await buildTicketControls(guild.id, panelId, channel.id, config, { includeClaimButton });
 
   const introText = renderTicketText(reason.beforeImage || config.messages.beforeImage, memberId);
   if (introText) await channel.send({ content: introText });
@@ -394,6 +425,7 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
 
   tickets[channel.id] = {
     channelId: channel.id,
+    panelId,
     memberId,
     reasonKey,
     claimedBy: null,
@@ -402,7 +434,7 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
     createdAt: Date.now()
   };
 
-  setGuildData(guild.id, config, tickets, pendingRequests);
+  setGuildData(guild.id, config, tickets, pendingRequests, panelId);
   return channel;
 }
 
@@ -439,11 +471,10 @@ async function applyHideOnClaim(channel, guild, config, claimerId, memberId, ext
   }
 }
 
-async function handleOpenRequest(interaction, guildId, reasonKey) {
+async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
   await interaction.deferReply({ ephemeral: true }).catch(() => {});
   const guild = interaction.guild;
-  const { guild: g } = getGuildData(guildId);
-  const { config, tickets, pendingRequests } = g;
+  const { config, tickets, pendingRequests } = getPanelData(guildId, panelId || 'default');
 
   const openCount = countOpenMemberTickets(tickets, interaction.user.id);
   if (openCount >= (config.memberOpenLimit || 1)) {
@@ -453,7 +484,7 @@ async function handleOpenRequest(interaction, guildId, reasonKey) {
 
   if (config.autoCreateOnRequest) {
     try {
-      const channel = await createTicketChannel({ guild, member: interaction.member, config, reasonKey, tickets, pendingRequests });
+      const channel = await createTicketChannel({ guild, member: interaction.member, config, reasonKey, tickets, pendingRequests, panelId: panelId || 'default' });
       await interaction.editReply({ embeds: [makeTicketEmbed('تم', `**تم انشاء التكت :** <#${channel.id}>`, 0x57F287)] });
     } catch (error) {
       console.error('ticket open create channel error:', error?.message || error);
@@ -462,14 +493,14 @@ async function handleOpenRequest(interaction, guildId, reasonKey) {
     return;
   }
 
-  const reqId = `${guildId}_${interaction.user.id}_${Date.now()}`;
-  pendingRequests[reqId] = { guildId, userId: interaction.user.id, reasonKey, sourceChannelId: interaction.channelId, createdAt: Date.now() };
+  const reqId = `${guildId}_${panelId || 'default'}_${interaction.user.id}_${Date.now()}`;
+  pendingRequests[reqId] = { guildId, panelId: panelId || 'default', userId: interaction.user.id, reasonKey, sourceChannelId: interaction.channelId, createdAt: Date.now() };
 
   const targetChannelId = config.claimFromDedicatedChannel ? config.claimChannelId : interaction.channelId;
   const targetChannel = await guild.channels.fetch(targetChannelId).catch(() => null);
   if (!targetChannel || targetChannel.type !== ChannelType.GuildText) {
     delete pendingRequests[reqId];
-    setGuildData(guildId, config, tickets, pendingRequests);
+    setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
     await interaction.editReply({ embeds: [makeTicketEmbed('خطأ', '**فشل : شات الاستلام غير صالح.**', 0xED4245)] });
     return;
   }
@@ -493,6 +524,11 @@ async function handleOpenRequest(interaction, guildId, reasonKey) {
     }
   }
 
+  const mentionChunks = buildMentionChunks(getAdminRoles(config));
+  for (const chunk of mentionChunks) {
+    await targetChannel.send({ content: chunk }).catch(() => {});
+  }
+
   if (reasonImage) {
     await targetChannel.send({ files: [reasonImage], components: [row] });
   } else {
@@ -502,14 +538,13 @@ async function handleOpenRequest(interaction, guildId, reasonKey) {
     });
   }
 
-  setGuildData(guildId, config, tickets, pendingRequests);
+  setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
   await interaction.editReply({ embeds: [makeTicketEmbed('تم', '**تم ارسال طلبك لشات الاستلام.**', 0x57F287)] });
 }
 
-async function handleClaimInTicket(interaction, guildId, channelId) {
+async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
   await interaction.deferReply().catch(() => {});
-  const { guild: g } = getGuildData(guildId);
-  const { config, tickets, pendingRequests } = g;
+  const { config, tickets, pendingRequests } = getPanelData(guildId, panelId || 'default');
   const ticket = tickets[channelId];
   if (!ticket || ticket.status !== 'open' || interaction.channelId !== channelId) {
     await interaction.editReply({ embeds: [makeTicketEmbed('تنبيه', '**هذا التكت غير متاح.**', { user: interaction.user })] });
@@ -542,7 +577,7 @@ async function handleClaimInTicket(interaction, guildId, channelId) {
     await applyHideOnClaim(interaction.channel, interaction.guild, config, interaction.user.id, ticket.memberId, ticket.extraMembers || []);
   }
 
-  setGuildData(guildId, config, tickets, pendingRequests);
+  setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
   if (interaction.message?.components?.length) {
     const updatedRows = interaction.message.components.map((row) => {
       const updatedComponents = row.components.map((component) => {
@@ -563,9 +598,8 @@ async function handleClaimInTicket(interaction, guildId, channelId) {
 
 async function handleClaimFromRequest(interaction, reqId) {
   await interaction.deferReply().catch(() => {});
-  const guildId = reqId.split('_')[0];
-  const { guild: g } = getGuildData(guildId);
-  const { config, tickets, pendingRequests } = g;
+  const [guildId, panelId = 'default'] = reqId.split('_');
+  const { config, tickets, pendingRequests } = getPanelData(guildId, panelId);
   const req = pendingRequests[reqId];
 
   if (!req) {
@@ -587,14 +621,14 @@ async function handleClaimFromRequest(interaction, reqId) {
   const member = await interaction.guild.members.fetch(req.userId).catch(() => null);
   if (!member) {
     delete pendingRequests[reqId];
-    setGuildData(guildId, config, tickets, pendingRequests);
+    setGuildData(guildId, config, tickets, pendingRequests, panelId);
     await interaction.editReply({ embeds: [makeTicketEmbed('خطأ', '**لا يمكن العثور على العضو.**', { user: interaction.user })] });
     return;
   }
 
   let channel;
   try {
-    channel = await createTicketChannel({ guild: interaction.guild, member, config, reasonKey: req.reasonKey, tickets, pendingRequests, includeClaimButton: false });
+    channel = await createTicketChannel({ guild: interaction.guild, member, config, reasonKey: req.reasonKey, tickets, pendingRequests, includeClaimButton: false, panelId: req.panelId || panelId });
   } catch (error) {
     console.error('ticket claimreq create channel error:', error?.message || error);
     await interaction.editReply({ embeds: [makeTicketEmbed('خطأ', '**فشل انشاء التكت من طلب الاستلام، تأكد من صلاحيات البوت والكاتوقري.**', { user: interaction.user })] });
@@ -611,13 +645,12 @@ async function handleClaimFromRequest(interaction, reqId) {
   await sendClaimAnnounce({ channel, config, ticket: createdTicket, claimerId: interaction.user.id, claimImage });
 
   delete pendingRequests[reqId];
-  setGuildData(guildId, config, tickets, pendingRequests);
+  setGuildData(guildId, config, tickets, pendingRequests, panelId);
   await interaction.editReply({ embeds: [makeTicketEmbed('تم استلام التكت', `**تم الاستلام والانشاء :** <#${channel.id}>`)] });
 }
 
-async function handleClose(interaction, guildId, channelId) {
-  const { guild: g } = getGuildData(guildId);
-  const { config, tickets, pendingRequests } = g;
+async function handleClose(interaction, guildId, panelId, channelId) {
+  const { config, tickets, pendingRequests } = getPanelData(guildId, panelId || 'default');
   const ticket = tickets[channelId];
   if (!ticket || interaction.channelId !== channelId) {
     await interaction.reply({ content: '**لا توجد بيانات لهذا التكت.**', ephemeral: true });
@@ -640,7 +673,7 @@ async function handleClose(interaction, guildId, channelId) {
 
   if (!config.keepClosedTickets) {
     delete tickets[channelId];
-    setGuildData(guildId, config, tickets, pendingRequests);
+    setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
     await interaction.reply({ embeds: [makeTicketEmbed('اقفال', '**سيتم حذف التكت خلال 3 ثواني.**', 0xED4245)], ephemeral: true });
     setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
     return;
@@ -672,23 +705,23 @@ async function handleClose(interaction, guildId, channelId) {
     components: buildPostCloseControls(guildId, channelId, ticket)
   }).catch(() => {});
 
-  setGuildData(guildId, config, tickets, pendingRequests);
+  setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
   await interaction.reply({ embeds: [makeTicketEmbed('اقفال', '**تم اقفال التكت والاحتفاظ به.**', 0xED4245)], ephemeral: true });
 }
 
-function createReasonComponents(config, guildId) {
+function createReasonComponents(config, guildId, panelId = 'default') {
   const reasons = Object.entries(config.reasons || {}).sort((a, b) => Number(a[0]) - Number(b[0])).slice(0, 25);
   if (config.displayMode === 'menu') {
     const options = reasons.length
       ? reasons.map(([k, v]) => ({ label: (v.name || `سبب ${k}`).slice(0, 100), description: (v.description || '').slice(0, 100) || undefined, value: `reason_${k}`, emoji: v.emoji || undefined }))
       : [{ label: 'فتح تكت عام', value: 'reason_0', emoji: '🎫' }];
-    return [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`ticket_open_menu_${guildId}`).setPlaceholder('اختر السبب').addOptions(options))];
+    return [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`ticket_open_menu_${guildId}_${panelId}`).setPlaceholder('اختر السبب').addOptions(options))];
   }
 
   const maxButtons = Math.max(1, Math.min(25, (config.buttonRows || 2) * 5));
   const entries = (reasons.length ? reasons : [['0', { name: 'فتح تكت', emoji: '🎫' }]]).slice(0, maxButtons);
   const buttons = entries.map(([k, v]) => new ButtonBuilder()
-    .setCustomId(`ticket_open_btn_${guildId}_${k}`)
+    .setCustomId(`ticket_open_btn_${guildId}_${panelId}_${k}`)
     .setLabel((v.name || `سبب ${k}`).slice(0, 80))
     .setStyle(ButtonStyle.Primary)
     .setEmoji(v.emoji || '🎫'));
@@ -707,12 +740,32 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     return;
   }
 
-  const { guild: g } = getGuildData(message.guild.id);
-  const { config, tickets, pendingRequests } = g;
-
   const controlChannel = message.channel;
   let setupMessage = null;
   let activePromptInteraction = null;
+
+  let panelId = normalizeId(args?.[0]);
+  if (!panelId) {
+    await controlChannel.send('**ارسل اي دي او منشن الروم المراد ربط إعدادات التكت به.**').catch(() => {});
+    const collected = await controlChannel.awaitMessages({
+      filter: (m) => m.author.id === message.author.id,
+      max: 1,
+      time: 180000
+    });
+    const first = collected.first();
+    if (first) {
+      panelId = normalizeId(first.content || '');
+      await first.delete().catch(() => {});
+    }
+  }
+
+  const panelChannel = panelId ? await message.guild.channels.fetch(panelId).catch(() => null) : null;
+  if (!panelChannel || panelChannel.type !== ChannelType.GuildText) {
+    await controlChannel.send('**❌ الروم غير صالح، استخدم منشن أو اي دي روم نصي صحيح.**').catch(() => {});
+    return;
+  }
+
+  const { config, tickets, pendingRequests } = getPanelData(message.guild.id, panelId);
 
   const ask = async (prompt, timeout = 180000) => {
     if (activePromptInteraction) {
@@ -784,6 +837,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         '• **طريقة العرض:** أزرار أو منيو.',
         '',
         '**الحالة الحالية:**',
+        `**روم الإعداد الحالي :** <#${panelId}>`,
         `**اسم التكت :** ${config.ticketNamePrefix} - ${config.ticketNameMode}`,
         `**كاتوقري الفتح :** ${config.openCategoryId ? `<#${config.openCategoryId}>` : 'غير معين'}`,
         `**المسؤولين :** ${config.responsibleRoleIds.length}`,
@@ -867,7 +921,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
   });
 
   const refresh = async (note = null, components = buildMenuComponents()) => {
-    setGuildData(message.guild.id, config, tickets, pendingRequests);
+    setGuildData(message.guild.id, config, tickets, pendingRequests, panelId);
     await setupMessage.edit({
       content: note || null,
       embeds: [buildSetupEmbed()],
@@ -1343,11 +1397,6 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 
       if (choice === 'send_panel_now') {
         if (!(await assertSetupReady('ارسال البانل'))) return;
-        const panelChannel = await message.guild.channels.fetch(normalizeId(await ask('**ارسل : الشات (منشن/ايدي)**'))).catch(() => null);
-        if (!panelChannel || panelChannel.type !== ChannelType.GuildText) {
-          await refresh( '**فشل : شات غير صالح.**');
-          return;
-        }
 
         const mode = (await ask('**طريقة الارسال : text / image / both**')) || 'both';
         const text = mode === 'image' ? '' : await ask('**النص : (0 لتخطي)**');
@@ -1356,7 +1405,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         await panelChannel.send({
           content: text && text !== '0' ? text : null,
           files: image && image !== '0' ? [image] : [],
-          components: createReasonComponents(config, message.guild.id)
+          components: createReasonComponents(config, message.guild.id, panelId)
         });
 
         await refresh( '**تم ارسال البانل بنجاح.**');
@@ -1371,13 +1420,13 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
   });
 
   collector.on('end', async () => {
-    setGuildData(message.guild.id, config, tickets, pendingRequests);
+    setGuildData(message.guild.id, config, tickets, pendingRequests, panelId);
     await setupMessage.edit({ embeds: [buildSetupEmbed()], components: [] }).catch(() => {});
     await controlChannel.send('**تم حفظ اعدادات التكت.**').catch(() => {});
   });
 }
 
-async function handleTransferResponsibility(interaction, guildId, channelId, value) {
+async function handleTransferResponsibility(interaction, guildId, panelId, channelId, value) {
   if (!value || value === 'resp_none') {
     await interaction.reply({ content: '**لا توجد مسؤولية صالحة.**', ephemeral: true });
     return;
@@ -1401,8 +1450,7 @@ async function handleTransferResponsibility(interaction, guildId, channelId, val
     return;
   }
 
-  const { guild: g } = getGuildData(guildId);
-  const { config, tickets, pendingRequests } = g;
+  const { config, tickets, pendingRequests } = getPanelData(guildId, panelId || 'default');
   const ticket = tickets[channelId];
   if (!ticket || interaction.channelId !== channelId) {
     await interaction.reply({ content: '**لا توجد بيانات لهذا التكت.**', ephemeral: true });
@@ -1436,7 +1484,7 @@ async function handleTransferResponsibility(interaction, guildId, channelId, val
   }
 
   config.responsibleRoleIds = [...targetRoles];
-  setGuildData(guildId, config, tickets, pendingRequests);
+  setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
 
   const mentions = [
     ...(selected.roles || []).map((id) => `<@&${id}>`),
@@ -1481,16 +1529,20 @@ function registerHandlers(client) {
         const id = interaction.customId || '';
 
         if (id.startsWith('ticket_open_btn_')) {
-          const [, , , guildId, reasonKey] = id.split('_');
-          await handleOpenRequest(interaction, guildId, reasonKey);
+          const parts = id.split('_');
+          const guildId = parts[3];
+          const panelId = parts.length >= 6 ? parts[4] : 'default';
+          const reasonKey = parts.length >= 6 ? parts[5] : parts[4];
+          await handleOpenRequest(interaction, guildId, panelId, reasonKey);
           return;
         }
 
         if (interaction.isStringSelectMenu() && id.startsWith('ticket_open_menu_')) {
-          const guildId = id.replace('ticket_open_menu_', '');
+          const raw = id.replace('ticket_open_menu_', '');
+          const [guildId, panelId = 'default'] = raw.split('_');
           const value = interaction.values?.[0] || 'reason_0';
           const reasonKey = value.replace('reason_', '');
-          await handleOpenRequest(interaction, guildId, reasonKey);
+          await handleOpenRequest(interaction, guildId, panelId, reasonKey);
           return;
         }
 
@@ -1501,14 +1553,20 @@ function registerHandlers(client) {
         }
 
         if (id.startsWith('ticket_claim_')) {
-          const [, , guildId, channelId] = id.split('_');
-          await handleClaimInTicket(interaction, guildId, channelId);
+          const parts = id.split('_');
+          const guildId = parts[2];
+          const panelId = parts.length >= 5 ? parts[3] : 'default';
+          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          await handleClaimInTicket(interaction, guildId, panelId, channelId);
           return;
         }
 
         if (id.startsWith('ticket_close_')) {
-          const [, , guildId, channelId] = id.split('_');
-          await handleClose(interaction, guildId, channelId);
+          const parts = id.split('_');
+          const guildId = parts[2];
+          const panelId = parts.length >= 5 ? parts[3] : 'default';
+          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          await handleClose(interaction, guildId, panelId, channelId);
           return;
         }
 
@@ -1583,48 +1641,56 @@ function registerHandlers(client) {
         }
 
         if (id.startsWith('ticket_rename_')) {
-          const [, , guildId, channelId] = id.split('_');
-          const { guild: g } = getGuildData(guildId);
-          const { config, tickets } = g;
+          const parts = id.split('_');
+          const guildId = parts[2];
+          const panelId = parts.length >= 5 ? parts[3] : 'default';
+          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          const { config, tickets } = getPanelData(guildId, panelId);
           const ticket = tickets[channelId];
           if (!ticket || !canManageTicket(interaction, ticket, config)) {
             await interaction.reply({ content: '**ليس لديك صلاحية تغيير الاسم.**', ephemeral: true });
             return;
           }
-          await showInputModal(interaction, `ticket_rename_modal_${guildId}_${channelId}`, 'تغيير اسم التكت', 'الاسم الجديد', 'مثال : support-user');
+          await showInputModal(interaction, `ticket_rename_modal_${guildId}_${panelId}_${channelId}`, 'تغيير اسم التكت', 'الاسم الجديد', 'مثال : support-user');
           return;
         }
 
         if (id.startsWith('ticket_add_')) {
-          const [, , guildId, channelId] = id.split('_');
-          const { guild: g } = getGuildData(guildId);
-          const { config, tickets } = g;
+          const parts = id.split('_');
+          const guildId = parts[2];
+          const panelId = parts.length >= 5 ? parts[3] : 'default';
+          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          const { config, tickets } = getPanelData(guildId, panelId);
           const ticket = tickets[channelId];
           if (!ticket || !canManageTicket(interaction, ticket, config)) {
             await interaction.reply({ content: '**ليس لديك صلاحية الاضافة.**', ephemeral: true });
             return;
           }
-          await showInputModal(interaction, `ticket_add_modal_${guildId}_${channelId}`, 'اضافة شخص للتكت', 'ايدي او منشن الشخص');
+          await showInputModal(interaction, `ticket_add_modal_${guildId}_${panelId}_${channelId}`, 'اضافة شخص للتكت', 'ايدي او منشن الشخص');
           return;
         }
 
         if (id.startsWith('ticket_remove_')) {
-          const [, , guildId, channelId] = id.split('_');
-          const { guild: g } = getGuildData(guildId);
-          const { config, tickets } = g;
+          const parts = id.split('_');
+          const guildId = parts[2];
+          const panelId = parts.length >= 5 ? parts[3] : 'default';
+          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          const { config, tickets } = getPanelData(guildId, panelId);
           const ticket = tickets[channelId];
           if (!ticket || !canManageTicket(interaction, ticket, config)) {
             await interaction.reply({ content: '**ليس لديك صلاحية الازالة.**', ephemeral: true });
             return;
           }
-          await showInputModal(interaction, `ticket_remove_modal_${guildId}_${channelId}`, 'ازالة شخص من التكت', 'ايدي او منشن الشخص');
+          await showInputModal(interaction, `ticket_remove_modal_${guildId}_${panelId}_${channelId}`, 'ازالة شخص من التكت', 'ايدي او منشن الشخص');
           return;
         }
 
         if (id.startsWith('ticket_ping_')) {
-          const [, , guildId, channelId] = id.split('_');
-          const { guild: g } = getGuildData(guildId);
-          const { tickets, config, pendingRequests } = g;
+          const parts = id.split('_');
+          const guildId = parts[2];
+          const panelId = parts.length >= 5 ? parts[3] : 'default';
+          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          const { tickets, config, pendingRequests } = getPanelData(guildId, panelId);
           const ticket = tickets[channelId];
           if (!ticket || interaction.channelId !== channelId) {
             await interaction.reply({ content: '**لا توجد بيانات لهذا التكت.**', ephemeral: true });
@@ -1650,15 +1716,18 @@ function registerHandlers(client) {
             await user.send({ embeds: [makeTicketEmbed('استدعاء للتكت', `**تم استدعاؤك للتكت**\n**الرابط :** ${link}`, 0x5865F2)] }).catch(() => {});
           }
           pingCooldowns.set(cooldownKey, now);
-          setGuildData(guildId, config, tickets, pendingRequests);
+          setGuildData(guildId, config, tickets, pendingRequests, panelId);
           await interaction.reply({ embeds: [makeTicketEmbed('تم', `**تم استدعاء العضو :** <@${ticket.memberId}>`, 0x57F287)], ephemeral: true });
           return;
         }
 
         if (interaction.isStringSelectMenu() && id.startsWith('ticket_transfer_')) {
-          const [, , guildId, channelId] = id.split('_');
+          const parts = id.split('_');
+          const guildId = parts[2];
+          const panelId = parts.length >= 5 ? parts[3] : 'default';
+          const channelId = parts.length >= 5 ? parts[4] : parts[3];
           const selected = interaction.values?.[0] || 'resp_none';
-          await handleTransferResponsibility(interaction, guildId, channelId, selected);
+          await handleTransferResponsibility(interaction, guildId, panelId, channelId, selected);
           return;
         }
       }
@@ -1667,14 +1736,13 @@ function registerHandlers(client) {
         const modalId = interaction.customId;
 
         if (modalId.startsWith('ticket_rename_modal_')) {
-          const [, , , guildId, channelId] = modalId.split('_');
+          const [, , , guildId, panelId = 'default', channelId] = modalId.split('_');
           const newName = sanitizeName(interaction.fields.getTextInputValue('value'));
           if (!newName) {
             await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**الاسم غير صالح.**', 0xED4245)], ephemeral: true });
             return;
           }
-          const { guild: g } = getGuildData(guildId);
-          const { config, tickets } = g;
+          const { config, tickets } = getPanelData(guildId, panelId);
           const ticket = tickets[channelId];
           if (!ticket || interaction.channelId !== channelId) {
             await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**لا توجد بيانات لهذا التكت.**', 0xED4245)], ephemeral: true });
@@ -1690,14 +1758,13 @@ function registerHandlers(client) {
         }
 
         if (modalId.startsWith('ticket_add_modal_')) {
-          const [, , , guildId, channelId] = modalId.split('_');
+          const [, , , guildId, panelId = 'default', channelId] = modalId.split('_');
           const userId = normalizeId(interaction.fields.getTextInputValue('value'));
           if (!userId) {
             await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**المدخل غير صالح.**', 0xED4245)], ephemeral: true });
             return;
           }
-          const { guild: g } = getGuildData(guildId);
-          const { config, tickets, pendingRequests } = g;
+          const { config, tickets, pendingRequests } = getPanelData(guildId, panelId);
           const ticket = tickets[channelId];
           if (!ticket || interaction.channelId !== channelId) {
             await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**لا توجد بيانات لهذا التكت.**', 0xED4245)], ephemeral: true });
@@ -1722,20 +1789,19 @@ function registerHandlers(client) {
             ReadMessageHistory: true
           }).catch(() => {});
           if (!ticket.extraMembers.includes(userId)) ticket.extraMembers.push(userId);
-          setGuildData(guildId, config, tickets, pendingRequests);
+          setGuildData(guildId, config, tickets, pendingRequests, panelId);
           await interaction.reply({ embeds: [makeTicketEmbed('تم', `**تم اضافة الشخص :** <@${userId}>`, 0x57F287)], ephemeral: true });
           return;
         }
 
         if (modalId.startsWith('ticket_remove_modal_')) {
-          const [, , , guildId, channelId] = modalId.split('_');
+          const [, , , guildId, panelId = 'default', channelId] = modalId.split('_');
           const userId = normalizeId(interaction.fields.getTextInputValue('value'));
           if (!userId) {
             await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**المدخل غير صالح.**', 0xED4245)], ephemeral: true });
             return;
           }
-          const { guild: g } = getGuildData(guildId);
-          const { config, tickets, pendingRequests } = g;
+          const { config, tickets, pendingRequests } = getPanelData(guildId, panelId);
           const ticket = tickets[channelId];
           if (!ticket || interaction.channelId !== channelId) {
             await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**لا توجد بيانات لهذا التكت.**', 0xED4245)], ephemeral: true });
@@ -1751,7 +1817,7 @@ function registerHandlers(client) {
           }
           await interaction.channel.permissionOverwrites.edit(userId, { ViewChannel: false }).catch(() => {});
           ticket.extraMembers = (ticket.extraMembers || []).filter((id) => id !== userId);
-          setGuildData(guildId, config, tickets, pendingRequests);
+          setGuildData(guildId, config, tickets, pendingRequests, panelId);
           await interaction.reply({ embeds: [makeTicketEmbed('تم', `**تم ازالة الشخص :** <@${userId}>`, 0x57F287)], ephemeral: true });
           return;
         }
