@@ -32,6 +32,51 @@ function makeTicketEmbed(title, description, options = {}) {
   return embed;
 }
 
+function renderTicketText(template, memberId) {
+  if (!template) return '';
+  return String(template).replace(/\buser\b/gi, `<@${memberId}>`);
+}
+
+function buildMentionChunks(roleIds = [], maxLen = 1800) {
+  const mentions = [...new Set(roleIds)].map((id) => `<@&${id}>`);
+  const chunks = [];
+  let current = '';
+  for (const mention of mentions) {
+    const next = current ? `${current} ${mention}` : mention;
+    if (next.length > maxLen) {
+      if (current) chunks.push(current);
+      current = mention;
+    } else {
+      current = next;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+async function sendClaimAnnounce({ channel, config, ticket, claimerId, claimImage }) {
+  const adminRoleIds = getAdminRoles(config)
+    .map((id) => String(id || '').trim())
+    .filter((id) => /^\d{16,20}$/.test(id));
+
+  const reasonName = config.reasons?.[ticket.reasonKey]?.name || `سبب ${ticket.reasonKey}`;
+  const mentionChunks = buildMentionChunks(adminRoleIds);
+  for (const chunk of mentionChunks) {
+    await channel.send({ content: chunk }).catch(() => {});
+  }
+
+  const claimEmbed = makeTicketEmbed(
+    'Ticket claimed',
+    `**Ticket claimed by :** <@${claimerId}>\n**Reason :** ${reasonName}`
+  );
+
+  if (claimImage) {
+    await channel.send({ files: [claimImage], embeds: [claimEmbed] }).catch(() => {});
+  } else {
+    await channel.send({ embeds: [claimEmbed] }).catch(() => {});
+  }
+}
+
 function buildPostCloseControls(guildId, channelId, ticket = {}) {
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`ticket_down_${guildId}_${channelId}`).setLabel('-1').setStyle(ButtonStyle.Secondary),
@@ -328,15 +373,11 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
 
   const controls = await buildTicketControls(guild.id, channel.id, config, { includeClaimButton });
 
-  if (reason.beforeImage || config.messages.beforeImage) {
-    await channel.send({ content: reason.beforeImage || config.messages.beforeImage });
-  }
+  const introText = renderTicketText(reason.beforeImage || config.messages.beforeImage, memberId);
+  if (introText) await channel.send({ content: introText });
   const openImage = resolveImageForSend(reason.openImage || config.messages.ticketImage);
   if (openImage) {
     await channel.send({ files: [openImage] }).catch(() => {});
-  }
-  if (reason.afterImage || config.messages.afterImage) {
-    await channel.send({ content: reason.afterImage || config.messages.afterImage });
   }
 
   await channel.send({
@@ -492,7 +533,7 @@ async function handleClaimInTicket(interaction, guildId, channelId) {
 
   const claimedCount = countClaimedByAdmin(tickets, interaction.user.id);
   if (claimedCount >= (config.adminClaimLimit || 1)) {
-    await interaction.reply({ content: `**الحد :** لا يمكنك استلام أكثر من ${config.adminClaimLimit} تكت مفتوح.`, ephemeral: true });
+    await interaction.editReply({ embeds: [makeTicketEmbed('تنبيه', `**الحد :** لا يمكنك استلام أكثر من ${config.adminClaimLimit} تكت مفتوح.`, { user: interaction.user })] });
     return;
   }
 
@@ -516,15 +557,8 @@ async function handleClaimInTicket(interaction, guildId, channelId) {
   }
   const reason = config.reasons?.[ticket.reasonKey] || {};
   const claimImage = resolveImageForSend(reason.claimImage);
-  if (claimImage) {
-    await interaction.channel.send({
-      files: [claimImage],
-      embeds: [makeTicketEmbed('تم استلام التكت', `**المستلم :** <@${interaction.user.id}>\n**العضو :** <@${ticket.memberId}>`)]
-    }).catch(() => {});
-    await interaction.editReply({ embeds: [makeTicketEmbed('تم', '**تم استلام التكت بنجاح.**', { user: interaction.user })] });
-  } else {
-    await interaction.editReply({ embeds: [makeTicketEmbed('تم استلام التكت', `**المستلم :** <@${interaction.user.id}>\n**العضو :** <@${ticket.memberId}>`)] });
-  }
+  await sendClaimAnnounce({ channel: interaction.channel, config, ticket, claimerId: interaction.user.id, claimImage });
+  await interaction.editReply({ embeds: [makeTicketEmbed('تم', '**تم استلام التكت بنجاح.**', { user: interaction.user })] });
 }
 
 async function handleClaimFromRequest(interaction, reqId) {
@@ -571,6 +605,10 @@ async function handleClaimFromRequest(interaction, reqId) {
   if (config.hideOnClaim) {
     await applyHideOnClaim(channel, interaction.guild, config, interaction.user.id, member.id, tickets[channel.id].extraMembers || []);
   }
+
+  const createdTicket = tickets[channel.id];
+  const claimImage = resolveImageForSend(config.reasons?.[createdTicket.reasonKey]?.claimImage);
+  await sendClaimAnnounce({ channel, config, ticket: createdTicket, claimerId: interaction.user.id, claimImage });
 
   delete pendingRequests[reqId];
   setGuildData(guildId, config, tickets, pendingRequests);
