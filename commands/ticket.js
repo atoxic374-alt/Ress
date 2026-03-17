@@ -773,6 +773,17 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     }).catch(() => {});
   };
 
+  const buildReasonsIndexText = () => {
+    const lines = [];
+    for (let i = 1; i <= 25; i += 1) {
+      const key = String(i);
+      const reason = config.reasons?.[key] || {};
+      const label = reason.name || `سبب ${i}`;
+      lines.push(`**${i})** ${label}`);
+    }
+    return lines.join('\n');
+  };
+
   const openReasonSubmenu = async (key, reason, idx) => {
     let done = false;
     while (!done) {
@@ -943,6 +954,12 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       }
 
       if (c === 'i3') {
+        await setupMessage.edit({
+          content: '**اختر رقم السبب من القائمة التالية ثم اكتب الرقم في الشات.**',
+          embeds: [new EmbedBuilder().setTitle('**فهرس الأسباب (1 - 25)**').setDescription(buildReasonsIndexText())],
+          components: []
+        }).catch(() => {});
+
         const idx = Number(await ask('**اختر رقم السبب من 1 الى 25**'));
         if (!Number.isFinite(idx) || idx < 1 || idx > 25) continue;
         const key = String(idx);
@@ -1192,6 +1209,13 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           await refresh( '**يلزم تعيين كاتوقري الفتح قبل تعديل الاسباب.**');
           return;
         }
+
+        await setupMessage.edit({
+          content: '**اختر رقم السبب من القائمة التالية ثم اكتب الرقم في الشات.**',
+          embeds: [new EmbedBuilder().setTitle('**فهرس الأسباب (1 - 25)**').setDescription(buildReasonsIndexText())],
+          components: []
+        }).catch(() => {});
+
         const idx = Number(await ask('**اختر : رقم السبب من 1 الى 25**'));
         if (Number.isFinite(idx) && idx >= 1 && idx <= 25) {
           const key = String(idx);
