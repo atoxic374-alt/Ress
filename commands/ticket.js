@@ -263,6 +263,14 @@ function normalizeId(input) {
   return match ? match[1] : null;
 }
 
+function extractChannelId(input) {
+  if (!input) return null;
+  const normalized = normalizeId(input);
+  if (normalized) return normalized;
+  const any = String(input).match(/(\d{16,20})/);
+  return any ? any[1] : null;
+}
+
 function createMainEmbed(config, guildName) {
   return colorManager.createEmbed()
     .setTitle(`**إعدادات التكت : ${guildName}**`)
@@ -752,7 +760,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
   let setupMessage = null;
   let activePromptInteraction = null;
 
-  let panelId = normalizeId(args?.[0]);
+  let panelId = extractChannelId((args || []).join(' '));
   if (!panelId) {
     await controlChannel.send('**ارسل اي دي او منشن الروم المراد ربط إعدادات التكت به.**').catch(() => {});
     const collected = await controlChannel.awaitMessages({
@@ -762,13 +770,13 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     });
     const first = collected.first();
     if (first) {
-      panelId = normalizeId(first.content || '');
+      panelId = extractChannelId(first.content || '');
       await first.delete().catch(() => {});
     }
   }
 
   const panelChannel = panelId ? await message.guild.channels.fetch(panelId).catch(() => null) : null;
-  if (!panelChannel || panelChannel.type !== ChannelType.GuildText) {
+  if (!panelChannel || !panelChannel.isTextBased?.()) {
     await controlChannel.send('**❌ الروم غير صالح، استخدم منشن أو اي دي روم نصي صحيح.**').catch(() => {});
     return;
   }
@@ -908,22 +916,22 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       .setCustomId(`ticket_setup_menu_${message.author.id}_${Date.now()}`)
       .setPlaceholder('اختر اعداد التكت')
       .addOptions([
-        { label: '1) اسم شات التكت', value: 'set_name' },
-        { label: '2) كاتوقري الفتح', value: 'set_open_category' },
-        { label: '3) تحديد المسؤولين', value: 'set_responsibles' },
-        { label: '4) تحديد رولات الادمن', value: 'set_admin_roles' },
-        { label: '5) حد استلام الاداري', value: 'set_admin_limit' },
-        { label: '6) حد فتح العضو', value: 'set_member_limit' },
-        { label: '7) انشاء قبل الاستلام (toggle)', value: 'toggle_auto_create' },
-        { label: '8) اخفاء عند الاستلام (toggle)', value: 'toggle_hide_on_claim' },
-        { label: '9) الاستلام من شات مخصص', value: 'toggle_claim_channel' },
-        { label: '10) الاحتفاظ بعد الاغلاق', value: 'toggle_keep_closed' },
-        { label: '11) اعدادات الرسائل (نصوص فقط)', value: 'set_messages' },
-        { label: '12) اعدادات الصور', value: 'set_images' },
-        { label: '13) تعيين الاسباب', value: 'set_reasons' },
-        { label: '14) طريقة العرض', value: 'set_display_mode' },
-        { label: '15) ارسال بانل التكت', value: 'send_panel_now' },
-        { label: 'انهاء الاعداد', value: 'finish' }
+        { label: '1) اسم شات التكت', value: 'set_name', description: 'تحديد بادئة الاسم وطريقة التسمية' },
+        { label: '2) كاتوقري الفتح', value: 'set_open_category', description: 'تحديد كاتوقري استقبال التكتات' },
+        { label: '3) تحديد المسؤولين', value: 'set_responsibles', description: 'الرولات التي تدير التكتات' },
+        { label: '4) تحديد رولات الادمن', value: 'set_admin_roles', description: 'الرولات التي لها صلاحيات إدارية' },
+        { label: '5) حد استلام الاداري', value: 'set_admin_limit', description: 'عدد التكتات المفتوحة لكل إداري' },
+        { label: '6) حد فتح العضو', value: 'set_member_limit', description: 'عدد التكتات المفتوحة لكل عضو' },
+        { label: '7) انشاء قبل الاستلام (toggle)', value: 'toggle_auto_create', description: 'فتح مباشر أو انتظار الاستلام' },
+        { label: '8) اخفاء عند الاستلام (toggle)', value: 'toggle_hide_on_claim', description: 'إخفاء/إظهار بحسب المستلم' },
+        { label: '9) الاستلام من شات مخصص', value: 'toggle_claim_channel', description: 'تفعيل شات منفصل لطلبات الاستلام' },
+        { label: '10) الاحتفاظ بعد الاغلاق', value: 'toggle_keep_closed', description: 'حذف التكت أو إبقاؤه بعد الإغلاق' },
+        { label: '11) اعدادات الرسائل (نصوص فقط)', value: 'set_messages', description: 'تخصيص النصوص قبل/بعد/قبول' },
+        { label: '12) اعدادات الصور', value: 'set_images', description: 'تخصيص صور الفتح/الاستلام/الفاصل' },
+        { label: '13) تعيين الاسباب', value: 'set_reasons', description: 'تعديل أسماء/وصف/كاتوقري الأسباب' },
+        { label: '14) طريقة العرض', value: 'set_display_mode', description: 'الاختيار بين buttons أو menu' },
+        { label: '15) ارسال بانل التكت', value: 'send_panel_now', description: 'إرسال بانل الفتح للروم المحدد' },
+        { label: 'انهاء الاعداد', value: 'finish', description: 'حفظ الإعدادات وإغلاق الجلسة' }
       ]);
 
     return [new ActionRowBuilder().addComponents(menu)];
