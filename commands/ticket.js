@@ -258,16 +258,24 @@ async function buildTicketControls(guildId, channelId, config) {
 async function createTicketChannel({ guild, member, config, reasonKey, tickets, pendingRequests }) {
   const reason = config.reasons?.[reasonKey] || {};
   const prefix = sanitizeName(reason.ticketName || config.ticketNamePrefix || 'ticket') || 'ticket';
-  const suffix = config.ticketNameMode === 'user' ? sanitizeName(member.user.username) : String(config.counter || 1);
+  const memberId = member?.id || member?.user?.id || null;
+  if (!memberId) {
+    throw new Error('MEMBER_ID_MISSING');
+  }
+
+  const memberUsername = member?.user?.username || member?.displayName || 'user';
+  const suffix = config.ticketNameMode === 'user' ? sanitizeName(memberUsername) : String(config.counter || 1);
   const channelName = `${prefix}-${suffix}`.slice(0, 90);
   const categoryId = reason.categoryId || config.openCategoryId || null;
 
   const adminRoles = getAdminRoles(config);
-  const allowedStaffRoles = [...new Set([...(config.responsibleRoleIds || []), ...adminRoles])];
+  const allowedStaffRoles = [...new Set([...(config.responsibleRoleIds || []), ...adminRoles])]
+    .map((roleId) => String(roleId || '').trim())
+    .filter((roleId) => /^\d{16,20}$/.test(roleId) && guild.roles.cache.has(roleId));
 
   const permissionOverwrites = [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-    { id: member.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
+    { id: memberId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
   ];
 
   for (const roleId of allowedStaffRoles) {
@@ -295,7 +303,7 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
   }
 
   await channel.send({
-    content: `**التكت : تم الانشاء**\n**العضو :** <@${member.id}>`,
+    content: `**التكت : تم الانشاء**\n**العضو :** <@${memberId}>`,
     components: controls
   });
 
@@ -303,7 +311,7 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
 
   tickets[channel.id] = {
     channelId: channel.id,
-    memberId: member.id,
+    memberId,
     reasonKey,
     claimedBy: null,
     status: 'open',
