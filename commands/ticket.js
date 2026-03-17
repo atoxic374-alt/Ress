@@ -12,6 +12,7 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const { registerTicketInteractionRouter } = require('../utils/ticketInteractionRouter');
 
 const name = 'ticket';
 const aliases = ['تكت'];
@@ -1236,7 +1237,7 @@ function registerHandlers(client) {
   if (handlersRegistered) return;
   handlersRegistered = true;
 
-  client.on('interactionCreate', async (interaction) => {
+  registerTicketInteractionRouter(async (interaction) => {
     try {
       if (interaction.isButton() || interaction.isStringSelectMenu()) {
         const id = interaction.customId || '';
@@ -1436,10 +1437,13 @@ function registerHandlers(client) {
           return;
         }
       }
+
+      return false;
     } catch {
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({ content: '**حدث خطأ أثناء معالجة التكت.**', ephemeral: true }).catch(() => {});
       }
+      return true;
     }
   });
 }
