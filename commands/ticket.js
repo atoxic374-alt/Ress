@@ -12,6 +12,7 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const { registerTicketInteractionRouter } = require('../utils/ticketInteractionRouter');
 
 const name = 'ticket';
 const aliases = ['تكت'];
@@ -239,9 +240,9 @@ async function buildTicketControls(guildId, channelId, config) {
   );
 
   const responsibilities = loadResponsibilities();
-  const options = Object.keys(responsibilities)
-    .slice(0, 25)
-    .map((respName) => ({ label: respName.slice(0, 100), value: `resp_${respName}` }));
+  const responsibilityNames = Object.keys(responsibilities).slice(0, 25);
+  const options = responsibilityNames
+    .map((respName, index) => ({ label: respName.slice(0, 100), value: `respidx_${index}` }));
 
   const row3 = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
@@ -257,16 +258,24 @@ async function buildTicketControls(guildId, channelId, config) {
 async function createTicketChannel({ guild, member, config, reasonKey, tickets, pendingRequests }) {
   const reason = config.reasons?.[reasonKey] || {};
   const prefix = sanitizeName(reason.ticketName || config.ticketNamePrefix || 'ticket') || 'ticket';
-  const suffix = config.ticketNameMode === 'user' ? sanitizeName(member.user.username) : String(config.counter || 1);
+  const memberId = member?.id || member?.user?.id || null;
+  if (!memberId) {
+    throw new Error('MEMBER_ID_MISSING');
+  }
+
+  const memberUsername = member?.user?.username || member?.displayName || 'user';
+  const suffix = config.ticketNameMode === 'user' ? sanitizeName(memberUsername) : String(config.counter || 1);
   const channelName = `${prefix}-${suffix}`.slice(0, 90);
   const categoryId = reason.categoryId || config.openCategoryId || null;
 
   const adminRoles = getAdminRoles(config);
-  const allowedStaffRoles = [...new Set([...(config.responsibleRoleIds || []), ...adminRoles])];
+  const allowedStaffRoles = [...new Set([...(config.responsibleRoleIds || []), ...adminRoles])]
+    .map((roleId) => String(roleId || '').trim())
+    .filter((roleId) => /^\d{16,20}$/.test(roleId) && guild.roles.cache.has(roleId));
 
   const permissionOverwrites = [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-    { id: member.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
+    { id: memberId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
   ];
 
   for (const roleId of allowedStaffRoles) {
@@ -294,7 +303,7 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
   }
 
   await channel.send({
-    content: `**التكت : تم الانشاء**\n**العضو :** <@${member.id}>`,
+    content: `**التكت : تم الانشاء**\n**العضو :** <@${memberId}>`,
     components: controls
   });
 
@@ -302,7 +311,7 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
 
   tickets[channel.id] = {
     channelId: channel.id,
-    memberId: member.id,
+    memberId,
     reasonKey,
     claimedBy: null,
     status: 'open',
@@ -359,8 +368,13 @@ async function handleOpenRequest(interaction, guildId, reasonKey) {
   }
 
   if (config.autoCreateOnRequest) {
-    const channel = await createTicketChannel({ guild, member: interaction.member, config, reasonKey, tickets, pendingRequests });
-    await interaction.reply({ content: `**تم انشاء التكت :** <#${channel.id}>`, ephemeral: true });
+    try {
+      const channel = await createTicketChannel({ guild, member: interaction.member, config, reasonKey, tickets, pendingRequests });
+      await interaction.reply({ content: `**تم انشاء التكت :** <#${channel.id}>`, ephemeral: true });
+    } catch (error) {
+      console.error('ticket open create channel error:', error?.message || error);
+      await interaction.reply({ content: '**فشل فتح التكت، تأكد من صلاحيات البوت والكاتوقري.**', ephemeral: true });
+    }
     return;
   }
 
@@ -1164,8 +1178,25 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 }
 
 async function handleTransferResponsibility(interaction, guildId, channelId, value) {
-  const respName = value.replace('resp_', '');
-  if (!respName || respName === 'none') {
+  if (!value || value === 'resp_none') {
+    await interaction.reply({ content: '**لا توجد مسؤولية صالحة.**', ephemeral: true });
+    return;
+  }
+
+  const responsibilities = loadResponsibilities();
+  const responsibilityNames = Object.keys(responsibilities).slice(0, 25);
+
+  let respName = null;
+  if (value.startsWith('respidx_')) {
+    const index = Number(value.replace('respidx_', ''));
+    if (Number.isInteger(index) && index >= 0 && index < responsibilityNames.length) {
+      respName = responsibilityNames[index];
+    }
+  } else if (value.startsWith('resp_')) {
+    respName = value.replace('resp_', '');
+  }
+
+  if (!respName) {
     await interaction.reply({ content: '**لا توجد مسؤولية صالحة.**', ephemeral: true });
     return;
   }
@@ -1183,7 +1214,6 @@ async function handleTransferResponsibility(interaction, guildId, channelId, val
     return;
   }
 
-  const responsibilities = loadResponsibilities();
   const selected = responsibilities[respName];
   if (!selected) {
     await interaction.reply({ content: '**المسؤولية غير موجودة.**', ephemeral: true });
@@ -1236,7 +1266,7 @@ function registerHandlers(client) {
   if (handlersRegistered) return;
   handlersRegistered = true;
 
-  client.on('interactionCreate', async (interaction) => {
+  registerTicketInteractionRouter(async (interaction) => {
     try {
       if (interaction.isButton() || interaction.isStringSelectMenu()) {
         const id = interaction.customId || '';
@@ -1436,10 +1466,13 @@ function registerHandlers(client) {
           return;
         }
       }
+
+      return false;
     } catch {
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({ content: '**حدث خطأ أثناء معالجة التكت.**', ephemeral: true }).catch(() => {});
       }
+      return true;
     }
   });
 }
