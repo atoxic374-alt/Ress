@@ -240,9 +240,9 @@ async function buildTicketControls(guildId, channelId, config) {
   );
 
   const responsibilities = loadResponsibilities();
-  const options = Object.keys(responsibilities)
-    .slice(0, 25)
-    .map((respName) => ({ label: respName.slice(0, 100), value: `resp_${respName}` }));
+  const responsibilityNames = Object.keys(responsibilities).slice(0, 25);
+  const options = responsibilityNames
+    .map((respName, index) => ({ label: respName.slice(0, 100), value: `respidx_${index}` }));
 
   const row3 = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
@@ -360,8 +360,13 @@ async function handleOpenRequest(interaction, guildId, reasonKey) {
   }
 
   if (config.autoCreateOnRequest) {
-    const channel = await createTicketChannel({ guild, member: interaction.member, config, reasonKey, tickets, pendingRequests });
-    await interaction.reply({ content: `**تم انشاء التكت :** <#${channel.id}>`, ephemeral: true });
+    try {
+      const channel = await createTicketChannel({ guild, member: interaction.member, config, reasonKey, tickets, pendingRequests });
+      await interaction.reply({ content: `**تم انشاء التكت :** <#${channel.id}>`, ephemeral: true });
+    } catch (error) {
+      console.error('ticket open create channel error:', error?.message || error);
+      await interaction.reply({ content: '**فشل فتح التكت، تأكد من صلاحيات البوت والكاتوقري.**', ephemeral: true });
+    }
     return;
   }
 
@@ -1165,8 +1170,25 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 }
 
 async function handleTransferResponsibility(interaction, guildId, channelId, value) {
-  const respName = value.replace('resp_', '');
-  if (!respName || respName === 'none') {
+  if (!value || value === 'resp_none') {
+    await interaction.reply({ content: '**لا توجد مسؤولية صالحة.**', ephemeral: true });
+    return;
+  }
+
+  const responsibilities = loadResponsibilities();
+  const responsibilityNames = Object.keys(responsibilities).slice(0, 25);
+
+  let respName = null;
+  if (value.startsWith('respidx_')) {
+    const index = Number(value.replace('respidx_', ''));
+    if (Number.isInteger(index) && index >= 0 && index < responsibilityNames.length) {
+      respName = responsibilityNames[index];
+    }
+  } else if (value.startsWith('resp_')) {
+    respName = value.replace('resp_', '');
+  }
+
+  if (!respName) {
     await interaction.reply({ content: '**لا توجد مسؤولية صالحة.**', ephemeral: true });
     return;
   }
@@ -1184,7 +1206,6 @@ async function handleTransferResponsibility(interaction, guildId, channelId, val
     return;
   }
 
-  const responsibilities = loadResponsibilities();
   const selected = responsibilities[respName];
   if (!selected) {
     await interaction.reply({ content: '**المسؤولية غير موجودة.**', ephemeral: true });
