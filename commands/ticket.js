@@ -12,6 +12,7 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const { registerTicketInteractionRouter } = require('../utils/ticketInteractionRouter');
 
 const name = 'ticket';
 const aliases = ['تكت'];
@@ -20,6 +21,35 @@ const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilitie
 const ticketImagesDir = path.join(__dirname, '..', 'data', 'ticket_images');
 
 let handlersRegistered = false;
+const pingCooldowns = new Map();
+
+function makeTicketEmbed(title, description, color = 0x5865F2) {
+  return new EmbedBuilder().setColor(color).setTitle(title).setDescription(description || null);
+}
+
+function buildPostCloseControls(guildId, channelId, ticket = {}) {
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`ticket_down_${guildId}_${channelId}`).setLabel('-1').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`ticket_delete_${guildId}_${channelId}`).setLabel('حذف').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`ticket_up1_${guildId}_${channelId}`).setLabel('1').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`ticket_up2_${guildId}_${channelId}`).setLabel('2').setStyle(ButtonStyle.Success)
+  );
+
+  const memberHidden = ticket.memberHidden !== false;
+  const claimerHidden = ticket.claimerHidden !== false;
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`ticket_toggle_member_${guildId}_${channelId}`)
+      .setLabel(memberHidden ? 'ارجاع العضو' : 'اخفاء العضو')
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`ticket_toggle_claimer_${guildId}_${channelId}`)
+      .setLabel(claimerHidden ? 'ارجاع المسؤول' : 'اخفاء المسؤول')
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  return [row1, row2];
+}
 
 function loadStore() {
   try {
@@ -239,9 +269,9 @@ async function buildTicketControls(guildId, channelId, config) {
   );
 
   const responsibilities = loadResponsibilities();
-  const options = Object.keys(responsibilities)
-    .slice(0, 25)
-    .map((respName) => ({ label: respName.slice(0, 100), value: `resp_${respName}` }));
+  const responsibilityNames = Object.keys(responsibilities).slice(0, 25);
+  const options = responsibilityNames
+    .map((respName, index) => ({ label: respName.slice(0, 100), value: `respidx_${index}` }));
 
   const row3 = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
@@ -257,16 +287,24 @@ async function buildTicketControls(guildId, channelId, config) {
 async function createTicketChannel({ guild, member, config, reasonKey, tickets, pendingRequests }) {
   const reason = config.reasons?.[reasonKey] || {};
   const prefix = sanitizeName(reason.ticketName || config.ticketNamePrefix || 'ticket') || 'ticket';
-  const suffix = config.ticketNameMode === 'user' ? sanitizeName(member.user.username) : String(config.counter || 1);
+  const memberId = member?.id || member?.user?.id || null;
+  if (!memberId) {
+    throw new Error('MEMBER_ID_MISSING');
+  }
+
+  const memberUsername = member?.user?.username || member?.displayName || 'user';
+  const suffix = config.ticketNameMode === 'user' ? sanitizeName(memberUsername) : String(config.counter || 1);
   const channelName = `${prefix}-${suffix}`.slice(0, 90);
   const categoryId = reason.categoryId || config.openCategoryId || null;
 
   const adminRoles = getAdminRoles(config);
-  const allowedStaffRoles = [...new Set([...(config.responsibleRoleIds || []), ...adminRoles])];
+  const allowedStaffRoles = [...new Set([...(config.responsibleRoleIds || []), ...adminRoles])]
+    .map((roleId) => String(roleId || '').trim())
+    .filter((roleId) => /^\d{16,20}$/.test(roleId) && guild.roles.cache.has(roleId));
 
   const permissionOverwrites = [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-    { id: member.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
+    { id: memberId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
   ];
 
   for (const roleId of allowedStaffRoles) {
@@ -294,7 +332,12 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
   }
 
   await channel.send({
-    content: `**التكت : تم الانشاء**\n**العضو :** <@${member.id}>`,
+    embeds: [
+      makeTicketEmbed(
+        'التكت : تم الانشاء',
+        `**التكت :** ${reason.name || `سبب ${reasonKey}`}\n**العضو :** <@${memberId}>`
+      )
+    ],
     components: controls
   });
 
@@ -302,7 +345,7 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
 
   tickets[channel.id] = {
     channelId: channel.id,
-    memberId: member.id,
+    memberId,
     reasonKey,
     claimedBy: null,
     status: 'open',
@@ -348,19 +391,25 @@ async function applyHideOnClaim(channel, guild, config, claimerId, memberId, ext
 }
 
 async function handleOpenRequest(interaction, guildId, reasonKey) {
+  await interaction.deferReply({ ephemeral: true }).catch(() => {});
   const guild = interaction.guild;
   const { guild: g } = getGuildData(guildId);
   const { config, tickets, pendingRequests } = g;
 
   const openCount = countOpenMemberTickets(tickets, interaction.user.id);
   if (openCount >= (config.memberOpenLimit || 1)) {
-    await interaction.reply({ content: `**الحد : وصلت لاقصى تكت مفتوح (${config.memberOpenLimit}).**`, ephemeral: true });
+    await interaction.editReply({ embeds: [makeTicketEmbed('تنبيه', `**الحد : وصلت لاقصى تكت مفتوح (${config.memberOpenLimit}).**`, 0xED4245)] });
     return;
   }
 
   if (config.autoCreateOnRequest) {
-    const channel = await createTicketChannel({ guild, member: interaction.member, config, reasonKey, tickets, pendingRequests });
-    await interaction.reply({ content: `**تم انشاء التكت :** <#${channel.id}>`, ephemeral: true });
+    try {
+      const channel = await createTicketChannel({ guild, member: interaction.member, config, reasonKey, tickets, pendingRequests });
+      await interaction.editReply({ embeds: [makeTicketEmbed('تم', `**تم انشاء التكت :** <#${channel.id}>`, 0x57F287)] });
+    } catch (error) {
+      console.error('ticket open create channel error:', error?.message || error);
+      await interaction.editReply({ embeds: [makeTicketEmbed('خطأ', '**فشل فتح التكت، تأكد من صلاحيات البوت والكاتوقري.**', 0xED4245)] });
+    }
     return;
   }
 
@@ -372,7 +421,7 @@ async function handleOpenRequest(interaction, guildId, reasonKey) {
   if (!targetChannel || targetChannel.type !== ChannelType.GuildText) {
     delete pendingRequests[reqId];
     setGuildData(guildId, config, tickets, pendingRequests);
-    await interaction.reply({ content: '**فشل : شات الاستلام غير صالح.**', ephemeral: true });
+    await interaction.editReply({ embeds: [makeTicketEmbed('خطأ', '**فشل : شات الاستلام غير صالح.**', 0xED4245)] });
     return;
   }
 
@@ -380,7 +429,9 @@ async function handleOpenRequest(interaction, guildId, reasonKey) {
     new ButtonBuilder().setCustomId(`ticket_claimreq_${reqId}`).setStyle(ButtonStyle.Primary).setLabel('استلام التكت')
   );
 
-  if (config.messages.acceptance) await targetChannel.send({ content: config.messages.acceptance });
+  if (config.messages.acceptance) {
+    await targetChannel.send({ embeds: [makeTicketEmbed('قبول التكت', config.messages.acceptance)] });
+  }
   if (config.claimFromDedicatedChannel && config.claimChannelSeparator) {
     const separatorValue = config.claimChannelSeparator;
     const separatorImage = resolveImageForSend(separatorValue);
@@ -392,12 +443,12 @@ async function handleOpenRequest(interaction, guildId, reasonKey) {
   }
 
   await targetChannel.send({
-    content: `**طلب تكت :** <@${interaction.user.id}>\n**السبب :** ${config.reasons?.[reasonKey]?.name || `سبب ${reasonKey}`}`,
+    embeds: [makeTicketEmbed('طلب تكت', `**العضو :** <@${interaction.user.id}>\n**السبب :** ${config.reasons?.[reasonKey]?.name || `سبب ${reasonKey}`}`)],
     components: [row]
   });
 
   setGuildData(guildId, config, tickets, pendingRequests);
-  await interaction.reply({ content: '**تم ارسال طلبك لشات الاستلام.**', ephemeral: true });
+  await interaction.editReply({ embeds: [makeTicketEmbed('تم', '**تم ارسال طلبك لشات الاستلام.**', 0x57F287)] });
 }
 
 async function handleClaimInTicket(interaction, guildId, channelId) {
@@ -414,6 +465,16 @@ async function handleClaimInTicket(interaction, guildId, channelId) {
     return;
   }
 
+  if (ticket.claimedBy && ticket.claimedBy !== interaction.user.id) {
+    await interaction.reply({ embeds: [makeTicketEmbed('تنبيه', `**التكت مستلم مسبقاً بواسطة :** <@${ticket.claimedBy}>`, 0xED4245)], ephemeral: true });
+    return;
+  }
+
+  if (ticket.claimedBy === interaction.user.id) {
+    await interaction.reply({ embeds: [makeTicketEmbed('تنبيه', '**أنت مستلم هذا التكت بالفعل.**', 0xED4245)], ephemeral: true });
+    return;
+  }
+
   const claimedCount = countClaimedByAdmin(tickets, interaction.user.id);
   if (claimedCount >= (config.adminClaimLimit || 1)) {
     await interaction.reply({ content: `**الحد :** لا يمكنك استلام أكثر من ${config.adminClaimLimit} تكت مفتوح.`, ephemeral: true });
@@ -425,12 +486,20 @@ async function handleClaimInTicket(interaction, guildId, channelId) {
     await applyHideOnClaim(interaction.channel, interaction.guild, config, interaction.user.id, ticket.memberId, ticket.extraMembers || []);
   }
 
-  const reason = config.reasons?.[ticket.reasonKey] || {};
-  const claimImage = resolveImageForSend(reason.claimImage);
-  if (claimImage) await interaction.channel.send({ files: [claimImage] }).catch(() => {});
-
   setGuildData(guildId, config, tickets, pendingRequests);
-  await interaction.reply({ content: `**تم الاستلام :** <@${interaction.user.id}>` });
+  if (interaction.message?.components?.length) {
+    const updatedRows = interaction.message.components.map((row) => {
+      const updatedComponents = row.components.map((component) => {
+        if (component.customId?.startsWith('ticket_claim_')) {
+          return ButtonBuilder.from(component).setDisabled(true).setLabel('تم الاستلام');
+        }
+        return component;
+      });
+      return new ActionRowBuilder().addComponents(updatedComponents);
+    });
+    await interaction.message.edit({ components: updatedRows }).catch(() => {});
+  }
+  await interaction.reply({ embeds: [makeTicketEmbed('تم استلام التكت', `**المستلم :** <@${interaction.user.id}>`, 0x57F287)] });
 }
 
 async function handleClaimFromRequest(interaction, reqId) {
@@ -477,13 +546,9 @@ async function handleClaimFromRequest(interaction, reqId) {
     await applyHideOnClaim(channel, interaction.guild, config, interaction.user.id, member.id, tickets[channel.id].extraMembers || []);
   }
 
-  const reason = config.reasons?.[req.reasonKey] || {};
-  const claimImage = resolveImageForSend(reason.claimImage);
-  if (claimImage) await channel.send({ files: [claimImage] }).catch(() => {});
-
   delete pendingRequests[reqId];
   setGuildData(guildId, config, tickets, pendingRequests);
-  await interaction.reply({ content: `**تم الاستلام والانشاء :** <#${channel.id}>` });
+  await interaction.reply({ embeds: [makeTicketEmbed('تم استلام التكت', `**تم الاستلام والانشاء :** <#${channel.id}>`, 0x57F287)] });
 }
 
 async function handleClose(interaction, guildId, channelId) {
@@ -501,21 +566,50 @@ async function handleClose(interaction, guildId, channelId) {
   }
 
   ticket.status = 'closed';
+  if (ticket.closedAt) {
+    await interaction.reply({ embeds: [makeTicketEmbed('تنبيه', '**التكت مقفل مسبقاً.**', 0xED4245)], ephemeral: true });
+    return;
+  }
+  ticket.closedAt = Date.now();
+  ticket.memberHidden = true;
+  ticket.claimerHidden = true;
 
   if (!config.keepClosedTickets) {
     delete tickets[channelId];
     setGuildData(guildId, config, tickets, pendingRequests);
-    await interaction.reply({ content: '**سيتم حذف التكت خلال 3 ثواني.**' });
+    await interaction.reply({ embeds: [makeTicketEmbed('اقفال', '**سيتم حذف التكت خلال 3 ثواني.**', 0xED4245)], ephemeral: true });
     setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
     return;
+  }
+
+  if (ticket.memberId) {
+    await interaction.channel.permissionOverwrites.edit(ticket.memberId, {
+      ViewChannel: false,
+      SendMessages: false
+    }).catch(() => {});
+  }
+  if (ticket.claimedBy) {
+    await interaction.channel.permissionOverwrites.edit(ticket.claimedBy, {
+      ViewChannel: false,
+      SendMessages: false
+    }).catch(() => {});
+  }
+
+  if (interaction.message?.editable) {
+    await interaction.message.edit({ components: [] }).catch(() => {});
   }
 
   const closePrefix = `closed-${sanitizeName(config.ticketNamePrefix || 'ticket')}`;
   await interaction.channel.setName(`${closePrefix}-${channelId.slice(-4)}`).catch(() => {});
   if (config.closedCategoryId) await interaction.channel.setParent(config.closedCategoryId).catch(() => {});
 
+  await interaction.channel.send({
+    embeds: [makeTicketEmbed('التكت مقفل', '**تم إقفال التكت، يمكنك استخدام أزرار الإدارة بالأسفل.**', 0xED4245)],
+    components: buildPostCloseControls(guildId, channelId, ticket)
+  }).catch(() => {});
+
   setGuildData(guildId, config, tickets, pendingRequests);
-  await interaction.reply({ content: '**تم اقفال التكت والاحتفاظ به.**' });
+  await interaction.reply({ embeds: [makeTicketEmbed('اقفال', '**تم اقفال التكت والاحتفاظ به.**', 0xED4245)], ephemeral: true });
 }
 
 function createReasonComponents(config, guildId) {
@@ -1164,8 +1258,25 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 }
 
 async function handleTransferResponsibility(interaction, guildId, channelId, value) {
-  const respName = value.replace('resp_', '');
-  if (!respName || respName === 'none') {
+  if (!value || value === 'resp_none') {
+    await interaction.reply({ content: '**لا توجد مسؤولية صالحة.**', ephemeral: true });
+    return;
+  }
+
+  const responsibilities = loadResponsibilities();
+  const responsibilityNames = Object.keys(responsibilities).slice(0, 25);
+
+  let respName = null;
+  if (value.startsWith('respidx_')) {
+    const index = Number(value.replace('respidx_', ''));
+    if (Number.isInteger(index) && index >= 0 && index < responsibilityNames.length) {
+      respName = responsibilityNames[index];
+    }
+  } else if (value.startsWith('resp_')) {
+    respName = value.replace('resp_', '');
+  }
+
+  if (!respName) {
     await interaction.reply({ content: '**لا توجد مسؤولية صالحة.**', ephemeral: true });
     return;
   }
@@ -1183,7 +1294,6 @@ async function handleTransferResponsibility(interaction, guildId, channelId, val
     return;
   }
 
-  const responsibilities = loadResponsibilities();
   const selected = responsibilities[respName];
   if (!selected) {
     await interaction.reply({ content: '**المسؤولية غير موجودة.**', ephemeral: true });
@@ -1213,8 +1323,17 @@ async function handleTransferResponsibility(interaction, guildId, channelId, val
     ...(selected.responsibles || []).map((id) => `<@${id}>`)
   ];
 
+  if (ticket.claimedBy) {
+    await interaction.channel.permissionOverwrites.edit(ticket.claimedBy, { ViewChannel: false, SendMessages: false }).catch(() => {});
+  }
+  const dmEmbed = makeTicketEmbed('تحويل تكت', `يوجد تكت تم تحويله لمسؤوليتكم في <#${channelId}>`, 0x5865F2);
+  for (const uid of (selected.responsibles || [])) {
+    const user = await interaction.client.users.fetch(uid).catch(() => null);
+    if (user) await user.send({ embeds: [dmEmbed] }).catch(() => {});
+  }
+
   await interaction.reply({
-    content: `**تم تحويل التكت لمسؤوليين : ${respName}**\n${mentions.join(' ') || '**لا يوجد منشن محدد**'}`
+    embeds: [makeTicketEmbed('تحويل', `**تم تحويل التكت لمسؤولين : ${respName}**\n${mentions.join(' ') || '**لا يوجد منشن محدد**'}`, 0x5865F2)]
   });
 }
 
@@ -1236,7 +1355,7 @@ function registerHandlers(client) {
   if (handlersRegistered) return;
   handlersRegistered = true;
 
-  client.on('interactionCreate', async (interaction) => {
+  registerTicketInteractionRouter(async (interaction) => {
     try {
       if (interaction.isButton() || interaction.isStringSelectMenu()) {
         const id = interaction.customId || '';
@@ -1270,6 +1389,76 @@ function registerHandlers(client) {
         if (id.startsWith('ticket_close_')) {
           const [, , guildId, channelId] = id.split('_');
           await handleClose(interaction, guildId, channelId);
+          return;
+        }
+
+        if (id.startsWith('ticket_delete_')) {
+          const [, , guildId, channelId] = id.split('_');
+          const { guild: g } = getGuildData(guildId);
+          const ticket = g.tickets[channelId];
+          if (!ticket || interaction.channelId !== channelId) {
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**لا توجد بيانات لهذا التكت.**', 0xED4245)], ephemeral: true });
+            return;
+          }
+          if (!hasStaffAccess(interaction.member, g.config)) {
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**ليس لديك صلاحية الحذف.**', 0xED4245)], ephemeral: true });
+            return;
+          }
+          delete g.tickets[channelId];
+          setGuildData(guildId, g.config, g.tickets, g.pendingRequests || {});
+          await interaction.reply({ embeds: [makeTicketEmbed('حذف', '**سيتم حذف التكت خلال 3 ثواني.**', 0xED4245)], ephemeral: true });
+          setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
+          return;
+        }
+
+        if (id.startsWith('ticket_down_') || id.startsWith('ticket_up1_') || id.startsWith('ticket_up2_')) {
+          const [, , guildId, channelId] = id.split('_');
+          const { guild: g } = getGuildData(guildId);
+          const ticket = g.tickets[channelId];
+          if (!ticket || interaction.channelId !== channelId) {
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**لا توجد بيانات لهذا التكت.**', 0xED4245)], ephemeral: true });
+            return;
+          }
+          if (!hasStaffAccess(interaction.member, g.config)) {
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**ليس لديك صلاحية النقاط.**', 0xED4245)], ephemeral: true });
+            return;
+          }
+          await interaction.reply({ embeds: [makeTicketEmbed('تم', '**تم تنفيذ الإجراء.**', 0x57F287)], ephemeral: true });
+          return;
+        }
+
+        if (id.startsWith('ticket_toggle_member_') || id.startsWith('ticket_toggle_claimer_')) {
+          const parts = id.split('_');
+          const guildId = parts[3];
+          const channelId = parts[4];
+          const { guild: g } = getGuildData(guildId);
+          const ticket = g.tickets[channelId];
+          if (!ticket || interaction.channelId !== channelId) {
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**لا توجد بيانات لهذا التكت.**', 0xED4245)], ephemeral: true });
+            return;
+          }
+          if (!hasStaffAccess(interaction.member, g.config)) {
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**ليس لديك صلاحية هذا الإجراء.**', 0xED4245)], ephemeral: true });
+            return;
+          }
+
+          const isMember = id.startsWith('ticket_toggle_member_');
+          const targetId = isMember ? ticket.memberId : ticket.claimedBy;
+          if (!targetId) {
+            await interaction.reply({ embeds: [makeTicketEmbed('تنبيه', '**لا يوجد مستخدم مرتبط بهذا الزر.**', 0xED4245)], ephemeral: true });
+            return;
+          }
+
+          const key = isMember ? 'memberHidden' : 'claimerHidden';
+          ticket[key] = !(ticket[key] !== false);
+          await interaction.channel.permissionOverwrites.edit(targetId, {
+            ViewChannel: !ticket[key],
+            SendMessages: !ticket[key],
+            ReadMessageHistory: true
+          }).catch(() => {});
+
+          setGuildData(guildId, g.config, g.tickets, g.pendingRequests || {});
+          await interaction.update({ components: buildPostCloseControls(guildId, channelId, ticket) });
           return;
         }
 
@@ -1325,13 +1514,24 @@ function registerHandlers(client) {
             await interaction.reply({ content: '**ليس لديك صلاحية الاستدعاء.**', ephemeral: true });
             return;
           }
+          const cooldownKey = `${interaction.guild.id}:${channelId}:${interaction.user.id}`;
+          const last = pingCooldowns.get(cooldownKey) || 0;
+          const now = Date.now();
+          const cooldownMs = 10 * 60 * 1000;
+          if (now - last < cooldownMs) {
+            const left = Math.ceil((cooldownMs - (now - last)) / 1000);
+            await interaction.reply({ embeds: [makeTicketEmbed('كولداون', `**انتظر ${left} ثانية قبل استخدام الاستدعاء مرة أخرى.**`, 0xED4245)], ephemeral: true });
+            return;
+          }
+
           const user = await client.users.fetch(ticket.memberId).catch(() => null);
           const link = `https://discord.com/channels/${interaction.guild.id}/${interaction.channel.id}`;
           if (user) {
-            await user.send(`**تنبيه :** تم استدعاؤك للتكت\n**الرابط :** ${link}`).catch(() => {});
+            await user.send({ embeds: [makeTicketEmbed('استدعاء للتكت', `**تم استدعاؤك للتكت**\n**الرابط :** ${link}`, 0x5865F2)] }).catch(() => {});
           }
+          pingCooldowns.set(cooldownKey, now);
           setGuildData(guildId, config, tickets, pendingRequests);
-          await interaction.reply({ content: `**تم استدعاء العضو :** <@${ticket.memberId}>` });
+          await interaction.reply({ embeds: [makeTicketEmbed('تم', `**تم استدعاء العضو :** <@${ticket.memberId}>`, 0x57F287)], ephemeral: true });
           return;
         }
 
@@ -1350,22 +1550,22 @@ function registerHandlers(client) {
           const [, , , guildId, channelId] = modalId.split('_');
           const newName = sanitizeName(interaction.fields.getTextInputValue('value'));
           if (!newName) {
-            await interaction.reply({ content: '**الاسم غير صالح.**', ephemeral: true });
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**الاسم غير صالح.**', 0xED4245)], ephemeral: true });
             return;
           }
           const { guild: g } = getGuildData(guildId);
           const { config, tickets } = g;
           const ticket = tickets[channelId];
           if (!ticket || interaction.channelId !== channelId) {
-            await interaction.reply({ content: '**لا توجد بيانات لهذا التكت.**', ephemeral: true });
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**لا توجد بيانات لهذا التكت.**', 0xED4245)], ephemeral: true });
             return;
           }
           if (!canManageTicket(interaction, ticket, config)) {
-            await interaction.reply({ content: '**ليس لديك صلاحية تغيير الاسم.**', ephemeral: true });
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**ليس لديك صلاحية تغيير الاسم.**', 0xED4245)], ephemeral: true });
             return;
           }
           await interaction.channel.setName(newName).catch(() => {});
-          await interaction.reply({ content: `**تم تغيير الاسم :** ${newName}` });
+          await interaction.reply({ embeds: [makeTicketEmbed('تم', `**تم تغيير الاسم :** ${newName}`, 0x57F287)], ephemeral: true });
           return;
         }
 
@@ -1373,27 +1573,27 @@ function registerHandlers(client) {
           const [, , , guildId, channelId] = modalId.split('_');
           const userId = normalizeId(interaction.fields.getTextInputValue('value'));
           if (!userId) {
-            await interaction.reply({ content: '**المدخل غير صالح.**', ephemeral: true });
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**المدخل غير صالح.**', 0xED4245)], ephemeral: true });
             return;
           }
           const { guild: g } = getGuildData(guildId);
           const { config, tickets, pendingRequests } = g;
           const ticket = tickets[channelId];
           if (!ticket || interaction.channelId !== channelId) {
-            await interaction.reply({ content: '**لا توجد بيانات لهذا التكت.**', ephemeral: true });
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**لا توجد بيانات لهذا التكت.**', 0xED4245)], ephemeral: true });
             return;
           }
           if (!canManageTicket(interaction, ticket, config)) {
-            await interaction.reply({ content: '**ليس لديك صلاحية الاضافة.**', ephemeral: true });
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**ليس لديك صلاحية الاضافة.**', 0xED4245)], ephemeral: true });
             return;
           }
           if (ticket.memberId === userId) {
-            await interaction.reply({ content: '**الشخص هو صاحب التكت بالفعل.**', ephemeral: true });
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**الشخص هو صاحب التكت بالفعل.**', 0xED4245)], ephemeral: true });
             return;
           }
           const targetMember = await interaction.guild.members.fetch(userId).catch(() => null);
           if (!targetMember) {
-            await interaction.reply({ content: '**لا يمكن العثور على العضو.**', ephemeral: true });
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**لا يمكن العثور على العضو.**', 0xED4245)], ephemeral: true });
             return;
           }
           await interaction.channel.permissionOverwrites.edit(userId, {
@@ -1403,7 +1603,7 @@ function registerHandlers(client) {
           }).catch(() => {});
           if (!ticket.extraMembers.includes(userId)) ticket.extraMembers.push(userId);
           setGuildData(guildId, config, tickets, pendingRequests);
-          await interaction.reply({ content: `**تم اضافة الشخص :** <@${userId}>` });
+          await interaction.reply({ embeds: [makeTicketEmbed('تم', `**تم اضافة الشخص :** <@${userId}>`, 0x57F287)], ephemeral: true });
           return;
         }
 
@@ -1411,35 +1611,38 @@ function registerHandlers(client) {
           const [, , , guildId, channelId] = modalId.split('_');
           const userId = normalizeId(interaction.fields.getTextInputValue('value'));
           if (!userId) {
-            await interaction.reply({ content: '**المدخل غير صالح.**', ephemeral: true });
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**المدخل غير صالح.**', 0xED4245)], ephemeral: true });
             return;
           }
           const { guild: g } = getGuildData(guildId);
           const { config, tickets, pendingRequests } = g;
           const ticket = tickets[channelId];
           if (!ticket || interaction.channelId !== channelId) {
-            await interaction.reply({ content: '**لا توجد بيانات لهذا التكت.**', ephemeral: true });
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**لا توجد بيانات لهذا التكت.**', 0xED4245)], ephemeral: true });
             return;
           }
           if (!canManageTicket(interaction, ticket, config)) {
-            await interaction.reply({ content: '**ليس لديك صلاحية الازالة.**', ephemeral: true });
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**ليس لديك صلاحية الازالة.**', 0xED4245)], ephemeral: true });
             return;
           }
           if (ticket.memberId === userId) {
-            await interaction.reply({ content: '**لا يمكن إزالة صاحب التكت.**', ephemeral: true });
+            await interaction.reply({ embeds: [makeTicketEmbed('خطأ', '**لا يمكن إزالة صاحب التكت.**', 0xED4245)], ephemeral: true });
             return;
           }
           await interaction.channel.permissionOverwrites.edit(userId, { ViewChannel: false }).catch(() => {});
           ticket.extraMembers = (ticket.extraMembers || []).filter((id) => id !== userId);
           setGuildData(guildId, config, tickets, pendingRequests);
-          await interaction.reply({ content: `**تم ازالة الشخص :** <@${userId}>` });
+          await interaction.reply({ embeds: [makeTicketEmbed('تم', `**تم ازالة الشخص :** <@${userId}>`, 0x57F287)], ephemeral: true });
           return;
         }
       }
+
+      return false;
     } catch {
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({ content: '**حدث خطأ أثناء معالجة التكت.**', ephemeral: true }).catch(() => {});
       }
+      return true;
     }
   });
 }
