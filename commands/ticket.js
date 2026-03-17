@@ -839,45 +839,33 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     const responsiblesMentions = (config.responsibleRoleIds || []).length
       ? (config.responsibleRoleIds || []).map((id) => `<@&${id}>`).join(' ')
       : 'غير معين';
-    const reasonsNames = Object.entries(config.reasons || {})
+    const reasonsNamesRaw = Object.entries(config.reasons || {})
       .sort((a, b) => Number(a[0]) - Number(b[0]))
       .map(([k, v]) => `**${k})** ${v.name || `سبب ${k}`}`)
       .join('\n') || 'لا يوجد';
+    const reasonsNames = reasonsNamesRaw.length > 1000 ? `${reasonsNamesRaw.slice(0, 1000)}\n...` : reasonsNamesRaw;
+    const setupIssues = getSetupIssues();
+    const setupStatus = setupIssues.length === 0
+      ? 'مكتمل ✅'
+      : `ناقص ⚠️\n${setupIssues.map((i) => `• ${i.replace(/\*\*/g, '')}`).join('\n')}`;
 
     return colorManager.createEmbed()
       .setColor(colorManager.getColor())
       .setTitle(`**اعدادات التكت : ${message.guild.name}**`)
       .setThumbnail(message.guild.iconURL({ dynamic: true, size: 256 }))
-      .setDescription([
-        '## **مرحبًا بك في لوحة إعدادات التكت**',
-        '',
-        '**اختر من القائمة بالأسفل للتعديل الفوري.**',
-        '**ملاحظة:** أي رسالة إدخال منك يتم حذفها تلقائيًا بعد الحفظ.',
-        '',
-        '**شرح سريع:**',
-        '• **اعدادات الرسائل:** نصوص النظام.',
-        '• **اعدادات الصور:** صور الفتح/الاستلام/فاصل شات الاستلام.',
-        '• **تعيين الاسباب:** اسم السبب + الإيموجي + وصف المنيو + كاتوقري السبب.',
-        '• **طريقة العرض:** أزرار أو منيو.',
-        '',
-        '## **الحالة الحالية**',
-        '',
-        `**روم الإعداد الحالي :** <#${panelId}>`,
-        `**اسم التكت :** ${config.ticketNamePrefix} - ${config.ticketNameMode}`,
-        `**كاتوقري الفتح :** ${config.openCategoryId ? `<#${config.openCategoryId}>` : 'غير معين'}`,
-        `**المسؤولين :**\n${responsiblesMentions}`,
-        `**رولات الادمن :** ${config.useGlobalAdminRoles ? 'adminRoles العامة' : config.adminRoleIds.length}`,
-        `**حد استلام الاداري :** ${config.adminClaimLimit}`,
-        `**حد فتح العضو :** ${config.memberOpenLimit}`,
-        `**انشاء قبل الاستلام :** ${config.autoCreateOnRequest ? 'مفعل' : 'مقفل'}`,
-        `**اخفاء عند الاستلام :** ${config.hideOnClaim ? 'مفعل' : 'مقفل'}`,
-        `**استلام من شات مخصص :** ${config.claimFromDedicatedChannel ? 'مفعل' : 'مقفل'}`,
-        `**الاحتفاظ بعد الاغلاق :** ${config.keepClosedTickets ? 'مفعل' : 'مقفل'}`,
-        `**طريقة العرض :** ${config.displayMode}`,
-        `**عدد الاسباب :** ${reasonsCount}`,
-        `**قائمة الاسباب :**\n${reasonsNames}`,
-        `**جاهزية النظام :** ${getSetupIssues().length === 0 ? 'مكتمل' : 'ناقص'}${getSetupIssues().length ? `\n${getSetupIssues().map((i) => `- ${i.replace(/\*\*/g, '')}`).join('\n')}` : ''}`
-      ].join('\n'))
+      .setDescription('**اختر من المنيو بالأسفل التعديل المطلوب.**')
+      .addFields(
+        { name: 'الروم الحالي', value: `<#${panelId}>`, inline: true },
+        { name: 'اسم التكت', value: `${config.ticketNamePrefix} - ${config.ticketNameMode}`, inline: true },
+        { name: 'كاتوقري الفتح', value: config.openCategoryId ? `<#${config.openCategoryId}>` : 'غير معين', inline: true },
+        { name: 'المسؤولين', value: responsiblesMentions.slice(0, 1024), inline: false },
+        { name: 'رولات الادمن', value: config.useGlobalAdminRoles ? 'adminRoles العامة' : String(config.adminRoleIds.length), inline: true },
+        { name: 'طريقة العرض', value: config.displayMode, inline: true },
+        { name: 'حدود النظام', value: `حد الاستلام: ${config.adminClaimLimit}\nحد الفتح: ${config.memberOpenLimit}`, inline: true },
+        { name: 'حالة التبديلات', value: `انشاء قبل الاستلام: ${config.autoCreateOnRequest ? 'مفعل' : 'مقفل'}\nاخفاء عند الاستلام: ${config.hideOnClaim ? 'مفعل' : 'مقفل'}\nشات استلام مخصص: ${config.claimFromDedicatedChannel ? 'مفعل' : 'مقفل'}\nالاحتفاظ بعد الاغلاق: ${config.keepClosedTickets ? 'مفعل' : 'مقفل'}`, inline: false },
+        { name: `الاسباب (${reasonsCount})`, value: reasonsNames, inline: false },
+        { name: 'جاهزية النظام', value: setupStatus.slice(0, 1024), inline: false }
+      )
       .setFooter({ text: 'Ticket Settings • لوحة منظمة وسهلة القراءة' });
   };
 
