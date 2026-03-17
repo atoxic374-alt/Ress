@@ -1,13 +1,24 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ChannelType, PermissionFlagsBits } = require('discord.js');
+const {
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  StringSelectMenuBuilder,
+  ChannelType,
+  PermissionFlagsBits,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle
+} = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 
 const name = 'ticket';
 const aliases = ['تكت'];
 const dataPath = path.join(__dirname, '..', 'data', 'ticketConfig.json');
+const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
 
 let handlersRegistered = false;
-const pendingRequests = new Map(); // reqId -> { guildId, userId, reasonKey, sourceChannelId }
 
 function loadStore() {
   try {
@@ -21,6 +32,16 @@ function loadStore() {
 
 function saveStore(store) {
   fs.writeFileSync(dataPath, JSON.stringify(store, null, 2), 'utf8');
+}
+
+function loadResponsibilities() {
+  try {
+    if (!fs.existsSync(responsibilitiesPath)) return {};
+    const parsed = JSON.parse(fs.readFileSync(responsibilitiesPath, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function baseConfig() {
@@ -56,16 +77,17 @@ function baseConfig() {
 function getGuildData(guildId) {
   const store = loadStore();
   const existing = store[guildId] || {};
-  const config = { ...baseConfig(), ...existing.config };
+  const config = { ...baseConfig(), ...(existing.config || {}) };
   config.messages = { ...baseConfig().messages, ...(existing.config?.messages || {}) };
   config.reasons = existing.config?.reasons || {};
   const tickets = existing.tickets || {};
-  return { store, guild: { config, tickets } };
+  const pendingRequests = existing.pendingRequests || {};
+  return { store, guild: { config, tickets, pendingRequests } };
 }
 
-function setGuildData(guildId, config, tickets) {
+function setGuildData(guildId, config, tickets, pendingRequests = {}) {
   const store = loadStore();
-  store[guildId] = { config, tickets };
+  store[guildId] = { config, tickets, pendingRequests };
   saveStore(store);
 }
 
@@ -102,7 +124,7 @@ function createMainEmbed(config, guildName) {
     );
 }
 
-function getAdminRoles(config, guild) {
+function getAdminRoles(config) {
   if (!config.useGlobalAdminRoles) return config.adminRoleIds || [];
   try {
     const fromFile = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'data', 'adminRoles.json'), 'utf8'));
@@ -113,21 +135,67 @@ function getAdminRoles(config, guild) {
 }
 
 function countOpenMemberTickets(tickets, userId) {
-  return Object.values(tickets).filter(t => t.status === 'open' && t.memberId === userId).length;
+  return Object.values(tickets).filter((t) => t.status === 'open' && t.memberId === userId).length;
 }
 
 function countClaimedByAdmin(tickets, adminId) {
-  return Object.values(tickets).filter(t => t.status === 'open' && t.claimedBy === adminId).length;
+  return Object.values(tickets).filter((t) => t.status === 'open' && t.claimedBy === adminId).length;
 }
 
-async function createTicketChannel({ guild, member, config, reasonKey, tickets }) {
+function canManageTicket(interaction, ticket) {
+  return (
+    interaction.user.id === ticket.memberId ||
+    interaction.user.id === ticket.claimedBy ||
+    interaction.member.permissions.has(PermissionFlagsBits.Administrator)
+  );
+}
+
+function sanitizeName(input) {
+  return String(input || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0600-\u06FF\-\_\s]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .slice(0, 90);
+}
+
+async function buildTicketControls(guildId, channelId, config) {
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`ticket_claim_${guildId}_${channelId}`).setLabel('استلام').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`ticket_close_${guildId}_${channelId}`).setLabel('اقفال').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`ticket_rename_${guildId}_${channelId}`).setLabel('تغيير الاسم').setStyle(ButtonStyle.Secondary)
+  );
+
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`ticket_add_${guildId}_${channelId}`).setLabel('اضافة شخص').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`ticket_remove_${guildId}_${channelId}`).setLabel('ازالة شخص').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`ticket_ping_${guildId}_${channelId}`).setLabel('استدعاء العضو').setStyle(ButtonStyle.Primary)
+  );
+
+  const responsibilities = loadResponsibilities();
+  const options = Object.keys(responsibilities)
+    .slice(0, 25)
+    .map((respName) => ({ label: respName.slice(0, 100), value: `resp_${respName}` }));
+
+  const row3 = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`ticket_transfer_${guildId}_${channelId}`)
+      .setPlaceholder('اختر مسؤولية لتحويل التكت')
+      .addOptions(options.length ? options : [{ label: 'لا توجد مسؤوليات', value: 'resp_none' }])
+      .setDisabled(options.length === 0)
+  );
+
+  return [row1, row2, row3];
+}
+
+async function createTicketChannel({ guild, member, config, reasonKey, tickets, pendingRequests }) {
   const reason = config.reasons?.[reasonKey] || {};
-  const prefix = (reason.ticketName || config.ticketNamePrefix || 'ticket').toLowerCase().replace(/\s+/g, '-');
-  const suffix = config.ticketNameMode === 'user' ? member.user.username.toLowerCase().replace(/\s+/g, '-') : String(config.counter || 1);
+  const prefix = sanitizeName(reason.ticketName || config.ticketNamePrefix || 'ticket') || 'ticket';
+  const suffix = config.ticketNameMode === 'user' ? sanitizeName(member.user.username) : String(config.counter || 1);
   const channelName = `${prefix}-${suffix}`.slice(0, 90);
   const categoryId = reason.categoryId || config.openCategoryId || null;
 
-  const adminRoles = getAdminRoles(config, guild);
+  const adminRoles = getAdminRoles(config);
   const allowedStaffRoles = [...new Set([...(config.responsibleRoleIds || []), ...adminRoles])];
 
   const permissionOverwrites = [
@@ -146,10 +214,7 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets }
     permissionOverwrites
   });
 
-  const controls = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`ticket_claim_${guild.id}_${channel.id}`).setLabel('استلام').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`ticket_close_${guild.id}_${channel.id}`).setLabel('اقفال').setStyle(ButtonStyle.Danger)
-  );
+  const controls = await buildTicketControls(guild.id, channel.id, config);
 
   if (reason.beforeImage || config.messages.beforeImage) {
     await channel.send({ content: reason.beforeImage || config.messages.beforeImage });
@@ -163,7 +228,7 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets }
 
   await channel.send({
     content: `**التكت : تم الانشاء**\n**العضو :** <@${member.id}>`,
-    components: [controls]
+    components: controls
   });
 
   if (config.ticketNameMode !== 'user') config.counter = (config.counter || 1) + 1;
@@ -174,28 +239,47 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets }
     reasonKey,
     claimedBy: null,
     status: 'open',
+    extraMembers: [],
     createdAt: Date.now()
   };
 
+  setGuildData(guild.id, config, tickets, pendingRequests);
   return channel;
 }
 
-async function applyHideOnClaim(channel, guild, config, claimerId, memberId) {
-  const adminRoles = getAdminRoles(config, guild);
-  for (const roleId of adminRoles) {
+async function applyHideOnClaim(channel, guild, config, claimerId, memberId, extraMembers = []) {
+  const adminRoles = getAdminRoles(config);
+  const allHideRoles = [...new Set([...adminRoles, ...(config.responsibleRoleIds || [])])];
+
+  for (const roleId of allHideRoles) {
     await channel.permissionOverwrites.edit(roleId, { ViewChannel: false }).catch(() => {});
   }
-  for (const roleId of (config.responsibleRoleIds || [])) {
-    await channel.permissionOverwrites.edit(roleId, { ViewChannel: true }).catch(() => {});
+
+  await channel.permissionOverwrites.edit(claimerId, {
+    ViewChannel: true,
+    SendMessages: true,
+    ReadMessageHistory: true
+  }).catch(() => {});
+
+  await channel.permissionOverwrites.edit(memberId, {
+    ViewChannel: true,
+    SendMessages: true,
+    ReadMessageHistory: true
+  }).catch(() => {});
+
+  for (const userId of extraMembers) {
+    await channel.permissionOverwrites.edit(userId, {
+      ViewChannel: true,
+      SendMessages: true,
+      ReadMessageHistory: true
+    }).catch(() => {});
   }
-  await channel.permissionOverwrites.edit(claimerId, { ViewChannel: true, SendMessages: true }).catch(() => {});
-  await channel.permissionOverwrites.edit(memberId, { ViewChannel: true, SendMessages: true }).catch(() => {});
 }
 
 async function handleOpenRequest(interaction, guildId, reasonKey) {
   const guild = interaction.guild;
   const { guild: g } = getGuildData(guildId);
-  const { config, tickets } = g;
+  const { config, tickets, pendingRequests } = g;
 
   const openCount = countOpenMemberTickets(tickets, interaction.user.id);
   if (openCount >= (config.memberOpenLimit || 1)) {
@@ -204,18 +288,19 @@ async function handleOpenRequest(interaction, guildId, reasonKey) {
   }
 
   if (config.autoCreateOnRequest) {
-    const channel = await createTicketChannel({ guild, member: interaction.member, config, reasonKey, tickets });
-    setGuildData(guildId, config, tickets);
+    const channel = await createTicketChannel({ guild, member: interaction.member, config, reasonKey, tickets, pendingRequests });
     await interaction.reply({ content: `**تم انشاء التكت :** <#${channel.id}>`, ephemeral: true });
     return;
   }
 
   const reqId = `${guildId}_${interaction.user.id}_${Date.now()}`;
-  pendingRequests.set(reqId, { guildId, userId: interaction.user.id, reasonKey, sourceChannelId: interaction.channelId });
+  pendingRequests[reqId] = { guildId, userId: interaction.user.id, reasonKey, sourceChannelId: interaction.channelId, createdAt: Date.now() };
 
   const targetChannelId = config.claimFromDedicatedChannel ? config.claimChannelId : interaction.channelId;
   const targetChannel = await guild.channels.fetch(targetChannelId).catch(() => null);
   if (!targetChannel || targetChannel.type !== ChannelType.GuildText) {
+    delete pendingRequests[reqId];
+    setGuildData(guildId, config, tickets, pendingRequests);
     await interaction.reply({ content: '**فشل : شات الاستلام غير صالح.**', ephemeral: true });
     return;
   }
@@ -232,20 +317,21 @@ async function handleOpenRequest(interaction, guildId, reasonKey) {
     components: [row]
   });
 
+  setGuildData(guildId, config, tickets, pendingRequests);
   await interaction.reply({ content: '**تم ارسال طلبك لشات الاستلام.**', ephemeral: true });
 }
 
 async function handleClaimInTicket(interaction, guildId, channelId) {
   const { guild: g } = getGuildData(guildId);
-  const { config, tickets } = g;
+  const { config, tickets, pendingRequests } = g;
   const ticket = tickets[channelId];
   if (!ticket || ticket.status !== 'open') {
     await interaction.reply({ content: '**هذا التكت غير متاح.**', ephemeral: true });
     return;
   }
 
-  const adminRoles = getAdminRoles(config, interaction.guild);
-  const hasRole = interaction.member.roles.cache.some(r => adminRoles.includes(r.id) || (config.responsibleRoleIds || []).includes(r.id));
+  const adminRoles = getAdminRoles(config);
+  const hasRole = interaction.member.roles.cache.some((r) => adminRoles.includes(r.id) || (config.responsibleRoleIds || []).includes(r.id));
   if (!hasRole && !interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
     await interaction.reply({ content: '**ليس لديك صلاحية الاستلام.**', ephemeral: true });
     return;
@@ -259,24 +345,29 @@ async function handleClaimInTicket(interaction, guildId, channelId) {
 
   ticket.claimedBy = interaction.user.id;
   if (config.hideOnClaim) {
-    const channel = interaction.channel;
-    await applyHideOnClaim(channel, interaction.guild, config, interaction.user.id, ticket.memberId);
+    await applyHideOnClaim(interaction.channel, interaction.guild, config, interaction.user.id, ticket.memberId, ticket.extraMembers || []);
   }
-  setGuildData(guildId, config, tickets);
+
+  const reason = config.reasons?.[ticket.reasonKey] || {};
+  if (reason.claimImage) await interaction.channel.send({ files: [reason.claimImage] }).catch(() => {});
+
+  setGuildData(guildId, config, tickets, pendingRequests);
   await interaction.reply({ content: `**تم الاستلام :** <@${interaction.user.id}>` });
 }
 
 async function handleClaimFromRequest(interaction, reqId) {
-  const req = pendingRequests.get(reqId);
+  const guildId = reqId.split('_')[0];
+  const { guild: g } = getGuildData(guildId);
+  const { config, tickets, pendingRequests } = g;
+  const req = pendingRequests[reqId];
+
   if (!req) {
     await interaction.reply({ content: '**انتهى الطلب.**', ephemeral: true });
     return;
   }
 
-  const { guild: g } = getGuildData(req.guildId);
-  const { config, tickets } = g;
-  const adminRoles = getAdminRoles(config, interaction.guild);
-  const hasRole = interaction.member.roles.cache.some(r => adminRoles.includes(r.id) || (config.responsibleRoleIds || []).includes(r.id));
+  const adminRoles = getAdminRoles(config);
+  const hasRole = interaction.member.roles.cache.some((r) => adminRoles.includes(r.id) || (config.responsibleRoleIds || []).includes(r.id));
   if (!hasRole && !interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
     await interaction.reply({ content: '**ليس لديك صلاحية الاستلام.**', ephemeral: true });
     return;
@@ -290,48 +381,56 @@ async function handleClaimFromRequest(interaction, reqId) {
 
   const member = await interaction.guild.members.fetch(req.userId).catch(() => null);
   if (!member) {
+    delete pendingRequests[reqId];
+    setGuildData(guildId, config, tickets, pendingRequests);
     await interaction.reply({ content: '**لا يمكن العثور على العضو.**', ephemeral: true });
     return;
   }
 
-  const channel = await createTicketChannel({ guild: interaction.guild, member, config, reasonKey: req.reasonKey, tickets });
+  const channel = await createTicketChannel({ guild: interaction.guild, member, config, reasonKey: req.reasonKey, tickets, pendingRequests });
   tickets[channel.id].claimedBy = interaction.user.id;
-  if (config.hideOnClaim) await applyHideOnClaim(channel, interaction.guild, config, interaction.user.id, member.id);
 
-  setGuildData(req.guildId, config, tickets);
-  pendingRequests.delete(reqId);
+  if (config.hideOnClaim) {
+    await applyHideOnClaim(channel, interaction.guild, config, interaction.user.id, member.id, tickets[channel.id].extraMembers || []);
+  }
+
+  const reason = config.reasons?.[req.reasonKey] || {};
+  if (reason.claimImage) await channel.send({ files: [reason.claimImage] }).catch(() => {});
+
+  delete pendingRequests[reqId];
+  setGuildData(guildId, config, tickets, pendingRequests);
   await interaction.reply({ content: `**تم الاستلام والانشاء :** <#${channel.id}>` });
 }
 
 async function handleClose(interaction, guildId, channelId) {
   const { guild: g } = getGuildData(guildId);
-  const { config, tickets } = g;
+  const { config, tickets, pendingRequests } = g;
   const ticket = tickets[channelId];
   if (!ticket) {
     await interaction.reply({ content: '**لا توجد بيانات لهذا التكت.**', ephemeral: true });
     return;
   }
 
-  const canClose = interaction.user.id === ticket.memberId || interaction.user.id === ticket.claimedBy || interaction.member.permissions.has(PermissionFlagsBits.Administrator);
-  if (!canClose) {
+  if (!canManageTicket(interaction, ticket)) {
     await interaction.reply({ content: '**ليس لديك صلاحية الاقفال.**', ephemeral: true });
     return;
   }
 
   ticket.status = 'closed';
-  setGuildData(guildId, config, tickets);
 
   if (!config.keepClosedTickets) {
     delete tickets[channelId];
-    setGuildData(guildId, config, tickets);
+    setGuildData(guildId, config, tickets, pendingRequests);
     await interaction.reply({ content: '**سيتم حذف التكت خلال 3 ثواني.**' });
     setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
     return;
   }
 
-  const closePrefix = `closed-${config.ticketNamePrefix || 'ticket'}`;
+  const closePrefix = `closed-${sanitizeName(config.ticketNamePrefix || 'ticket')}`;
   await interaction.channel.setName(`${closePrefix}-${channelId.slice(-4)}`).catch(() => {});
   if (config.closedCategoryId) await interaction.channel.setParent(config.closedCategoryId).catch(() => {});
+
+  setGuildData(guildId, config, tickets, pendingRequests);
   await interaction.reply({ content: '**تم اقفال التكت والاحتفاظ به.**' });
 }
 
@@ -360,18 +459,18 @@ function createReasonComponents(config, guildId) {
 async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
   const member = await message.guild.members.fetch(message.author.id);
   const isOwner = BOT_OWNERS.includes(message.author.id) || message.guild.ownerId === message.author.id;
-  const hasAdminRole = member.roles.cache.some(r => ADMIN_ROLES.includes(r.id));
+  const hasAdminRole = member.roles.cache.some((r) => ADMIN_ROLES.includes(r.id));
   if (!isOwner && !hasAdminRole && !member.permissions.has(PermissionFlagsBits.Administrator)) {
     await message.react('❌');
     return;
   }
 
   const { guild: g } = getGuildData(message.guild.id);
-  const { config, tickets } = g;
+  const { config, tickets, pendingRequests } = g;
 
   const ask = async (prompt, timeout = 180000) => {
     await message.channel.send(prompt);
-    const collected = await message.channel.awaitMessages({ filter: m => m.author.id === message.author.id, max: 1, time: timeout });
+    const collected = await message.channel.awaitMessages({ filter: (m) => m.author.id === message.author.id, max: 1, time: timeout });
     const first = collected.first();
     return first ? first.content.trim() : null;
   };
@@ -383,11 +482,13 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 
     if (choice === '1') {
       const mode = await ask('**اكتب : counter او user (او 0 لاعادة التعيين)**');
-      if (mode === '0') { config.ticketNameMode = 'counter'; config.ticketNamePrefix = 'ticket'; }
-      else if (['counter', 'user'].includes((mode || '').toLowerCase())) {
+      if (mode === '0') {
+        config.ticketNameMode = 'counter';
+        config.ticketNamePrefix = 'ticket';
+      } else if (['counter', 'user'].includes((mode || '').toLowerCase())) {
         config.ticketNameMode = mode.toLowerCase();
         const prefix = await ask('**اكتب : بادئة اسم التكت**');
-        if (prefix && prefix !== '0') config.ticketNamePrefix = prefix.replace(/\s+/g, '-').toLowerCase();
+        if (prefix && prefix !== '0') config.ticketNamePrefix = sanitizeName(prefix);
       }
     } else if (choice === '2') {
       const v = await ask('**ارسل : منشن/ايدي الكاتوقري (0 لاعادة التعيين)**');
@@ -396,19 +497,24 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       const v = await ask('**ارسل : رولات المسؤولين (منشن/ايدي) او file او 0**');
       if (v === '0') config.responsibleRoleIds = [];
       else if ((v || '').toLowerCase() === 'file') {
-        try {
-          const resp = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'data', 'responsibilities.json'), 'utf8'));
-          const set = new Set();
-          for (const item of Object.values(resp || {})) for (const role of (item.roles || [])) set.add(role);
-          config.responsibleRoleIds = [...set];
-        } catch { await message.channel.send('**فشل : ملف المسؤوليات غير متاح.**'); }
+        const resp = loadResponsibilities();
+        const set = new Set();
+        for (const item of Object.values(resp || {})) {
+          for (const role of (item.roles || [])) set.add(role);
+        }
+        config.responsibleRoleIds = [...set];
       } else {
         config.responsibleRoleIds = (v || '').split(/\s+/).map(normalizeId).filter(Boolean);
       }
     } else if (choice === '4') {
       const v = await ask('**ارسل : رولات الادمن (منشن/ايدي) او 0 لاستخدام الادمن رولز العامة**');
-      if (v === '0') { config.useGlobalAdminRoles = true; config.adminRoleIds = []; }
-      else { config.useGlobalAdminRoles = false; config.adminRoleIds = (v || '').split(/\s+/).map(normalizeId).filter(Boolean); }
+      if (v === '0') {
+        config.useGlobalAdminRoles = true;
+        config.adminRoleIds = [];
+      } else {
+        config.useGlobalAdminRoles = false;
+        config.adminRoleIds = (v || '').split(/\s+/).map(normalizeId).filter(Boolean);
+      }
     } else if (choice === '5') {
       const n = Number(await ask('**اكتب : حد استلام الاداري المفتوح**'));
       if (Number.isFinite(n) && n > 0) config.adminClaimLimit = n;
@@ -448,7 +554,17 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       const idx = Number(await ask('**اختر : رقم السبب من 1 الى 25**'));
       if (Number.isFinite(idx) && idx >= 1 && idx <= 25) {
         const key = String(idx);
-        const reason = { name: `سبب ${idx}`, ticketName: '', openImage: '', emoji: '🎫', categoryId: null, claimImage: '', beforeImage: '', afterImage: '', ...(config.reasons[key] || {}) };
+        const reason = {
+          name: `سبب ${idx}`,
+          ticketName: '',
+          openImage: '',
+          emoji: '🎫',
+          categoryId: null,
+          claimImage: '',
+          beforeImage: '',
+          afterImage: '',
+          ...(config.reasons[key] || {})
+        };
         while (true) {
           await message.channel.send('**السبب : 1 الاسم - 2 اسم التكت - 3 صورة فتح - 4 ايموجي - 5 كاتوقري - 6 صورة استلام - 7 قبل/بعد - 8 انهاء**');
           const c = await ask('**اختر :**');
@@ -459,7 +575,12 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           if (c === '4') { const v = await ask('**ايموجي : (0 لاعادة التعيين)**'); reason.emoji = v === '0' ? '🎫' : (v || reason.emoji); }
           if (c === '5') { const v = await ask('**كاتوقري : (0 لاعادة التعيين)**'); reason.categoryId = v === '0' ? null : normalizeId(v); }
           if (c === '6') { const v = await ask('**صورة الاستلام : (0 لاعادة التعيين)**'); reason.claimImage = v === '0' ? '' : (v || reason.claimImage); }
-          if (c === '7') { const b = await ask('**قبل الصورة : (0 لاعادة التعيين)**'); const a = await ask('**بعد الصورة : (0 لاعادة التعيين)**'); reason.beforeImage = b === '0' ? '' : (b || reason.beforeImage); reason.afterImage = a === '0' ? '' : (a || reason.afterImage); }
+          if (c === '7') {
+            const b = await ask('**قبل الصورة : (0 لاعادة التعيين)**');
+            const a = await ask('**بعد الصورة : (0 لاعادة التعيين)**');
+            reason.beforeImage = b === '0' ? '' : (b || reason.beforeImage);
+            reason.afterImage = a === '0' ? '' : (a || reason.afterImage);
+          }
         }
         config.reasons[key] = reason;
       }
@@ -490,11 +611,80 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       }
     }
 
-    setGuildData(message.guild.id, config, tickets);
+    setGuildData(message.guild.id, config, tickets, pendingRequests);
   }
 
-  setGuildData(message.guild.id, config, tickets);
+  setGuildData(message.guild.id, config, tickets, pendingRequests);
   await message.channel.send('**تم حفظ اعدادات التكت.**');
+}
+
+async function handleTransferResponsibility(interaction, guildId, channelId, value) {
+  const respName = value.replace('resp_', '');
+  if (!respName || respName === 'none') {
+    await interaction.reply({ content: '**لا توجد مسؤولية صالحة.**', ephemeral: true });
+    return;
+  }
+
+  const { guild: g } = getGuildData(guildId);
+  const { config, tickets, pendingRequests } = g;
+  const ticket = tickets[channelId];
+  if (!ticket) {
+    await interaction.reply({ content: '**لا توجد بيانات لهذا التكت.**', ephemeral: true });
+    return;
+  }
+
+  if (!canManageTicket(interaction, ticket)) {
+    await interaction.reply({ content: '**ليس لديك صلاحية التحويل.**', ephemeral: true });
+    return;
+  }
+
+  const responsibilities = loadResponsibilities();
+  const selected = responsibilities[respName];
+  if (!selected) {
+    await interaction.reply({ content: '**المسؤولية غير موجودة.**', ephemeral: true });
+    return;
+  }
+
+  ticket.claimedBy = null;
+
+  for (const roleId of (config.responsibleRoleIds || [])) {
+    await interaction.channel.permissionOverwrites.edit(roleId, { ViewChannel: false }).catch(() => {});
+  }
+
+  const targetRoles = selected.roles || [];
+  for (const roleId of targetRoles) {
+    await interaction.channel.permissionOverwrites.edit(roleId, {
+      ViewChannel: true,
+      SendMessages: true,
+      ReadMessageHistory: true
+    }).catch(() => {});
+  }
+
+  config.responsibleRoleIds = [...targetRoles];
+  setGuildData(guildId, config, tickets, pendingRequests);
+
+  const mentions = [
+    ...(selected.roles || []).map((id) => `<@&${id}>`),
+    ...(selected.responsibles || []).map((id) => `<@${id}>`)
+  ];
+
+  await interaction.reply({
+    content: `**تم تحويل التكت لمسؤوليين : ${respName}**\n${mentions.join(' ') || '**لا يوجد منشن محدد**'}`
+  });
+}
+
+async function showInputModal(interaction, customId, title, label, placeholder = '') {
+  const modal = new ModalBuilder().setCustomId(customId).setTitle(title);
+  const input = new TextInputBuilder()
+    .setCustomId('value')
+    .setLabel(label)
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder(placeholder)
+    .setMaxLength(100);
+
+  modal.addComponents(new ActionRowBuilder().addComponents(input));
+  await interaction.showModal(modal);
 }
 
 function registerHandlers(client) {
@@ -503,41 +693,175 @@ function registerHandlers(client) {
 
   client.on('interactionCreate', async (interaction) => {
     try {
-      if (!(interaction.isButton() || interaction.isStringSelectMenu())) return;
-      const id = interaction.customId || '';
+      if (interaction.isButton() || interaction.isStringSelectMenu()) {
+        const id = interaction.customId || '';
 
-      if (id.startsWith('ticket_open_btn_')) {
-        const [, , , guildId, reasonKey] = id.split('_');
-        await handleOpenRequest(interaction, guildId, reasonKey);
-        return;
+        if (id.startsWith('ticket_open_btn_')) {
+          const [, , , guildId, reasonKey] = id.split('_');
+          await handleOpenRequest(interaction, guildId, reasonKey);
+          return;
+        }
+
+        if (interaction.isStringSelectMenu() && id.startsWith('ticket_open_menu_')) {
+          const guildId = id.replace('ticket_open_menu_', '');
+          const value = interaction.values?.[0] || 'reason_0';
+          const reasonKey = value.replace('reason_', '');
+          await handleOpenRequest(interaction, guildId, reasonKey);
+          return;
+        }
+
+        if (id.startsWith('ticket_claimreq_')) {
+          const reqId = id.replace('ticket_claimreq_', '');
+          await handleClaimFromRequest(interaction, reqId);
+          return;
+        }
+
+        if (id.startsWith('ticket_claim_')) {
+          const [, , guildId, channelId] = id.split('_');
+          await handleClaimInTicket(interaction, guildId, channelId);
+          return;
+        }
+
+        if (id.startsWith('ticket_close_')) {
+          const [, , guildId, channelId] = id.split('_');
+          await handleClose(interaction, guildId, channelId);
+          return;
+        }
+
+        if (id.startsWith('ticket_rename_')) {
+          const [, , guildId, channelId] = id.split('_');
+          await showInputModal(interaction, `ticket_rename_modal_${guildId}_${channelId}`, 'تغيير اسم التكت', 'الاسم الجديد', 'مثال : support-user');
+          return;
+        }
+
+        if (id.startsWith('ticket_add_')) {
+          const [, , guildId, channelId] = id.split('_');
+          await showInputModal(interaction, `ticket_add_modal_${guildId}_${channelId}`, 'اضافة شخص للتكت', 'ايدي او منشن الشخص');
+          return;
+        }
+
+        if (id.startsWith('ticket_remove_')) {
+          const [, , guildId, channelId] = id.split('_');
+          await showInputModal(interaction, `ticket_remove_modal_${guildId}_${channelId}`, 'ازالة شخص من التكت', 'ايدي او منشن الشخص');
+          return;
+        }
+
+        if (id.startsWith('ticket_ping_')) {
+          const [, , guildId, channelId] = id.split('_');
+          const { guild: g } = getGuildData(guildId);
+          const { tickets, config, pendingRequests } = g;
+          const ticket = tickets[channelId];
+          if (!ticket) {
+            await interaction.reply({ content: '**لا توجد بيانات لهذا التكت.**', ephemeral: true });
+            return;
+          }
+          if (!canManageTicket(interaction, ticket)) {
+            await interaction.reply({ content: '**ليس لديك صلاحية الاستدعاء.**', ephemeral: true });
+            return;
+          }
+          const user = await client.users.fetch(ticket.memberId).catch(() => null);
+          const link = `https://discord.com/channels/${interaction.guild.id}/${interaction.channel.id}`;
+          if (user) {
+            await user.send(`**تنبيه :** تم استدعاؤك للتكت\n**الرابط :** ${link}`).catch(() => {});
+          }
+          setGuildData(guildId, config, tickets, pendingRequests);
+          await interaction.reply({ content: `**تم استدعاء العضو :** <@${ticket.memberId}>` });
+          return;
+        }
+
+        if (interaction.isStringSelectMenu() && id.startsWith('ticket_transfer_')) {
+          const [, , guildId, channelId] = id.split('_');
+          const selected = interaction.values?.[0] || 'resp_none';
+          await handleTransferResponsibility(interaction, guildId, channelId, selected);
+          return;
+        }
       }
 
-      if (interaction.isStringSelectMenu() && id.startsWith('ticket_open_menu_')) {
-        const guildId = id.replace('ticket_open_menu_', '');
-        const value = interaction.values?.[0] || 'reason_0';
-        const reasonKey = value.replace('reason_', '');
-        await handleOpenRequest(interaction, guildId, reasonKey);
-        return;
-      }
+      if (interaction.isModalSubmit() && interaction.customId.startsWith('ticket_')) {
+        const modalId = interaction.customId;
 
-      if (id.startsWith('ticket_claimreq_')) {
-        const reqId = id.replace('ticket_claimreq_', '');
-        await handleClaimFromRequest(interaction, reqId);
-        return;
-      }
+        if (modalId.startsWith('ticket_rename_modal_')) {
+          const [, , , guildId, channelId] = modalId.split('_');
+          const newName = sanitizeName(interaction.fields.getTextInputValue('value'));
+          if (!newName) {
+            await interaction.reply({ content: '**الاسم غير صالح.**', ephemeral: true });
+            return;
+          }
+          const { guild: g } = getGuildData(guildId);
+          const { tickets } = g;
+          const ticket = tickets[channelId];
+          if (!ticket) {
+            await interaction.reply({ content: '**لا توجد بيانات لهذا التكت.**', ephemeral: true });
+            return;
+          }
+          if (!canManageTicket(interaction, ticket)) {
+            await interaction.reply({ content: '**ليس لديك صلاحية تغيير الاسم.**', ephemeral: true });
+            return;
+          }
+          await interaction.channel.setName(newName).catch(() => {});
+          await interaction.reply({ content: `**تم تغيير الاسم :** ${newName}` });
+          return;
+        }
 
-      if (id.startsWith('ticket_claim_')) {
-        const [, , guildId, channelId] = id.split('_');
-        await handleClaimInTicket(interaction, guildId, channelId);
-        return;
-      }
+        if (modalId.startsWith('ticket_add_modal_')) {
+          const [, , , guildId, channelId] = modalId.split('_');
+          const userId = normalizeId(interaction.fields.getTextInputValue('value'));
+          if (!userId) {
+            await interaction.reply({ content: '**المدخل غير صالح.**', ephemeral: true });
+            return;
+          }
+          const { guild: g } = getGuildData(guildId);
+          const { config, tickets, pendingRequests } = g;
+          const ticket = tickets[channelId];
+          if (!ticket) {
+            await interaction.reply({ content: '**لا توجد بيانات لهذا التكت.**', ephemeral: true });
+            return;
+          }
+          if (!canManageTicket(interaction, ticket)) {
+            await interaction.reply({ content: '**ليس لديك صلاحية الاضافة.**', ephemeral: true });
+            return;
+          }
+          await interaction.channel.permissionOverwrites.edit(userId, {
+            ViewChannel: true,
+            SendMessages: true,
+            ReadMessageHistory: true
+          }).catch(() => {});
+          if (!ticket.extraMembers.includes(userId)) ticket.extraMembers.push(userId);
+          setGuildData(guildId, config, tickets, pendingRequests);
+          await interaction.reply({ content: `**تم اضافة الشخص :** <@${userId}>` });
+          return;
+        }
 
-      if (id.startsWith('ticket_close_')) {
-        const [, , guildId, channelId] = id.split('_');
-        await handleClose(interaction, guildId, channelId);
-        return;
+        if (modalId.startsWith('ticket_remove_modal_')) {
+          const [, , , guildId, channelId] = modalId.split('_');
+          const userId = normalizeId(interaction.fields.getTextInputValue('value'));
+          if (!userId) {
+            await interaction.reply({ content: '**المدخل غير صالح.**', ephemeral: true });
+            return;
+          }
+          const { guild: g } = getGuildData(guildId);
+          const { config, tickets, pendingRequests } = g;
+          const ticket = tickets[channelId];
+          if (!ticket) {
+            await interaction.reply({ content: '**لا توجد بيانات لهذا التكت.**', ephemeral: true });
+            return;
+          }
+          if (!canManageTicket(interaction, ticket)) {
+            await interaction.reply({ content: '**ليس لديك صلاحية الازالة.**', ephemeral: true });
+            return;
+          }
+          if (ticket.memberId === userId) {
+            await interaction.reply({ content: '**لا يمكن إزالة صاحب التكت.**', ephemeral: true });
+            return;
+          }
+          await interaction.channel.permissionOverwrites.edit(userId, { ViewChannel: false }).catch(() => {});
+          ticket.extraMembers = (ticket.extraMembers || []).filter((id) => id !== userId);
+          setGuildData(guildId, config, tickets, pendingRequests);
+          await interaction.reply({ content: `**تم ازالة الشخص :** <@${userId}>` });
+          return;
+        }
       }
-    } catch (e) {
+    } catch {
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({ content: '**حدث خطأ أثناء معالجة التكت.**', ephemeral: true }).catch(() => {});
       }
