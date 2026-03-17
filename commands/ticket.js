@@ -13,6 +13,7 @@ const {
 const fs = require('fs');
 const path = require('path');
 const { registerTicketInteractionRouter } = require('../utils/ticketInteractionRouter');
+const colorManager = require('../utils/colorManager');
 
 const name = 'ticket';
 const aliases = ['تكت'];
@@ -23,8 +24,12 @@ const ticketImagesDir = path.join(__dirname, '..', 'data', 'ticket_images');
 let handlersRegistered = false;
 const pingCooldowns = new Map();
 
-function makeTicketEmbed(title, description, color = 0x5865F2) {
-  return new EmbedBuilder().setColor(color).setTitle(title).setDescription(description || null);
+function makeTicketEmbed(title, description, options = {}) {
+  const embed = colorManager.createEmbed().setTitle(title).setDescription(description || null);
+  if (options?.user) {
+    embed.setAuthor({ name: options.user.username || options.user.tag || 'User', iconURL: options.user.displayAvatarURL?.() || undefined });
+  }
+  return embed;
 }
 
 function buildPostCloseControls(guildId, channelId, ticket = {}) {
@@ -183,7 +188,7 @@ function normalizeId(input) {
 }
 
 function createMainEmbed(config, guildName) {
-  return new EmbedBuilder()
+  return colorManager.createEmbed()
     .setTitle(`**إعدادات التكت : ${guildName}**`)
     .setDescription([
       '**اكتب رقم الخيار من 1 الى 14 أو اكتب خروج.**',
@@ -255,12 +260,15 @@ function sanitizeName(input) {
     .slice(0, 90);
 }
 
-async function buildTicketControls(guildId, channelId, config) {
-  const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`ticket_claim_${guildId}_${channelId}`).setLabel('استلام').setStyle(ButtonStyle.Success),
+async function buildTicketControls(guildId, channelId, config, options = {}) {
+  const includeClaimButton = options.includeClaimButton !== false;
+  const row1Buttons = [];
+  if (includeClaimButton) row1Buttons.push(new ButtonBuilder().setCustomId(`ticket_claim_${guildId}_${channelId}`).setLabel('استلام').setStyle(ButtonStyle.Success));
+  row1Buttons.push(
     new ButtonBuilder().setCustomId(`ticket_close_${guildId}_${channelId}`).setLabel('اقفال').setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId(`ticket_rename_${guildId}_${channelId}`).setLabel('تغيير الاسم').setStyle(ButtonStyle.Secondary)
   );
+  const row1 = new ActionRowBuilder().addComponents(row1Buttons);
 
   const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`ticket_add_${guildId}_${channelId}`).setLabel('اضافة شخص').setStyle(ButtonStyle.Primary),
@@ -270,21 +278,21 @@ async function buildTicketControls(guildId, channelId, config) {
 
   const responsibilities = loadResponsibilities();
   const responsibilityNames = Object.keys(responsibilities).slice(0, 25);
-  const options = responsibilityNames
+  const responsibilityOptions = responsibilityNames
     .map((respName, index) => ({ label: respName.slice(0, 100), value: `respidx_${index}` }));
 
   const row3 = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId(`ticket_transfer_${guildId}_${channelId}`)
       .setPlaceholder('اختر مسؤولية لتحويل التكت')
-      .addOptions(options.length ? options : [{ label: 'لا توجد مسؤوليات', value: 'resp_none' }])
-      .setDisabled(options.length === 0)
+      .addOptions(responsibilityOptions.length ? responsibilityOptions : [{ label: 'لا توجد مسؤوليات', value: 'resp_none' }])
+      .setDisabled(responsibilityOptions.length === 0)
   );
 
   return [row1, row2, row3];
 }
 
-async function createTicketChannel({ guild, member, config, reasonKey, tickets, pendingRequests }) {
+async function createTicketChannel({ guild, member, config, reasonKey, tickets, pendingRequests, includeClaimButton = true }) {
   const reason = config.reasons?.[reasonKey] || {};
   const prefix = sanitizeName(reason.ticketName || config.ticketNamePrefix || 'ticket') || 'ticket';
   const memberId = member?.id || member?.user?.id || null;
@@ -318,7 +326,7 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
     permissionOverwrites
   });
 
-  const controls = await buildTicketControls(guild.id, channel.id, config);
+  const controls = await buildTicketControls(guild.id, channel.id, config, { includeClaimButton });
 
   if (reason.beforeImage || config.messages.beforeImage) {
     await channel.send({ content: reason.beforeImage || config.messages.beforeImage });
@@ -429,10 +437,12 @@ async function handleOpenRequest(interaction, guildId, reasonKey) {
     new ButtonBuilder().setCustomId(`ticket_claimreq_${reqId}`).setStyle(ButtonStyle.Primary).setLabel('استلام التكت')
   );
 
-  if (config.messages.acceptance) {
+  const reasonImage = resolveImageForSend(config.reasons?.[reasonKey]?.openImage || config.messages.ticketImage);
+
+  if (!reasonImage && config.messages.acceptance) {
     await targetChannel.send({ embeds: [makeTicketEmbed('قبول التكت', config.messages.acceptance)] });
   }
-  if (config.claimFromDedicatedChannel && config.claimChannelSeparator) {
+  if (!reasonImage && config.claimFromDedicatedChannel && config.claimChannelSeparator) {
     const separatorValue = config.claimChannelSeparator;
     const separatorImage = resolveImageForSend(separatorValue);
     if (separatorImage && (String(separatorValue).startsWith('local:') || /^https?:\/\//i.test(String(separatorValue)))) {
@@ -442,36 +452,41 @@ async function handleOpenRequest(interaction, guildId, reasonKey) {
     }
   }
 
-  await targetChannel.send({
-    embeds: [makeTicketEmbed('طلب تكت', `**العضو :** <@${interaction.user.id}>\n**السبب :** ${config.reasons?.[reasonKey]?.name || `سبب ${reasonKey}`}`)],
-    components: [row]
-  });
+  if (reasonImage) {
+    await targetChannel.send({ files: [reasonImage], components: [row] });
+  } else {
+    await targetChannel.send({
+      embeds: [makeTicketEmbed('طلب تكت', `**العضو :** <@${interaction.user.id}>\n**السبب :** ${config.reasons?.[reasonKey]?.name || `سبب ${reasonKey}`}`)],
+      components: [row]
+    });
+  }
 
   setGuildData(guildId, config, tickets, pendingRequests);
   await interaction.editReply({ embeds: [makeTicketEmbed('تم', '**تم ارسال طلبك لشات الاستلام.**', 0x57F287)] });
 }
 
 async function handleClaimInTicket(interaction, guildId, channelId) {
+  await interaction.deferReply().catch(() => {});
   const { guild: g } = getGuildData(guildId);
   const { config, tickets, pendingRequests } = g;
   const ticket = tickets[channelId];
   if (!ticket || ticket.status !== 'open' || interaction.channelId !== channelId) {
-    await interaction.reply({ content: '**هذا التكت غير متاح.**', ephemeral: true });
+    await interaction.editReply({ embeds: [makeTicketEmbed('تنبيه', '**هذا التكت غير متاح.**', { user: interaction.user })] });
     return;
   }
 
   if (!hasStaffAccess(interaction.member, config)) {
-    await interaction.reply({ content: '**ليس لديك صلاحية الاستلام.**', ephemeral: true });
+    await interaction.editReply({ embeds: [makeTicketEmbed('تنبيه', '**ليس لديك صلاحية الاستلام.**', { user: interaction.user })] });
     return;
   }
 
   if (ticket.claimedBy && ticket.claimedBy !== interaction.user.id) {
-    await interaction.reply({ embeds: [makeTicketEmbed('تنبيه', `**التكت مستلم مسبقاً بواسطة :** <@${ticket.claimedBy}>`, 0xED4245)], ephemeral: true });
+    await interaction.editReply({ embeds: [makeTicketEmbed('تنبيه', `**التكت مستلم مسبقاً بواسطة :** <@${ticket.claimedBy}>`, { user: interaction.user })] });
     return;
   }
 
   if (ticket.claimedBy === interaction.user.id) {
-    await interaction.reply({ embeds: [makeTicketEmbed('تنبيه', '**أنت مستلم هذا التكت بالفعل.**', 0xED4245)], ephemeral: true });
+    await interaction.editReply({ embeds: [makeTicketEmbed('تنبيه', '**أنت مستلم هذا التكت بالفعل.**', { user: interaction.user })] });
     return;
   }
 
@@ -499,28 +514,39 @@ async function handleClaimInTicket(interaction, guildId, channelId) {
     });
     await interaction.message.edit({ components: updatedRows }).catch(() => {});
   }
-  await interaction.reply({ embeds: [makeTicketEmbed('تم استلام التكت', `**المستلم :** <@${interaction.user.id}>`, 0x57F287)] });
+  const reason = config.reasons?.[ticket.reasonKey] || {};
+  const claimImage = resolveImageForSend(reason.claimImage);
+  if (claimImage) {
+    await interaction.channel.send({
+      files: [claimImage],
+      embeds: [makeTicketEmbed('تم استلام التكت', `**المستلم :** <@${interaction.user.id}>\n**العضو :** <@${ticket.memberId}>`)]
+    }).catch(() => {});
+    await interaction.editReply({ embeds: [makeTicketEmbed('تم', '**تم استلام التكت بنجاح.**', { user: interaction.user })] });
+  } else {
+    await interaction.editReply({ embeds: [makeTicketEmbed('تم استلام التكت', `**المستلم :** <@${interaction.user.id}>\n**العضو :** <@${ticket.memberId}>`)] });
+  }
 }
 
 async function handleClaimFromRequest(interaction, reqId) {
+  await interaction.deferReply().catch(() => {});
   const guildId = reqId.split('_')[0];
   const { guild: g } = getGuildData(guildId);
   const { config, tickets, pendingRequests } = g;
   const req = pendingRequests[reqId];
 
   if (!req) {
-    await interaction.reply({ content: '**انتهى الطلب.**', ephemeral: true });
+    await interaction.editReply({ embeds: [makeTicketEmbed('تنبيه', '**انتهى الطلب.**', { user: interaction.user })] });
     return;
   }
 
   if (!hasStaffAccess(interaction.member, config)) {
-    await interaction.reply({ content: '**ليس لديك صلاحية الاستلام.**', ephemeral: true });
+    await interaction.editReply({ embeds: [makeTicketEmbed('تنبيه', '**ليس لديك صلاحية الاستلام.**', { user: interaction.user })] });
     return;
   }
 
   const claimedCount = countClaimedByAdmin(tickets, interaction.user.id);
   if (claimedCount >= (config.adminClaimLimit || 1)) {
-    await interaction.reply({ content: `**الحد :** لا يمكنك استلام أكثر من ${config.adminClaimLimit} تكت مفتوح.`, ephemeral: true });
+    await interaction.editReply({ embeds: [makeTicketEmbed('تنبيه', `**الحد :** لا يمكنك استلام أكثر من ${config.adminClaimLimit} تكت مفتوح.`, { user: interaction.user })] });
     return;
   }
 
@@ -528,16 +554,16 @@ async function handleClaimFromRequest(interaction, reqId) {
   if (!member) {
     delete pendingRequests[reqId];
     setGuildData(guildId, config, tickets, pendingRequests);
-    await interaction.reply({ content: '**لا يمكن العثور على العضو.**', ephemeral: true });
+    await interaction.editReply({ embeds: [makeTicketEmbed('خطأ', '**لا يمكن العثور على العضو.**', { user: interaction.user })] });
     return;
   }
 
   let channel;
   try {
-    channel = await createTicketChannel({ guild: interaction.guild, member, config, reasonKey: req.reasonKey, tickets, pendingRequests });
+    channel = await createTicketChannel({ guild: interaction.guild, member, config, reasonKey: req.reasonKey, tickets, pendingRequests, includeClaimButton: false });
   } catch (error) {
     console.error('ticket claimreq create channel error:', error?.message || error);
-    await interaction.reply({ content: '**فشل انشاء التكت من طلب الاستلام، تأكد من صلاحيات البوت والكاتوقري.**', ephemeral: true });
+    await interaction.editReply({ embeds: [makeTicketEmbed('خطأ', '**فشل انشاء التكت من طلب الاستلام، تأكد من صلاحيات البوت والكاتوقري.**', { user: interaction.user })] });
     return;
   }
   tickets[channel.id].claimedBy = interaction.user.id;
@@ -548,7 +574,7 @@ async function handleClaimFromRequest(interaction, reqId) {
 
   delete pendingRequests[reqId];
   setGuildData(guildId, config, tickets, pendingRequests);
-  await interaction.reply({ embeds: [makeTicketEmbed('تم استلام التكت', `**تم الاستلام والانشاء :** <#${channel.id}>`, 0x57F287)] });
+  await interaction.editReply({ embeds: [makeTicketEmbed('تم استلام التكت', `**تم الاستلام والانشاء :** <#${channel.id}>`)] });
 }
 
 async function handleClose(interaction, guildId, channelId) {
@@ -671,18 +697,55 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     return attachment?.url || null;
   };
 
+  const askNumberInRange = async (prompt, min, max) => {
+    const raw = await ask(prompt);
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value < min || value > max) {
+      await controlChannel.send(`**❌ ادخال غير صالح. اكتب رقمًا بين ${min} و ${max}.**`).catch(() => {});
+      return null;
+    }
+    return value;
+  };
+
+  const promptAndStoreImage = async ({
+    prompt,
+    currentValue,
+    slotKey,
+    failureText
+  }) => {
+    const v = await ask(prompt);
+    if (!v) return currentValue;
+    if (v === '0') {
+      removeStoredImage(currentValue);
+      return '';
+    }
+    try {
+      return await storeImageLocally(v, message.guild.id, slotKey, currentValue);
+    } catch {
+      await activePromptInteraction?.followUp({ content: failureText || '❌ فشل حفظ الصورة.', ephemeral: true }).catch(() => {});
+      return currentValue;
+    }
+  };
+
   const buildSetupEmbed = () => {
     const reasonsCount = Object.keys(config.reasons || {}).length;
-    return new EmbedBuilder()
+    return colorManager.createEmbed()
+      .setColor(colorManager.getColor())
       .setTitle(`**اعدادات التكت : ${message.guild.name}**`)
+      .setThumbnail(message.guild.iconURL({ dynamic: true, size: 256 }))
       .setDescription([
-        '**اختر من المنيو للتعديل الفوري.**',
-        '**ملاحظة:** مدخلاتك للحقول تُحذف تلقائياً بعد حفظها.',
-        '**شرح الخيارات:**',
-        '- **اعدادات الرسائل:** رسائل نصية فقط مع مكان ظهور كل رسالة.',
-        '- **اعدادات الصور:** كل صور النظام (فتح/استلام/فاصل/صورة بانل ثابتة).',
-        '- **تعيين الاسباب:** الاسم/الايموجي/الوصف/الكاتوقري ورسائل السبب.',
-        '- **طريقة العرض:** ازرار أو منيو مع وصف لكل سبب في وضع المنيو.',
+        '## **مرحبًا بك في لوحة إعدادات التكت**',
+        '',
+        '**اختر من القائمة بالأسفل للتعديل الفوري.**',
+        '**ملاحظة:** أي رسالة إدخال منك يتم حذفها تلقائيًا بعد الحفظ.',
+        '',
+        '**شرح سريع:**',
+        '• **اعدادات الرسائل:** نصوص النظام.',
+        '• **اعدادات الصور:** صور الفتح/الاستلام/فاصل شات الاستلام.',
+        '• **تعيين الاسباب:** اسم السبب + الإيموجي + وصف المنيو + كاتوقري السبب.',
+        '• **طريقة العرض:** أزرار أو منيو.',
+        '',
+        '**الحالة الحالية:**',
         `**اسم التكت :** ${config.ticketNamePrefix} - ${config.ticketNameMode}`,
         `**كاتوقري الفتح :** ${config.openCategoryId ? `<#${config.openCategoryId}>` : 'غير معين'}`,
         `**المسؤولين :** ${config.responsibleRoleIds.length}`,
@@ -696,7 +759,8 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         `**طريقة العرض :** ${config.displayMode}`,
         `**عدد الاسباب :** ${reasonsCount}`,
         `**جاهزية النظام :** ${getSetupIssues().length === 0 ? 'مكتمل' : 'ناقص'}${getSetupIssues().length ? `\n${getSetupIssues().map((i) => `- ${i.replace(/\*\*/g, '')}`).join('\n')}` : ''}`
-      ].join('\n'));
+      ].join('\n'))
+      .setFooter({ text: 'Ticket Settings • لوحة منظمة وسهلة القراءة' });
   };
 
 
@@ -787,7 +851,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
   const openReasonSubmenu = async (key, reason, idx) => {
     let done = false;
     while (!done) {
-      const state = new EmbedBuilder()
+      const state = colorManager.createEmbed()
         .setTitle(`**اعداد السبب ${idx}**`)
         .setDescription([
           `**الاسم:** ${reason.name || `سبب ${idx}`}`,
@@ -845,7 +909,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
   const openMessagesSubmenu = async () => {
     let done = false;
     while (!done) {
-      const state = new EmbedBuilder()
+      const state = colorManager.createEmbed()
         .setTitle('**اعدادات الرسائل**')
         .setDescription([
           `**1) رسالة القبول (تظهر في شات الاستلام):** ${formatSettingValue(config.messages.acceptance)}`,
@@ -890,7 +954,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
   const openImagesSubmenu = async () => {
     let done = false;
     while (!done) {
-      const state = new EmbedBuilder()
+      const state = colorManager.createEmbed()
         .setTitle('**اعدادات الصور**')
         .setDescription([
           `**1) صورة التكت العامة (داخل شات التكت):** ${formatSettingValue(config.messages.ticketImage)}`,
@@ -926,42 +990,32 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       if (c === 'finish') { done = true; break; }
 
       if (c === 'i1') {
-        const v = await ask('**صورة التكت العامة: ارسل رابط صورة او ارفق صورة (0 للحذف)**');
-        if (v === '0') {
-          removeStoredImage(config.messages.ticketImage);
-          config.messages.ticketImage = '';
-        } else if (v) {
-          try {
-            config.messages.ticketImage = await storeImageLocally(v, message.guild.id, 'global_ticket_image', config.messages.ticketImage);
-          } catch {
-            await activePromptInteraction?.followUp({ content: '❌ فشل حفظ الصورة العامة.', ephemeral: true }).catch(() => {});
-          }
-        }
+        config.messages.ticketImage = await promptAndStoreImage({
+          prompt: '**صورة التكت العامة: ارسل رابط صورة او ارفق صورة (0 للحذف)**',
+          currentValue: config.messages.ticketImage,
+          slotKey: 'global_ticket_image',
+          failureText: '❌ فشل حفظ الصورة العامة.'
+        });
       }
 
       if (c === 'i2') {
-        const v = await ask('**صورة فاصل شات الاستلام: ارسل رابط صورة او ارفق صورة (0 للحذف)**');
-        if (v === '0') {
-          removeStoredImage(config.claimChannelSeparator);
-          config.claimChannelSeparator = '';
-        } else if (v) {
-          try {
-            config.claimChannelSeparator = await storeImageLocally(v, message.guild.id, 'claim_separator', config.claimChannelSeparator);
-          } catch {
-            await activePromptInteraction?.followUp({ content: '❌ فشل حفظ صورة الفاصل.', ephemeral: true }).catch(() => {});
-          }
-        }
+        config.claimChannelSeparator = await promptAndStoreImage({
+          prompt: '**صورة فاصل شات الاستلام: ارسل رابط صورة او ارفق صورة (0 للحذف)**',
+          currentValue: config.claimChannelSeparator,
+          slotKey: 'claim_separator',
+          failureText: '❌ فشل حفظ صورة الفاصل.'
+        });
       }
 
       if (c === 'i3') {
         await setupMessage.edit({
           content: '**اختر رقم السبب من القائمة التالية ثم اكتب الرقم في الشات.**',
-          embeds: [new EmbedBuilder().setTitle('**فهرس الأسباب (1 - 25)**').setDescription(buildReasonsIndexText())],
+          embeds: [colorManager.createEmbed().setTitle('**فهرس الأسباب (1 - 25)**').setDescription(buildReasonsIndexText())],
           components: []
         }).catch(() => {});
 
-        const idx = Number(await ask('**اختر رقم السبب من 1 الى 25**'));
-        if (!Number.isFinite(idx) || idx < 1 || idx > 25) continue;
+        const idx = await askNumberInRange('**اختر رقم السبب من 1 الى 25**', 1, 25);
+        if (!idx) continue;
         const key = String(idx);
         const reason = {
           name: `سبب ${idx}`,
@@ -972,7 +1026,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 
         await setupMessage.edit({
           content: '**اختر نوع الصورة لهذا السبب.**',
-          embeds: [new EmbedBuilder().setTitle(`**صور السبب ${idx}**`).setDescription([
+          embeds: [colorManager.createEmbed().setTitle(`**صور السبب ${idx}**`).setDescription([
             `**صورة الفتح (داخل شات التكت عند الانشاء):** ${formatSettingValue(reason.openImage)}`,
             `**صورة الاستلام (عند استلام التكت):** ${formatSettingValue(reason.claimImage)}`
           ].join('\n'))],
@@ -998,17 +1052,21 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         const rc = reasonPick.values?.[0];
         if (rc === 'finish') continue;
 
-        const v = await ask(`**${rc === 'open' ? 'صورة فتح السبب' : 'صورة استلام السبب'}: ارسل رابط صورة او ارفق صورة (0 للحذف)**`);
-        if (v === '0') {
-          if (rc === 'open') { removeStoredImage(reason.openImage); reason.openImage = ''; }
-          if (rc === 'claim') { removeStoredImage(reason.claimImage); reason.claimImage = ''; }
-        } else if (v) {
-          try {
-            if (rc === 'open') reason.openImage = await storeImageLocally(v, message.guild.id, `reason_${key}_open`, reason.openImage);
-            if (rc === 'claim') reason.claimImage = await storeImageLocally(v, message.guild.id, `reason_${key}_claim`, reason.claimImage);
-          } catch {
-            await activePromptInteraction?.followUp({ content: '❌ فشل حفظ صورة السبب.', ephemeral: true }).catch(() => {});
-          }
+        if (rc === 'open') {
+          reason.openImage = await promptAndStoreImage({
+            prompt: '**صورة فتح السبب: ارسل رابط صورة او ارفق صورة (0 للحذف)**',
+            currentValue: reason.openImage,
+            slotKey: `reason_${key}_open`,
+            failureText: '❌ فشل حفظ صورة السبب.'
+          });
+        }
+        if (rc === 'claim') {
+          reason.claimImage = await promptAndStoreImage({
+            prompt: '**صورة استلام السبب: ارسل رابط صورة او ارفق صورة (0 للحذف)**',
+            currentValue: reason.claimImage,
+            slotKey: `reason_${key}_claim`,
+            failureText: '❌ فشل حفظ صورة السبب.'
+          });
         }
 
         config.reasons[key] = { ...(config.reasons[key] || {}), ...reason };
@@ -1020,7 +1078,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
   const openDisplayModeSubmenu = async () => {
     let done = false;
     while (!done) {
-      const state = new EmbedBuilder()
+      const state = colorManager.createEmbed()
         .setTitle('**اعدادات طريقة العرض**')
         .setDescription([
           `**الوضع الحالي:** ${config.displayMode}`,
@@ -1212,11 +1270,11 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 
         await setupMessage.edit({
           content: '**اختر رقم السبب من القائمة التالية ثم اكتب الرقم في الشات.**',
-          embeds: [new EmbedBuilder().setTitle('**فهرس الأسباب (1 - 25)**').setDescription(buildReasonsIndexText())],
+          embeds: [colorManager.createEmbed().setTitle('**فهرس الأسباب (1 - 25)**').setDescription(buildReasonsIndexText())],
           components: []
         }).catch(() => {});
 
-        const idx = Number(await ask('**اختر : رقم السبب من 1 الى 25**'));
+        const idx = await askNumberInRange('**اختر : رقم السبب من 1 الى 25**', 1, 25);
         if (Number.isFinite(idx) && idx >= 1 && idx <= 25) {
           const key = String(idx);
           const reason = {
