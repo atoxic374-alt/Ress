@@ -584,7 +584,11 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       .setDescription([
         '**اختر من المنيو للتعديل الفوري.**',
         '**ملاحظة:** مدخلاتك للحقول تُحذف تلقائياً بعد حفظها.',
-        '**وصف سريع:** اضبط الفتح/الاستلام/الاسباب ثم ارسل بانل التكت.',
+        '**شرح الخيارات:**',
+        '- **اعدادات الرسائل:** رسائل نصية فقط مع مكان ظهور كل رسالة.',
+        '- **اعدادات الصور:** كل صور النظام (فتح/استلام/فاصل/صورة بانل ثابتة).',
+        '- **تعيين الاسباب:** الاسم/الايموجي/الوصف/الكاتوقري ورسائل السبب.',
+        '- **طريقة العرض:** ازرار أو منيو مع وصف لكل سبب في وضع المنيو.',
         `**اسم التكت :** ${config.ticketNamePrefix} - ${config.ticketNameMode}`,
         `**كاتوقري الفتح :** ${config.openCategoryId ? `<#${config.openCategoryId}>` : 'غير معين'}`,
         `**المسؤولين :** ${config.responsibleRoleIds.length}`,
@@ -646,10 +650,11 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         { label: '8) اخفاء عند الاستلام (toggle)', value: 'toggle_hide_on_claim' },
         { label: '9) الاستلام من شات مخصص', value: 'toggle_claim_channel' },
         { label: '10) الاحتفاظ بعد الاغلاق', value: 'toggle_keep_closed' },
-        { label: '11) اعدادات الرسائل', value: 'set_messages' },
-        { label: '12) تعيين الاسباب', value: 'set_reasons' },
-        { label: '13) طريقة العرض', value: 'set_display_mode' },
-        { label: '14) ارسال بانل التكت', value: 'send_panel_now' },
+        { label: '11) اعدادات الرسائل (نصوص فقط)', value: 'set_messages' },
+        { label: '12) اعدادات الصور', value: 'set_images' },
+        { label: '13) تعيين الاسباب', value: 'set_reasons' },
+        { label: '14) طريقة العرض', value: 'set_display_mode' },
+        { label: '15) ارسال بانل التكت', value: 'send_panel_now' },
         { label: 'انهاء الاعداد', value: 'finish' }
       ]);
 
@@ -682,12 +687,10 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         .setDescription([
           `**الاسم:** ${reason.name || `سبب ${idx}`}`,
           `**اسم التكت:** ${reason.ticketName || 'افتراضي'}`,
-          `**صورة الفتح:** ${formatSettingValue(reason.openImage)}`,
           `**الايموجي:** ${formatSettingValue(reason.emoji || '🎫')}`,
           `**الكاتوقري:** ${reason.categoryId ? `<#${reason.categoryId}>` : 'افتراضي'}`,
-          `**صورة الاستلام:** ${formatSettingValue(reason.claimImage)}`,
-          `**قبل الصورة:** ${formatSettingValue(reason.beforeImage)}`,
-          `**بعد الصورة:** ${formatSettingValue(reason.afterImage)}`,
+          `**رسالة قبل الصورة:** ${formatSettingValue(reason.beforeImage)}`,
+          `**رسالة بعد الصورة:** ${formatSettingValue(reason.afterImage)}`,
           `**وصف المنيو:** ${formatSettingValue(reason.description)}`
         ].join('\n'));
 
@@ -701,13 +704,11 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
             .addOptions([
               { label: '1) الاسم', value: 'r1' },
               { label: '2) اسم التكت', value: 'r2' },
-              { label: '3) صورة الفتح', value: 'r3' },
-              { label: '4) الايموجي', value: 'r4' },
-              { label: '5) الكاتوقري', value: 'r5' },
-              { label: '6) صورة الاستلام', value: 'r6' },
-              { label: '7) قبل الصورة', value: 'r7' },
-              { label: '8) بعد الصورة', value: 'r8' },
-              { label: '9) وصف السبب (للمنيو)', value: 'r9' },
+              { label: '3) الايموجي', value: 'r3' },
+              { label: '4) الكاتوقري', value: 'r4' },
+              { label: '5) رسالة قبل الصورة', value: 'r5' },
+              { label: '6) رسالة بعد الصورة', value: 'r6' },
+              { label: '7) وصف السبب (للمنيو)', value: 'r7' },
               { label: 'انهاء', value: 'finish' }
             ])
         )]
@@ -726,37 +727,11 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 
       if (c === 'r1') { const v = await ask('**اسم السبب : (0 لاعادة التعيين)**'); reason.name = v === '0' ? `سبب ${idx}` : (v || reason.name); }
       if (c === 'r2') { const v = await ask('**اسم التكت : (0 لاعادة التعيين)**'); reason.ticketName = v === '0' ? '' : (v || reason.ticketName); }
-      if (c === 'r3') {
-        const v = await ask('**صورة الفتح : (0 لاعادة التعيين)**');
-        if (v === '0') {
-          removeStoredImage(reason.openImage);
-          reason.openImage = '';
-        } else if (v) {
-          try {
-            reason.openImage = await storeImageLocally(v, message.guild.id, `reason_${key}_open`, reason.openImage);
-          } catch {
-            await controlChannel.send('**فشل تحميل صورة الفتح، تأكد أن الرابط مباشر لصورة.**').then((m) => setTimeout(() => m.delete().catch(() => {}), 3000)).catch(() => {});
-          }
-        }
-      }
-      if (c === 'r4') { const v = await ask('**ايموجي : (0 لاعادة التعيين)**'); reason.emoji = v === '0' ? '🎫' : (v || reason.emoji); }
-      if (c === 'r5') { const v = await ask('**كاتوقري : (0 لاعادة التعيين)**'); reason.categoryId = v === '0' ? null : normalizeId(v); }
-      if (c === 'r6') {
-        const v = await ask('**صورة الاستلام : (0 لاعادة التعيين)**');
-        if (v === '0') {
-          removeStoredImage(reason.claimImage);
-          reason.claimImage = '';
-        } else if (v) {
-          try {
-            reason.claimImage = await storeImageLocally(v, message.guild.id, `reason_${key}_claim`, reason.claimImage);
-          } catch {
-            await controlChannel.send('**فشل تحميل صورة الاستلام، تأكد أن الرابط مباشر لصورة.**').then((m) => setTimeout(() => m.delete().catch(() => {}), 3000)).catch(() => {});
-          }
-        }
-      }
-      if (c === 'r7') { const v = await ask('**قبل الصورة : (0 لاعادة التعيين)**'); reason.beforeImage = v === '0' ? '' : (v || reason.beforeImage); }
-      if (c === 'r8') { const v = await ask('**بعد الصورة : (0 لاعادة التعيين)**'); reason.afterImage = v === '0' ? '' : (v || reason.afterImage); }
-      if (c === 'r9') { const v = await ask('**وصف السبب (يظهر في منيو الفتح) : (0 لاعادة التعيين)**'); reason.description = v === '0' ? '' : (v || reason.description || ''); }
+      if (c === 'r3') { const v = await ask('**ايموجي : (0 لاعادة التعيين)**'); reason.emoji = v === '0' ? '🎫' : (v || reason.emoji); }
+      if (c === 'r4') { const v = await ask('**كاتوقري : (0 لاعادة التعيين)**'); reason.categoryId = v === '0' ? null : normalizeId(v); }
+      if (c === 'r5') { const v = await ask('**رسالة قبل الصورة : (0 لاعادة التعيين)**'); reason.beforeImage = v === '0' ? '' : (v || reason.beforeImage); }
+      if (c === 'r6') { const v = await ask('**رسالة بعد الصورة : (0 لاعادة التعيين)**'); reason.afterImage = v === '0' ? '' : (v || reason.afterImage); }
+      if (c === 'r7') { const v = await ask('**وصف السبب (يظهر في منيو الفتح) : (0 لاعادة التعيين)**'); reason.description = v === '0' ? '' : (v || reason.description || ''); }
 
       config.reasons[key] = reason;
     }
@@ -768,10 +743,9 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       const state = new EmbedBuilder()
         .setTitle('**اعدادات الرسائل**')
         .setDescription([
-          `**1) رسالة القبول :** ${formatSettingValue(config.messages.acceptance)}`,
-          `**2) قبل الصورة :** ${formatSettingValue(config.messages.beforeImage)}`,
-          `**3) صورة التكت :** ${formatSettingValue(config.messages.ticketImage)}`,
-          `**4) بعد الصورة :** ${formatSettingValue(config.messages.afterImage)}`
+          `**1) رسالة القبول (تظهر في شات الاستلام):** ${formatSettingValue(config.messages.acceptance)}`,
+          `**2) رسالة قبل صورة التكت (داخل شات التكت):** ${formatSettingValue(config.messages.beforeImage)}`,
+          `**3) رسالة بعد صورة التكت (داخل شات التكت):** ${formatSettingValue(config.messages.afterImage)}`
         ].join('\n'));
 
       await setupMessage.edit({
@@ -782,10 +756,9 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
             .setCustomId(`ticket_msg_menu_${message.author.id}_${Date.now()}`)
             .setPlaceholder('اختر اعداد الرسائل')
             .addOptions([
-              { label: '1) رسالة القبول', value: 'm1' },
-              { label: '2) قبل الصورة', value: 'm2' },
-              { label: '3) صورة التكت', value: 'm3' },
-              { label: '4) بعد الصورة', value: 'm4' },
+              { label: '1) رسالة القبول - شات الاستلام', value: 'm1' },
+              { label: '2) رسالة قبل الصورة - شات التكت', value: 'm2' },
+              { label: '3) رسالة بعد الصورة - شات التكت', value: 'm3' },
               { label: 'انهاء', value: 'finish' }
             ])
         )]
@@ -801,10 +774,54 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       await pick.deferUpdate().catch(() => {});
       const c = pick.values?.[0];
       if (c === 'finish') { done = true; break; }
-      if (c === 'm1') { const v = await ask('**رسالة القبول : (0 لاعادة التعيين)**'); config.messages.acceptance = v === '0' ? '' : (v || ''); }
-      if (c === 'm2') { const v = await ask('**قبل الصورة : (0 لاعادة التعيين)**'); config.messages.beforeImage = v === '0' ? '' : (v || ''); }
-      if (c === 'm3') {
-        const v = await ask('**رابط الصورة : (0 لاعادة التعيين)**');
+
+      if (c === 'm1') { const v = await ask('**رسالة القبول (تظهر في شات الاستلام) : (0 لاعادة التعيين)**'); config.messages.acceptance = v === '0' ? '' : (v || ''); }
+      if (c === 'm2') { const v = await ask('**رسالة قبل صورة التكت (داخل شات التكت) : (0 لاعادة التعيين)**'); config.messages.beforeImage = v === '0' ? '' : (v || ''); }
+      if (c === 'm3') { const v = await ask('**رسالة بعد صورة التكت (داخل شات التكت) : (0 لاعادة التعيين)**'); config.messages.afterImage = v === '0' ? '' : (v || ''); }
+    }
+  };
+
+
+  const openImagesSubmenu = async () => {
+    let done = false;
+    while (!done) {
+      const state = new EmbedBuilder()
+        .setTitle('**اعدادات الصور**')
+        .setDescription([
+          `**1) صورة التكت العامة (داخل شات التكت):** ${formatSettingValue(config.messages.ticketImage)}`,
+          `**2) صورة فاصل شات الاستلام (بين الطلبات):** ${formatSettingValue(config.claimChannelSeparator)}`,
+          '**3) صور السبب (فتح/استلام): تختار السبب ثم تعدل صورة الفتح أو الاستلام.**'
+        ].join('\n'));
+
+      await setupMessage.edit({
+        content: '**اختر اعداد الصور، او انهاء للرجوع.**',
+        embeds: [state],
+        components: [new ActionRowBuilder().addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId(`ticket_img_menu_${message.author.id}_${Date.now()}`)
+            .setPlaceholder('اختر اعداد الصور')
+            .addOptions([
+              { label: '1) صورة التكت العامة', value: 'i1' },
+              { label: '2) صورة فاصل شات الاستلام', value: 'i2' },
+              { label: '3) صور السبب', value: 'i3' },
+              { label: 'انهاء', value: 'finish' }
+            ])
+        )]
+      }).catch(() => {});
+
+      const pick = await setupMessage.awaitMessageComponent({
+        filter: (i) => i.user.id === message.author.id && i.isStringSelectMenu() && i.customId.startsWith('ticket_img_menu_'),
+        time: 240000
+      }).catch(() => null);
+
+      if (!pick) break;
+      activePromptInteraction = pick;
+      await pick.deferUpdate().catch(() => {});
+      const c = pick.values?.[0];
+      if (c === 'finish') { done = true; break; }
+
+      if (c === 'i1') {
+        const v = await ask('**صورة التكت العامة: ارسل رابط صورة او ارفق صورة (0 للحذف)**');
         if (v === '0') {
           removeStoredImage(config.messages.ticketImage);
           config.messages.ticketImage = '';
@@ -812,11 +829,79 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           try {
             config.messages.ticketImage = await storeImageLocally(v, message.guild.id, 'global_ticket_image', config.messages.ticketImage);
           } catch {
-            await controlChannel.send('**فشل تحميل الصورة، تأكد أن الرابط مباشر لصورة.**').then((m) => setTimeout(() => m.delete().catch(() => {}), 3000)).catch(() => {});
+            await activePromptInteraction?.followUp({ content: '❌ فشل حفظ الصورة العامة.', ephemeral: true }).catch(() => {});
           }
         }
       }
-      if (c === 'm4') { const v = await ask('**بعد الصورة : (0 لاعادة التعيين)**'); config.messages.afterImage = v === '0' ? '' : (v || ''); }
+
+      if (c === 'i2') {
+        const v = await ask('**صورة فاصل شات الاستلام: ارسل رابط صورة او ارفق صورة (0 للحذف)**');
+        if (v === '0') {
+          removeStoredImage(config.claimChannelSeparator);
+          config.claimChannelSeparator = '';
+        } else if (v) {
+          try {
+            config.claimChannelSeparator = await storeImageLocally(v, message.guild.id, 'claim_separator', config.claimChannelSeparator);
+          } catch {
+            await activePromptInteraction?.followUp({ content: '❌ فشل حفظ صورة الفاصل.', ephemeral: true }).catch(() => {});
+          }
+        }
+      }
+
+      if (c === 'i3') {
+        const idx = Number(await ask('**اختر رقم السبب من 1 الى 25**'));
+        if (!Number.isFinite(idx) || idx < 1 || idx > 25) continue;
+        const key = String(idx);
+        const reason = {
+          name: `سبب ${idx}`,
+          openImage: '',
+          claimImage: '',
+          ...(config.reasons[key] || {})
+        };
+
+        await setupMessage.edit({
+          content: '**اختر نوع الصورة لهذا السبب.**',
+          embeds: [new EmbedBuilder().setTitle(`**صور السبب ${idx}**`).setDescription([
+            `**صورة الفتح (داخل شات التكت عند الانشاء):** ${formatSettingValue(reason.openImage)}`,
+            `**صورة الاستلام (عند استلام التكت):** ${formatSettingValue(reason.claimImage)}`
+          ].join('\n'))],
+          components: [new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder()
+              .setCustomId(`ticket_img_reason_menu_${message.author.id}_${Date.now()}`)
+              .setPlaceholder('اختر الصورة')
+              .addOptions([
+                { label: 'صورة الفتح', value: 'open' },
+                { label: 'صورة الاستلام', value: 'claim' },
+                { label: 'انهاء', value: 'finish' }
+              ])
+          )]
+        }).catch(() => {});
+
+        const reasonPick = await setupMessage.awaitMessageComponent({
+          filter: (i) => i.user.id === message.author.id && i.isStringSelectMenu() && i.customId.startsWith('ticket_img_reason_menu_'),
+          time: 180000
+        }).catch(() => null);
+        if (!reasonPick) continue;
+        activePromptInteraction = reasonPick;
+        await reasonPick.deferUpdate().catch(() => {});
+        const rc = reasonPick.values?.[0];
+        if (rc === 'finish') continue;
+
+        const v = await ask(`**${rc === 'open' ? 'صورة فتح السبب' : 'صورة استلام السبب'}: ارسل رابط صورة او ارفق صورة (0 للحذف)**`);
+        if (v === '0') {
+          if (rc === 'open') { removeStoredImage(reason.openImage); reason.openImage = ''; }
+          if (rc === 'claim') { removeStoredImage(reason.claimImage); reason.claimImage = ''; }
+        } else if (v) {
+          try {
+            if (rc === 'open') reason.openImage = await storeImageLocally(v, message.guild.id, `reason_${key}_open`, reason.openImage);
+            if (rc === 'claim') reason.claimImage = await storeImageLocally(v, message.guild.id, `reason_${key}_claim`, reason.claimImage);
+          } catch {
+            await activePromptInteraction?.followUp({ content: '❌ فشل حفظ صورة السبب.', ephemeral: true }).catch(() => {});
+          }
+        }
+
+        config.reasons[key] = { ...(config.reasons[key] || {}), ...reason };
+      }
     }
   };
 
@@ -978,22 +1063,9 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
             return;
           }
           config.claimChannelId = askedChannel;
-          const sep = await ask('**ارسل : فاصلة شات الاستلام (نص او صورة) - 0 للتفريغ**');
-          if (sep === '0') {
-            removeStoredImage(config.claimChannelSeparator);
-            config.claimChannelSeparator = '';
-          } else if (sep) {
-            if (/^https?:\/\//i.test(sep)) {
-              try {
-                config.claimChannelSeparator = await storeImageLocally(sep, message.guild.id, 'claim_separator', config.claimChannelSeparator);
-              } catch {
-                config.claimChannelSeparator = sep;
-              }
-            } else {
-              removeStoredImage(config.claimChannelSeparator);
-              config.claimChannelSeparator = sep;
-            }
-          }
+          const sep = await ask('**ارسل : فاصل شات الاستلام كنص فقط (0 للتفريغ) - الصور من خيار اعدادات الصور**');
+          if (sep === '0') config.claimChannelSeparator = '';
+          else if (sep) config.claimChannelSeparator = sep;
         }
         await refresh( `**تم التحديث : ${config.claimFromDedicatedChannel ? 'مفعل' : 'مقفل'}**`);
         return;
@@ -1012,6 +1084,12 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       if (choice === 'set_messages') {
         await openMessagesSubmenu();
         await refresh('**تم تحديث اعدادات الرسائل.**');
+        return;
+      }
+
+      if (choice === 'set_images') {
+        await openImagesSubmenu();
+        await refresh('**تم تحديث اعدادات الصور.**');
         return;
       }
 
@@ -1059,7 +1137,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 
         const mode = (await ask('**طريقة الارسال : text / image / both**')) || 'both';
         const text = mode === 'image' ? '' : await ask('**النص : (0 لتخطي)**');
-        const image = mode === 'text' ? '' : await ask('**الصورة : رابط مباشر (0 لتخطي)**');
+        const image = mode === 'text' ? '' : await ask('**الصورة : رابط مباشر او ارفاق صورة (0 لتخطي)**');
 
         await panelChannel.send({
           content: text && text !== '0' ? text : null,
