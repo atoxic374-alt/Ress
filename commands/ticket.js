@@ -499,8 +499,39 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         `**استلام من شات مخصص :** ${config.claimFromDedicatedChannel ? 'مفعل' : 'مقفل'}`,
         `**الاحتفاظ بعد الاغلاق :** ${config.keepClosedTickets ? 'مفعل' : 'مقفل'}`,
         `**طريقة العرض :** ${config.displayMode}`,
-        `**عدد الاسباب :** ${reasonsCount}`
+        `**عدد الاسباب :** ${reasonsCount}`,
+        `**جاهزية النظام :** ${getSetupIssues().length === 0 ? 'مكتمل' : 'ناقص'}${getSetupIssues().length ? `\n${getSetupIssues().map((i) => `- ${i.replace(/\*\*/g, '')}`).join('\n')}` : ''}`
       ].join('\n'));
+  };
+
+
+  const getSetupIssues = () => {
+    const issues = [];
+    const adminRolesResolved = getAdminRoles(config);
+
+    if (!config.openCategoryId) issues.push('**يلزم تعيين كاتوقري فتح التكت**');
+    if ((config.responsibleRoleIds || []).length === 0) issues.push('**يلزم تعيين رولات المسؤولين**');
+    if (adminRolesResolved.length === 0) issues.push('**يلزم تعيين رولات الادمن**');
+    if (Object.keys(config.reasons || {}).length === 0) issues.push('**يلزم تعيين سبب واحد على الاقل**');
+
+    if (config.claimFromDedicatedChannel && !config.claimChannelId) {
+      issues.push('**تفعيل شات الاستلام يحتاج تعيين شات الاستلام**');
+    }
+
+    if (config.displayMode === 'buttons') {
+      if (!Number.isFinite(config.buttonRows) || config.buttonRows < 1 || config.buttonRows > 5) {
+        issues.push('**عدد صفوف الازرار يجب ان يكون بين 1 و 5**');
+      }
+    }
+
+    return issues;
+  };
+
+  const assertSetupReady = async (interaction, actionLabel = 'تنفيذ العملية') => {
+    const issues = getSetupIssues();
+    if (issues.length === 0) return true;
+    await refresh(interaction, `**لا يمكن ${actionLabel} قبل اكمال المتطلبات :**\n${issues.join('\n')}`);
+    return false;
   };
 
   const buildMenuComponents = () => {
@@ -589,6 +620,10 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         } else {
           config.responsibleRoleIds = (v || '').split(/\s+/).map(normalizeId).filter(Boolean);
         }
+        if (config.responsibleRoleIds.length === 0) {
+          await refresh(interaction, '**تنبيه : لم يتم حفظ اي رول مسؤول صالح.**');
+          return;
+        }
         await refresh(interaction, '**تم تحديث المسؤولين.**');
         return;
       }
@@ -601,6 +636,10 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         } else {
           config.useGlobalAdminRoles = false;
           config.adminRoleIds = (v || '').split(/\s+/).map(normalizeId).filter(Boolean);
+        }
+        if (getAdminRoles(config).length === 0) {
+          await refresh(interaction, '**تنبيه : لا توجد رولات ادمن فعالة بعد التحديث.**');
+          return;
         }
         await refresh(interaction, '**تم تحديث رولات الادمن.**');
         return;
@@ -635,7 +674,15 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       if (choice === 'toggle_claim_channel') {
         config.claimFromDedicatedChannel = !config.claimFromDedicatedChannel;
         if (config.claimFromDedicatedChannel) {
-          config.claimChannelId = normalizeId(await ask('**ارسل : منشن/ايدي شات الاستلام**'));
+          const askedChannel = normalizeId(await ask('**ارسل : منشن/ايدي شات الاستلام**'));
+          const channelObj = askedChannel ? await message.guild.channels.fetch(askedChannel).catch(() => null) : null;
+          if (!channelObj || channelObj.type !== ChannelType.GuildText) {
+            config.claimFromDedicatedChannel = false;
+            config.claimChannelId = null;
+            await refresh(interaction, '**فشل : شات الاستلام غير صالح وتم الغاء التفعيل.**');
+            return;
+          }
+          config.claimChannelId = askedChannel;
           const sep = await ask('**ارسل : فاصلة شات الاستلام (0 للتفريغ)**');
           config.claimChannelSeparator = sep === '0' ? '' : (sep || config.claimChannelSeparator);
         }
@@ -664,6 +711,10 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       }
 
       if (choice === 'set_reasons') {
+        if (!config.openCategoryId) {
+          await refresh(interaction, '**يلزم تعيين كاتوقري الفتح قبل تعديل الاسباب.**');
+          return;
+        }
         const idx = Number(await ask('**اختر : رقم السبب من 1 الى 25**'));
         if (Number.isFinite(idx) && idx >= 1 && idx <= 25) {
           const key = String(idx);
@@ -712,6 +763,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       }
 
       if (choice === 'send_panel_now') {
+        if (!(await assertSetupReady(interaction, 'ارسال البانل'))) return;
         const panelChannel = await message.guild.channels.fetch(normalizeId(await ask('**ارسل : الشات (منشن/ايدي)**'))).catch(() => null);
         if (!panelChannel || panelChannel.type !== ChannelType.GuildText) {
           await refresh(interaction, '**فشل : شات غير صالح.**');
