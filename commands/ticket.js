@@ -472,106 +472,214 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
   const { config, tickets, pendingRequests } = g;
 
   const ask = async (prompt, timeout = 180000) => {
-    await message.channel.send(prompt);
-    const collected = await message.channel.awaitMessages({ filter: (m) => m.author.id === message.author.id, max: 1, time: timeout });
+    await message.channel.send({ content: prompt });
+    const collected = await message.channel.awaitMessages({
+      filter: (m) => m.author.id === message.author.id,
+      max: 1,
+      time: timeout
+    });
     const first = collected.first();
     return first ? first.content.trim() : null;
   };
 
-  while (true) {
-    await message.channel.send({ embeds: [createMainEmbed(config, message.guild.name)] });
-    const choice = await ask('**اختر : رقم من 1 الى 14**');
-    if (!choice || ['exit', 'خروج', 'انهاء'].includes(choice.toLowerCase())) break;
+  const buildSetupEmbed = () => {
+    const reasonsCount = Object.keys(config.reasons || {}).length;
+    return new EmbedBuilder()
+      .setTitle(`**اعدادات التكت : ${message.guild.name}**`)
+      .setDescription([
+        '**اختر من المنيو للتعديل الفوري.**',
+        `**اسم التكت :** ${config.ticketNamePrefix} - ${config.ticketNameMode}`,
+        `**كاتوقري الفتح :** ${config.openCategoryId ? `<#${config.openCategoryId}>` : 'غير معين'}`,
+        `**المسؤولين :** ${config.responsibleRoleIds.length}`,
+        `**رولات الادمن :** ${config.useGlobalAdminRoles ? 'adminRoles العامة' : config.adminRoleIds.length}`,
+        `**حد استلام الاداري :** ${config.adminClaimLimit}`,
+        `**حد فتح العضو :** ${config.memberOpenLimit}`,
+        `**انشاء قبل الاستلام :** ${config.autoCreateOnRequest ? 'مفعل' : 'مقفل'}`,
+        `**اخفاء عند الاستلام :** ${config.hideOnClaim ? 'مفعل' : 'مقفل'}`,
+        `**استلام من شات مخصص :** ${config.claimFromDedicatedChannel ? 'مفعل' : 'مقفل'}`,
+        `**الاحتفاظ بعد الاغلاق :** ${config.keepClosedTickets ? 'مفعل' : 'مقفل'}`,
+        `**طريقة العرض :** ${config.displayMode}`,
+        `**عدد الاسباب :** ${reasonsCount}`
+      ].join('\n'));
+  };
 
-    if (choice === '1') {
-      const mode = await ask('**اكتب : counter او user (او 0 لاعادة التعيين)**');
-      if (mode === '0') {
-        config.ticketNameMode = 'counter';
-        config.ticketNamePrefix = 'ticket';
-      } else if (['counter', 'user'].includes((mode || '').toLowerCase())) {
-        config.ticketNameMode = mode.toLowerCase();
-        const prefix = await ask('**اكتب : بادئة اسم التكت**');
-        if (prefix && prefix !== '0') config.ticketNamePrefix = sanitizeName(prefix);
+  const buildMenuComponents = () => {
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(`ticket_setup_menu_${message.author.id}_${Date.now()}`)
+      .setPlaceholder('اختر اعداد التكت')
+      .addOptions([
+        { label: '1) اسم شات التكت', value: 'set_name' },
+        { label: '2) كاتوقري الفتح', value: 'set_open_category' },
+        { label: '3) تحديد المسؤولين', value: 'set_responsibles' },
+        { label: '4) تحديد رولات الادمن', value: 'set_admin_roles' },
+        { label: '5) حد استلام الاداري', value: 'set_admin_limit' },
+        { label: '6) حد فتح العضو', value: 'set_member_limit' },
+        { label: '7) انشاء قبل الاستلام (toggle)', value: 'toggle_auto_create' },
+        { label: '8) اخفاء عند الاستلام (toggle)', value: 'toggle_hide_on_claim' },
+        { label: '9) الاستلام من شات مخصص', value: 'toggle_claim_channel' },
+        { label: '10) الاحتفاظ بعد الاغلاق', value: 'toggle_keep_closed' },
+        { label: '11) اعدادات الرسائل', value: 'set_messages' },
+        { label: '12) تعيين الاسباب', value: 'set_reasons' },
+        { label: '13) طريقة العرض', value: 'set_display_mode' },
+        { label: '14) ارسال بانل التكت', value: 'send_panel_now' },
+        { label: 'انهاء الاعداد', value: 'finish' }
+      ]);
+
+    return [new ActionRowBuilder().addComponents(menu)];
+  };
+
+  const setupMessage = await message.channel.send({ embeds: [buildSetupEmbed()], components: buildMenuComponents() });
+
+  const collector = setupMessage.createMessageComponentCollector({
+    filter: (i) => i.user.id === message.author.id,
+    time: 30 * 60 * 1000
+  });
+
+  const refresh = async (interaction, note = null) => {
+    setGuildData(message.guild.id, config, tickets, pendingRequests);
+    await interaction.update({
+      content: note || null,
+      embeds: [buildSetupEmbed()],
+      components: buildMenuComponents()
+    });
+  };
+
+  collector.on('collect', async (interaction) => {
+    try {
+      const choice = interaction.values?.[0];
+      if (!choice) return;
+
+      if (choice === 'finish') {
+        collector.stop('finished');
+        await interaction.update({ embeds: [buildSetupEmbed()], components: [] });
+        return;
       }
-    } else if (choice === '2') {
-      const v = await ask('**ارسل : منشن/ايدي الكاتوقري (0 لاعادة التعيين)**');
-      config.openCategoryId = v === '0' ? null : normalizeId(v);
-    } else if (choice === '3') {
-      const v = await ask('**ارسل : رولات المسؤولين (منشن/ايدي) او file او 0**');
-      if (v === '0') config.responsibleRoleIds = [];
-      else if ((v || '').toLowerCase() === 'file') {
-        const resp = loadResponsibilities();
-        const set = new Set();
-        for (const item of Object.values(resp || {})) {
-          for (const role of (item.roles || [])) set.add(role);
+
+      if (choice === 'set_name') {
+        const mode = await ask('**اكتب : counter او user (او 0 لاعادة التعيين)**');
+        if (mode === '0') {
+          config.ticketNameMode = 'counter';
+          config.ticketNamePrefix = 'ticket';
+        } else if (['counter', 'user'].includes((mode || '').toLowerCase())) {
+          config.ticketNameMode = mode.toLowerCase();
+          const prefix = await ask('**اكتب : بادئة اسم التكت**');
+          if (prefix && prefix !== '0') config.ticketNamePrefix = sanitizeName(prefix);
         }
-        config.responsibleRoleIds = [...set];
-      } else {
-        config.responsibleRoleIds = (v || '').split(/\s+/).map(normalizeId).filter(Boolean);
+        await refresh(interaction, '**تم تحديث الاسم.**');
+        return;
       }
-    } else if (choice === '4') {
-      const v = await ask('**ارسل : رولات الادمن (منشن/ايدي) او 0 لاستخدام الادمن رولز العامة**');
-      if (v === '0') {
-        config.useGlobalAdminRoles = true;
-        config.adminRoleIds = [];
-      } else {
-        config.useGlobalAdminRoles = false;
-        config.adminRoleIds = (v || '').split(/\s+/).map(normalizeId).filter(Boolean);
+
+      if (choice === 'set_open_category') {
+        const v = await ask('**ارسل : منشن/ايدي الكاتوقري (0 لاعادة التعيين)**');
+        config.openCategoryId = v === '0' ? null : normalizeId(v);
+        await refresh(interaction, '**تم تحديث كاتوقري الفتح.**');
+        return;
       }
-    } else if (choice === '5') {
-      const n = Number(await ask('**اكتب : حد استلام الاداري المفتوح**'));
-      if (Number.isFinite(n) && n > 0) config.adminClaimLimit = n;
-    } else if (choice === '6') {
-      const n = Number(await ask('**اكتب : حد فتح العضو المفتوح**'));
-      if (Number.isFinite(n) && n > 0) config.memberOpenLimit = n;
-    } else if (choice === '7') {
-      config.autoCreateOnRequest = !config.autoCreateOnRequest;
-      await message.channel.send(`**الحالة : ${config.autoCreateOnRequest ? 'مفعل' : 'مقفل'}**`);
-    } else if (choice === '8') {
-      config.hideOnClaim = !config.hideOnClaim;
-      await message.channel.send(`**الحالة : ${config.hideOnClaim ? 'مفعل' : 'مقفل'}**`);
-    } else if (choice === '9') {
-      config.claimFromDedicatedChannel = !config.claimFromDedicatedChannel;
-      if (config.claimFromDedicatedChannel) {
-        config.claimChannelId = normalizeId(await ask('**ارسل : منشن/ايدي شات الاستلام**'));
-        const sep = await ask('**ارسل : فاصلة شات الاستلام (0 للتفريغ)**');
-        config.claimChannelSeparator = sep === '0' ? '' : (sep || config.claimChannelSeparator);
+
+      if (choice === 'set_responsibles') {
+        const v = await ask('**ارسل : رولات المسؤولين (منشن/ايدي) او file او 0**');
+        if (v === '0') config.responsibleRoleIds = [];
+        else if ((v || '').toLowerCase() === 'file') {
+          const resp = loadResponsibilities();
+          const set = new Set();
+          for (const item of Object.values(resp || {})) {
+            for (const role of (item.roles || [])) set.add(role);
+          }
+          config.responsibleRoleIds = [...set];
+        } else {
+          config.responsibleRoleIds = (v || '').split(/\s+/).map(normalizeId).filter(Boolean);
+        }
+        await refresh(interaction, '**تم تحديث المسؤولين.**');
+        return;
       }
-    } else if (choice === '10') {
-      config.keepClosedTickets = !config.keepClosedTickets;
-      if (config.keepClosedTickets) {
-        const v = await ask('**ارسل : كاتوقري المقفلة (0 للبقاء بنفس المكان)**');
-        config.closedCategoryId = v === '0' ? null : normalizeId(v);
+
+      if (choice === 'set_admin_roles') {
+        const v = await ask('**ارسل : رولات الادمن (منشن/ايدي) او 0 لاستخدام الادمن رولز العامة**');
+        if (v === '0') {
+          config.useGlobalAdminRoles = true;
+          config.adminRoleIds = [];
+        } else {
+          config.useGlobalAdminRoles = false;
+          config.adminRoleIds = (v || '').split(/\s+/).map(normalizeId).filter(Boolean);
+        }
+        await refresh(interaction, '**تم تحديث رولات الادمن.**');
+        return;
       }
-    } else if (choice === '11') {
-      while (true) {
-        await message.channel.send('**الرسائل : 1 قبول - 2 قبل الصورة - 3 صورة - 4 بعد الصورة - 5 انهاء**');
-        const c = await ask('**اختر :**');
-        if (!c || c === '5' || c.toLowerCase() === 'انهاء') break;
+
+      if (choice === 'set_admin_limit') {
+        const n = Number(await ask('**اكتب : حد استلام الاداري المفتوح**'));
+        if (Number.isFinite(n) && n > 0) config.adminClaimLimit = n;
+        await refresh(interaction, '**تم تحديث حد استلام الاداري.**');
+        return;
+      }
+
+      if (choice === 'set_member_limit') {
+        const n = Number(await ask('**اكتب : حد فتح العضو المفتوح**'));
+        if (Number.isFinite(n) && n > 0) config.memberOpenLimit = n;
+        await refresh(interaction, '**تم تحديث حد فتح العضو.**');
+        return;
+      }
+
+      if (choice === 'toggle_auto_create') {
+        config.autoCreateOnRequest = !config.autoCreateOnRequest;
+        await refresh(interaction, `**تم التحديث : ${config.autoCreateOnRequest ? 'مفعل' : 'مقفل'}**`);
+        return;
+      }
+
+      if (choice === 'toggle_hide_on_claim') {
+        config.hideOnClaim = !config.hideOnClaim;
+        await refresh(interaction, `**تم التحديث : ${config.hideOnClaim ? 'مفعل' : 'مقفل'}**`);
+        return;
+      }
+
+      if (choice === 'toggle_claim_channel') {
+        config.claimFromDedicatedChannel = !config.claimFromDedicatedChannel;
+        if (config.claimFromDedicatedChannel) {
+          config.claimChannelId = normalizeId(await ask('**ارسل : منشن/ايدي شات الاستلام**'));
+          const sep = await ask('**ارسل : فاصلة شات الاستلام (0 للتفريغ)**');
+          config.claimChannelSeparator = sep === '0' ? '' : (sep || config.claimChannelSeparator);
+        }
+        await refresh(interaction, `**تم التحديث : ${config.claimFromDedicatedChannel ? 'مفعل' : 'مقفل'}**`);
+        return;
+      }
+
+      if (choice === 'toggle_keep_closed') {
+        config.keepClosedTickets = !config.keepClosedTickets;
+        if (config.keepClosedTickets) {
+          const v = await ask('**ارسل : كاتوقري المقفلة (0 للبقاء بنفس المكان)**');
+          config.closedCategoryId = v === '0' ? null : normalizeId(v);
+        }
+        await refresh(interaction, `**تم التحديث : ${config.keepClosedTickets ? 'مفعل' : 'مقفل'}**`);
+        return;
+      }
+
+      if (choice === 'set_messages') {
+        const c = await ask('**الرسائل : 1 قبول - 2 قبل الصورة - 3 صورة - 4 بعد الصورة**');
         if (c === '1') { const v = await ask('**رسالة القبول : (0 لاعادة التعيين)**'); config.messages.acceptance = v === '0' ? '' : (v || ''); }
         if (c === '2') { const v = await ask('**قبل الصورة : (0 لاعادة التعيين)**'); config.messages.beforeImage = v === '0' ? '' : (v || ''); }
         if (c === '3') { const v = await ask('**رابط الصورة : (0 لاعادة التعيين)**'); config.messages.ticketImage = v === '0' ? '' : (v || ''); }
         if (c === '4') { const v = await ask('**بعد الصورة : (0 لاعادة التعيين)**'); config.messages.afterImage = v === '0' ? '' : (v || ''); }
+        await refresh(interaction, '**تم تحديث الرسائل.**');
+        return;
       }
-    } else if (choice === '12') {
-      const idx = Number(await ask('**اختر : رقم السبب من 1 الى 25**'));
-      if (Number.isFinite(idx) && idx >= 1 && idx <= 25) {
-        const key = String(idx);
-        const reason = {
-          name: `سبب ${idx}`,
-          ticketName: '',
-          openImage: '',
-          emoji: '🎫',
-          categoryId: null,
-          claimImage: '',
-          beforeImage: '',
-          afterImage: '',
-          ...(config.reasons[key] || {})
-        };
-        while (true) {
-          await message.channel.send('**السبب : 1 الاسم - 2 اسم التكت - 3 صورة فتح - 4 ايموجي - 5 كاتوقري - 6 صورة استلام - 7 قبل/بعد - 8 انهاء**');
-          const c = await ask('**اختر :**');
-          if (!c || c === '8' || c.toLowerCase() === 'انهاء') break;
+
+      if (choice === 'set_reasons') {
+        const idx = Number(await ask('**اختر : رقم السبب من 1 الى 25**'));
+        if (Number.isFinite(idx) && idx >= 1 && idx <= 25) {
+          const key = String(idx);
+          const reason = {
+            name: `سبب ${idx}`,
+            ticketName: '',
+            openImage: '',
+            emoji: '🎫',
+            categoryId: null,
+            claimImage: '',
+            beforeImage: '',
+            afterImage: '',
+            ...(config.reasons[key] || {})
+          };
+
+          const c = await ask('**السبب : 1 الاسم - 2 اسم التكت - 3 صورة فتح - 4 ايموجي - 5 كاتوقري - 6 صورة استلام - 7 قبل/بعد**');
           if (c === '1') { const v = await ask('**اسم السبب : (0 لاعادة التعيين)**'); reason.name = v === '0' ? `سبب ${idx}` : (v || reason.name); }
           if (c === '2') { const v = await ask('**اسم التكت : (0 لاعادة التعيين)**'); reason.ticketName = v === '0' ? '' : (v || reason.ticketName); }
           if (c === '3') { const v = await ask('**صورة الفتح : (0 لاعادة التعيين)**'); reason.openImage = v === '0' ? '' : (v || reason.openImage); }
@@ -584,23 +692,32 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
             reason.beforeImage = b === '0' ? '' : (b || reason.beforeImage);
             reason.afterImage = a === '0' ? '' : (a || reason.afterImage);
           }
+          config.reasons[key] = reason;
         }
-        config.reasons[key] = reason;
+        await refresh(interaction, '**تم تحديث السبب.**');
+        return;
       }
-    } else if (choice === '13') {
-      const mode = await ask('**اكتب : buttons او menu**');
-      if (['buttons', 'menu'].includes((mode || '').toLowerCase())) {
-        config.displayMode = mode.toLowerCase();
-        if (config.displayMode === 'buttons') {
-          const rows = Number(await ask('**عدد الصفوف : من 1 الى 5**'));
-          if (Number.isFinite(rows) && rows >= 1 && rows <= 5) config.buttonRows = rows;
+
+      if (choice === 'set_display_mode') {
+        const mode = await ask('**اكتب : buttons او menu**');
+        if (['buttons', 'menu'].includes((mode || '').toLowerCase())) {
+          config.displayMode = mode.toLowerCase();
+          if (config.displayMode === 'buttons') {
+            const rows = Number(await ask('**عدد الصفوف : من 1 الى 5**'));
+            if (Number.isFinite(rows) && rows >= 1 && rows <= 5) config.buttonRows = rows;
+          }
         }
+        await refresh(interaction, '**تم تحديث طريقة العرض.**');
+        return;
       }
-    } else if (choice === '14') {
-      const panelChannel = await message.guild.channels.fetch(normalizeId(await ask('**ارسل : الشات (منشن/ايدي)**'))).catch(() => null);
-      if (!panelChannel || panelChannel.type !== ChannelType.GuildText) {
-        await message.channel.send('**فشل : شات غير صالح.**');
-      } else {
+
+      if (choice === 'send_panel_now') {
+        const panelChannel = await message.guild.channels.fetch(normalizeId(await ask('**ارسل : الشات (منشن/ايدي)**'))).catch(() => null);
+        if (!panelChannel || panelChannel.type !== ChannelType.GuildText) {
+          await refresh(interaction, '**فشل : شات غير صالح.**');
+          return;
+        }
+
         const mode = (await ask('**طريقة الارسال : text / image / both**')) || 'both';
         const text = mode === 'image' ? '' : await ask('**النص : (0 لتخطي)**');
         const image = mode === 'text' ? '' : await ask('**الصورة : رابط مباشر (0 لتخطي)**');
@@ -610,15 +727,24 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           files: image && image !== '0' ? [image] : [],
           components: createReasonComponents(config, message.guild.id)
         });
-        await message.channel.send('**تم ارسال البانل بنجاح.**');
+
+        await refresh(interaction, '**تم ارسال البانل بنجاح.**');
+        return;
+      }
+
+      await interaction.deferUpdate().catch(() => {});
+    } catch {
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: '**حدث خطأ اثناء تحديث الاعدادات.**', ephemeral: true }).catch(() => {});
       }
     }
+  });
 
+  collector.on('end', async () => {
     setGuildData(message.guild.id, config, tickets, pendingRequests);
-  }
-
-  setGuildData(message.guild.id, config, tickets, pendingRequests);
-  await message.channel.send('**تم حفظ اعدادات التكت.**');
+    await setupMessage.edit({ embeds: [buildSetupEmbed()], components: [] }).catch(() => {});
+    await message.channel.send('**تم حفظ اعدادات التكت.**');
+  });
 }
 
 async function handleTransferResponsibility(interaction, guildId, channelId, value) {
