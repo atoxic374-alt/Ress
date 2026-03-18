@@ -1310,6 +1310,11 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     }
   };
 
+  const notifySetupResult = async (text) => {
+    await activePromptInteraction?.followUp({ content: text, ephemeral: true }).catch(() => {});
+  };
+
+
   const buildSetupEmbed = () => {
     const reasonsCount = Object.keys(config.reasons || {}).length;
     const responsiblesMentions = (config.responsibleRoleIds || []).length
@@ -1817,19 +1822,45 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         if (mode === '0') {
           config.ticketNameMode = 'counter';
           config.ticketNamePrefix = 'ticket';
-        } else if (['counter', 'user'].includes((mode || '').toLowerCase())) {
-          config.ticketNameMode = mode.toLowerCase();
-          const prefix = await ask('**اكتب : بادئة اسم التكت**');
-          if (prefix && prefix !== '0') config.ticketNamePrefix = sanitizeName(prefix);
+          await refresh('**✅ تم إعادة تعيين اسم التكت للوضع الافتراضي.**');
+          await notifySetupResult('**✅ تم إعادة تعيين اسم التكت للوضع الافتراضي.**');
+          return;
         }
-        await refresh( '**تم تحديث الاسم.**');
+
+        if (!['counter', 'user'].includes((mode || '').toLowerCase())) {
+          await refresh('**❌ فشل تحديث الاسم: اكتب فقط counter أو user أو 0.**');
+          await notifySetupResult('**❌ فشل تحديث الاسم: اكتب فقط counter أو user أو 0.**');
+          return;
+        }
+
+        config.ticketNameMode = mode.toLowerCase();
+        const prefix = await ask('**اكتب : بادئة اسم التكت**');
+        if (prefix && prefix !== '0') config.ticketNamePrefix = sanitizeName(prefix);
+
+        await refresh('**✅ تم تحديث الاسم.**');
+        await notifySetupResult('**✅ تم تحديث إعداد الاسم بنجاح.**');
         return;
       }
 
       if (choice === 'set_open_category') {
         const v = await ask('**ارسل : منشن/ايدي الكاتوقري (0 لاعادة التعيين)**');
-        config.openCategoryId = v === '0' ? null : normalizeId(v);
-        await refresh( '**تم تحديث كاتوقري الفتح.**');
+        if (v === '0') {
+          config.openCategoryId = null;
+          await refresh('**✅ تم إعادة تعيين كاتوقري الفتح.**');
+          await notifySetupResult('**✅ تم إعادة تعيين كاتوقري الفتح.**');
+          return;
+        }
+
+        const catId = normalizeId(v);
+        if (!catId) {
+          await refresh('**❌ فشل تحديث كاتوقري الفتح: أرسل منشن أو آيدي كاتوقري صحيح.**');
+          await notifySetupResult('**❌ فشل تحديث كاتوقري الفتح: أرسل منشن أو آيدي كاتوقري صحيح.**');
+          return;
+        }
+
+        config.openCategoryId = catId;
+        await refresh('**✅ تم تحديث كاتوقري الفتح.**');
+        await notifySetupResult('**✅ تم تحديث كاتوقري الفتح بنجاح.**');
         return;
       }
 
@@ -1860,7 +1891,8 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           await refresh( '**تنبيه : لم يتم حفظ اي رول مسؤول صالح.**');
           return;
         }
-        await refresh( '**تم تحديث المسؤولين.**');
+        await refresh('**✅ تم تحديث المسؤولين.**');
+        await notifySetupResult('**✅ تم تحديث المسؤولين بنجاح.**');
         return;
       }
 
@@ -1877,33 +1909,48 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           await refresh( '**تنبيه : لا توجد رولات ادمن فعالة بعد التحديث.**');
           return;
         }
-        await refresh( '**تم تحديث رولات الادمن.**');
+        await refresh('**✅ تم تحديث رولات الادمن.**');
+        await notifySetupResult('**✅ تم تحديث رولات الادمن بنجاح.**');
         return;
       }
 
       if (choice === 'set_admin_limit') {
         const n = Number(await ask('**اكتب : حد استلام الاداري المفتوح**'));
-        if (Number.isFinite(n) && n > 0) config.adminClaimLimit = n;
-        await refresh( '**تم تحديث حد استلام الاداري.**');
+        if (!Number.isFinite(n) || n <= 0) {
+          await refresh('**❌ فشل تحديث حد استلام الاداري: أدخل رقمًا أكبر من 0.**');
+          await notifySetupResult('**❌ فشل تحديث حد استلام الاداري: أدخل رقمًا أكبر من 0.**');
+          return;
+        }
+        config.adminClaimLimit = n;
+        await refresh('**✅ تم تحديث حد استلام الاداري.**');
+        await notifySetupResult('**✅ تم تحديث حد استلام الاداري بنجاح.**');
         return;
       }
 
       if (choice === 'set_member_limit') {
         const n = Number(await ask('**اكتب : حد فتح العضو المفتوح**'));
-        if (Number.isFinite(n) && n > 0) config.memberOpenLimit = n;
-        await refresh( '**تم تحديث حد فتح العضو.**');
+        if (!Number.isFinite(n) || n <= 0) {
+          await refresh('**❌ فشل تحديث حد فتح العضو: أدخل رقمًا أكبر من 0.**');
+          await notifySetupResult('**❌ فشل تحديث حد فتح العضو: أدخل رقمًا أكبر من 0.**');
+          return;
+        }
+        config.memberOpenLimit = n;
+        await refresh('**✅ تم تحديث حد فتح العضو.**');
+        await notifySetupResult('**✅ تم تحديث حد فتح العضو بنجاح.**');
         return;
       }
 
       if (choice === 'toggle_auto_create') {
         config.autoCreateOnRequest = !config.autoCreateOnRequest;
-        await refresh( `**تم التحديث : ${config.autoCreateOnRequest ? 'مفعل' : 'مقفل'}**`);
+        await refresh(`**✅ تم التحديث : ${config.autoCreateOnRequest ? 'مفعل' : 'مقفل'}**`);
+        await notifySetupResult(`**✅ حالة إنشاء التكت قبل الاستلام: ${config.autoCreateOnRequest ? 'مفعل' : 'مقفل'}.**`);
         return;
       }
 
       if (choice === 'toggle_hide_on_claim') {
         config.hideOnClaim = !config.hideOnClaim;
-        await refresh( `**تم التحديث : ${config.hideOnClaim ? 'مفعل' : 'مقفل'}**`);
+        await refresh(`**✅ تم التحديث : ${config.hideOnClaim ? 'مفعل' : 'مقفل'}**`);
+        await notifySetupResult(`**✅ حالة إخفاء التكت عند الاستلام: ${config.hideOnClaim ? 'مفعل' : 'مقفل'}.**`);
         return;
       }
 
@@ -1923,7 +1970,8 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           if (sep === '0') config.claimChannelSeparator = '';
           else if (sep) config.claimChannelSeparator = sep;
         }
-        await refresh( `**تم التحديث : ${config.claimFromDedicatedChannel ? 'مفعل' : 'مقفل'}**`);
+        await refresh(`**✅ تم التحديث : ${config.claimFromDedicatedChannel ? 'مفعل' : 'مقفل'}**`);
+        await notifySetupResult(`**✅ حالة شات الاستلام المخصص: ${config.claimFromDedicatedChannel ? 'مفعل' : 'مقفل'}.**`);
         return;
       }
 
@@ -1933,19 +1981,22 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           const v = await ask('**ارسل : كاتوقري المقفلة (0 للبقاء بنفس المكان)**');
           config.closedCategoryId = v === '0' ? null : normalizeId(v);
         }
-        await refresh( `**تم التحديث : ${config.keepClosedTickets ? 'مفعل' : 'مقفل'}**`);
+        await refresh(`**✅ تم التحديث : ${config.keepClosedTickets ? 'مفعل' : 'مقفل'}**`);
+        await notifySetupResult(`**✅ حالة الاحتفاظ بالتكت بعد الإغلاق: ${config.keepClosedTickets ? 'مفعل' : 'مقفل'}.**`);
         return;
       }
 
       if (choice === 'set_messages') {
         await openMessagesSubmenu();
-        await refresh('**تم تحديث اعدادات الرسائل.**');
+        await refresh('**✅ تم تحديث اعدادات الرسائل.**');
+        await notifySetupResult('**✅ تم حفظ إعدادات الرسائل بنجاح.**');
         return;
       }
 
       if (choice === 'set_images') {
         await openImagesSubmenu();
-        await refresh('**تم تحديث اعدادات الصور.**');
+        await refresh('**✅ تم تحديث اعدادات الصور.**');
+        await notifySetupResult('**✅ تم حفظ إعدادات الصور بنجاح.**');
         return;
       }
 
@@ -1980,13 +2031,15 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           await openReasonSubmenu(key, reason, idx);
           config.reasons[key] = reason;
         }
-        await refresh( '**تم تحديث السبب.**');
+        await refresh('**✅ تم تحديث السبب.**');
+        await notifySetupResult('**✅ تم حفظ إعدادات السبب بنجاح.**');
         return;
       }
 
       if (choice === 'set_display_mode') {
         await openDisplayModeSubmenu();
-        await refresh( '**تم تحديث طريقة العرض.**');
+        await refresh('**✅ تم تحديث طريقة العرض.**');
+        await notifySetupResult('**✅ تم حفظ إعدادات طريقة العرض بنجاح.**');
         return;
       }
 
@@ -2039,7 +2092,8 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 
       if (choice === 'toggle_delete_claim_msg') {
         config.deleteClaimMessageOnClaim = !config.deleteClaimMessageOnClaim;
-        await refresh(`**تم التحديث : ${config.deleteClaimMessageOnClaim ? 'مفعل' : 'مقفل'}**`);
+        await refresh(`**✅ تم التحديث : ${config.deleteClaimMessageOnClaim ? 'مفعل' : 'مقفل'}**`);
+        await notifySetupResult(`**✅ حالة حذف رسالة الاستلام بعد التنفيذ: ${config.deleteClaimMessageOnClaim ? 'مفعل' : 'مقفل'}.**`);
         return;
       }
 
