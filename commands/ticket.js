@@ -119,6 +119,26 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
   }
 }
 
+async function sendTranscriptOutsideTicket(interaction, transcriptFile, label = 'Transcript') {
+  if (!transcriptFile) return false;
+
+  try {
+    await interaction.user?.send?.({ content: label, files: [transcriptFile] });
+    return true;
+  } catch {}
+
+  try {
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp({ content: label, files: [transcriptFile], ephemeral: true });
+    } else {
+      await interaction.reply({ content: label, files: [transcriptFile], ephemeral: true });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function sendClaimAnnounce({ channel, config, ticket, claimerId, claimImage }) {
   const adminRoleIds = getAdminRoles(config, ticket?.reasonKey)
     .map((id) => String(id || '').trim())
@@ -163,7 +183,7 @@ function buildPostCloseControls(guildId, panelId, channelId, ticket = {}) {
     new ButtonBuilder()
       .setCustomId(`ticket_toggle_member_${guildId}_${channelId}`)
       .setLabel(memberHidden ? 'ارجاع العضو' : 'اخفاء العضو')
-      .setStyle(resolveButtonStyle(v.buttonStyle)),
+      .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
       .setCustomId(`ticket_toggle_claimer_${guildId}_${channelId}`)
       .setLabel(claimerHidden ? 'ارجاع المسؤول' : 'اخفاء المسؤول')
@@ -961,10 +981,12 @@ async function handleClose(interaction, guildId, panelId, channelId) {
   if (!config.keepClosedTickets) {
     delete tickets[channelId];
     setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
-    if (transcriptFile) {
-      await interaction.channel.send({ files: [transcriptFile], content: 'Transcript before delete' }).catch(() => {});
-    }
-    await interaction.reply({ embeds: [makeTicketEmbed('اقفال', '**سيتم حذف التكت خلال 3 ثواني.**', 0xED4245)], ephemeral: true });
+    const transcriptDelivered = await sendTranscriptOutsideTicket(interaction, transcriptFile, 'Transcript before delete');
+    await interaction.reply({
+      embeds: [makeTicketEmbed('اقفال', `**سيتم حذف التكت خلال 3 ثواني.**${transcriptFile ? `
+**حالة الترانسكربت:** ${transcriptDelivered ? 'تم إرساله خارج التكت.' : 'تعذر إرساله خارج التكت.'}` : ''}`, 0xED4245)],
+      ephemeral: true
+    });
     setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
     return;
   }
@@ -1032,6 +1054,35 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId) {
     return;
   }
 
+  const mentionChunks = buildMentionChunks(getAdminRoles(config, ticket?.reasonKey));
+  const requestRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`ticket_reassign_claim_${guildId}_${panelId || 'default'}_${channelId}`)
+      .setLabel('استلام المستلم الجديد')
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  const reason = config.reasons?.[ticket.reasonKey] || {};
+  const reasonImage = resolveImageForSend(reason.openImage || config.messages.ticketImage);
+  const requestText = `**العضو :** <@${ticket.memberId}>
+**السبب :** ${reason.name || `سبب ${ticket.reasonKey}`}
+**التكت :** <#${channelId}>`;
+
+  try {
+    for (const chunk of mentionChunks) {
+      await targetChannel.send({ content: chunk });
+    }
+
+    if (reasonImage) {
+      await targetChannel.send({ content: requestText, files: [reasonImage], components: [requestRow] });
+    } else {
+      await targetChannel.send({ embeds: [makeTicketEmbed('طلب استلام جديد', requestText)], components: [requestRow] });
+    }
+  } catch {
+    await interaction.reply({ content: '**فشل إرسال طلب تغيير المستلم في شات القبول، تم إلغاء العملية.**', ephemeral: true });
+    return;
+  }
+
   ticket.claimedBy = null;
   ticket.reassignPendingAt = Date.now();
 
@@ -1048,30 +1099,10 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId) {
     }).catch(() => {});
   }
 
-  const mentionChunks = buildMentionChunks(getAdminRoles(config, ticket?.reasonKey));
-  for (const chunk of mentionChunks) {
-    await targetChannel.send({ content: chunk }).catch(() => {});
-  }
-
-  const requestRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`ticket_reassign_claim_${guildId}_${panelId || 'default'}_${channelId}`)
-      .setLabel('استلام المستلم الجديد')
-      .setStyle(ButtonStyle.Primary)
-  );
-
-  const reason = config.reasons?.[ticket.reasonKey] || {};
-  const reasonImage = resolveImageForSend(reason.openImage || config.messages.ticketImage);
-  const requestText = `**العضو :** <@${ticket.memberId}>\n**السبب :** ${reason.name || `سبب ${ticket.reasonKey}`}\n**التكت :** <#${channelId}>`;
-  if (reasonImage) {
-    await targetChannel.send({ content: requestText, files: [reasonImage], components: [requestRow] }).catch(() => {});
-  } else {
-    await targetChannel.send({ embeds: [makeTicketEmbed('طلب استلام جديد', requestText)], components: [requestRow] }).catch(() => {});
-  }
-
   setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
   await interaction.reply({ embeds: [makeTicketEmbed('تم', '**تم إخراجك من التكت وإرسال طلب استلام جديد.**', 0x57F287)], ephemeral: true });
 }
+
 
 async function handleReassignClaim(interaction, guildId, panelId, channelId) {
   await interaction.deferReply({ ephemeral: true }).catch(() => {});
@@ -2543,12 +2574,14 @@ function registerHandlers(client) {
             return;
           }
           const transcriptFile = await buildTicketTranscript(interaction.channel).catch(() => null);
-          if (transcriptFile) {
-            await interaction.channel.send({ files: [transcriptFile], content: 'Transcript before manual delete' }).catch(() => {});
-          }
+          const transcriptDelivered = await sendTranscriptOutsideTicket(interaction, transcriptFile, 'Transcript before manual delete');
           delete tickets[channelId];
           setGuildData(guildId, config, tickets, pendingRequests || {}, panelId);
-          await interaction.reply({ embeds: [makeTicketEmbed('حذف', '**سيتم حذف التكت خلال 3 ثواني.**', 0xED4245)], ephemeral: true });
+          await interaction.reply({
+            embeds: [makeTicketEmbed('حذف', `**سيتم حذف التكت خلال 3 ثواني.**${transcriptFile ? `
+**حالة الترانسكربت:** ${transcriptDelivered ? 'تم إرساله خارج التكت.' : 'تعذر إرساله خارج التكت.'}` : ''}`, 0xED4245)],
+            ephemeral: true
+          });
           setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
           return;
         }
