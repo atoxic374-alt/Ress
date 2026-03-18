@@ -1231,31 +1231,47 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       await activePromptInteraction.followUp({ content: `🔒 ${prompt}`, ephemeral: true }).catch(() => {});
     }
 
-    const collected = await controlChannel.awaitMessages({
-      filter: (m) => m.author.id === message.author.id,
-      max: 1,
-      time: timeout
-    });
-    const first = collected.first();
-    if (!first) return null;
+    const maxAttempts = imageOnly ? 3 : 1;
+    let attempt = 0;
+    while (attempt < maxAttempts) {
+      attempt += 1;
 
-    const attachment = first.attachments?.first?.();
-    const attachmentUrl = attachment?.url || null;
-    const text = (first.content || '').trim();
+      const collected = await controlChannel.awaitMessages({
+        filter: (m) => m.author.id === message.author.id,
+        max: 1,
+        time: timeout
+      });
+      const first = collected.first();
+      if (!first) return null;
 
-    if (first) await first.delete().catch(() => {});
+      const attachment = first.attachments?.first?.();
+      const attachmentUrl = attachment?.url || null;
+      const text = (first.content || '').trim();
 
-    if (imageOnly) {
-      if (text === '0') return '0';
-      if (attachmentUrl) return attachmentUrl;
-      if (/^https?:\/\//i.test(text)) return text;
-      await controlChannel.send('**❌ ادخال الصورة غير صالح: ارسل الصورة كمرفق بدون نص، او رابط مباشر للصورة.**').catch(() => {});
-      return null;
+      if (first) await first.delete().catch(() => {});
+
+      if (imageOnly) {
+        if (text === '0') return '0';
+        if (attachmentUrl) return attachmentUrl;
+        if (/^https?:\/\//i.test(text)) return text;
+
+        const remaining = maxAttempts - attempt;
+        if (remaining > 0) {
+          await controlChannel.send(`**❌ ادخال الصورة غير صالح. المتبقي ${remaining} محاولة.**
+**ارسل الصورة كمرفق بدون نص، او رابط مباشر للصورة، او 0 للإلغاء.**`).catch(() => {});
+          continue;
+        }
+
+        await controlChannel.send('**❌ تم إلغاء العملية: لم يتم استلام صورة صالحة.**').catch(() => {});
+        return null;
+      }
+
+      if (preferAttachment && attachmentUrl) return attachmentUrl;
+      if (text) return text;
+      return attachmentUrl;
     }
 
-    if (preferAttachment && attachmentUrl) return attachmentUrl;
-    if (text) return text;
-    return attachmentUrl;
+    return null;
   };
 
   const askNumberInRange = async (prompt, min, max) => {
@@ -1275,9 +1291,13 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     failureText
   }) => {
     const v = await ask(prompt, 180000, { imageOnly: true, preferAttachment: true });
-    if (!v) return currentValue;
+    if (!v) {
+      await activePromptInteraction?.followUp({ content: '**⚠️ لم يتم تغيير الصورة.**', ephemeral: true }).catch(() => {});
+      return currentValue;
+    }
     if (v === '0') {
       removeStoredImage(currentValue);
+      await activePromptInteraction?.followUp({ content: '**✅ تم حذف الصورة بنجاح.**', ephemeral: true }).catch(() => {});
       return '';
     }
     try {
@@ -1576,9 +1596,21 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       const c = pick.values?.[0];
       if (c === 'finish') { done = true; break; }
 
-      if (c === 'm1') { const v = await ask('**رسالة القبول (تظهر في شات الاستلام) : (0 لاعادة التعيين)**'); config.messages.acceptance = v === '0' ? '' : (v || ''); }
-      if (c === 'm2') { const v = await ask('**رسالة قبل صورة التكت (داخل شات التكت) : (0 لاعادة التعيين)**'); config.messages.beforeImage = v === '0' ? '' : (v || ''); }
-      if (c === 'm3') { const v = await ask('**رسالة بعد صورة التكت (داخل شات التكت) : (0 لاعادة التعيين)**'); config.messages.afterImage = v === '0' ? '' : (v || ''); }
+      if (c === 'm1') {
+        const v = await ask('**رسالة القبول (تظهر في شات الاستلام) : (0 لاعادة التعيين)**');
+        config.messages.acceptance = v === '0' ? '' : (v || '');
+        await activePromptInteraction?.followUp({ content: '**✅ تم تحديث رسالة القبول.**', ephemeral: true }).catch(() => {});
+      }
+      if (c === 'm2') {
+        const v = await ask('**رسالة قبل صورة التكت (داخل شات التكت) : (0 لاعادة التعيين)**');
+        config.messages.beforeImage = v === '0' ? '' : (v || '');
+        await activePromptInteraction?.followUp({ content: '**✅ تم تحديث رسالة ما قبل الصورة.**', ephemeral: true }).catch(() => {});
+      }
+      if (c === 'm3') {
+        const v = await ask('**رسالة بعد صورة التكت (داخل شات التكت) : (0 لاعادة التعيين)**');
+        config.messages.afterImage = v === '0' ? '' : (v || '');
+        await activePromptInteraction?.followUp({ content: '**✅ تم تحديث رسالة ما بعد الصورة.**', ephemeral: true }).catch(() => {});
+      }
     }
   };
 
@@ -2001,7 +2033,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           await panelChannel.send(payload);
         }
 
-        await refresh('**تم ارسال البانل بنجاح.**');
+        await refresh(`**✅ تم ارسال بانل التكت بنجاح في <#${panelId}>.**`);
         return;
       }
 
