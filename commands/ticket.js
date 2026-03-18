@@ -714,9 +714,10 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
   const reasonImage = resolveImageForSend(config.reasons?.[reasonKey]?.openImage || config.messages.ticketImage);
 
   const mentionChunks = buildMentionChunks(getAdminRoles(config));
+  const acceptanceText = config.reasons?.[reasonKey]?.acceptanceMessage || config.messages.acceptance;
 
-  if (config.messages.acceptance) {
-    await targetChannel.send({ embeds: [makeTicketEmbed('قبول التكت', config.messages.acceptance)] }).catch(() => {});
+  if (acceptanceText) {
+    await targetChannel.send({ embeds: [makeTicketEmbed('قبول التكت', acceptanceText)] }).catch(() => {});
   }
   if (config.claimFromDedicatedChannel && config.claimChannelSeparator) {
     const separatorValue = config.claimChannelSeparator;
@@ -1445,42 +1446,130 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     return lines.join('\n');
   };
 
+  const buildReasonSelectOptions = () => {
+    const options = [];
+    for (let i = 1; i <= 25; i += 1) {
+      const key = String(i);
+      const reason = config.reasons?.[key] || {};
+      options.push({
+        label: `${i}) ${(reason.name || `سبب ${i}`).slice(0, 80)}`,
+        description: (reason.description || `تعديل إعدادات السبب ${i}`).slice(0, 90),
+        value: `reason_${i}`,
+        emoji: reason.emoji || '🎫'
+      });
+    }
+    return options;
+  };
+
+  const pickReasonFromMenu = async () => {
+    await setupMessage.edit({
+      content: '**اختر السبب من القائمة مباشرة.**',
+      embeds: [
+        colorManager.createEmbed()
+          .setTitle('**اختيار السبب**')
+          .setDescription('**اختر السبب من المنيو ثم عدّل كل تفاصيله (الاسم / الكاتوقري / الرسائل / الصور / المودال).**')
+      ],
+      components: [new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`ticket_reason_pick_${message.author.id}_${Date.now()}`)
+          .setPlaceholder('اختر السبب المراد تعديله')
+          .addOptions(buildReasonSelectOptions())
+      )]
+    }).catch(() => {});
+
+    const pick = await setupMessage.awaitMessageComponent({
+      filter: (i) => i.user.id === message.author.id && i.isStringSelectMenu() && i.customId.startsWith('ticket_reason_pick_'),
+      time: 240000
+    }).catch(() => null);
+
+    if (!pick) return null;
+    activePromptInteraction = pick;
+    await pick.deferUpdate().catch(() => {});
+    const raw = pick.values?.[0] || '';
+    const idx = Number(String(raw).replace('reason_', ''));
+    if (!Number.isFinite(idx) || idx < 1 || idx > 25) return null;
+    return idx;
+  };
+
   const openReasonSubmenu = async (key, reason, idx) => {
     let done = false;
     while (!done) {
+      const modalFields = Array.isArray(reason.openModal?.fields) ? reason.openModal.fields : [];
+      const modalOrderText = modalFields.length
+        ? modalFields.map((f, i) => `**${i + 1})** ${String(f?.label || 'حقل').slice(0, 45)}`).join('\n')
+        : 'لا يوجد';
+
       const state = colorManager.createEmbed()
-        .setTitle(`**اعداد السبب ${idx}**`)
-        .setDescription([
-          `**الاسم:** ${reason.name || `سبب ${idx}`}`,
-          `**اسم التكت:** ${reason.ticketName || 'افتراضي'}`,
-          `**الايموجي:** ${formatSettingValue(reason.emoji || '🎫')}`,
-          `**الكاتوقري:** ${reason.categoryId ? `<#${reason.categoryId}>` : 'افتراضي'}`,
-          `**رسالة قبل الصورة:** ${formatSettingValue(reason.beforeImage)}`,
-          `**رسالة بعد الصورة:** ${formatSettingValue(reason.afterImage)}`,
-          `**وصف المنيو:** ${formatSettingValue(reason.description)}`,
-          `**لون الزر:** ${formatSettingValue(reason.buttonStyle || 'primary')}`,
-          `**ترتيب الزر:** ${formatSettingValue(reason.buttonOrder || idx)}`,
-          `**مودال مخصص عند الفتح:** ${reason.openModal?.enabled ? 'مفعل' : 'غير مفعل'}`
-        ].join('\n'));
+        .setTitle(`**إعدادات السبب ${idx}**`)
+        .setDescription('**التعديل من الأعلى للأقل أهمية: الاسم ← الكاتوقري ← الرسائل ← الصور ← المودال ← العرض.**')
+        .addFields(
+          {
+            name: 'الهوية الأساسية',
+            value: [
+              `**الاسم:** ${reason.name || `سبب ${idx}`}`,
+              `**اسم التكت:** ${reason.ticketName || 'افتراضي'}`,
+              `**الايموجي:** ${formatSettingValue(reason.emoji || '🎫')}`,
+              `**الكاتوقري:** ${reason.categoryId ? `<#${reason.categoryId}>` : 'افتراضي'}`
+            ].join('\n'),
+            inline: false
+          },
+          {
+            name: 'رسائل السبب',
+            value: [
+              `**رسالة القبول:** ${formatSettingValue(reason.acceptanceMessage)}`,
+              `**رسالة قبل الصورة:** ${formatSettingValue(reason.beforeImage)}`,
+              `**رسالة بعد الصورة:** ${formatSettingValue(reason.afterImage)}`
+            ].join('\n'),
+            inline: false
+          },
+          {
+            name: 'صور السبب',
+            value: [
+              `**صورة الفتح:** ${formatSettingValue(reason.openImage)}`,
+              `**صورة الاستلام:** ${formatSettingValue(reason.claimImage)}`
+            ].join('\n'),
+            inline: false
+          },
+          {
+            name: 'العرض',
+            value: [
+              `**وصف المنيو:** ${formatSettingValue(reason.description)}`,
+              `**لون الزر:** ${formatSettingValue(reason.buttonStyle || 'primary')}`,
+              `**ترتيب الزر:** ${formatSettingValue(reason.buttonOrder || idx)}`
+            ].join('\n'),
+            inline: false
+          },
+          {
+            name: 'مودال السبب',
+            value: [
+              `**الحالة:** ${reason.openModal?.enabled ? 'مفعل' : 'غير مفعل'}`,
+              `**العنوان:** ${formatSettingValue(reason.openModal?.title)}`,
+              `**الوصف:** ${formatSettingValue(reason.openModal?.description)}`,
+              `**ترتيب الحقول:** ${modalOrderText}`
+            ].join('\n').slice(0, 1024),
+            inline: false
+          }
+        );
 
       await setupMessage.edit({
-        content: '**اختر اعداد السبب المطلوب تعديله، او انهاء للرجوع.**',
+        content: '**اختر العنصر المطلوب تعديله لهذا السبب، أو انهاء للرجوع.**',
         embeds: [state],
         components: [new ActionRowBuilder().addComponents(
           new StringSelectMenuBuilder()
             .setCustomId(`ticket_reason_menu_${message.author.id}_${Date.now()}`)
-            .setPlaceholder('اختر اعداد السبب')
+            .setPlaceholder('اختر إعداد السبب')
             .addOptions([
-              { label: '1) الاسم', value: 'r1' },
-              { label: '2) اسم التكت', value: 'r2' },
-              { label: '3) الايموجي', value: 'r3' },
-              { label: '4) الكاتوقري', value: 'r4' },
-              { label: '5) رسالة قبل الصورة', value: 'r5' },
-              { label: '6) رسالة بعد الصورة', value: 'r6' },
-              { label: '7) وصف السبب (للمنيو)', value: 'r7' },
-              { label: '8) لون الزر', value: 'r8' },
-              { label: '9) ترتيب الزر', value: 'r9' },
-              { label: '10) مودال السبب', value: 'r10' },
+              { label: '1) اسم السبب', value: 'r1', description: 'الاسم الذي يظهر للعضو' },
+              { label: '2) كاتوقري السبب', value: 'r2', description: 'كاتوقري مخصص لهذا السبب' },
+              { label: '3) اسم التكت لهذا السبب', value: 'r3', description: 'اسم مخصص بدل الافتراضي' },
+              { label: '4) رسالة القبول لهذا السبب', value: 'r4', description: 'تظهر في شات الاستلام' },
+              { label: '5) رسالة قبل صورة التكت', value: 'r5', description: 'داخل التكت قبل الصورة' },
+              { label: '6) رسالة بعد صورة التكت', value: 'r6', description: 'داخل التكت بعد الصورة' },
+              { label: '7) صورة الفتح لهذا السبب', value: 'r7', description: 'ترسل عند فتح التكت' },
+              { label: '8) صورة الاستلام لهذا السبب', value: 'r8', description: 'ترسل عند استلام التكت' },
+              { label: '9) الايموجي + وصف المنيو', value: 'r9', description: 'تخصيص عرض السبب' },
+              { label: '10) اللون + ترتيب الزر', value: 'r10', description: 'تنظيم الأزرار في البانل' },
+              { label: '11) مودال السبب وترتيب حقوله', value: 'r11', description: 'حقول من الأهم للأقل' },
               { label: 'انهاء', value: 'finish' }
             ])
         )]
@@ -1497,30 +1586,78 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       const c = pick.values?.[0];
       if (c === 'finish') { done = true; break; }
 
-      if (c === 'r1') { const v = await ask('**اسم السبب : (0 لاعادة التعيين)**'); reason.name = v === '0' ? `سبب ${idx}` : (v || reason.name); }
-      if (c === 'r2') { const v = await ask('**اسم التكت : (0 لاعادة التعيين)**'); reason.ticketName = v === '0' ? '' : (v || reason.ticketName); }
-      if (c === 'r3') { const v = await ask('**ايموجي : (0 لاعادة التعيين)**'); reason.emoji = v === '0' ? '🎫' : (v || reason.emoji); }
-      if (c === 'r4') { const v = await ask('**كاتوقري : (0 لاعادة التعيين)**'); reason.categoryId = v === '0' ? null : normalizeId(v); }
-      if (c === 'r5') { const v = await ask('**رسالة قبل الصورة : (0 لاعادة التعيين)**'); reason.beforeImage = v === '0' ? '' : (v || reason.beforeImage); }
-      if (c === 'r6') { const v = await ask('**رسالة بعد الصورة : (0 لاعادة التعيين)**'); reason.afterImage = v === '0' ? '' : (v || reason.afterImage); }
-      if (c === 'r7') { const v = await ask('**وصف السبب (يظهر في منيو الفتح) : (0 لاعادة التعيين)**'); reason.description = v === '0' ? '' : (v || reason.description || ''); }
+      if (c === 'r1') {
+        const v = await ask('**اسم السبب : (0 لاعادة التعيين)**');
+        reason.name = v === '0' ? `سبب ${idx}` : (v || reason.name);
+        await notifySetupResult('**✅ تم تحديث اسم السبب.**');
+      }
+      if (c === 'r2') {
+        const v = await ask('**كاتوقري السبب : منشن/ايدي (0 لاعادة التعيين)**');
+        reason.categoryId = v === '0' ? null : normalizeId(v);
+        await notifySetupResult('**✅ تم تحديث كاتوقري السبب.**');
+      }
+      if (c === 'r3') {
+        const v = await ask('**اسم التكت لهذا السبب : (0 لاعادة التعيين)**');
+        reason.ticketName = v === '0' ? '' : (v || reason.ticketName);
+        await notifySetupResult('**✅ تم تحديث اسم التكت للسبب.**');
+      }
+      if (c === 'r4') {
+        const v = await ask('**رسالة القبول لهذا السبب : (0 لاعادة التعيين)**');
+        reason.acceptanceMessage = v === '0' ? '' : (v || reason.acceptanceMessage || '');
+        await notifySetupResult('**✅ تم تحديث رسالة القبول الخاصة بالسبب.**');
+      }
+      if (c === 'r5') {
+        const v = await ask('**رسالة قبل الصورة : (0 لاعادة التعيين)**');
+        reason.beforeImage = v === '0' ? '' : (v || reason.beforeImage);
+        await notifySetupResult('**✅ تم تحديث رسالة ما قبل الصورة.**');
+      }
+      if (c === 'r6') {
+        const v = await ask('**رسالة بعد الصورة : (0 لاعادة التعيين)**');
+        reason.afterImage = v === '0' ? '' : (v || reason.afterImage);
+        await notifySetupResult('**✅ تم تحديث رسالة ما بعد الصورة.**');
+      }
+      if (c === 'r7') {
+        reason.openImage = await promptAndStoreImage({
+          prompt: '**صورة فتح السبب: ارسل رابط صورة او ارفق صورة (0 للحذف)**',
+          currentValue: reason.openImage,
+          slotKey: `reason_${key}_open`,
+          failureText: '**❌ فشل حفظ صورة فتح السبب.**'
+        });
+      }
       if (c === 'r8') {
+        reason.claimImage = await promptAndStoreImage({
+          prompt: '**صورة استلام السبب: ارسل رابط صورة او ارفق صورة (0 للحذف)**',
+          currentValue: reason.claimImage,
+          slotKey: `reason_${key}_claim`,
+          failureText: '**❌ فشل حفظ صورة استلام السبب.**'
+        });
+      }
+      if (c === 'r9') {
+        const emo = await ask('**ايموجي السبب : (0 لاعادة التعيين)**');
+        reason.emoji = emo === '0' ? '🎫' : (emo || reason.emoji);
+        const desc = await ask('**وصف السبب في المنيو : (0 لاعادة التعيين)**');
+        reason.description = desc === '0' ? '' : (desc || reason.description || '');
+        await notifySetupResult('**✅ تم تحديث ايموجي ووصف السبب.**');
+      }
+      if (c === 'r10') {
         const v = ((await ask('**لون الزر: primary / secondary / success / danger (0 لاعادة التعيين)**')) || '').toLowerCase();
         if (v === '0') reason.buttonStyle = 'primary';
         else if (['primary', 'secondary', 'success', 'danger'].includes(v)) reason.buttonStyle = v;
+
+        const order = Number(await ask('**ترتيب الزر (رقم من 1 الى 999 - 0 لاعادة التعيين)**'));
+        if (order === 0) reason.buttonOrder = idx;
+        else if (Number.isFinite(order) && order >= 1 && order <= 999) reason.buttonOrder = order;
+        await notifySetupResult('**✅ تم تحديث لون وترتيب زر السبب.**');
       }
-      if (c === 'r9') {
-        const v = Number(await ask('**ترتيب الزر (رقم من 1 الى 999 - 0 لاعادة التعيين)**'));
-        if (v === 0) reason.buttonOrder = idx;
-        else if (Number.isFinite(v) && v >= 1 && v <= 999) reason.buttonOrder = v;
-      }
-      if (c === 'r10') {
+      if (c === 'r11') {
         const enabled = ((await ask('**تفعيل مودال السبب؟ yes/no**')) || '').toLowerCase();
         if (!reason.openModal || typeof reason.openModal !== 'object') {
           reason.openModal = { enabled: false, title: '', description: '', fields: [] };
         }
+
         if (enabled === 'yes' || enabled === 'y' || enabled === 'نعم') {
           reason.openModal.enabled = true;
+
           const title = await ask('**عنوان المودال (0 لاعادة التعيين)**');
           if (title === '0') reason.openModal.title = '';
           else if (title) reason.openModal.title = title.slice(0, 45);
@@ -1529,7 +1666,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           if (desc === '0') reason.openModal.description = '';
           else if (desc) reason.openModal.description = desc.slice(0, 200);
 
-          const labelsRaw = await ask('**حقول المودال (افصل بينهم |) مثال: المعرف|الوصف|المدة (0 لاعادة التعيين)**');
+          const labelsRaw = await ask('**حقول المودال بالترتيب من الأهم للأقل (افصل بينهم |) مثال: الاسم|الايدي|الوصف**');
           if (labelsRaw === '0') {
             reason.openModal.fields = [];
           } else {
@@ -1541,14 +1678,17 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
               .map((label) => ({ label: label.slice(0, 45), placeholder: '', style: 'short', required: true }));
             reason.openModal.fields = labels;
           }
+          await notifySetupResult('**✅ تم تحديث المودال وترتيب حقوله.**');
         } else {
           reason.openModal = { enabled: false, title: '', description: '', fields: [] };
+          await notifySetupResult('**✅ تم تعطيل مودال السبب.**');
         }
       }
 
       config.reasons[key] = reason;
     }
   };
+
 
   const openMessagesSubmenu = async () => {
     let done = false;
@@ -2002,35 +2142,35 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 
       if (choice === 'set_reasons') {
         if (!config.openCategoryId) {
-          await refresh( '**يلزم تعيين كاتوقري الفتح قبل تعديل الاسباب.**');
+          await refresh('**يلزم تعيين كاتوقري الفتح قبل تعديل الاسباب.**');
           return;
         }
 
-        await setupMessage.edit({
-          content: '**اختر رقم السبب من القائمة التالية ثم اكتب الرقم في الشات.**',
-          embeds: [colorManager.createEmbed().setTitle('**فهرس الأسباب (1 - 25)**').setDescription(buildReasonsIndexText())],
-          components: []
-        }).catch(() => {});
-
-        const idx = await askNumberInRange('**اختر : رقم السبب من 1 الى 25**', 1, 25);
-        if (Number.isFinite(idx) && idx >= 1 && idx <= 25) {
-          const key = String(idx);
-          const reason = {
-            name: `سبب ${idx}`,
-            ticketName: '',
-            openImage: '',
-            emoji: '🎫',
-            categoryId: null,
-            claimImage: '',
-            beforeImage: '',
-            afterImage: '',
-            description: '',
-            ...(config.reasons[key] || {})
-          };
-
-          await openReasonSubmenu(key, reason, idx);
-          config.reasons[key] = reason;
+        const idx = await pickReasonFromMenu();
+        if (!Number.isFinite(idx) || idx < 1 || idx > 25) {
+          await refresh('**❌ لم يتم اختيار سبب صالح.**');
+          await notifySetupResult('**❌ لم يتم اختيار سبب صالح.**');
+          return;
         }
+
+        const key = String(idx);
+        const reason = {
+          name: `سبب ${idx}`,
+          ticketName: '',
+          openImage: '',
+          emoji: '🎫',
+          categoryId: null,
+          claimImage: '',
+          beforeImage: '',
+          afterImage: '',
+          acceptanceMessage: '',
+          description: '',
+          ...(config.reasons[key] || {})
+        };
+
+        await openReasonSubmenu(key, reason, idx);
+        config.reasons[key] = reason;
+
         await refresh('**✅ تم تحديث السبب.**');
         await notifySetupResult('**✅ تم حفظ إعدادات السبب بنجاح.**');
         return;
