@@ -163,7 +163,7 @@ function buildPostCloseControls(guildId, panelId, channelId, ticket = {}) {
     new ButtonBuilder()
       .setCustomId(`ticket_toggle_member_${guildId}_${channelId}`)
       .setLabel(memberHidden ? 'ارجاع العضو' : 'اخفاء العضو')
-      .setStyle(ButtonStyle.Primary),
+      .setStyle(resolveButtonStyle(v.buttonStyle)),
     new ButtonBuilder()
       .setCustomId(`ticket_toggle_claimer_${guildId}_${channelId}`)
       .setLabel(claimerHidden ? 'ارجاع المسؤول' : 'اخفاء المسؤول')
@@ -1162,12 +1162,12 @@ function createReasonComponents(config, guildId, panelId = 'default') {
 
   const maxButtons = Math.max(1, Math.min(25, (config.buttonRows || 2) * 5));
   const entries = (reasons.length ? reasons : [['0', { name: 'فتح تكت', emoji: '🎫' }]])
-    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .sort((a, b) => Number(a[1]?.buttonOrder || a[0]) - Number(b[1]?.buttonOrder || b[0]))
     .slice(0, maxButtons);
   const buttons = entries.map(([k, v]) => new ButtonBuilder()
     .setCustomId(`ticket_open_btn_${guildId}_${panelId}_${k}`)
     .setLabel((v.name || `سبب ${k}`).slice(0, 80))
-    .setStyle(ButtonStyle.Primary)
+    .setStyle(resolveButtonStyle(v.buttonStyle))
     .setEmoji(v.emoji || '🎫'));
 
   const rows = [];
@@ -1326,7 +1326,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       ? adminRolesResolved.map((id) => `<@&${id}>`).join(' ')
       : 'غير معين';
     const reasonsNamesRaw = Object.entries(config.reasons || {})
-      .sort((a, b) => Number(a[0]) - Number(b[0]))
+      .sort((a, b) => Number(a[1]?.buttonOrder || a[0]) - Number(b[1]?.buttonOrder || b[0]))
       .map(([k, v]) => `**${k})** ${v.name || `سبب ${k}`}`)
       .join('\n') || 'لا يوجد';
     const reasonsNames = reasonsNamesRaw.length > 1000 ? `${reasonsNamesRaw.slice(0, 1000)}\n...` : reasonsNamesRaw;
@@ -1501,7 +1501,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 
       const state = colorManager.createEmbed()
         .setTitle(`**إعدادات السبب ${idx}**`)
-        .setDescription('**التعديل من الأعلى للأقل أهمية: الاسم ← الكاتوقري ← الرسائل ← الصور ← المودال.**')
+        .setDescription('**التعديل من الأعلى للأقل أهمية: الاسم ← الكاتوقري ← الرسائل ← الصور ← العرض (عند الأزرار فقط) ← المودال.**')
         .addFields(
           {
             name: 'الهوية الأساسية',
@@ -1527,6 +1527,15 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
             value: [
               `**صورة الفتح:** ${formatSettingValue(reason.openImage)}`,
               `**صورة الاستلام:** ${formatSettingValue(reason.claimImage)}`
+            ].join('\n'),
+            inline: false
+          },
+          {
+            name: 'العرض الخاص بالسبب',
+            value: [
+              `**لون الزر:** ${formatSettingValue(reason.buttonStyle || 'primary')}`,
+              `**ترتيب الزر:** ${formatSettingValue(reason.buttonOrder || idx)}`,
+              `**الحالة:** ${config.displayMode === 'buttons' ? 'يعمل الآن' : 'غير مستخدم لأن طريقة العرض الحالية ليست أزرار'}`
             ].join('\n'),
             inline: false
           },
@@ -1559,7 +1568,8 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
               { label: '7) صورة الفتح لهذا السبب', value: 'r7', description: 'ترسل عند فتح التكت' },
               { label: '8) صورة الاستلام لهذا السبب', value: 'r8', description: 'ترسل عند استلام التكت' },
               { label: '9) ايموجي السبب', value: 'r9', description: 'ايموجي يظهر مع السبب' },
-              { label: '10) مودال السبب وترتيب حقوله', value: 'r10', description: 'حقول من الأهم للأقل' },
+              { label: '10) لون وترتيب زر السبب', value: 'r10', description: 'يعمل فقط إذا كانت طريقة العرض أزرار' },
+              { label: '11) مودال السبب وترتيب حقوله', value: 'r11', description: 'حقول من الأهم للأقل' },
               { label: 'انهاء', value: 'finish' }
             ])
         )]
@@ -1628,6 +1638,20 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         await notifySetupResult('**✅ تم تحديث ايموجي السبب.**');
       }
       if (c === 'r10') {
+        if (config.displayMode !== 'buttons') {
+          await notifySetupResult('**❌ لا يمكن تعديل لون أو ترتيب السبب إلا عندما تكون طريقة العرض الأساسية أزرار (buttons).**');
+        } else {
+          const v = ((await ask('**لون الزر: primary / secondary / success / danger (0 لاعادة التعيين)**')) || '').toLowerCase();
+          if (v === '0') reason.buttonStyle = 'primary';
+          else if (['primary', 'secondary', 'success', 'danger'].includes(v)) reason.buttonStyle = v;
+
+          const order = Number(await ask('**ترتيب الزر (رقم من 1 الى 999 - 0 لاعادة التعيين)**'));
+          if (order === 0) reason.buttonOrder = idx;
+          else if (Number.isFinite(order) && order >= 1 && order <= 999) reason.buttonOrder = order;
+          await notifySetupResult('**✅ تم تحديث لون وترتيب زر السبب.**');
+        }
+      }
+      if (c === 'r11') {
         const enabled = ((await ask('**تفعيل مودال السبب؟ yes/no**')) || '').toLowerCase();
         if (!reason.openModal || typeof reason.openModal !== 'object') {
           reason.openModal = { enabled: false, title: '', description: '', fields: [] };
