@@ -1222,7 +1222,11 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 
   const { config, tickets, pendingRequests } = getPanelData(message.guild.id, panelId);
 
-  const ask = async (prompt, timeout = 180000) => {
+  const ask = async (prompt, timeout = 180000, options = {}) => {
+    const opts = options && typeof options === 'object' ? options : {};
+    const imageOnly = Boolean(opts.imageOnly);
+    const preferAttachment = Boolean(opts.preferAttachment);
+
     if (activePromptInteraction) {
       await activePromptInteraction.followUp({ content: `🔒 ${prompt}`, ephemeral: true }).catch(() => {});
     }
@@ -1233,14 +1237,25 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       time: timeout
     });
     const first = collected.first();
-    if (first) await first.delete().catch(() => {});
     if (!first) return null;
 
-    const text = (first.content || '').trim();
-    if (text) return text;
-
     const attachment = first.attachments?.first?.();
-    return attachment?.url || null;
+    const attachmentUrl = attachment?.url || null;
+    const text = (first.content || '').trim();
+
+    if (first) await first.delete().catch(() => {});
+
+    if (imageOnly) {
+      if (text === '0') return '0';
+      if (attachmentUrl) return attachmentUrl;
+      if (/^https?:\/\//i.test(text)) return text;
+      await controlChannel.send('**❌ ادخال الصورة غير صالح: ارسل الصورة كمرفق بدون نص، او رابط مباشر للصورة.**').catch(() => {});
+      return null;
+    }
+
+    if (preferAttachment && attachmentUrl) return attachmentUrl;
+    if (text) return text;
+    return attachmentUrl;
   };
 
   const askNumberInRange = async (prompt, min, max) => {
@@ -1259,7 +1274,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     slotKey,
     failureText
   }) => {
-    const v = await ask(prompt);
+    const v = await ask(prompt, 180000, { imageOnly: true, preferAttachment: true });
     if (!v) return currentValue;
     if (v === '0') {
       removeStoredImage(currentValue);
@@ -1267,10 +1282,10 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     }
     try {
       const stored = await storeImageLocally(v, message.guild.id, slotKey, currentValue);
-      await activePromptInteraction?.followUp({ content: '✅ تم حفظ الصورة بنجاح.', ephemeral: true }).catch(() => {});
+      await activePromptInteraction?.followUp({ content: '**✅ تم حفظ الصورة بنجاح.**', ephemeral: true }).catch(() => {});
       return stored;
     } catch {
-      await activePromptInteraction?.followUp({ content: failureText || '❌ فشل حفظ الصورة. تأكد ان الرابط مباشر او ارسل الصورة كمرفق.', ephemeral: true }).catch(() => {});
+      await activePromptInteraction?.followUp({ content: failureText || '**❌ فشل حفظ الصورة. تأكد ان الرابط مباشر او ارسل الصورة كمرفق.**', ephemeral: true }).catch(() => {});
       return currentValue;
     }
   };
@@ -1624,7 +1639,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           prompt: '**صورة التكت العامة: ارسل رابط صورة او ارفق صورة (0 للحذف)**',
           currentValue: config.messages.ticketImage,
           slotKey: 'global_ticket_image',
-          failureText: '❌ فشل حفظ الصورة العامة.'
+          failureText: '**❌ فشل حفظ الصورة العامة.**'
         });
       }
 
@@ -1633,7 +1648,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           prompt: '**صورة فاصل شات الاستلام: ارسل رابط صورة او ارفق صورة (0 للحذف)**',
           currentValue: config.claimChannelSeparator,
           slotKey: 'claim_separator',
-          failureText: '❌ فشل حفظ صورة الفاصل.'
+          failureText: '**❌ فشل حفظ صورة الفاصل.**'
         });
       }
 
@@ -1687,7 +1702,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
             prompt: '**صورة فتح السبب: ارسل رابط صورة او ارفق صورة (0 للحذف)**',
             currentValue: reason.openImage,
             slotKey: `reason_${key}_open`,
-            failureText: '❌ فشل حفظ صورة السبب.'
+            failureText: '**❌ فشل حفظ صورة السبب.**'
           });
         }
         if (rc === 'claim') {
@@ -1695,7 +1710,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
             prompt: '**صورة استلام السبب: ارسل رابط صورة او ارفق صورة (0 للحذف)**',
             currentValue: reason.claimImage,
             slotKey: `reason_${key}_claim`,
-            failureText: '❌ فشل حفظ صورة السبب.'
+            failureText: '**❌ فشل حفظ صورة السبب.**'
           });
         }
 
@@ -1953,7 +1968,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         }
 
         const text = mode === 'image' ? '' : await ask('**النص : (0 لتخطي)**');
-        const imageInput = mode === 'text' ? '' : await ask('**الصورة : رابط مباشر او ارفق صورة فقط (0 لالغاء العملية)**');
+        const imageInput = mode === 'text' ? '' : await ask('**الصورة : رابط مباشر او ارفق صورة فقط (0 لالغاء العملية)**', 180000, { imageOnly: true, preferAttachment: true });
 
         const payload = {
           content: text && text !== '0' ? text : null,
