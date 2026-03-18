@@ -1266,9 +1266,11 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       return '';
     }
     try {
-      return await storeImageLocally(v, message.guild.id, slotKey, currentValue);
+      const stored = await storeImageLocally(v, message.guild.id, slotKey, currentValue);
+      await activePromptInteraction?.followUp({ content: '✅ تم حفظ الصورة بنجاح.', ephemeral: true }).catch(() => {});
+      return stored;
     } catch {
-      await activePromptInteraction?.followUp({ content: failureText || '❌ فشل حفظ الصورة.', ephemeral: true }).catch(() => {});
+      await activePromptInteraction?.followUp({ content: failureText || '❌ فشل حفظ الصورة. تأكد ان الرابط مباشر او ارسل الصورة كمرفق.', ephemeral: true }).catch(() => {});
       return currentValue;
     }
   };
@@ -1513,11 +1515,24 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     while (!done) {
       const state = colorManager.createEmbed()
         .setTitle('**اعدادات الرسائل**')
-        .setDescription([
-          `**1) رسالة القبول (تظهر في شات الاستلام):** ${formatSettingValue(config.messages.acceptance)}`,
-          `**2) رسالة قبل صورة التكت (داخل شات التكت):** ${formatSettingValue(config.messages.beforeImage)}`,
-          `**3) رسالة بعد صورة التكت (داخل شات التكت):** ${formatSettingValue(config.messages.afterImage)}`
-        ].join('\n'));
+        .setDescription('**كل خيار يوضح مكان ظهور الرسالة داخل نظام التكت.**')
+        .addFields(
+          {
+            name: '1) رسالة القبول',
+            value: `**المكان:** شات الاستلام\n**القيمة الحالية:** ${formatSettingValue(config.messages.acceptance)}`,
+            inline: false
+          },
+          {
+            name: '2) رسالة قبل صورة التكت',
+            value: `**المكان:** داخل شات التكت قبل الصورة\n**القيمة الحالية:** ${formatSettingValue(config.messages.beforeImage)}`,
+            inline: false
+          },
+          {
+            name: '3) رسالة بعد صورة التكت',
+            value: `**المكان:** داخل شات التكت بعد الصورة\n**القيمة الحالية:** ${formatSettingValue(config.messages.afterImage)}`,
+            inline: false
+          }
+        );
 
       await setupMessage.edit({
         content: '**اختر من قائمة اعدادات الرسائل، او انهاء للرجوع.**',
@@ -1527,9 +1542,9 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
             .setCustomId(`ticket_msg_menu_${message.author.id}_${Date.now()}`)
             .setPlaceholder('اختر اعداد الرسائل')
             .addOptions([
-              { label: '1) رسالة القبول - شات الاستلام', value: 'm1' },
-              { label: '2) رسالة قبل الصورة - شات التكت', value: 'm2' },
-              { label: '3) رسالة بعد الصورة - شات التكت', value: 'm3' },
+              { label: '1) رسالة القبول - شات الاستلام', description: 'تظهر في روم طلبات الاستلام', value: 'm1' },
+              { label: '2) رسالة قبل الصورة - شات التكت', description: 'تظهر قبل صورة فتح التكت', value: 'm2' },
+              { label: '3) رسالة بعد الصورة - شات التكت', description: 'تظهر بعد صورة فتح التكت', value: 'm3' },
               { label: 'انهاء', value: 'finish' }
             ])
         )]
@@ -1558,11 +1573,24 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     while (!done) {
       const state = colorManager.createEmbed()
         .setTitle('**اعدادات الصور**')
-        .setDescription([
-          `**1) صورة التكت العامة (داخل شات التكت):** ${formatSettingValue(config.messages.ticketImage)}`,
-          `**2) صورة فاصل شات الاستلام (بين الطلبات):** ${formatSettingValue(config.claimChannelSeparator)}`,
-          '**3) صور السبب (فتح/استلام): تختار السبب ثم تعدل صورة الفتح أو الاستلام.**'
-        ].join('\n'));
+        .setDescription('**رفع الصورة يتم بطريقتين:** ارسال رابط مباشر للصورة أو ارفاق الصورة بدون نص.')
+        .addFields(
+          {
+            name: '1) صورة التكت العامة',
+            value: `**المكان:** داخل شات التكت عند الفتح\n**القيمة الحالية:** ${formatSettingValue(config.messages.ticketImage)}`,
+            inline: false
+          },
+          {
+            name: '2) صورة/نص فاصل شات الاستلام',
+            value: `**المكان:** داخل شات الاستلام بين الطلبات\n**القيمة الحالية:** ${formatSettingValue(config.claimChannelSeparator)}`,
+            inline: false
+          },
+          {
+            name: '3) صور السبب',
+            value: '**المكان:** لكل سبب على حدة (صورة فتح + صورة استلام).',
+            inline: false
+          }
+        );
 
       await setupMessage.edit({
         content: '**اختر اعداد الصور، او انهاء للرجوع.**',
@@ -1572,9 +1600,9 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
             .setCustomId(`ticket_img_menu_${message.author.id}_${Date.now()}`)
             .setPlaceholder('اختر اعداد الصور')
             .addOptions([
-              { label: '1) صورة التكت العامة', value: 'i1' },
-              { label: '2) صورة فاصل شات الاستلام', value: 'i2' },
-              { label: '3) صور السبب', value: 'i3' },
+              { label: '1) صورة التكت العامة', description: 'تظهر داخل شات التكت', value: 'i1' },
+              { label: '2) صورة/نص فاصل شات الاستلام', description: 'يظهر بين طلبات الاستلام', value: 'i2' },
+              { label: '3) صور السبب', description: 'لكل سبب: فتح + استلام', value: 'i3' },
               { label: 'انهاء', value: 'finish' }
             ])
         )]
@@ -1918,29 +1946,47 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       if (choice === 'send_panel_now') {
         if (!(await assertSetupReady('ارسال البانل'))) return;
 
-        const mode = (await ask('**طريقة الارسال : text / image / both**')) || 'both';
+        const mode = ((await ask('**طريقة الارسال : text / image / both**')) || 'both').toLowerCase();
+        if (!['text', 'image', 'both'].includes(mode)) {
+          await refresh('**❌ طريقة ارسال غير صالحة. استخدم text أو image أو both.**');
+          return;
+        }
+
         const text = mode === 'image' ? '' : await ask('**النص : (0 لتخطي)**');
-        const image = mode === 'text' ? '' : await ask('**الصورة : رابط مباشر او ارفاق صورة (0 لتخطي)**');
+        const imageInput = mode === 'text' ? '' : await ask('**الصورة : رابط مباشر او ارفق صورة فقط (0 لالغاء العملية)**');
 
         const payload = {
           content: text && text !== '0' ? text : null,
           components: createReasonComponents(config, message.guild.id, panelId)
         };
 
-        if (image && image !== '0') {
-          try {
-            await panelChannel.send({ ...payload, files: [image] });
-          } catch {
-            const fallback = /^https?:\/\//i.test(String(image || '').trim())
-              ? { embeds: [makeTicketEmbed('بانل التكت', `**صورة البانل:** ${String(image).trim()}`)] }
-              : {};
-            await panelChannel.send({ ...payload, ...fallback }).catch(() => {});
+        if (mode === 'image' || mode === 'both') {
+          if (!imageInput || imageInput === '0') {
+            await refresh('**❌ تم إلغاء ارسال البانل: وضع الصورة يتطلب صورة صالحة.**');
+            return;
           }
+
+          let storedPanelImage = '';
+          try {
+            storedPanelImage = await storeImageLocally(imageInput, message.guild.id, `panel_send_${Date.now()}`);
+          } catch {
+            await refresh('**❌ فشل رفع صورة البانل. تأكد ان الرابط مباشر أو ارسل الصورة كمرفق بدون نص.**');
+            return;
+          }
+
+          const panelImage = resolveImageForSend(storedPanelImage);
+          if (!panelImage) {
+            await refresh('**❌ فشل تجهيز صورة البانل بعد الحفظ.**');
+            return;
+          }
+
+          await panelChannel.send({ ...payload, files: [panelImage] }).catch(() => {});
+          removeStoredImage(storedPanelImage);
         } else {
           await panelChannel.send(payload);
         }
 
-        await refresh( '**تم ارسال البانل بنجاح.**');
+        await refresh('**تم ارسال البانل بنجاح.**');
         return;
       }
 
