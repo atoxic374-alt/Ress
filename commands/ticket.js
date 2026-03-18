@@ -1162,12 +1162,12 @@ function createReasonComponents(config, guildId, panelId = 'default') {
 
   const maxButtons = Math.max(1, Math.min(25, (config.buttonRows || 2) * 5));
   const entries = (reasons.length ? reasons : [['0', { name: 'فتح تكت', emoji: '🎫' }]])
-    .sort((a, b) => Number(a[1]?.buttonOrder || a[0]) - Number(b[1]?.buttonOrder || b[0]))
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
     .slice(0, maxButtons);
   const buttons = entries.map(([k, v]) => new ButtonBuilder()
     .setCustomId(`ticket_open_btn_${guildId}_${panelId}_${k}`)
     .setLabel((v.name || `سبب ${k}`).slice(0, 80))
-    .setStyle(resolveButtonStyle(v.buttonStyle))
+    .setStyle(ButtonStyle.Primary)
     .setEmoji(v.emoji || '🎫'));
 
   const rows = [];
@@ -1501,7 +1501,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 
       const state = colorManager.createEmbed()
         .setTitle(`**إعدادات السبب ${idx}**`)
-        .setDescription('**التعديل من الأعلى للأقل أهمية: الاسم ← الكاتوقري ← الرسائل ← الصور ← المودال ← العرض.**')
+        .setDescription('**التعديل من الأعلى للأقل أهمية: الاسم ← الكاتوقري ← الرسائل ← الصور ← المودال.**')
         .addFields(
           {
             name: 'الهوية الأساسية',
@@ -1527,15 +1527,6 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
             value: [
               `**صورة الفتح:** ${formatSettingValue(reason.openImage)}`,
               `**صورة الاستلام:** ${formatSettingValue(reason.claimImage)}`
-            ].join('\n'),
-            inline: false
-          },
-          {
-            name: 'العرض',
-            value: [
-              `**وصف المنيو:** ${formatSettingValue(reason.description)}`,
-              `**لون الزر:** ${formatSettingValue(reason.buttonStyle || 'primary')}`,
-              `**ترتيب الزر:** ${formatSettingValue(reason.buttonOrder || idx)}`
             ].join('\n'),
             inline: false
           },
@@ -1567,9 +1558,8 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
               { label: '6) رسالة بعد صورة التكت', value: 'r6', description: 'داخل التكت بعد الصورة' },
               { label: '7) صورة الفتح لهذا السبب', value: 'r7', description: 'ترسل عند فتح التكت' },
               { label: '8) صورة الاستلام لهذا السبب', value: 'r8', description: 'ترسل عند استلام التكت' },
-              { label: '9) الايموجي + وصف المنيو', value: 'r9', description: 'تخصيص عرض السبب' },
-              { label: '10) اللون + ترتيب الزر', value: 'r10', description: 'تنظيم الأزرار في البانل' },
-              { label: '11) مودال السبب وترتيب حقوله', value: 'r11', description: 'حقول من الأهم للأقل' },
+              { label: '9) ايموجي السبب', value: 'r9', description: 'ايموجي يظهر مع السبب' },
+              { label: '10) مودال السبب وترتيب حقوله', value: 'r10', description: 'حقول من الأهم للأقل' },
               { label: 'انهاء', value: 'finish' }
             ])
         )]
@@ -1635,21 +1625,9 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       if (c === 'r9') {
         const emo = await ask('**ايموجي السبب : (0 لاعادة التعيين)**');
         reason.emoji = emo === '0' ? '🎫' : (emo || reason.emoji);
-        const desc = await ask('**وصف السبب في المنيو : (0 لاعادة التعيين)**');
-        reason.description = desc === '0' ? '' : (desc || reason.description || '');
-        await notifySetupResult('**✅ تم تحديث ايموجي ووصف السبب.**');
+        await notifySetupResult('**✅ تم تحديث ايموجي السبب.**');
       }
       if (c === 'r10') {
-        const v = ((await ask('**لون الزر: primary / secondary / success / danger (0 لاعادة التعيين)**')) || '').toLowerCase();
-        if (v === '0') reason.buttonStyle = 'primary';
-        else if (['primary', 'secondary', 'success', 'danger'].includes(v)) reason.buttonStyle = v;
-
-        const order = Number(await ask('**ترتيب الزر (رقم من 1 الى 999 - 0 لاعادة التعيين)**'));
-        if (order === 0) reason.buttonOrder = idx;
-        else if (Number.isFinite(order) && order >= 1 && order <= 999) reason.buttonOrder = order;
-        await notifySetupResult('**✅ تم تحديث لون وترتيب زر السبب.**');
-      }
-      if (c === 'r11') {
         const enabled = ((await ask('**تفعيل مودال السبب؟ yes/no**')) || '').toLowerCase();
         if (!reason.openModal || typeof reason.openModal !== 'object') {
           reason.openModal = { enabled: false, title: '', description: '', fields: [] };
@@ -2164,7 +2142,6 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           beforeImage: '',
           afterImage: '',
           acceptanceMessage: '',
-          description: '',
           ...(config.reasons[key] || {})
         };
 
