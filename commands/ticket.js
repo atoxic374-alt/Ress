@@ -1496,28 +1496,29 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
 
   const mentionChunks = buildMentionChunks(getAdminRoles(config, reasonKey));
   const acceptanceText = config.reasons?.[reasonKey]?.acceptanceMessage || config.messages.acceptance;
-
-  const separatorHasImage = config.claimFromDedicatedChannel
-    && config.claimChannelSeparator
-    && isImageSettingValue(String(config.claimChannelSeparator))
-    && resolveImageForSend(config.claimChannelSeparator);
+  const acceptanceImage = acceptanceText && isImageSettingValue(String(acceptanceText))
+    ? resolveImageForSend(String(acceptanceText))
+    : null;
 
   if (acceptanceText) {
     const renderedAcceptanceText = renderTicketText(acceptanceText, interaction.user.id).trim();
-    if (renderedAcceptanceText) {
-      if (separatorHasImage) await targetChannel.send({ content: renderedAcceptanceText }).catch(() => {});
-      else await targetChannel.send(buildTicketMessagePayload('قبول التكت', renderedAcceptanceText)).catch(() => {});
+    if (acceptanceImage) {
+      await targetChannel.send({ files: [acceptanceImage] }).catch(() => {});
+    } else if (renderedAcceptanceText) {
+      await targetChannel.send({ content: renderedAcceptanceText }).catch(() => {});
     }
   }
   if (config.claimFromDedicatedChannel && config.claimChannelSeparator) {
     const separatorValue = config.claimChannelSeparator;
     const separatorImage = resolveImageForSend(separatorValue);
     const separatorMatchesReasonImage = Boolean(separatorImage && reasonImage && String(separatorImage) === String(reasonImage));
+    const separatorMatchesAcceptanceImage = Boolean(separatorImage && acceptanceImage && String(separatorImage) === String(acceptanceImage));
     const separatorMatchesAcceptance = Boolean(acceptanceText && String(separatorValue).trim() === String(acceptanceText).trim());
-    if (!separatorMatchesReasonImage && !separatorMatchesAcceptance && separatorImage && isImageSettingValue(String(separatorValue))) {
+    if (!separatorMatchesReasonImage && !separatorMatchesAcceptance && !separatorMatchesAcceptanceImage && separatorImage && isImageSettingValue(String(separatorValue))) {
       await targetChannel.send({ files: [separatorImage] }).catch(() => {});
-    } else if (!separatorMatchesReasonImage && !separatorMatchesAcceptance) {
-      await targetChannel.send({ content: separatorValue }).catch(() => {});
+    } else if (!separatorMatchesReasonImage && !separatorMatchesAcceptance && !separatorMatchesAcceptanceImage) {
+      const separatorContent = String(separatorValue || '').trim();
+      if (separatorContent) await targetChannel.send({ content: separatorContent }).catch(() => {});
     }
   }
 
