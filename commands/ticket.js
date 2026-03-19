@@ -1984,9 +1984,7 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId) {
       .setStyle(ButtonStyle.Primary)
   );
 
-  const reasonSettings = getReasonVisualSettings(config, ticket.reasonKey);
-  const reason = reasonSettings.reason;
-  const reasonImage = resolveImageForSend(reasonSettings.claimImage);
+  const reason = config.reasons?.[ticket.reasonKey] || {};
   const requestText = [
     '# طلب تغيير الاداري',
     `**العضو :** <@${ticket.memberId}>`,
@@ -1999,11 +1997,7 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId) {
       await targetChannel.send({ content: chunk });
     }
 
-    if (reasonImage) {
-      await targetChannel.send({ content: requestText, files: [reasonImage], components: [requestRow] });
-    } else {
-      await targetChannel.send({ content: requestText, components: [requestRow] });
-    }
+    await targetChannel.send({ content: requestText, components: [requestRow] });
   } catch {
     await interaction.editReply(buildTicketMessagePayload('خطأ', '**فشل إرسال طلب تغيير المستلم في شات القبول، تم إلغاء العملية.**', { ephemeral: true }));
     return;
@@ -2115,8 +2109,7 @@ async function handleReassignClaim(interaction, guildId, panelId, channelId) {
     }
   }
 
-  const claimImage = resolveImageForSend(getReasonVisualSettings(config, ticket.reasonKey).claimImage);
-  await sendClaimAnnounce({ channel: ticketChannel, config, ticket, claimerId: interaction.user.id, claimImage });
+  await sendClaimAnnounce({ channel: ticketChannel, config, ticket, claimerId: interaction.user.id, claimImage: null });
 
   await syncTicketLogMessage({
     guild: interaction.guild,
