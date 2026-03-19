@@ -1456,7 +1456,13 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
   const setupSessionKey = `${message.guild.id}:${message.author.id}`;
   const existingSession = activeTicketSetupSessions.get(setupSessionKey);
   if (existingSession && (Date.now() - existingSession.startedAt) < (30 * 60 * 1000)) {
-    await message.reply('**لديك جلسة إعداد تكت قيد العمل بالفعل.**').catch(() => {});
+    if (existingSession.sourceMessageId === message.id) return;
+    const setupLink = existingSession.messageId
+      ? `https://discord.com/channels/${message.guild.id}/${existingSession.channelId || message.channel.id}/${existingSession.messageId}`
+      : null;
+    await message.reply(setupLink
+      ? `**لديك جلسة إعداد تكت قيد العمل بالفعل.**\n**الرابط :** ${setupLink}`
+      : '**لديك جلسة إعداد تكت قيد العمل بالفعل.**').catch(() => {});
     return;
   }
 
@@ -1468,7 +1474,13 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     return;
   }
 
-  activeTicketSetupSessions.set(setupSessionKey, { startedAt: Date.now(), messageId: null, initializing: true });
+  activeTicketSetupSessions.set(setupSessionKey, {
+    startedAt: Date.now(),
+    messageId: null,
+    channelId: message.channel.id,
+    sourceMessageId: message.id,
+    initializing: true
+  });
 
   const controlChannel = message.channel;
   let setupMessage = null;
@@ -1696,7 +1708,13 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
   };
 
   setupMessage = await controlChannel.send({ embeds: [buildSetupEmbed()], components: buildMenuComponents() });
-  activeTicketSetupSessions.set(setupSessionKey, { startedAt: Date.now(), messageId: setupMessage.id, initializing: false });
+  activeTicketSetupSessions.set(setupSessionKey, {
+    startedAt: Date.now(),
+    messageId: setupMessage.id,
+    channelId: setupMessage.channel.id,
+    sourceMessageId: message.id,
+    initializing: false
+  });
 
   const collector = setupMessage.createMessageComponentCollector({
     filter: (i) => i.user.id === message.author.id && i.customId.startsWith('ticket_setup_menu_'),
