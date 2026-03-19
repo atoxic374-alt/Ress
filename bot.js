@@ -517,21 +517,24 @@ try {
   console.error('❌ خطأ في تسجيل معالجات setroom:', error);
 }
 
-// تسجيل معالجات الأنظمة المرتبطة بالتذاكر
+// تسجيل معالجات نظام التذاكر (settings menus)
 try {
   const ticketSettingsCommand = require('./commands/settings.js');
   if (ticketSettingsCommand.registerHandlers) {
     ticketSettingsCommand.registerHandlers(client);
-    console.log('✅ تم تسجيل معالجات إعدادات التذاكر (settings)');
+console.log('✅ تم تسجيل معالجات إعدادات التذاكر (settings)');
+
   }
 
   const ticketCommand = require('./commands/ticket.js');
+
   if (ticketCommand.registerHandlers) {
+
     ticketCommand.registerHandlers(client);
-    console.log('✅ تم تسجيل معالجات نظام ticket');
-  }
+
+    console.log('✅ تم تسجيل معالجات نظام ticket');  }
 } catch (error) {
-  console.error('❌ خطأ في تسجيل معالجات أنظمة التذاكر:', error);
+  console.error('❌ خطأ في تسجيل معالجات نظام التذاكر:', error);
 }
 
   // تسجيل معالج مودال الباكب
