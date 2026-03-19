@@ -1466,14 +1466,6 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     return;
   }
 
-  const member = await message.guild.members.fetch(message.author.id);
-  const isOwner = BOT_OWNERS.includes(message.author.id) || message.guild.ownerId === message.author.id;
-  const hasAdminRole = member.roles.cache.some((r) => ADMIN_ROLES.includes(r.id));
-  if (!isOwner && !hasAdminRole) {
-    await message.react('❌');
-    return;
-  }
-
   activeTicketSetupSessions.set(setupSessionKey, {
     startedAt: Date.now(),
     messageId: null,
@@ -1481,6 +1473,19 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     sourceMessageId: message.id,
     initializing: true
   });
+
+  const member = await message.guild.members.fetch(message.author.id).catch(() => null);
+  if (!member) {
+    activeTicketSetupSessions.delete(setupSessionKey);
+    return;
+  }
+  const isOwner = BOT_OWNERS.includes(message.author.id) || message.guild.ownerId === message.author.id;
+  const hasAdminRole = member.roles.cache.some((r) => ADMIN_ROLES.includes(r.id));
+  if (!isOwner && !hasAdminRole) {
+    activeTicketSetupSessions.delete(setupSessionKey);
+    await message.react('❌');
+    return;
+  }
 
   const controlChannel = message.channel;
   let setupMessage = null;
