@@ -1189,12 +1189,22 @@ function hasStaffAccess(member, config, reasonKey = null, ticket = null) {
   return hasRole;
 }
 
+function hasResponsibleTicketAccess(member, config, guild, ticket = null) {
+  const allowedRoleIds = getConfiguredResponsibleRoleIds(config, guild, ticket);
+  let memberRoleIds = [];
+
+  if (member?.roles?.cache) memberRoleIds = [...member.roles.cache.keys()];
+  else if (Array.isArray(member?.roles)) memberRoleIds = member.roles;
+  else if (Array.isArray(member?.roles?.value)) memberRoleIds = member.roles.value;
+  else if (Array.isArray(member?.roles?.ids)) memberRoleIds = member.roles.ids;
+
+  memberRoleIds = memberRoleIds.map((id) => String(id));
+  return memberRoleIds.some((id) => allowedRoleIds.includes(id));
+}
+
 function canManageTicket(interaction, ticket, config) {
   if (interaction.user.id === ticket.claimedBy) return true;
-  if (!ticket.claimedBy && Array.isArray(ticket?.transferredRoleIds) && ticket.transferredRoleIds.length) {
-    return hasStaffAccess(interaction.member, config, ticket?.reasonKey, ticket);
-  }
-  return isAdminOnly(interaction, config, ticket?.reasonKey);
+  return hasResponsibleTicketAccess(interaction.member, config, interaction.guild, ticket);
 }
 
 function canManagePostCloseControls(interaction, ticket, config) {
@@ -1210,7 +1220,7 @@ function canUserWriteInTicket(message, ticket, config) {
   if (ticket.memberId === userId) return true;
   if (ticket.claimedBy === userId) return true;
   if (Array.isArray(ticket.extraMembers) && ticket.extraMembers.includes(userId)) return true;
-  return hasStaffAccess(message.member, config, ticket?.reasonKey, ticket);
+  return hasResponsibleTicketAccess(message.member, config, message.guild, ticket);
 }
 
 async function recordUnauthorizedTicketMessage(message, ticket, config) {
@@ -1336,8 +1346,7 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
   const channelName = `${prefix}-${suffix}`.slice(0, 90);
   const categoryId = reason.categoryId || config.openCategoryId || null;
 
-  const adminRoles = getAdminRoles(config, reasonKey);
-  const allowedStaffRoles = [...new Set([...(config.responsibleRoleIds || []), ...adminRoles])]
+  const allowedStaffRoles = [...new Set([...(config.responsibleRoleIds || [])])]
     .map((roleId) => String(roleId || '').trim())
     .filter((roleId) => /^\d{16,20}$/.test(roleId) && guild.roles.cache.has(roleId));
 
@@ -3367,7 +3376,7 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   const allKnownRoles = [...new Set([...(config.responsibleRoleIds || []).map((id) => String(id)), ...targetRoles, ...adminRoles])];
 
   for (const roleId of allKnownRoles) {
-    const shouldSee = targetRoles.includes(roleId) || adminRoles.includes(roleId);
+    const shouldSee = targetRoles.includes(roleId);
     await interaction.channel.permissionOverwrites.edit(roleId, {
       ViewChannel: shouldSee,
       SendMessages: shouldSee,
