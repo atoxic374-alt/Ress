@@ -1239,6 +1239,17 @@ function canUserWriteInTicket(message, ticket, config) {
   return hasResponsibleTicketAccess(message.member, config, message.guild, ticket);
 }
 
+async function deleteClaimMessageIfEnabled(interaction, config) {
+  if (!config?.deleteClaimMessageOnClaim || !interaction?.message?.id) return false;
+  const directDelete = await interaction.message.delete().then(() => true).catch(() => false);
+  if (directDelete) return true;
+  const fallbackChannel = interaction.channel
+    || interaction.guild?.channels?.cache?.get?.(interaction.message.channelId)
+    || await interaction.guild?.channels?.fetch?.(interaction.message.channelId).catch(() => null);
+  if (!fallbackChannel?.messages?.delete) return false;
+  return fallbackChannel.messages.delete(interaction.message.id).then(() => true).catch(() => false);
+}
+
 async function recordUnauthorizedTicketMessage(message, ticket, config) {
   if (!message?.guild || !ticket || !config) return;
   await syncTicketLogMessage({
@@ -1298,13 +1309,16 @@ function sanitizeName(input) {
 
 async function buildTicketControls(guildId, panelId, channelId, config, options = {}) {
   const includeClaimButton = options.includeClaimButton !== false && !options.disableClaimButton;
+  const includeReassignButton = options.hideReassignButton !== true;
   const row1Buttons = [];
   if (includeClaimButton) row1Buttons.push(new ButtonBuilder().setCustomId(`ticket_claim_${guildId}_${panelId}_${channelId}`).setLabel('استلام').setStyle(ButtonStyle.Success));
   row1Buttons.push(
     new ButtonBuilder().setCustomId(`ticket_close_${guildId}_${panelId}_${channelId}`).setLabel('اقفال').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId(`ticket_rename_${guildId}_${panelId}_${channelId}`).setLabel('تغيير الاسم').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`ticket_reassign_${guildId}_${panelId}_${channelId}`).setLabel('تغيير المستلم').setStyle(ButtonStyle.Success)
+    new ButtonBuilder().setCustomId(`ticket_rename_${guildId}_${panelId}_${channelId}`).setLabel('تغيير الاسم').setStyle(ButtonStyle.Secondary)
   );
+  if (includeReassignButton) {
+    row1Buttons.push(new ButtonBuilder().setCustomId(`ticket_reassign_${guildId}_${panelId}_${channelId}`).setLabel('تغيير المستلم').setStyle(ButtonStyle.Success));
+  }
   const row1 = new ActionRowBuilder().addComponents(row1Buttons);
 
   const row2 = new ActionRowBuilder().addComponents(
@@ -1632,7 +1646,7 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
     const firstChunk = mentionChunks.shift() || null;
 
     if (config.deleteClaimMessageOnClaim) {
-      await interaction.message.delete().catch(() => {});
+      await deleteClaimMessageIfEnabled(interaction, config);
     } else {
       await interaction.message.edit({
         content: [firstChunk, buildClaimRequestContent(ticket, config, interaction.user.id)].filter(Boolean).join('\n'),
@@ -1758,7 +1772,7 @@ async function handleClaimFromRequest(interaction, reqId) {
       return new ActionRowBuilder().addComponents(components);
     });
     if (config.deleteClaimMessageOnClaim) {
-      await interaction.message.delete().catch(() => {});
+      await deleteClaimMessageIfEnabled(interaction, config);
     } else {
       await interaction.message.edit({
         content: buildClaimRequestContent(createdTicket, config, interaction.user.id),
@@ -2105,7 +2119,7 @@ async function handleReassignClaim(interaction, guildId, panelId, channelId) {
       return new ActionRowBuilder().addComponents(comps);
     });
     if (config.deleteClaimMessageOnClaim) {
-      await interaction.message.delete().catch(() => {});
+      await deleteClaimMessageIfEnabled(interaction, config);
     } else {
       await interaction.message.edit({
         content: buildClaimRequestContent(ticket, config, interaction.user.id),
@@ -3383,7 +3397,7 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   }
 
   if (!canManageTicket(interaction, ticket, config)) {
-    await interaction.editReply(buildTicketMessagePayload('خطأ', '**ليس لديك صلاحية التحويل.**')).catch(() => {});
+    await interaction.deleteReply().catch(() => {});
     return;
   }
 
@@ -3485,7 +3499,11 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   await interaction.channel.setName(renamed).catch(() => {});
 
   if (interaction.message?.editable) {
-    const refreshedControls = await buildTicketControls(guildId, resolvedPanelId, actionChannelId, config, { includeClaimButton: false, disableClaimButton: true });
+    const refreshedControls = await buildTicketControls(guildId, resolvedPanelId, actionChannelId, config, {
+      includeClaimButton: false,
+      disableClaimButton: true,
+      hideReassignButton: true
+    });
     await interaction.message.edit({ components: refreshedControls }).catch(() => {});
   }
 
@@ -4109,7 +4127,11 @@ function registerHandlers(client) {
           const { panelId: resolvedPanelId, config, ticket, actionChannelId } = getTicketContextFromInteraction(guildId, interaction, channelId, panelId);
           if (ticket && interaction.message?.editable) {
             const hasTransferredAssignment = Boolean(ticket.transferredRoleIds?.length || ticket.transferredUserIds?.length || ticket.transferredTo);
-            const refreshedControls = await buildTicketControls(guildId, resolvedPanelId, actionChannelId, config, { includeClaimButton: !hasTransferredAssignment, disableClaimButton: hasTransferredAssignment });
+            const refreshedControls = await buildTicketControls(guildId, resolvedPanelId, actionChannelId, config, {
+              includeClaimButton: !hasTransferredAssignment,
+              disableClaimButton: hasTransferredAssignment,
+              hideReassignButton: hasTransferredAssignment
+            });
             await interaction.message.edit({ components: refreshedControls }).catch(() => {});
           }
           return;
