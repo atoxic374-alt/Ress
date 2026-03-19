@@ -607,16 +607,9 @@ async function sendClaimAnnounce({ channel, config, ticket, claimerId, claimImag
 
   const claimEmbed = makeTicketEmbed('Ticket claimed', `**العضو :** <@${ticket.memberId}>\n**السبب :** ${reasonName}\n**المستلم :** <@${claimerId}>`);
 
-  if (claimImage) {
-    await channel.send({
-      files: [claimImage],
-      embeds: [claimEmbed]
-    }).catch(() => {});
-  } else {
-    await channel.send({
-      embeds: [claimEmbed]
-    }).catch(() => {});
-  }
+  await channel.send({
+    embeds: [claimEmbed]
+  }).catch(() => {});
 }
 
 function buildClaimRequestContent(ticket, config, claimerId = null) {
@@ -1198,6 +1191,9 @@ function hasStaffAccess(member, config, reasonKey = null, ticket = null) {
 
 function canManageTicket(interaction, ticket, config) {
   if (interaction.user.id === ticket.claimedBy) return true;
+  if (!ticket.claimedBy && Array.isArray(ticket?.transferredRoleIds) && ticket.transferredRoleIds.length) {
+    return hasStaffAccess(interaction.member, config, ticket?.reasonKey, ticket);
+  }
   return isAdminOnly(interaction, config, ticket?.reasonKey);
 }
 
@@ -3368,7 +3364,7 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     .map((id) => String(id || '').trim())
     .filter((id) => /^\d{16,20}$/.test(id) && interaction.guild.roles.cache.has(id));
   const adminRoles = getAdminRoles(config, ticket?.reasonKey);
-  const allKnownRoles = [...new Set([...(config.responsibleRoleIds || []).map((id) => String(id)), ...targetRoles])];
+  const allKnownRoles = [...new Set([...(config.responsibleRoleIds || []).map((id) => String(id)), ...targetRoles, ...adminRoles])];
 
   for (const roleId of allKnownRoles) {
     const shouldSee = targetRoles.includes(roleId) || adminRoles.includes(roleId);
