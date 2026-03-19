@@ -940,6 +940,13 @@ function getConfiguredResponsibleRoleIds(config, guild, ticket = null) {
     .filter((id) => /^\d{16,20}$/.test(id) && guild?.roles?.cache?.has(id));
 }
 
+function getActiveResponsibleRoleIds(config, guild, ticket = null) {
+  const generalRoleIds = (config?.responsibleRoleIds || []).map((id) => String(id || '').trim());
+  const transferredRoleIds = Array.isArray(ticket?.transferredRoleIds) ? ticket.transferredRoleIds.map((id) => String(id || '').trim()) : [];
+  return [...new Set([...generalRoleIds, ...transferredRoleIds])]
+    .filter((id) => /^\d{16,20}$/.test(id) && guild?.roles?.cache?.has(id));
+}
+
 function getClosedTicketViewerTargets(config, ticket, guild) {
   const roleIds = getConfiguredResponsibleRoleIds(config, guild, ticket);
   const userIds = [];
@@ -1190,7 +1197,7 @@ function hasStaffAccess(member, config, reasonKey = null, ticket = null) {
 }
 
 function hasResponsibleTicketAccess(member, config, guild, ticket = null) {
-  const allowedRoleIds = getConfiguredResponsibleRoleIds(config, guild, ticket);
+  const allowedRoleIds = getActiveResponsibleRoleIds(config, guild, ticket);
   let memberRoleIds = [];
 
   if (member?.roles?.cache) memberRoleIds = [...member.roles.cache.keys()];
@@ -1208,9 +1215,7 @@ function canManageTicket(interaction, ticket, config) {
 }
 
 function canManagePostCloseControls(interaction, ticket, config) {
-  const allowedRoleIds = getConfiguredResponsibleRoleIds(config, interaction.guild, ticket);
-  const memberRoleIds = interaction.member?.roles?.cache ? [...interaction.member.roles.cache.keys()].map((id) => String(id)) : [];
-  return memberRoleIds.some((id) => allowedRoleIds.includes(id));
+  return Boolean(ticket?.claimedBy && interaction.user.id === ticket.claimedBy);
 }
 
 function canUserWriteInTicket(message, ticket, config) {
@@ -1853,8 +1858,8 @@ async function closeTicketCore({
 
   if (ticket.claimedBy) {
     await channel.permissionOverwrites.edit(ticket.claimedBy, {
-      ViewChannel: false,
-      SendMessages: false,
+      ViewChannel: true,
+      SendMessages: true,
       ReadMessageHistory: true
     }).catch(() => {});
   }
@@ -3372,11 +3377,14 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   const targetRoles = (selected.roles || [])
     .map((id) => String(id || '').trim())
     .filter((id) => /^\d{16,20}$/.test(id) && interaction.guild.roles.cache.has(id));
+  const generalResponsibleRoles = (config.responsibleRoleIds || [])
+    .map((id) => String(id || '').trim())
+    .filter((id) => /^\d{16,20}$/.test(id) && interaction.guild.roles.cache.has(id));
   const adminRoles = getAdminRoles(config, ticket?.reasonKey);
-  const allKnownRoles = [...new Set([...(config.responsibleRoleIds || []).map((id) => String(id)), ...targetRoles, ...adminRoles])];
+  const allKnownRoles = [...new Set([...generalResponsibleRoles, ...targetRoles, ...adminRoles])];
 
   for (const roleId of allKnownRoles) {
-    const shouldSee = targetRoles.includes(roleId);
+    const shouldSee = targetRoles.includes(roleId) || generalResponsibleRoles.includes(roleId);
     await interaction.channel.permissionOverwrites.edit(roleId, {
       ViewChannel: shouldSee,
       SendMessages: shouldSee,
