@@ -718,9 +718,7 @@ function getReasonVisualSettings(config, reasonKey) {
     beforeText: pickReasonOverride(reason.beforeImage, config?.messages?.beforeImage),
     openImage: pickReasonOverride(reason.openImage, config?.messages?.ticketImage),
     afterText: pickReasonOverride(reason.afterImage, config?.messages?.afterImage),
-    acceptanceText: pickReasonOverride(reason.acceptanceMessage, config?.messages?.acceptance),
-    claimImage: pickReasonOverride(reason.claimImage, config?.messages?.ticketImage),
-    hasCustomClaimVisuals: Boolean(reason.acceptanceMessage || reason.claimImage)
+    claimImage: pickReasonOverride(reason.claimImage, config?.messages?.claimImage || config?.messages?.ticketImage)
   };
 }
 
@@ -774,7 +772,6 @@ function baseConfig() {
     hideOnClaim: false,
     claimFromDedicatedChannel: false,
     claimChannelId: null,
-    claimChannelSeparator: '────────────────',
     keepClosedTickets: false,
     deleteClaimMessageOnClaim: false,
     logChannelId: null,
@@ -782,9 +779,9 @@ function baseConfig() {
     autoCloseHours: 24,
     autoCloseWarningMinutes: 10,
     messages: {
-      acceptance: '',
       beforeImage: '',
       ticketImage: '',
+      claimImage: '',
       afterImage: ''
     },
     reasons: {},
@@ -1524,39 +1521,9 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
 
   const reasonSettings = getReasonVisualSettings(config, reasonKey);
   const reasonData = reasonSettings.reason;
-  const reasonImage = resolveImageForSend(reasonSettings.openImage);
-  const reasonHasOwnClaimVisuals = reasonSettings.hasCustomClaimVisuals;
+  const claimImage = resolveImageForSend(reasonSettings.claimImage);
 
   const mentionChunks = buildMentionChunks(getAdminRoles(config, reasonKey));
-  const acceptanceText = reasonHasOwnClaimVisuals
-    ? (reasonData.acceptanceMessage || '')
-    : reasonSettings.acceptanceText;
-  const acceptanceImage = acceptanceText && isImageSettingValue(String(acceptanceText))
-    ? resolveImageForSend(String(acceptanceText))
-    : null;
-
-  if (acceptanceText) {
-    const renderedAcceptanceText = renderTicketText(acceptanceText, interaction.user.id).trim();
-    if (acceptanceImage) {
-      await targetChannel.send({ files: [acceptanceImage] }).catch(() => {});
-    } else if (renderedAcceptanceText) {
-      await targetChannel.send({ content: renderedAcceptanceText }).catch(() => {});
-    }
-  }
-  if (config.claimFromDedicatedChannel && config.claimChannelSeparator && !reasonHasOwnClaimVisuals) {
-    const separatorValue = config.claimChannelSeparator;
-    const separatorImage = resolveImageForSend(separatorValue);
-    const reasonOverridesGlobalSeparatorImage = Boolean(separatorImage && reasonImage && isImageSettingValue(String(separatorValue)));
-    const separatorMatchesReasonImage = Boolean(separatorImage && reasonImage && String(separatorImage) === String(reasonImage));
-    const separatorMatchesAcceptanceImage = Boolean(separatorImage && acceptanceImage && String(separatorImage) === String(acceptanceImage));
-    const separatorMatchesAcceptance = Boolean(acceptanceText && String(separatorValue).trim() === String(acceptanceText).trim());
-    if (!reasonOverridesGlobalSeparatorImage && !separatorMatchesReasonImage && !separatorMatchesAcceptance && !separatorMatchesAcceptanceImage && separatorImage && isImageSettingValue(String(separatorValue))) {
-      await targetChannel.send({ files: [separatorImage] }).catch(() => {});
-    } else if (!reasonOverridesGlobalSeparatorImage && !separatorMatchesReasonImage && !separatorMatchesAcceptance && !separatorMatchesAcceptanceImage) {
-      const separatorContent = String(separatorValue || '').trim();
-      if (separatorContent) await targetChannel.send({ content: separatorContent }).catch(() => {});
-    }
-  }
 
   for (const chunk of mentionChunks) {
     await targetChannel.send({ content: chunk }).catch(() => {});
@@ -1564,8 +1531,8 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
 
   const requestSummary = `**العضو :** <@${interaction.user.id}>\n**السبب :** ${reasonData.name || `سبب ${reasonKey}`}${reasonData.description ? `\n**الوصف :** ${reasonData.description}` : ''}`;
 
-  if (reasonImage) {
-    await targetChannel.send({ content: requestSummary, files: [reasonImage], components: [row] });
+  if (claimImage) {
+    await targetChannel.send({ content: requestSummary, files: [claimImage], components: [row] });
   } else {
     await targetChannel.send({ content: requestSummary, components: [row] });
   }
@@ -1984,7 +1951,8 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId) {
       .setStyle(ButtonStyle.Primary)
   );
 
-  const reason = config.reasons?.[ticket.reasonKey] || {};
+  const reasonSettings = getReasonVisualSettings(config, ticket.reasonKey);
+  const reason = reasonSettings.reason;
   const requestText = [
     '# طلب تغيير الاداري',
     `**العضو :** <@${ticket.memberId}>`,
@@ -1997,7 +1965,12 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId) {
       await targetChannel.send({ content: chunk });
     }
 
-    await targetChannel.send({ content: requestText, components: [requestRow] });
+    const claimImage = resolveImageForSend(reasonSettings.claimImage);
+    if (claimImage) {
+      await targetChannel.send({ content: requestText, files: [claimImage], components: [requestRow] });
+    } else {
+      await targetChannel.send({ content: requestText, components: [requestRow] });
+    }
   } catch {
     await interaction.editReply(buildTicketMessagePayload('خطأ', '**فشل إرسال طلب تغيير المستلم في شات القبول، تم إلغاء العملية.**', { ephemeral: true }));
     return;
@@ -2109,7 +2082,8 @@ async function handleReassignClaim(interaction, guildId, panelId, channelId) {
     }
   }
 
-  await sendClaimAnnounce({ channel: ticketChannel, config, ticket, claimerId: interaction.user.id, claimImage: null });
+  const claimImage = resolveImageForSend(getReasonVisualSettings(config, ticket.reasonKey).claimImage);
+  await sendClaimAnnounce({ channel: ticketChannel, config, ticket, claimerId: interaction.user.id, claimImage });
 
   await syncTicketLogMessage({
     guild: interaction.guild,
@@ -2328,28 +2302,6 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     }
   };
 
-  const promptAndStoreTextOrImage = async ({
-    prompt,
-    currentValue,
-    slotKey
-  }) => {
-    const v = await ask(prompt, 180000, { preferAttachment: true });
-    if (!v) return currentValue;
-    if (v === '0') {
-      removeStoredImage(currentValue);
-      return '';
-    }
-    if (!/^https?:\/\//i.test(v)) {
-      removeStoredImage(currentValue);
-      return v;
-    }
-    try {
-      return await storeImageLocally(v, message.guild.id, slotKey, currentValue);
-    } catch {
-      return v;
-    }
-  };
-
   const notifySetupResult = async (text) => {
     await activePromptInteraction?.followUp(buildTicketMessagePayload('نتيجة التحديث', text, { ephemeral: true })).catch(() => {});
   };
@@ -2561,7 +2513,6 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           {
             name: 'رسائل السبب',
             value: [
-              `**رسالة القبول:** ${formatSettingValue(reason.acceptanceMessage)}`,
               `**رسالة قبل الصورة:** ${formatSettingValue(reason.beforeImage)}`,
               `**رسالة بعد الصورة:** ${formatSettingValue(reason.afterImage)}`
             ].join('\n'),
@@ -2615,15 +2566,14 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
               { label: '2) كاتوقري السبب', value: 'r2', description: 'كاتوقري مخصص لهذا السبب' },
               { label: '3) اسم التكت لهذا السبب', value: 'r3', description: 'اسم مخصص بدل الافتراضي' },
               { label: '4) وصف السبب', value: 'r4', description: 'يظهر داخل منيو الأسباب' },
-              { label: '5) رسالة القبول لهذا السبب', value: 'r5', description: 'تظهر في شات الاستلام' },
-              { label: '6) رسالة قبل صورة التكت', value: 'r6', description: 'داخل التكت قبل الصورة' },
-              { label: '7) رسالة بعد صورة التكت', value: 'r7', description: 'داخل التكت بعد الصورة وتحت منيو المسؤوليات' },
-              { label: '8) صورة الفتح لهذا السبب', value: 'r8', description: 'ترسل عند فتح التكت' },
-              { label: '9) صورة الاستلام لهذا السبب', value: 'r9', description: 'ترسل عند استلام التكت' },
-              { label: '10) ايموجي السبب', value: 'r10', description: 'ايموجي يظهر مع السبب' },
-              { label: '11) لون وترتيب زر السبب', value: 'r11', description: 'يعمل فقط إذا كانت طريقة العرض أزرار' },
-              { label: '12) رولات الإدارة الخاصة بهذا السبب', value: 'r12', description: 'تستبدل الرولات الإدارية العامة لهذا السبب فقط' },
-              { label: '13) مودال السبب وترتيب حقوله', value: 'r13', description: 'حقول من الأهم للأقل' },
+              { label: '5) رسالة قبل صورة التكت', value: 'r6', description: 'داخل التكت قبل الصورة' },
+              { label: '6) رسالة بعد صورة التكت', value: 'r7', description: 'داخل التكت بعد الصورة وتحت منيو المسؤوليات' },
+              { label: '7) صورة الفتح لهذا السبب', value: 'r8', description: 'ترسل عند فتح التكت' },
+              { label: '8) صورة الاستلام لهذا السبب', value: 'r9', description: 'تظهر في طلبات وإعلانات الاستلام' },
+              { label: '9) ايموجي السبب', value: 'r10', description: 'ايموجي يظهر مع السبب' },
+              { label: '10) لون وترتيب زر السبب', value: 'r11', description: 'يعمل فقط إذا كانت طريقة العرض أزرار' },
+              { label: '11) رولات الإدارة الخاصة بهذا السبب', value: 'r12', description: 'تستبدل الرولات الإدارية العامة لهذا السبب فقط' },
+              { label: '12) مودال السبب وترتيب حقوله', value: 'r13', description: 'حقول من الأهم للأقل' },
               { label: 'انهاء', value: 'finish' }
             ])
         )]
@@ -2659,11 +2609,6 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         const v = await ask('**وصف السبب : (0 لاعادة التعيين)**');
         reason.description = v === '0' ? '' : (v || reason.description || '');
         await notifySetupResult('**✅ تم تحديث وصف السبب.**');
-      }
-      if (c === 'r5') {
-        const v = await ask('**رسالة القبول لهذا السبب : (0 لاعادة التعيين)**');
-        reason.acceptanceMessage = v === '0' ? '' : (v || reason.acceptanceMessage || '');
-        await notifySetupResult('**✅ تم تحديث رسالة القبول الخاصة بالسبب.**');
       }
       if (c === 'r6') {
         const v = await ask('**رسالة قبل الصورة : (0 لاعادة التعيين)**');
@@ -2776,17 +2721,12 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
         .setDescription('**كل خيار يوضح مكان ظهور الرسالة داخل نظام التكت.**')
         .addFields(
           {
-            name: '1) رسالة القبول',
-            value: `**المكان:** شات الاستلام\n**القيمة الحالية:** ${formatSettingValue(config.messages.acceptance)}`,
-            inline: false
-          },
-          {
-            name: '2) رسالة قبل صورة التكت',
+            name: '1) رسالة قبل صورة التكت',
             value: `**المكان:** داخل شات التكت قبل الصورة\n**القيمة الحالية:** ${formatSettingValue(config.messages.beforeImage)}`,
             inline: false
           },
           {
-            name: '3) رسالة بعد صورة التكت',
+            name: '2) رسالة بعد صورة التكت',
             value: `**المكان:** داخل شات التكت بعد الصورة\n**القيمة الحالية:** ${formatSettingValue(config.messages.afterImage)}`,
             inline: false
           }
@@ -2799,9 +2739,8 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
             .setCustomId(`ticket_msg_menu_${message.author.id}_${Date.now()}`)
             .setPlaceholder('اختر اعداد الرسائل')
             .addOptions([
-              { label: '1) رسالة القبول - شات الاستلام', description: 'تظهر في روم طلبات الاستلام', value: 'm1' },
-              { label: '2) رسالة قبل الصورة - شات التكت', description: 'تظهر قبل صورة فتح التكت', value: 'm2' },
-              { label: '3) رسالة بعد الصورة - شات التكت', description: 'تظهر بعد صورة فتح التكت', value: 'm3' },
+              { label: '1) رسالة قبل الصورة - شات التكت', description: 'تظهر قبل صورة فتح التكت', value: 'm2' },
+              { label: '2) رسالة بعد الصورة - شات التكت', description: 'تظهر بعد صورة فتح التكت', value: 'm3' },
               { label: 'انهاء', value: 'finish' }
             ])
         )]
@@ -2818,11 +2757,6 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       const c = pick.values?.[0];
       if (c === 'finish') { done = true; break; }
 
-      if (c === 'm1') {
-        const v = await ask('**رسالة القبول (تظهر في شات الاستلام) : (0 لاعادة التعيين)**');
-        config.messages.acceptance = v === '0' ? '' : (v || '');
-        await activePromptInteraction?.followUp(buildTicketMessagePayload('تم', '**✅ تم تحديث رسالة القبول.**', { ephemeral: true })).catch(() => {});
-      }
       if (c === 'm2') {
         const v = await ask('**رسالة قبل صورة التكت (داخل شات التكت) : (0 لاعادة التعيين)**');
         config.messages.beforeImage = v === '0' ? '' : (v || '');
@@ -2850,8 +2784,8 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
             inline: false
           },
           {
-            name: '2) صورة/نص فاصل شات الاستلام',
-            value: `**المكان:** داخل شات الاستلام بين الطلبات\n**القيمة الحالية:** ${formatSettingValue(config.claimChannelSeparator)}`,
+            name: '2) صورة الاستلام العامة',
+            value: `**المكان:** طلبات/إعلانات الاستلام\n**القيمة الحالية:** ${formatSettingValue(config.messages.claimImage || config.messages.ticketImage)}`,
             inline: false
           },
           {
@@ -2869,7 +2803,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
             .setPlaceholder('اختر اعداد الصور')
             .addOptions([
               { label: '1) صورة التكت العامة', description: 'تظهر داخل شات التكت', value: 'i1' },
-              { label: '2) صورة/نص فاصل شات الاستلام', description: 'يظهر بين طلبات الاستلام', value: 'i2' },
+              { label: '2) صورة الاستلام العامة', description: 'تظهر في طلبات وإعلانات الاستلام', value: 'i2' },
               { label: '3) صور السبب', description: 'لكل سبب: فتح + استلام', value: 'i3' },
               { label: 'انهاء', value: 'finish' }
             ])
@@ -2897,11 +2831,11 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       }
 
       if (c === 'i2') {
-        config.claimChannelSeparator = await promptAndStoreImage({
-          prompt: '**صورة فاصل شات الاستلام: ارسل رابط صورة او ارفق صورة (0 للحذف)**',
-          currentValue: config.claimChannelSeparator,
-          slotKey: 'claim_separator',
-          failureText: '**❌ فشل حفظ صورة الفاصل.**'
+        config.messages.claimImage = await promptAndStoreImage({
+          prompt: '**صورة الاستلام العامة: ارسل رابط صورة او ارفق صورة (0 للحذف)**',
+          currentValue: config.messages.claimImage,
+          slotKey: 'global_claim_image',
+          failureText: '**❌ فشل حفظ صورة الاستلام العامة.**'
         });
       }
 
@@ -2924,7 +2858,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           embeds: [normalizeEmbedForStandardMessage(
             colorManager.createEmbed().setTitle(`**صور السبب ${idx}**`).setDescription([
               `**صورة الفتح (داخل شات التكت عند الانشاء):** ${formatSettingValue(reason.openImage)}`,
-              `**صورة الاستلام (عند استلام التكت):** ${formatSettingValue(reason.claimImage)}`
+              `**صورة الاستلام (في طلبات وإعلانات الاستلام):** ${formatSettingValue(reason.claimImage)}`
             ].join('\n')),
             '**اختر نوع الصورة لهذا السبب.**'
           )],
@@ -3181,11 +3115,6 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
             return;
           }
           config.claimChannelId = askedChannel;
-          config.claimChannelSeparator = await promptAndStoreTextOrImage({
-            prompt: '**ارسل : فاصل شات الاستلام (نص أو صورة) - 0 للتفريغ**',
-            currentValue: config.claimChannelSeparator,
-            slotKey: 'claim_separator'
-          });
         }
         await refresh(`**✅ تم التحديث : ${config.claimFromDedicatedChannel ? 'مفعل' : 'مقفل'}**`);
         await notifySetupResult(`**✅ حالة شات الاستلام المخصص: ${config.claimFromDedicatedChannel ? 'مفعل' : 'مقفل'}.**`);
@@ -3240,7 +3169,6 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           claimImage: '',
           beforeImage: '',
           afterImage: '',
-          acceptanceMessage: '',
           useCustomAdminRoles: false,
           adminRoleIds: [],
           description: '',
