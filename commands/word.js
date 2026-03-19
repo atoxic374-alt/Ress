@@ -94,18 +94,27 @@ function isBotOwner(userId, BOT_OWNERS = []) {
     return BOT_OWNERS.includes(userId);
 }
 
-function canUseWord(member, entry, BOT_OWNERS = []) {
-    if (!member) return false;
+function getAllowedRoleIds(entry) {
+    if (!Array.isArray(entry?.allowedRoleIds) || entry.allowedRoleIds.length === 0) {
+        return [];
+    }
 
-    if (isBotOwner(member.id, BOT_OWNERS)) return true;
-    if (member.guild.ownerId === member.id) return true;
+    return [...new Set(entry.allowedRoleIds.map(String))];
+}
+
+function canUseWord(member, entry, _BOT_OWNERS = []) {
+    if (!member || !entry) return false;
 
     if (entry.allowedMode === 'admin') {
         const adminRoles = getAdminRoles();
+        if (adminRoles.length === 0) return false;
         return member.roles.cache.some(role => adminRoles.includes(role.id));
     }
 
-    return member.roles.cache.some(role => (entry.allowedRoleIds || []).includes(role.id));
+    const allowedRoleIds = getAllowedRoleIds(entry);
+    if (allowedRoleIds.length === 0) return false;
+
+    return member.roles.cache.some(role => allowedRoleIds.includes(role.id));
 }
 
 function findClosestRole(guild, rawInput) {
@@ -223,9 +232,10 @@ function upsertWord(guildId, wordEntry) {
 
 function buildWordPreview(entry, guild) {
     const keywordsText = getEntryKeywords(entry).join(' ، ') || '—';
+    const allowedRoleIds = getAllowedRoleIds(entry);
     const allowedText = entry.allowedMode === 'admin'
-        ? 'جميع رولات الأدمن '
-        : entry.allowedRoleIds.map(id => guild.roles.cache.get(id)?.toString() || `\`${id}\``).join(' , ') || '—';
+        ? 'جميع رولات الأدمن'
+        : allowedRoleIds.map(id => guild.roles.cache.get(id)?.toString() || `\`${id}\``).join(' , ') || '—';
 
     return colorManager.createEmbed()
         .setTitle('**Saved word**')
@@ -253,9 +263,10 @@ function buildWordSystemEmbed(guild) {
         ? '**لا توجد كلمات مضافة حالياً.**'
         : words.map((entry, index) => {
             const prefixes = getEntryKeywords(entry).join('  ,  ') || '—';
+            const allowedRoleIds = getAllowedRoleIds(entry);
             const allowedText = entry.allowedMode === 'admin'
                 ? 'كل الادارة'
-                : `${(entry.allowedRoleIds || []).length} رول`;
+                : `${allowedRoleIds.length} رول`;
 
             return [
                 `**`,
