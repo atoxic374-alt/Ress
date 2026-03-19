@@ -613,7 +613,7 @@ async function handleMessage(message, context) {
         if (entry.noPermMessage) {
             await message.reply(entry.noPermMessage).catch(() => {});
         } else {
-            await message.react('❌').catch(() => {});
+            await message.react('<:emoji_44:1481252878604697692>').catch(() => {});
         }
         return true;
     }
@@ -628,7 +628,7 @@ async function handleMessage(message, context) {
         const removeResult = await targetMember.roles.remove(entry.targetRoleId).then(() => true).catch(() => false);
         if (!removeResult) {
             await message.reply('❌ **فشل إزالة الرول من الهدف (تحقق من صلاحيات البوت وترتيب الرولات).**').catch(() => {});
-            await message.react('❌').catch(() => {});
+            await message.react('<:emoji_44:1481252878604697692>').catch(() => {});
             return true;
         }
         await message.react('<:emoji_42:1481252567227826388>').catch(() => {});
