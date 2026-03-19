@@ -483,6 +483,24 @@ function getTicketContextFromInteraction(guildId, interaction, channelId, prefer
   };
 }
 
+function findPendingRequestContext(guildId, reqId, preferredPanelId = 'default') {
+  const direct = getPanelData(guildId, preferredPanelId || 'default');
+  if (direct.pendingRequests?.[reqId]) {
+    return { panelId: preferredPanelId || 'default', ...direct, req: direct.pendingRequests[reqId] };
+  }
+
+  const { guild } = getGuildData(guildId);
+  for (const [panelId, panel] of Object.entries(guild.panels || {})) {
+    const pendingRequests = panel?.pendingRequests || {};
+    if (pendingRequests[reqId]) {
+      const { config, tickets, pendingRequests: resolvedPendingRequests } = getPanelData(guildId, panelId);
+      return { panelId, config, tickets, pendingRequests: resolvedPendingRequests, req: resolvedPendingRequests[reqId] };
+    }
+  }
+
+  return null;
+}
+
 function touchTicketActivity(ticket, timestamp = Date.now()) {
   if (!ticket || ticket.status !== 'open') return false;
   ticket.lastActivityAt = timestamp;
@@ -1036,15 +1054,24 @@ async function handleClaimFromRequest(interaction, reqId) {
   }
   ticketClaimLocks.add(lockKey);
   try {
-  const [guildId, panelId = 'default'] = reqId.split('_');
-  const { config, tickets, pendingRequests } = getPanelData(guildId, panelId);
-  const pruned = prunePendingRequests(pendingRequests);
-  if (pruned) setGuildData(guildId, config, tickets, pendingRequests, panelId);
-  const req = pendingRequests[reqId];
+  const [guildId, preferredPanelId = 'default'] = reqId.split('_');
+  let requestContext = findPendingRequestContext(guildId, reqId, preferredPanelId);
 
-  if (!req) {
+  if (!requestContext) {
     await interaction.editReply(buildTicketMessagePayload('تنبيه', '**انتهى الطلب.**', { user: interaction.user }));
     return;
+  }
+
+  let { panelId, config, tickets, pendingRequests, req } = requestContext;
+  const pruned = prunePendingRequests(pendingRequests);
+  if (pruned) {
+    setGuildData(guildId, config, tickets, pendingRequests, panelId);
+    requestContext = findPendingRequestContext(guildId, reqId, panelId);
+    if (!requestContext) {
+      await interaction.editReply(buildTicketMessagePayload('تنبيه', '**انتهى الطلب.**', { user: interaction.user }));
+      return;
+    }
+    ({ panelId, config, tickets, pendingRequests, req } = requestContext);
   }
 
   if (!hasStaffAccess(interaction.member, config, req?.reasonKey)) {
@@ -1272,7 +1299,7 @@ async function handleClose(interaction, guildId, panelId, channelId) {
     channel: interaction.channel,
     guildId,
     panelId: resolvedPanelId,
-    channelId,
+    channelId: actionChannelId,
     config,
     tickets,
     pendingRequests,
@@ -1313,7 +1340,7 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId) {
   const mentionChunks = buildMentionChunks(getAdminRoles(config, ticket?.reasonKey));
   const requestRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`ticket_reassign_claim_${guildId}_${panelId || 'default'}_${channelId}`)
+      .setCustomId(`ticket_reassign_claim_${guildId}_${resolvedPanelId}_${actionChannelId}`)
       .setLabel('استلام المستلم الجديد')
       .setStyle(ButtonStyle.Primary)
   );
@@ -1324,7 +1351,7 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId) {
     '# طلب تغيير الاداري',
     `**العضو :** <@${ticket.memberId}>`,
     `**السبب :** ${reason.name || `سبب ${ticket.reasonKey}`}`,
-    `**التكت :** <#${channelId}>`
+    `**التكت :** <#${actionChannelId}>`
   ].join('\n');
 
   try {
@@ -1359,6 +1386,9 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId) {
   }
 
   setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
+  await interaction.channel.send({
+    content: `**تم تغير المستلم :** ${previousClaimer ? `<@${previousClaimer}>` : (interaction.user.id ? `<@${interaction.user.id}>` : 'غير محدد')}\n**انتظر المستلم الجديد.**`
+  }).catch(() => {});
   await interaction.reply(buildTicketMessagePayload('تم', '**تم إخراجك من التكت وإرسال طلب استلام جديد.**', { ephemeral: true }));
 }
 
@@ -2464,9 +2494,19 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
             return;
           }
           config.claimChannelId = askedChannel;
-          const sep = await ask('**ارسل : فاصل شات الاستلام كنص فقط (0 للتفريغ) - الصور من خيار اعدادات الصور**');
+          const sep = await ask('**ارسل : فاصل شات الاستلام كنص فقط (0 للتفريغ) - وإذا أرسلت رابط صورة فسيتم حفظه تلقائيًا ضمن إعدادات الصور**');
           if (sep === '0') config.claimChannelSeparator = '';
-          else if (sep) config.claimChannelSeparator = sep;
+          else if (sep) {
+            if (/^https?:\/\//i.test(sep)) {
+              try {
+                config.claimChannelSeparator = await storeImageLocally(sep, message.guild.id, 'claim_separator', config.claimChannelSeparator);
+              } catch {
+                config.claimChannelSeparator = sep;
+              }
+            } else {
+              config.claimChannelSeparator = sep;
+            }
+          }
         }
         await refresh(`**✅ تم التحديث : ${config.claimFromDedicatedChannel ? 'مفعل' : 'مقفل'}**`);
         await notifySetupResult(`**✅ حالة شات الاستلام المخصص: ${config.claimFromDedicatedChannel ? 'مفعل' : 'مقفل'}.**`);
@@ -2647,7 +2687,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 
 async function handleTransferResponsibility(interaction, guildId, panelId, channelId, value) {
   if (!interaction.deferred && !interaction.replied) {
-    await interaction.deferReply({ ephemeral: true }).catch(() => {});
+    await interaction.deferReply().catch(() => {});
   }
 
   if (!value || value === 'resp_none') {
@@ -2750,7 +2790,7 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
 
   await interaction.editReply({
     content: mentions.join(' ') || null,
-    ...buildTicketMessagePayload('تحويل', `**تم تحويل التكت لمسؤولين : ${respName}**\n**المتصلون الآن:** ${onlineResponsibleMentions.join(' ') || 'لا يوجد'}\n**الرولات:** ${targetRoles.map((id) => `<@&${id}>`).join(' ') || 'لا يوجد'}`, { ephemeral: true })
+    ...buildTicketMessagePayload('تحويل', `**تم تحويل التكت لمسؤولين : ${respName}**\n**المتصلون الآن:** ${onlineResponsibleMentions.join(' ') || 'لا يوجد'}\n**الرولات:** ${targetRoles.map((id) => `<@&${id}>`).join(' ') || 'لا يوجد'}`)
   }).catch(() => {});
 }
 
