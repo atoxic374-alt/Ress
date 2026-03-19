@@ -26,6 +26,7 @@ const dataPath = path.join(__dirname, '..', 'data', 'ticketConfig.json');
 const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
 const ticketImagesDir = path.join(__dirname, '..', 'data', 'ticket_images');
 const pointsPath = path.join(__dirname, '..', 'data', 'points.json');
+const ticketSearchSessions = new Map();
 
 let handlersRegistered = false;
 const pingCooldowns = new Map();
@@ -172,16 +173,60 @@ function loadPoints() {
 }
 
 function savePoints(points) {
-  fs.writeFileSync(pointsPath, JSON.stringify(points, null, 2), 'utf8');
+  writeJsonAtomic(pointsPath, points);
+}
+
+function writeJsonAtomic(filePath, value) {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(value, null, 2), 'utf8');
+  fs.renameSync(tempPath, filePath);
+}
+
+function buildLogEvent(type, message, extra = {}) {
+  return {
+    id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    type: String(type || 'note'),
+    message: String(message || '').trim(),
+    at: Number(extra.at || Date.now()),
+    actorId: extra.actorId ? String(extra.actorId) : null,
+    targetId: extra.targetId ? String(extra.targetId) : null,
+    metadata: extra.metadata && typeof extra.metadata === 'object' ? extra.metadata : {}
+  };
+}
+
+function formatTicketLogEvent(event) {
+  if (!event) return '';
+  if (typeof event === 'string') return event.trim();
+  if (typeof event.message === 'string' && event.message.trim()) return event.message.trim();
+  const label = String(event.type || 'note');
+  return `[${label}]`;
 }
 
 function appendTicketLogEntry(ticket, entry) {
   if (!ticket) return;
-  const normalized = String(entry || '').trim();
-  if (!normalized) return;
+  const normalized = typeof entry === 'object' && entry !== null
+    ? buildLogEvent(entry.type, entry.message, entry)
+    : buildLogEvent('note', String(entry || '').trim());
+  if (!normalized.message) return;
+  if (!Array.isArray(ticket.logEvents)) ticket.logEvents = [];
+  ticket.logEvents.push(normalized);
+  if (ticket.logEvents.length > 40) ticket.logEvents = ticket.logEvents.slice(-40);
   if (!Array.isArray(ticket.logHistory)) ticket.logHistory = [];
-  ticket.logHistory.push(normalized);
+  ticket.logHistory.push(formatTicketLogEvent(normalized));
   if (ticket.logHistory.length > 12) ticket.logHistory = ticket.logHistory.slice(-12);
+}
+
+function getTicketLogTimeline(ticket, limit = 8) {
+  const events = Array.isArray(ticket?.logEvents) ? ticket.logEvents.slice(-limit) : [];
+  return events
+    .map((event) => {
+      const at = Number(event?.at || 0);
+      const time = at ? new Date(at).toISOString() : 'unknown-time';
+      return `• ${time} — ${escapeHtml(formatTicketLogEvent(event))}`;
+    })
+    .join('<br>');
 }
 
 function escapeHtml(value) {
@@ -200,6 +245,41 @@ function isImageLikeAttachment(attachment) {
   return contentType.startsWith('image/')
     || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name)
     || /\.(png|jpe?g|gif|webp|bmp|svg)(\?|$)/i.test(url);
+}
+
+function buildTranscriptAvatar(author) {
+  const url = author?.displayAvatarURL?.({ extension: 'png', forceStatic: false, size: 128 })
+    || author?.avatarURL?.({ extension: 'png', forceStatic: false, size: 128 })
+    || author?.avatarURL?.()
+    || '';
+  if (url) {
+    return `<img class="avatar-img" src="${escapeHtml(url)}" alt="${escapeHtml(author?.tag || author?.username || 'avatar')}" loading="lazy">`;
+  }
+  const fallback = String(author?.tag || author?.username || author?.id || '??').slice(0, 2).toUpperCase();
+  return `<div class="avatar-fallback">${escapeHtml(fallback)}</div>`;
+}
+
+function formatTranscriptEmbeds(embeds = []) {
+  return embeds.map((e) => {
+    const parts = [];
+    if (e.author?.name) parts.push(`<div class="embed-author">${escapeHtml(e.author.name)}</div>`);
+    if (e.title) parts.push(`<div class="embed-title">${escapeHtml(e.title)}</div>`);
+    if (e.description) parts.push(`<div class="embed-description">${escapeHtml(e.description).replace(/\n/g, '<br>')}</div>`);
+    if (Array.isArray(e.fields) && e.fields.length) {
+      const fields = e.fields.slice(0, 15).map((field) => `
+        <div class="embed-field">
+          <div class="embed-field-name">${escapeHtml(field.name || '-')}</div>
+          <div class="embed-field-value">${escapeHtml(field.value || '-').replace(/\n/g, '<br>')}</div>
+        </div>
+      `).join('');
+      parts.push(`<div class="embed-fields">${fields}</div>`);
+    }
+    if (e.footer?.text) parts.push(`<div class="embed-footer">${escapeHtml(e.footer.text)}</div>`);
+    const mediaUrl = e.image?.url || e.thumbnail?.url || null;
+    if (mediaUrl) parts.push(`<div class="media"><img src="${escapeHtml(mediaUrl)}" alt="embed-media" loading="lazy"></div>`);
+    if (!parts.length) return '';
+    return `<section class="embed-card">${parts.join('')}</section>`;
+  }).filter(Boolean).join('');
 }
 
 async function buildTicketTranscript(channel, maxMessages = 200) {
@@ -226,18 +306,18 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
             return `<div class="attachment">${imagePreview}<a href="${escapeHtml(a.url)}" target="_blank" rel="noreferrer">${escapeHtml(a.name || a.url)}</a></div>`;
           }).join('<br>')
           : '';
-        const embeds = msg.embeds?.length
-          ? msg.embeds.map((e) => {
-            const text = [e.title, e.description].filter(Boolean).map(escapeHtml).join(' — ');
-            const mediaUrl = e.image?.url || e.thumbnail?.url || null;
-            const media = mediaUrl ? `<div class="media"><img src="${escapeHtml(mediaUrl)}" alt="embed-media" loading="lazy"></div>` : '';
-            return [text, media].filter(Boolean).join('<br>');
-          }).filter(Boolean).join('<br>')
+        const embeds = msg.embeds?.length ? formatTranscriptEmbeds(msg.embeds) : '';
+        const stickers = msg.stickers?.size
+          ? `<div class="sticker-list">${[...msg.stickers.values()].map((sticker) => `🎟️ ${escapeHtml(sticker.name || sticker.id || 'sticker')}`).join('<br>')}</div>`
           : '';
-        const blocks = [content, attachments, embeds].filter(Boolean).join('<br>');
+        const reactions = msg.reactions?.cache?.size
+          ? `<div class="reactions">${[...msg.reactions.cache.values()].map((reaction) => `:${escapeHtml(reaction.emoji?.name || 'emoji')}: ×${reaction.count || 1}`).join(' ')}</div>`
+          : '';
+        const reference = msg.reference?.messageId ? `<div class="reply-ref">↪️ Reply to message ${escapeHtml(msg.reference.messageId)}</div>` : '';
+        const blocks = [reference, content, attachments, embeds, stickers, reactions].filter(Boolean).join('<br>');
         rows.push(`
           <article class="message">
-            <div class="avatar">${escapeHtml(author.slice(0, 2).toUpperCase())}</div>
+            <div class="avatar">${buildTranscriptAvatar(msg.author)}</div>
             <div class="content">
               <div class="meta">
                 <span class="author">${escapeHtml(author)}</span>
@@ -255,6 +335,7 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
     }
 
     if (rows.length === 0) return null;
+    const logTimeline = getTicketLogTimeline(channel.ticketMeta || null);
     const fileName = `transcript-${channel.id}.html`;
     const html = `<!doctype html>
 <html lang="ar">
@@ -271,7 +352,9 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
     .header p { margin: 4px 0; color: #b5bac1; }
     .message { display: flex; gap: 12px; padding: 12px 10px; border-radius: 12px; }
     .message:hover { background: rgba(255,255,255,0.03); }
-    .avatar { width: 40px; height: 40px; border-radius: 50%; background: #5865f2; display: flex; align-items: center; justify-content: center; font-weight: 700; flex: 0 0 40px; }
+    .avatar { width: 40px; height: 40px; border-radius: 50%; overflow: hidden; background: #5865f2; display: flex; align-items: center; justify-content: center; font-weight: 700; flex: 0 0 40px; }
+    .avatar-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .avatar-fallback { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
     .content { min-width: 0; flex: 1; }
     .meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-bottom: 4px; }
     .author { font-weight: 700; color: #fff; }
@@ -281,6 +364,11 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
     .body a:hover { text-decoration: underline; }
     .attachment { display: grid; gap: 6px; }
     .media img { max-width: min(100%, 520px); border-radius: 12px; border: 1px solid #3f4147; display: block; }
+    .embed-card { margin-top: 8px; border-left: 4px solid #5865f2; background: #2b2d31; border-radius: 8px; padding: 10px 12px; display: grid; gap: 8px; }
+    .embed-author, .embed-footer, .reply-ref, .reactions, .sticker-list { color: #b5bac1; font-size: 12px; }
+    .embed-title, .embed-field-name { font-weight: 700; color: #fff; }
+    .embed-fields { display: grid; gap: 8px; }
+    .timeline { margin-bottom: 16px; background: #1e1f22; border: 1px solid #3f4147; border-radius: 12px; padding: 14px 16px; }
     .muted { color: #949ba4; }
     @media (max-width: 640px) { .wrap { padding: 12px 8px 32px; } .header h1 { font-size: 18px; } }
   </style>
@@ -292,6 +380,7 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
       <p>Channel ID: ${escapeHtml(channel.id)}</p>
       <p>Generated at: ${escapeHtml(new Date().toISOString())}</p>
     </section>
+    ${logTimeline ? `<section class="timeline"><strong>Ticket activity</strong><br>${logTimeline}</section>` : ''}
     ${rows.join('\n')}
   </main>
 </body>
@@ -322,6 +411,28 @@ async function sendTranscriptOutsideTicket(interaction, transcriptFile, label = 
   }
 }
 
+async function retryAsync(fn, attempts = 3) {
+  let lastError = null;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      const result = await fn(i);
+      if (result) return result;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError) throw lastError;
+  return null;
+}
+
+async function sendTranscriptToLogChannel(logChannel, transcriptFile) {
+  if (!logChannel || !transcriptFile) return null;
+  const message = await retryAsync(() => logChannel.send({ files: [transcriptFile] }).catch(() => null), 2);
+  if (!message) return null;
+  const attachment = [...message.attachments.values()].find((item) => String(item.name || '').startsWith('transcript-'));
+  return attachment?.url || null;
+}
+
 async function syncTicketLogMessage({
   guild,
   config,
@@ -336,18 +447,25 @@ async function syncTicketLogMessage({
 
   const logChannel = guild.channels.cache.get(logChannelId)
     || await guild.channels.fetch(logChannelId).catch(() => null);
-  if (!logChannel || !logChannel.isTextBased?.()) return false;
+  if (!logChannel || !logChannel.isTextBased?.()) {
+    ticket.logSyncFailedAt = Date.now();
+    ticket.logSyncError = 'LOG_CHANNEL_UNAVAILABLE';
+    return false;
+  }
 
-  appendTicketLogEntry(ticket, actionText);
+  appendTicketLogEntry(ticket, typeof actionText === 'object' ? actionText : { type: 'action', message: actionText, actorId: actor?.id || null });
 
   const reason = config.reasons?.[ticket.reasonKey] || {};
   const historyText = (ticket.logHistory || []).slice(-12).map((line, index) => `${index + 1}) ${line}`).join('\n') || 'لا يوجد';
   const statusLabel = ticket.status === 'closed' ? 'Closed / مغلق' : 'Open / مفتوح';
+  const transcriptUrl = transcriptFile ? await sendTranscriptToLogChannel(logChannel, transcriptFile).catch(() => null) : (ticket.lastTranscriptUrl || null);
+  if (transcriptUrl) ticket.lastTranscriptUrl = transcriptUrl;
   const summaryLines = [
     `**Ticket :** ${channelId ? `<#${channelId}>` : (ticket.channelId ? `<#${ticket.channelId}>` : 'غير محدد')}`,
     `**Member :** ${ticket.memberId ? `<@${ticket.memberId}>` : 'غير محدد'}`,
     `**Reason :** ${reason.name || `سبب ${ticket.reasonKey || '-'}`}`,
     `**Status :** ${statusLabel}`,
+    transcriptUrl ? `**Transcript :** [Open transcript](${transcriptUrl})` : null,
     '',
     '**Results / النتائج :**',
     historyText
@@ -379,45 +497,25 @@ async function syncTicketLogMessage({
   }
 
   const payload = { embeds: [embed] };
-  if (transcriptFile) payload.files = [transcriptFile];
 
   let savedMessage = null;
+  ticket.logSyncFailedAt = null;
+  ticket.logSyncError = null;
   if (ticket.logMessageId) {
-    const existing = await logChannel.messages.fetch(ticket.logMessageId).catch(() => null);
+    const existing = await retryAsync(() => logChannel.messages.fetch(ticket.logMessageId).catch(() => null), 2).catch(() => null);
     if (existing?.editable) {
-      savedMessage = await existing.edit(payload).catch(() => null);
-      if (savedMessage && transcriptFile) {
-        const transcriptAttachment = [...savedMessage.attachments.values()].find((attachment) => String(attachment.name || '').startsWith('transcript-'));
-        if (transcriptAttachment) {
-          const buttonRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setStyle(ButtonStyle.Link)
-              .setLabel('Transcript')
-              .setURL(transcriptAttachment.url)
-          );
-          await savedMessage.edit({ embeds: [embed], components: [buttonRow] }).catch(() => {});
-        }
-      }
-      return true;
+      savedMessage = await retryAsync(() => existing.edit(payload).catch(() => null), 2).catch(() => null);
+      if (savedMessage) return true;
     }
   }
 
-  const sent = await logChannel.send(payload).catch(() => null);
-  if (!sent) return false;
-  ticket.logMessageId = sent.id;
-  savedMessage = sent;
-  if (savedMessage && transcriptFile) {
-    const transcriptAttachment = [...savedMessage.attachments.values()].find((attachment) => String(attachment.name || '').startsWith('transcript-'));
-    if (transcriptAttachment) {
-      const buttonRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setStyle(ButtonStyle.Link)
-          .setLabel('Transcript')
-          .setURL(transcriptAttachment.url)
-      );
-      await savedMessage.edit({ embeds: [embed], components: [buttonRow] }).catch(() => {});
-    }
+  const sent = await retryAsync(() => logChannel.send(payload).catch(() => null), 2).catch(() => null);
+  if (!sent) {
+    ticket.logSyncFailedAt = Date.now();
+    ticket.logSyncError = 'LOG_MESSAGE_SEND_FAILED';
+    return false;
   }
+  ticket.logMessageId = sent.id;
   return true;
 }
 
@@ -491,7 +589,7 @@ function loadStore() {
 }
 
 function saveStore(store) {
-  fs.writeFileSync(dataPath, JSON.stringify(store, null, 2), 'utf8');
+  writeJsonAtomic(dataPath, store);
 }
 
 function loadResponsibilities() {
@@ -579,6 +677,7 @@ function baseConfig() {
     logChannelId: null,
     autoCloseEnabled: false,
     autoCloseHours: 24,
+    autoCloseWarningMinutes: 10,
     messages: {
       acceptance: '',
       beforeImage: '',
@@ -589,6 +688,7 @@ function baseConfig() {
     displayMode: 'buttons',
     buttonRows: 2,
     panelMessageId: null,
+    exportedAt: null,
     counter: 1
   };
 }
@@ -639,6 +739,32 @@ function getPanelData(guildId, panelId = 'default') {
   const tickets = panel?.tickets || {};
   const pendingRequests = panel?.pendingRequests || {};
   return { config, tickets, pendingRequests };
+}
+
+function exportPanelSnapshot(guildId, panelId = 'default') {
+  const { config } = getPanelData(guildId, panelId);
+  return Buffer.from(JSON.stringify({
+    version: 1,
+    panelId,
+    exportedAt: new Date().toISOString(),
+    config
+  }, null, 2), 'utf8').toString('base64');
+}
+
+function importPanelSnapshot(guildId, panelId, encoded, preserveRuntime = true) {
+  const decoded = Buffer.from(String(encoded || ''), 'base64').toString('utf8');
+  const parsed = JSON.parse(decoded);
+  if (!parsed || typeof parsed !== 'object' || typeof parsed.config !== 'object') throw new Error('SNAPSHOT_INVALID');
+  const current = getPanelData(guildId, panelId);
+  const nextConfig = { ...baseConfig(), ...parsed.config };
+  nextConfig.messages = { ...baseConfig().messages, ...(parsed.config.messages || {}) };
+  nextConfig.reasons = parsed.config.reasons || {};
+  if (preserveRuntime) {
+    nextConfig.counter = current.config.counter || nextConfig.counter;
+    nextConfig.panelMessageId = current.config.panelMessageId || nextConfig.panelMessageId;
+  }
+  setGuildData(guildId, nextConfig, current.tickets, current.pendingRequests, panelId);
+  return nextConfig;
 }
 
 function findTicketPanel(guildId, channelId, preferredPanelId = 'default') {
@@ -825,6 +951,65 @@ function searchResponsibilitiesByName(rawQuery, responsibilities = {}, limit = 1
     .map((entry) => entry.name);
 }
 
+function createResponsibilitySearchSession({ guildId, panelId, channelId, query, results }) {
+  const sessionId = `${guildId}_${panelId}_${channelId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  ticketSearchSessions.set(sessionId, {
+    guildId,
+    panelId,
+    channelId,
+    query,
+    results,
+    createdAt: Date.now()
+  });
+  return sessionId;
+}
+
+function buildResponsibilitySearchResultsMessage(sessionId, responsibilities, page = 0) {
+  const session = ticketSearchSessions.get(sessionId);
+  if (!session) return null;
+  const perPage = 10;
+  const totalPages = Math.max(1, Math.ceil(session.results.length / perPage));
+  const safePage = Math.max(0, Math.min(page, totalPages - 1));
+  const slice = session.results.slice(safePage * perPage, (safePage + 1) * perPage);
+  const allNames = Object.keys(responsibilities || {});
+  const options = slice.map((name) => {
+    const index = allNames.indexOf(name);
+    const count = Array.isArray(responsibilities?.[name]?.responsibles) ? responsibilities[name].responsibles.length : 0;
+    return {
+      label: name.slice(0, 100),
+      value: `respidx_${index}`,
+      description: `عدد المسؤولين: ${count}`
+    };
+  });
+  return {
+    page: safePage,
+    totalPages,
+    payload: {
+      ...buildTicketMessagePayload('نتائج البحث', `**نتائج البحث عن :** ${session.query}\n**الصفحة:** ${safePage + 1}/${totalPages}\n**اختر المسؤولية ثم أكد التحويل.**`, { ephemeral: true }),
+      components: [
+        new ActionRowBuilder().addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId(`ticket_transfer_confirm_${session.guildId}_${session.panelId}_${session.channelId}`)
+            .setPlaceholder('اختر المسؤولية المطلوبة')
+            .addOptions(options.slice(0, 25))
+        ),
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`ticket_transfer_search_page_${sessionId}_${safePage - 1}`)
+            .setLabel('السابق')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(safePage <= 0),
+          new ButtonBuilder()
+            .setCustomId(`ticket_transfer_search_page_${sessionId}_${safePage + 1}`)
+            .setLabel('التالي')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(safePage + 1 >= totalPages)
+        )
+      ]
+    }
+  };
+}
+
 function createMainEmbed(config, guildName) {
   return colorManager.createEmbed()
     .setTitle(`**إعدادات التكت : ${guildName}**`)
@@ -883,7 +1068,9 @@ function prunePendingRequests(pendingRequests, maxAgeMs = 2 * 60 * 60 * 1000) {
   let changed = false;
   for (const [reqId, req] of Object.entries(pendingRequests || {})) {
     const createdAt = Number(req?.createdAt || 0);
-    if (!createdAt || now - createdAt > maxAgeMs) {
+    const updatedAt = Number(req?.updatedAt || createdAt || 0);
+    const isClaimed = Boolean(req?.claimedAt);
+    if (!createdAt || (!isClaimed && now - updatedAt > maxAgeMs)) {
       delete pendingRequests[reqId];
       changed = true;
     }
@@ -928,6 +1115,25 @@ function canUserWriteInTicket(message, ticket, config) {
   if (ticket.claimedBy === userId) return true;
   if (Array.isArray(ticket.extraMembers) && ticket.extraMembers.includes(userId)) return true;
   return hasStaffAccess(message.member, config, ticket?.reasonKey, ticket);
+}
+
+async function recordUnauthorizedTicketMessage(message, ticket, config) {
+  if (!message?.guild || !ticket || !config) return;
+  await syncTicketLogMessage({
+    guild: message.guild,
+    config,
+    ticket,
+    channelId: message.channelId || message.channel?.id,
+    actionText: {
+      type: 'unauthorized_message',
+      message: `تم حذف رسالة غير مصرح بها من : <@${message.author?.id || 'unknown'}>`,
+      actorId: message.author?.id || null,
+      metadata: {
+        snippet: String(message.content || '').slice(0, 180)
+      }
+    },
+    actor: message.author || null
+  }).catch(() => {});
 }
 
 function isAdminOnly(interaction, config, reasonKey = null) {
@@ -1057,6 +1263,7 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
     extraMembers: [],
     logMessageId: null,
     logHistory: [],
+    logEvents: [],
     openModalAnswers: openModalAnswers && typeof openModalAnswers === 'object' ? openModalAnswers : undefined,
     createdAt: Date.now(),
     lastActivityAt: Date.now()
@@ -1158,7 +1365,7 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
 
   const reqId = `${guildId}_${panelId || 'default'}_${interaction.user.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const duplicateRequest = Object.values(pendingRequests)
-    .find((req) => req.userId === interaction.user.id && req.panelId === (panelId || 'default'));
+    .find((req) => req.userId === interaction.user.id && req.panelId === (panelId || 'default') && !req.claimedAt);
   if (duplicateRequest) {
     await interaction.editReply(buildTicketMessagePayload('تنبيه', '**لديك طلب استلام معلّق بالفعل، انتظر حتى تتم معالجته.**'));
     return;
@@ -1170,7 +1377,9 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
     reasonKey,
     sourceChannelId: interaction.channelId,
     openModalAnswers: interaction.ticketModalAnswers || null,
-    createdAt: Date.now()
+    status: 'pending',
+    createdAt: Date.now(),
+    updatedAt: Date.now()
   };
 
   const targetChannelId = config.claimFromDedicatedChannel ? config.claimChannelId : interaction.channelId;
@@ -1372,6 +1581,11 @@ async function handleClaimFromRequest(interaction, reqId) {
   }
 
   let channel;
+  req.claimedAt = Date.now();
+  req.claimedBy = interaction.user.id;
+  req.status = 'claiming';
+  req.updatedAt = Date.now();
+  setGuildData(guildId, config, tickets, pendingRequests, panelId);
   try {
     channel = await createTicketChannel({
       guild: interaction.guild,
@@ -1385,6 +1599,11 @@ async function handleClaimFromRequest(interaction, reqId) {
       openModalAnswers: req.openModalAnswers || null
     });
   } catch (error) {
+    req.claimedAt = null;
+    req.claimedBy = null;
+    req.status = 'pending';
+    req.updatedAt = Date.now();
+    setGuildData(guildId, config, tickets, pendingRequests, panelId);
     console.error('ticket claimreq create channel error:', error?.message || error);
     await interaction.editReply(buildTicketMessagePayload('خطأ', '**فشل انشاء التكت من طلب الاستلام، تأكد من صلاحيات البوت والكاتوقري.**', { user: interaction.user }));
     return;
@@ -1450,7 +1669,7 @@ async function sendAutoCloseWarning(channel, ticket, dueAt) {
     content: mentions || undefined,
     ...buildTicketMessagePayload(
       'تنبيه الإغلاق التلقائي',
-      `**هذا التكت سيتم قفله تلقائيًا بعد 10 دقائق.**\n**موعد الإقفال:** <t:${Math.floor(dueAt / 1000)}:R>\n**أي رسالة جديدة داخل التكت ستعيد المدة من البداية.**`
+      `**هذا التكت سيتم قفله تلقائيًا قريبًا.**\n**موعد الإقفال:** <t:${Math.floor(dueAt / 1000)}:R>\n**أي رسالة جديدة داخل التكت ستعيد المدة من البداية.**`
     )
   }).catch(() => {});
 }
@@ -1476,6 +1695,7 @@ async function closeTicketCore({
   ticket.claimerHidden = false;
   delete ticket.autoCloseWarningSentAt;
 
+  channel.ticketMeta = ticket;
   const transcriptFile = await buildTicketTranscript(channel).catch(() => null);
   const logTranscriptFile = config.keepClosedTickets ? null : transcriptFile;
   await syncTicketLogMessage({
@@ -1483,7 +1703,11 @@ async function closeTicketCore({
     config,
     ticket,
     channelId,
-    actionText: `تم الغلق عن طريق : ${closedByLabel || (autoClose ? 'خمول التكت' : 'غير محدد')}`,
+    actionText: {
+      type: autoClose ? 'auto_close' : 'close',
+      message: `تم الغلق عن طريق : ${closedByLabel || (autoClose ? 'خمول التكت' : 'غير محدد')}`,
+      actorId: interaction?.user?.id || null
+    },
     actor: interaction?.user || null,
     transcriptFile: logTranscriptFile
   });
@@ -1561,10 +1785,6 @@ async function closeTicketCore({
     )],
     components: buildPostCloseControls(guildId, panelId || 'default', channelId, ticket)
   }).catch(() => {});
-
-  if (transcriptFile && !config.keepClosedTickets) {
-    await channel.send(buildTicketMessagePayload('Transcript on close', '**تم إرفاق الترانسكربت داخل التكت المغلق.**', { files: [transcriptFile] })).catch(() => {});
-  }
 
   setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
 
@@ -1826,6 +2046,38 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
   recentTicketCommandMessages.add(dedupeKey);
   setTimeout(() => recentTicketCommandMessages.delete(dedupeKey), 60 * 1000);
 
+  const member = await message.guild.members.fetch(message.author.id).catch(() => null);
+  if (!member) return;
+  const isOwner = BOT_OWNERS.includes(message.author.id) || message.guild.ownerId === message.author.id;
+  const hasAdminRole = member.roles.cache.some((r) => ADMIN_ROLES.includes(r.id));
+  if (!isOwner && !hasAdminRole) {
+    await message.react('❌');
+    return;
+  }
+
+  const subcommand = String(args?.[0] || '').toLowerCase();
+  if (subcommand === 'export') {
+    const panelId = extractChannelId(args?.[1]) || message.channel.id;
+    const snapshot = exportPanelSnapshot(message.guild.id, panelId);
+    await message.reply(buildTicketMessagePayload('تصدير إعدادات التكت', `\`\`\`\n${snapshot}\n\`\`\``, { ephemeral: false })).catch(() => {});
+    return;
+  }
+  if (subcommand === 'import' || subcommand === 'restore') {
+    const panelId = extractChannelId(args?.[1]) || message.channel.id;
+    const encoded = args?.slice(2).join('').trim();
+    if (!encoded) {
+      await message.reply(buildTicketMessagePayload('خطأ', '**أرسل snapshot base64 بعد الروم.**')).catch(() => {});
+      return;
+    }
+    try {
+      importPanelSnapshot(message.guild.id, panelId, encoded, true);
+      await message.reply(buildTicketMessagePayload('تم', `**تم استيراد إعدادات التكت للروم:** <#${panelId}>`)).catch(() => {});
+    } catch {
+      await message.reply(buildTicketMessagePayload('خطأ', '**snapshot غير صالح أو تالف.**')).catch(() => {});
+    }
+    return;
+  }
+
   const setupSessionKey = `${message.guild.id}:${message.author.id}`;
   const existingSession = activeTicketSetupSessions.get(setupSessionKey);
   if (existingSession && (Date.now() - existingSession.startedAt) < (30 * 60 * 1000)) {
@@ -1846,19 +2098,6 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     sourceMessageId: message.id,
     initializing: true
   });
-
-  const member = await message.guild.members.fetch(message.author.id).catch(() => null);
-  if (!member) {
-    activeTicketSetupSessions.delete(setupSessionKey);
-    return;
-  }
-  const isOwner = BOT_OWNERS.includes(message.author.id) || message.guild.ownerId === message.author.id;
-  const hasAdminRole = member.roles.cache.some((r) => ADMIN_ROLES.includes(r.id));
-  if (!isOwner && !hasAdminRole) {
-    activeTicketSetupSessions.delete(setupSessionKey);
-    await message.react('❌');
-    return;
-  }
 
   const controlChannel = message.channel;
   let setupMessage = null;
@@ -3222,6 +3461,8 @@ function registerTicketMessageActivityTracker(client) {
 
     if (!canUserWriteInTicket(message, ticket, config)) {
       await message.delete().catch(() => {});
+      await recordUnauthorizedTicketMessage(message, ticket, config);
+      setGuildData(guildId, config, tickets, pendingRequests, panelId);
       return;
     }
 
@@ -3238,7 +3479,6 @@ function startTicketAutoCloseWatcher(client) {
 
   const runCheck = async () => {
     const store = loadStore();
-    const warningMs = 10 * 60 * 1000;
 
     for (const [guildId, guildData] of Object.entries(store || {})) {
       const panels = guildData?.panels || {};
@@ -3246,6 +3486,7 @@ function startTicketAutoCloseWatcher(client) {
         const { config, tickets, pendingRequests } = getPanelData(guildId, panelId);
         const timeoutMs = getTicketAutoCloseMs(config);
         if (!timeoutMs) continue;
+        const warningMs = Math.max(1, Number(config.autoCloseWarningMinutes || 10)) * 60 * 1000;
 
         let changed = false;
         for (const [channelId, ticket] of Object.entries(tickets || {})) {
@@ -3259,6 +3500,18 @@ function startTicketAutoCloseWatcher(client) {
           if (!channel || channel.type !== ChannelType.GuildText) continue;
 
           const now = Date.now();
+          if (ticket.logSyncFailedAt && channel) {
+            await syncTicketLogMessage({
+              guild,
+              config,
+              ticket,
+              channelId,
+              actionText: {
+                type: 'log_retry',
+                message: 'إعادة مزامنة سجل التكت بعد فشل سابق'
+              }
+            }).catch(() => {});
+          }
           if (now >= dueAt) {
             await closeTicketCore({
               channel,
@@ -3542,6 +3795,20 @@ function registerHandlers(client) {
           return;
         }
 
+        if (id.startsWith('ticket_transfer_search_page_')) {
+          const parts = id.split('_');
+          const page = Number(parts.pop());
+          const sessionId = parts.slice(4).join('_');
+          const responsibilities = loadResponsibilities();
+          const pageData = buildResponsibilitySearchResultsMessage(sessionId, responsibilities, page);
+          if (!pageData) {
+            await interaction.reply(buildTicketMessagePayload('تنبيه', '**انتهت صلاحية نتائج البحث، أعد البحث مرة أخرى.**', { ephemeral: true }));
+            return;
+          }
+          await interaction.update(pageData.payload);
+          return;
+        }
+
         if (id.startsWith('ticket_add_')) {
           const parts = id.split('_');
           const guildId = parts[2];
@@ -3680,34 +3947,14 @@ function registerHandlers(client) {
           const [, , , , guildId, panelId = 'default', channelId] = modalId.split('_');
           const query = interaction.fields.getTextInputValue('value');
           const responsibilities = loadResponsibilities();
-          const results = searchResponsibilitiesByName(query, responsibilities, 10);
+          const results = searchResponsibilitiesByName(query, responsibilities, 50);
           if (results.length === 0) {
             await interaction.reply(buildTicketMessagePayload('بحث المسؤولية', '**لا توجد نتائج مطابقة.**', { ephemeral: true }));
             return;
           }
-
-          const allNames = Object.keys(responsibilities);
-          const options = results.map((name) => {
-            const index = allNames.indexOf(name);
-            const count = Array.isArray(responsibilities?.[name]?.responsibles) ? responsibilities[name].responsibles.length : 0;
-            return {
-              label: name.slice(0, 100),
-              value: `respidx_${index}`,
-              description: `عدد المسؤولين: ${count}`
-            };
-          });
-
-          await interaction.reply({
-            ...buildTicketMessagePayload('نتائج البحث', `**نتائج البحث عن :** ${query}\n**اختر المسؤولية ثم أكد التحويل.**`, { ephemeral: true }),
-            components: [
-              new ActionRowBuilder().addComponents(
-                new StringSelectMenuBuilder()
-                  .setCustomId(`ticket_transfer_confirm_${guildId}_${panelId}_${channelId}`)
-                  .setPlaceholder('اختر المسؤولية المطلوبة')
-                  .addOptions(options.slice(0, 25))
-              )
-            ]
-          });
+          const sessionId = createResponsibilitySearchSession({ guildId, panelId, channelId, query, results });
+          const pageData = buildResponsibilitySearchResultsMessage(sessionId, responsibilities, 0);
+          await interaction.reply(pageData.payload);
           return;
         }
 
