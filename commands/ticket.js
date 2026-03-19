@@ -229,6 +229,30 @@ function getTicketLogTimeline(ticket, limit = 8) {
     .join('<br>');
 }
 
+function formatDeletedTranscriptEntry(entry) {
+  const author = entry?.authorTag || entry?.authorName || entry?.authorId || 'unknown';
+  const ts = new Date(Number(entry?.deletedAt || entry?.createdTimestamp || Date.now())).toLocaleString('en-GB', { hour12: false, timeZone: 'UTC' });
+  const content = escapeHtml(entry?.content || '').replace(/\n/g, '<br>') || '<span class="muted">(empty)</span>';
+  const avatar = entry?.avatarUrl
+    ? `<img class="avatar-img" src="${escapeHtml(entry.avatarUrl)}" alt="${escapeHtml(author)}" loading="lazy">`
+    : `<div class="avatar-fallback">${escapeHtml(String(author).slice(0, 2).toUpperCase())}</div>`;
+  return {
+    timestamp: Number(entry?.deletedAt || entry?.createdTimestamp || Date.now()),
+    html: `
+      <article class="message deleted-message">
+        <div class="avatar">${avatar}</div>
+        <div class="content">
+          <div class="meta">
+            <span class="author">${escapeHtml(author)}</span>
+            <span class="time">${escapeHtml(ts)} UTC</span>
+          </div>
+          <div class="body" dir="auto"><span class="deleted-label">(deleted)</span> <span class="deleted-body">${content}</span></div>
+        </div>
+      </article>
+    `
+  };
+}
+
 function escapeHtml(value) {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -315,7 +339,9 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
           : '';
         const reference = msg.reference?.messageId ? `<div class="reply-ref">↪️ Reply to message ${escapeHtml(msg.reference.messageId)}</div>` : '';
         const blocks = [reference, content, attachments, embeds, stickers, reactions].filter(Boolean).join('<br>');
-        rows.push(`
+        rows.push({
+          timestamp: msg.createdTimestamp,
+          html: `
           <article class="message">
             <div class="avatar">${buildTranscriptAvatar(msg.author)}</div>
             <div class="content">
@@ -326,7 +352,8 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
               <div class="body" dir="auto">${blocks || '<span class="muted">(empty)</span>'}</div>
             </div>
           </article>
-        `);
+        `
+        });
       }
 
       fetchedTotal += batch.size;
@@ -334,7 +361,11 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
       if (!lastId) break;
     }
 
-    if (rows.length === 0) return null;
+    const deletedRows = Array.isArray(channel.ticketMeta?.deletedMessages)
+      ? channel.ticketMeta.deletedMessages.map((entry) => formatDeletedTranscriptEntry(entry))
+      : [];
+    const combinedRows = [...rows, ...deletedRows].sort((a, b) => a.timestamp - b.timestamp).map((row) => row.html);
+    if (combinedRows.length === 0) return null;
     const logTimeline = getTicketLogTimeline(channel.ticketMeta || null);
     const fileName = `transcript-${channel.id}.html`;
     const html = `<!doctype html>
@@ -369,6 +400,8 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
     .embed-title, .embed-field-name { font-weight: 700; color: #fff; }
     .embed-fields { display: grid; gap: 8px; }
     .timeline { margin-bottom: 16px; background: #1e1f22; border: 1px solid #3f4147; border-radius: 12px; padding: 14px 16px; }
+    .deleted-message { background: rgba(237, 66, 69, 0.08); border: 1px solid rgba(237, 66, 69, 0.25); }
+    .deleted-label, .deleted-body { color: #ff6b6b; }
     .muted { color: #949ba4; }
     @media (max-width: 640px) { .wrap { padding: 12px 8px 32px; } .header h1 { font-size: 18px; } }
   </style>
@@ -381,7 +414,7 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
       <p>Generated at: ${escapeHtml(new Date().toISOString())}</p>
     </section>
     ${logTimeline ? `<section class="timeline"><strong>Ticket activity</strong><br>${logTimeline}</section>` : ''}
-    ${rows.join('\n')}
+    ${combinedRows.join('\n')}
   </main>
 </body>
 </html>`;
@@ -1136,6 +1169,28 @@ async function recordUnauthorizedTicketMessage(message, ticket, config) {
   }).catch(() => {});
 }
 
+function rememberDeletedTicketMessage(ticket, message) {
+  if (!ticket || !message) return false;
+  if (!Array.isArray(ticket.deletedMessages)) ticket.deletedMessages = [];
+  if (message.id && ticket.deletedMessages.some((entry) => entry?.id === message.id)) return false;
+  const avatarUrl = message.author?.displayAvatarURL?.({ extension: 'png', forceStatic: false, size: 128 })
+    || message.author?.avatarURL?.({ extension: 'png', forceStatic: false, size: 128 })
+    || message.author?.avatarURL?.()
+    || null;
+  ticket.deletedMessages.push({
+    id: message.id || `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    authorId: message.author?.id || null,
+    authorTag: message.author?.tag || null,
+    authorName: message.author?.username || null,
+    avatarUrl,
+    content: String(message.content || ''),
+    createdTimestamp: Number(message.createdTimestamp || Date.now()),
+    deletedAt: Date.now()
+  });
+  if (ticket.deletedMessages.length > 100) ticket.deletedMessages = ticket.deletedMessages.slice(-100);
+  return true;
+}
+
 function isAdminOnly(interaction, config, reasonKey = null) {
   const adminRoles = getAdminRoles(config, reasonKey);
   const roleIds = interaction.member?.roles?.cache ? [...interaction.member.roles.cache.keys()] : [];
@@ -1264,6 +1319,7 @@ async function createTicketChannel({ guild, member, config, reasonKey, tickets, 
     logMessageId: null,
     logHistory: [],
     logEvents: [],
+    deletedMessages: [],
     openModalAnswers: openModalAnswers && typeof openModalAnswers === 'object' ? openModalAnswers : undefined,
     createdAt: Date.now(),
     lastActivityAt: Date.now()
@@ -3460,6 +3516,7 @@ function registerTicketMessageActivityTracker(client) {
     if (!ticket) return;
 
     if (!canUserWriteInTicket(message, ticket, config)) {
+      rememberDeletedTicketMessage(ticket, message);
       await message.delete().catch(() => {});
       await recordUnauthorizedTicketMessage(message, ticket, config);
       setGuildData(guildId, config, tickets, pendingRequests, panelId);
@@ -3468,6 +3525,33 @@ function registerTicketMessageActivityTracker(client) {
 
     if (ticket.status !== 'open') return;
     if (touchTicketActivity(ticket, message.createdTimestamp || Date.now())) {
+      setGuildData(guildId, config, tickets, pendingRequests, panelId);
+    }
+  });
+
+  client.on('messageDelete', async (message) => {
+    if (!message?.guild || !message.channel) return;
+    const guildId = message.guild.id;
+    const channelId = message.channel.id;
+    const { panelId, config, tickets, pendingRequests, ticket } = getTicketContext(guildId, channelId, 'default');
+    if (!ticket) return;
+    if (rememberDeletedTicketMessage(ticket, message)) {
+      setGuildData(guildId, config, tickets, pendingRequests, panelId);
+    }
+  });
+
+  client.on('messageDeleteBulk', async (messages) => {
+    const first = messages?.first?.();
+    if (!first?.guild || !first.channel) return;
+    const guildId = first.guild.id;
+    const channelId = first.channel.id;
+    const { panelId, config, tickets, pendingRequests, ticket } = getTicketContext(guildId, channelId, 'default');
+    if (!ticket) return;
+    let changed = false;
+    for (const message of messages.values()) {
+      changed = rememberDeletedTicketMessage(ticket, message) || changed;
+    }
+    if (changed) {
       setGuildData(guildId, config, tickets, pendingRequests, panelId);
     }
   });
