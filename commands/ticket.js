@@ -394,6 +394,7 @@ function baseConfig() {
     reasons: {},
     displayMode: 'buttons',
     buttonRows: 2,
+    panelMessageId: null,
     counter: 1
   };
 }
@@ -1615,10 +1616,11 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     const responsiblesMentions = (config.responsibleRoleIds || []).length
       ? (config.responsibleRoleIds || []).map((id) => `<@&${id}>`).join(' ')
       : 'غير معين';
-    const adminRolesResolved = getAdminRoles(config);
-    const adminRolesMentions = adminRolesResolved.length
-      ? adminRolesResolved.map((id) => `<@&${id}>`).join(' ')
-      : 'غير معين';
+    const adminRolesMentions = config.useGlobalAdminRoles
+      ? 'adminRoles'
+      : ((config.adminRoleIds || []).length
+        ? (config.adminRoleIds || []).map((id) => `<@&${id}>`).join(' ')
+        : 'غير معين');
     const reasonsNamesRaw = Object.entries(config.reasons || {})
       .sort((a, b) => Number(a[1]?.buttonOrder || a[0]) - Number(b[1]?.buttonOrder || b[0]))
       .map(([k, v]) => `**${k})** ${v.name || `سبب ${k}`}`)
@@ -2521,6 +2523,10 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
           components: createReasonComponents(config, message.guild.id, panelId)
         };
 
+        const previousPanelMessage = config.panelMessageId
+          ? await panelChannel.messages.fetch(config.panelMessageId).catch(() => null)
+          : null;
+
         if (mode === 'image' || mode === 'both') {
           if (!imageInput || imageInput === '0') {
             await refresh('**❌ تم إلغاء ارسال البانل: وضع الصورة يتطلب صورة صالحة.**');
@@ -2541,11 +2547,23 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
             return;
           }
 
-          await panelChannel.send({ ...payload, files: [panelImage] }).catch(() => {});
+          if (previousPanelMessage?.editable) {
+            await previousPanelMessage.edit({ ...payload, files: [panelImage] }).catch(() => {});
+          } else {
+            const sentPanelMessage = await panelChannel.send({ ...payload, files: [panelImage] }).catch(() => null);
+            if (sentPanelMessage) config.panelMessageId = sentPanelMessage.id;
+          }
           removeStoredImage(storedPanelImage);
         } else {
-          await panelChannel.send(payload);
+          if (previousPanelMessage?.editable) {
+            await previousPanelMessage.edit(payload).catch(() => {});
+          } else {
+            const sentPanelMessage = await panelChannel.send(payload).catch(() => null);
+            if (sentPanelMessage) config.panelMessageId = sentPanelMessage.id;
+          }
         }
+
+        if (previousPanelMessage?.id) config.panelMessageId = previousPanelMessage.id;
 
         await refresh(`**✅ تم ارسال بانل التكت بنجاح في <#${panelId}>.**`);
         return;
