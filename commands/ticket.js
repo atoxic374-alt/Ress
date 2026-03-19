@@ -229,10 +229,10 @@ function getTicketLogTimeline(ticket, limit = 8) {
     .join('<br>');
 }
 
-function formatDeletedTranscriptEntry(entry) {
+function formatDeletedTranscriptEntry(entry, channel = null) {
   const author = entry?.authorTag || entry?.authorName || entry?.authorId || 'unknown';
   const ts = new Date(Number(entry?.deletedAt || entry?.createdTimestamp || Date.now())).toLocaleString('en-GB', { hour12: false, timeZone: 'UTC' });
-  const content = escapeHtml(entry?.content || '').replace(/\n/g, '<br>') || '<span class="muted">(empty)</span>';
+  const content = renderTranscriptMentions(channel, escapeHtml(entry?.content || '')).replace(/\n/g, '<br>') || '<span class="muted">(empty)</span>';
   const avatar = entry?.avatarUrl
     ? `<img class="avatar-img" src="${escapeHtml(entry.avatarUrl)}" alt="${escapeHtml(author)}" loading="lazy">`
     : `<div class="avatar-fallback">${escapeHtml(String(author).slice(0, 2).toUpperCase())}</div>`;
@@ -260,6 +260,43 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function renderTranscriptMentions(channel, text) {
+  const guild = channel?.guild;
+  return String(text || '')
+    .replace(/<@!?(\d{16,20})>/g, (_, id) => {
+      const member = guild?.members?.cache?.get?.(id);
+      const label = member?.displayName || member?.user?.username || id;
+      return `<span class="mention user-mention">@${escapeHtml(label)}</span>`;
+    })
+    .replace(/<@&(\d{16,20})>/g, (_, id) => {
+      const role = guild?.roles?.cache?.get?.(id);
+      const label = role?.name || id;
+      return `<span class="mention role-mention">@${escapeHtml(label)}</span>`;
+    })
+    .replace(/<#(\d{16,20})>/g, (_, id) => {
+      const linked = guild?.channels?.cache?.get?.(id);
+      const label = linked?.name || id;
+      return `<span class="mention channel-mention">#${escapeHtml(label)}</span>`;
+    });
+}
+
+function formatTranscriptComponents(message) {
+  const rows = Array.isArray(message?.components) ? message.components : [];
+  if (!rows.length) return '';
+  const parts = rows.map((row) => {
+    const items = (row.components || []).map((component) => {
+      if (component.data?.options?.length || component.options?.length) {
+        const options = component.data?.options || component.options || [];
+        return `<div class="component select-menu">[Menu] ${options.map((option) => escapeHtml(option.label || option.value || 'option')).join(' | ')}</div>`;
+      }
+      const label = component.label || component.data?.label || component.placeholder || component.data?.placeholder || component.customId || 'component';
+      return `<div class="component button">${escapeHtml(label)}</div>`;
+    }).join('');
+    return `<div class="component-row">${items}</div>`;
+  }).join('');
+  return `<div class="components-wrap">${parts}</div>`;
 }
 
 function isImageLikeAttachment(attachment) {
@@ -321,7 +358,7 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
       for (const msg of ordered) {
         const ts = new Date(msg.createdTimestamp).toLocaleString('en-GB', { hour12: false, timeZone: 'UTC' });
         const author = msg.author?.tag || msg.author?.username || msg.author?.id || 'unknown';
-        const content = escapeHtml((msg.content || '').trim()).replace(/\n/g, '<br>');
+        const content = renderTranscriptMentions(channel, escapeHtml((msg.content || '').trim())).replace(/\n/g, '<br>');
         const attachments = msg.attachments?.size
           ? [...msg.attachments.values()].map((a) => {
             const imagePreview = isImageLikeAttachment(a)
@@ -338,7 +375,8 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
           ? `<div class="reactions">${[...msg.reactions.cache.values()].map((reaction) => `:${escapeHtml(reaction.emoji?.name || 'emoji')}: ×${reaction.count || 1}`).join(' ')}</div>`
           : '';
         const reference = msg.reference?.messageId ? `<div class="reply-ref">↪️ Reply to message ${escapeHtml(msg.reference.messageId)}</div>` : '';
-        const blocks = [reference, content, attachments, embeds, stickers, reactions].filter(Boolean).join('<br>');
+        const components = formatTranscriptComponents(msg);
+        const blocks = [reference, content, attachments, embeds, stickers, reactions, components].filter(Boolean).join('<br>');
         rows.push({
           timestamp: msg.createdTimestamp,
           html: `
@@ -362,7 +400,7 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
     }
 
     const deletedRows = Array.isArray(channel.ticketMeta?.deletedMessages)
-      ? channel.ticketMeta.deletedMessages.map((entry) => formatDeletedTranscriptEntry(entry))
+      ? channel.ticketMeta.deletedMessages.map((entry) => formatDeletedTranscriptEntry(entry, channel))
       : [];
     const combinedRows = [...rows, ...deletedRows].sort((a, b) => a.timestamp - b.timestamp).map((row) => row.html);
     if (combinedRows.length === 0) return null;
@@ -396,6 +434,9 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
     .attachment { display: grid; gap: 6px; }
     .media img { max-width: min(100%, 520px); border-radius: 12px; border: 1px solid #3f4147; display: block; }
     .embed-card { margin-top: 8px; border-left: 4px solid #5865f2; background: #2b2d31; border-radius: 8px; padding: 10px 12px; display: grid; gap: 8px; }
+    .mention { display: inline-block; border-radius: 6px; padding: 0 4px; background: rgba(88,101,242,.18); color: #c9cdfb; }
+    .component-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    .component { border: 1px solid #4e5058; border-radius: 8px; padding: 6px 10px; background: #2b2d31; color: #f2f3f5; font-size: 12px; }
     .embed-author, .embed-footer, .reply-ref, .reactions, .sticker-list { color: #b5bac1; font-size: 12px; }
     .embed-title, .embed-field-name { font-weight: 700; color: #fff; }
     .embed-fields { display: grid; gap: 8px; }
@@ -493,8 +534,9 @@ async function syncTicketLogMessage({
   const statusLabel = ticket.status === 'closed' ? 'Closed / مغلق' : 'Open / مفتوح';
   const transcriptUrl = transcriptFile ? await sendTranscriptToLogChannel(logChannel, transcriptFile).catch(() => null) : (ticket.lastTranscriptUrl || null);
   if (transcriptUrl) ticket.lastTranscriptUrl = transcriptUrl;
+  const ticketLabel = ticket.deletedChannel ? 'Deleted' : (channelId ? `<#${channelId}>` : (ticket.channelId ? `<#${ticket.channelId}>` : 'غير محدد'));
   const summaryLines = [
-    `**Ticket :** ${channelId ? `<#${channelId}>` : (ticket.channelId ? `<#${ticket.channelId}>` : 'غير محدد')}`,
+    `**Ticket :** ${ticketLabel}`,
     `**Member :** ${ticket.memberId ? `<@${ticket.memberId}>` : 'غير محدد'}`,
     `**Reason :** ${reason.name || `سبب ${ticket.reasonKey || '-'}`}`,
     `**Status :** ${statusLabel}`,
@@ -508,7 +550,7 @@ async function syncTicketLogMessage({
   if (description.length > 3800) {
     const trimmedHistory = (ticket.logHistory || []).slice(-8).map((line, index) => `${index + 1}) ${line}`).join('\n') || 'لا يوجد';
     description = [
-      `**Ticket :** ${channelId ? `<#${channelId}>` : (ticket.channelId ? `<#${ticket.channelId}>` : 'غير محدد')}`,
+      `**Ticket :** ${ticketLabel}`,
       `**Member :** ${ticket.memberId ? `<@${ticket.memberId}>` : 'غير محدد'}`,
       `**Reason :** ${reason.name || `سبب ${ticket.reasonKey || '-'}`}`,
       `**Status :** ${statusLabel}`,
@@ -524,10 +566,7 @@ async function syncTicketLogMessage({
     .setFooter({ text: `Ticket ID: ${ticket.channelId || channelId || 'unknown'}` })
     .setTimestamp(new Date());
 
-  const avatarURL = actor?.displayAvatarURL?.() || actor?.avatarURL?.() || null;
-  if (actor?.username || actor?.tag) {
-    embed.setAuthor({ name: actor.tag || actor.username, iconURL: avatarURL || undefined });
-  }
+  embed.setAuthor({ name: guild.name || 'Server', iconURL: guild.iconURL?.({ dynamic: true, size: 128 }) || undefined });
 
   const payload = { embeds: [embed] };
 
@@ -563,27 +602,29 @@ async function sendClaimAnnounce({ channel, config, ticket, claimerId, claimImag
     await channel.send({ content: chunk }).catch(() => {});
   }
 
-  const claimEmbed = makeTicketEmbed(
-    'Ticket claimed',
-    `**Ticket claimed by :** <@${claimerId}>\n**Reason :** ${reasonName}${ticket.memberId ? `\n**Member :** <@${ticket.memberId}>` : ''}`
-  );
-
-  const modalAnswers = ticket.openModalAnswers && typeof ticket.openModalAnswers === 'object' ? ticket.openModalAnswers : {};
-  const modalFields = Object.entries(modalAnswers).slice(0, 10);
-  for (const [label, value] of modalFields) {
-    claimEmbed.addFields({ name: label.slice(0, 256), value: String(value || '-').slice(0, 1024), inline: false });
-  }
+  const claimText = `**العضو :** <@${ticket.memberId}>\n**السبب :** ${reasonName}\n**المستلم :** <@${claimerId}>`;
 
   if (claimImage) {
     await channel.send({
-      files: [claimImage],
-      embeds: [claimEmbed]
+      content: claimText,
+      files: [claimImage]
     }).catch(() => {});
   } else {
     await channel.send({
-      embeds: [claimEmbed]
+      content: claimText
     }).catch(() => {});
   }
+}
+
+function buildClaimRequestContent(ticket, config, claimerId = null) {
+  const reason = config?.reasons?.[ticket?.reasonKey] || {};
+  const lines = [
+    `**العضو :** <@${ticket?.memberId || 'unknown'}>`,
+    `**السبب :** ${reason.name || `سبب ${ticket?.reasonKey || '-'}`}`
+  ];
+  if (reason.description) lines.push(`**الوصف :** ${reason.description}`);
+  if (claimerId) lines.push(`**المستلم :** <@${claimerId}>`);
+  return lines.join('\n');
 }
 
 function buildPostCloseControls(guildId, panelId, channelId, ticket = {}) {
@@ -1208,7 +1249,7 @@ function sanitizeName(input) {
 }
 
 async function buildTicketControls(guildId, panelId, channelId, config, options = {}) {
-  const includeClaimButton = options.includeClaimButton !== false;
+  const includeClaimButton = options.includeClaimButton !== false && !options.disableClaimButton;
   const row1Buttons = [];
   if (includeClaimButton) row1Buttons.push(new ButtonBuilder().setCustomId(`ticket_claim_${guildId}_${panelId}_${channelId}`).setLabel('استلام').setStyle(ButtonStyle.Success));
   row1Buttons.push(
@@ -1471,9 +1512,11 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
   if (config.claimFromDedicatedChannel && config.claimChannelSeparator) {
     const separatorValue = config.claimChannelSeparator;
     const separatorImage = resolveImageForSend(separatorValue);
-    if (separatorImage && isImageSettingValue(String(separatorValue))) {
+    const separatorMatchesReasonImage = Boolean(separatorImage && reasonImage && String(separatorImage) === String(reasonImage));
+    const separatorMatchesAcceptance = Boolean(acceptanceText && String(separatorValue).trim() === String(acceptanceText).trim());
+    if (!separatorMatchesReasonImage && !separatorMatchesAcceptance && separatorImage && isImageSettingValue(String(separatorValue))) {
       await targetChannel.send({ files: [separatorImage] }).catch(() => {});
-    } else {
+    } else if (!separatorMatchesReasonImage && !separatorMatchesAcceptance) {
       await targetChannel.send({ content: separatorValue }).catch(() => {});
     }
   }
@@ -1557,12 +1600,6 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
       });
       return new ActionRowBuilder().addComponents(updatedComponents);
     });
-    const reason = config.reasons?.[ticket.reasonKey] || {};
-    const claimImage = resolveImageForSend(reason.claimImage);
-    const claimEmbed = makeTicketEmbed(
-      'Ticket claimed',
-      `**Ticket claimed by :** <@${interaction.user.id}>\n**Reason :** ${reason.name || `سبب ${ticket.reasonKey}`}\n**Member :** <@${ticket.memberId}>`
-    );
     const mentionChunks = buildMentionChunks(getAdminRoles(config, ticket?.reasonKey));
     const firstChunk = mentionChunks.shift() || null;
 
@@ -1570,10 +1607,9 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
       await interaction.message.delete().catch(() => {});
     } else {
       await interaction.message.edit({
-        content: firstChunk,
-        embeds: [claimEmbed],
-        components: updatedRows,
-        files: claimImage ? [claimImage] : []
+        content: [firstChunk, buildClaimRequestContent(ticket, config, interaction.user.id)].filter(Boolean).join('\n'),
+        embeds: [],
+        components: updatedRows
       }).catch(() => {});
     }
 
@@ -1684,11 +1720,6 @@ async function handleClaimFromRequest(interaction, reqId) {
   });
 
   if (interaction.message?.editable) {
-    const reason = config.reasons?.[createdTicket.reasonKey] || {};
-    const claimEmbed = makeTicketEmbed(
-      'Ticket claimed',
-      `**Ticket claimed by :** <@${interaction.user.id}>\n**Reason :** ${reason.name || `سبب ${createdTicket.reasonKey}`}\n**Member :** <@${createdTicket.memberId}>`
-    );
     const updatedRows = interaction.message.components.map((row) => {
       const components = row.components.map((component) => {
         if (component.customId?.startsWith('ticket_claimreq_')) {
@@ -1702,7 +1733,8 @@ async function handleClaimFromRequest(interaction, reqId) {
       await interaction.message.delete().catch(() => {});
     } else {
       await interaction.message.edit({
-        embeds: [claimEmbed],
+        content: buildClaimRequestContent(createdTicket, config, interaction.user.id),
+        embeds: [],
         components: updatedRows
       }).catch(() => {});
     }
@@ -1747,8 +1779,9 @@ async function closeTicketCore({
 
   ticket.status = 'closed';
   ticket.closedAt = Date.now();
+  ticket.deletedChannel = !config.keepClosedTickets;
   ticket.memberHidden = true;
-  ticket.claimerHidden = false;
+  ticket.claimerHidden = true;
   delete ticket.autoCloseWarningSentAt;
 
   channel.ticketMeta = ticket;
@@ -1773,16 +1806,12 @@ async function closeTicketCore({
     setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
 
     if (interaction) {
-      const transcriptDelivered = await sendTranscriptOutsideTicket(interaction, transcriptFile, autoClose ? 'Transcript before auto-close delete' : 'Transcript before delete');
       await interaction.reply(buildTicketMessagePayload(
         autoClose ? 'إغلاق تلقائي' : 'اقفال',
-        `**سيتم حذف التكت خلال 3 ثواني.**${transcriptFile ? `\n**حالة الترانسكربت:** ${transcriptDelivered ? 'تم إرساله خارج التكت.' : 'تعذر إرساله خارج التكت.'}` : ''}`,
+        '**سيتم حذف التكت خلال 3 ثواني.**',
         { ephemeral: true }
       )).catch(() => {});
     } else {
-      if (transcriptFile) {
-        await channel.send(buildTicketMessagePayload('Transcript before auto delete', '**تم إرفاق الترانسكربت قبل حذف التكت تلقائيًا.**', { files: [transcriptFile] })).catch(() => {});
-      }
       await channel.send(buildTicketMessagePayload('إغلاق تلقائي', `**تم إقفال هذا التكت تلقائيًا${closedByLabel ? ` بواسطة ${closedByLabel}` : ''} وسيتم حذفه خلال 3 ثواني.**`)).catch(() => {});
     }
 
@@ -1882,30 +1911,31 @@ async function handleClose(interaction, guildId, panelId, channelId) {
 }
 
 async function handleReassignRequest(interaction, guildId, panelId, channelId) {
+  await interaction.deferReply({ ephemeral: true }).catch(() => {});
   const { panelId: resolvedPanelId, config, tickets, pendingRequests, ticket, actionChannelId } = getTicketContextFromInteraction(guildId, interaction, channelId, panelId || 'default');
   if (!ticket || interaction.channelId !== actionChannelId) {
-    await interaction.reply(buildTicketMessagePayload('خطأ', '**لا توجد بيانات لهذا التكت.**', { ephemeral: true }));
+    await interaction.editReply(buildTicketMessagePayload('خطأ', '**لا توجد بيانات لهذا التكت.**', { ephemeral: true }));
     return;
   }
   if (!isAdminOnly(interaction, config, ticket?.reasonKey)) {
-    await interaction.reply(buildTicketMessagePayload('خطأ', '**ليس لديك صلاحية تغيير المستلم.**', { ephemeral: true }));
+    await interaction.editReply(buildTicketMessagePayload('خطأ', '**ليس لديك صلاحية تغيير المستلم.**', { ephemeral: true }));
     return;
   }
   if (ticket.status !== 'open') {
-    await interaction.reply(buildTicketMessagePayload('تنبيه', '**تغيير المستلم متاح فقط قبل إغلاق التكت.**', { ephemeral: true }));
+    await interaction.editReply(buildTicketMessagePayload('تنبيه', '**تغيير المستلم متاح فقط قبل إغلاق التكت.**', { ephemeral: true }));
     return;
   }
 
   const previousClaimer = ticket.claimedBy || null;
   if (ticket.reassignPendingAt) {
-    await interaction.reply(buildTicketMessagePayload('تنبيه', '**يوجد طلب تغيير مستلم معلّق بالفعل.**', { ephemeral: true }));
+    await interaction.editReply(buildTicketMessagePayload('تنبيه', '**يوجد طلب تغيير مستلم معلّق بالفعل.**', { ephemeral: true }));
     return;
   }
 
   const targetChannelId = config.claimFromDedicatedChannel ? config.claimChannelId : interaction.channelId;
   const targetChannel = await interaction.guild.channels.fetch(targetChannelId).catch(() => null);
   if (!targetChannel || targetChannel.type !== ChannelType.GuildText) {
-    await interaction.reply(buildTicketMessagePayload('خطأ', '**شات القبول غير صالح أو غير متاح.**', { ephemeral: true }));
+    await interaction.editReply(buildTicketMessagePayload('خطأ', '**شات القبول غير صالح أو غير متاح.**', { ephemeral: true }));
     return;
   }
 
@@ -1937,12 +1967,13 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId) {
       await targetChannel.send({ content: requestText, components: [requestRow] });
     }
   } catch {
-    await interaction.reply(buildTicketMessagePayload('خطأ', '**فشل إرسال طلب تغيير المستلم في شات القبول، تم إلغاء العملية.**', { ephemeral: true }));
+    await interaction.editReply(buildTicketMessagePayload('خطأ', '**فشل إرسال طلب تغيير المستلم في شات القبول، تم إلغاء العملية.**', { ephemeral: true }));
     return;
   }
 
   ticket.claimedBy = null;
   ticket.reassignPendingAt = Date.now();
+  ticket.reassignPreviousClaimer = previousClaimer || interaction.user.id;
 
   if (interaction.user.id) {
     await interaction.channel.permissionOverwrites.edit(interaction.user.id, {
@@ -1969,7 +2000,7 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId) {
   await interaction.channel.send({
     content: `**تم تغير المستلم :** ${previousClaimer ? `<@${previousClaimer}>` : (interaction.user.id ? `<@${interaction.user.id}>` : 'غير محدد')}\n**انتظر المستلم الجديد.**`
   }).catch(() => {});
-  await interaction.reply(buildTicketMessagePayload('تم', '**تم إخراجك من التكت وإرسال طلب استلام جديد.**', { ephemeral: true }));
+  await interaction.editReply(buildTicketMessagePayload('تم', '**تم إخراجك من التكت وإرسال طلب استلام جديد.**', { ephemeral: true }));
 }
 
 
@@ -2004,6 +2035,10 @@ async function handleReassignClaim(interaction, guildId, panelId, channelId) {
     await interaction.editReply(buildTicketMessagePayload('تنبيه', '**لا يوجد طلب تغيير مستلم نشط لهذا التكت.**')).catch(() => {});
     return;
   }
+  if (ticket.reassignPreviousClaimer && ticket.reassignPreviousClaimer === interaction.user.id) {
+    await interaction.editReply(buildTicketMessagePayload('تنبيه', '**لا يمكن للمستلم السابق استلام نفس التكت بعد طلب تغيير المستلم.**')).catch(() => {});
+    return;
+  }
 
   const ticketChannel = interaction.guild.channels.cache.get(actionChannelId)
     || await interaction.guild.channels.fetch(actionChannelId).catch(() => null);
@@ -2021,13 +2056,6 @@ async function handleReassignClaim(interaction, guildId, panelId, channelId) {
     ReadMessageHistory: true
   }).catch(() => {});
 
-  const reason = config.reasons?.[ticket.reasonKey] || {};
-  const claimImage = resolveImageForSend(reason.claimImage);
-  const claimEmbed = makeTicketEmbed(
-    'Ticket claimed',
-    `**Ticket claimed by :** <@${interaction.user.id}>\n**Reason :** ${reason.name || `سبب ${ticket.reasonKey}`}\n**Member :** <@${ticket.memberId}>`
-  );
-
   if (interaction.message?.editable) {
     const rows = interaction.message.components.map((row) => {
       const comps = row.components.map((component) => {
@@ -2042,19 +2070,15 @@ async function handleReassignClaim(interaction, guildId, panelId, channelId) {
       await interaction.message.delete().catch(() => {});
     } else {
       await interaction.message.edit({
-        embeds: [claimEmbed],
+        content: buildClaimRequestContent(ticket, config, interaction.user.id),
+        embeds: [],
         components: rows
       }).catch(() => {});
     }
   }
 
-  if (claimImage) await ticketChannel.send({
-    files: [claimImage],
-    embeds: [claimEmbed]
-  }).catch(() => {});
-  else await ticketChannel.send({
-    embeds: [claimEmbed]
-  }).catch(() => {});
+  const claimImage = resolveImageForSend(config.reasons?.[ticket.reasonKey]?.claimImage);
+  await sendClaimAnnounce({ channel: ticketChannel, config, ticket, claimerId: interaction.user.id, claimImage });
 
   await syncTicketLogMessage({
     guild: interaction.guild,
@@ -3329,7 +3353,7 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   }
 
   const responsibilities = loadResponsibilities();
-  const responsibilityNames = Object.keys(responsibilities).slice(0, 25);
+  const responsibilityNames = Object.keys(responsibilities);
 
   let respName = null;
   if (value.startsWith('respidx_')) {
@@ -3428,6 +3452,11 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
 
   const renamed = `مسؤولين-${sanitizeName(respName)}`.slice(0, 90);
   await interaction.channel.setName(renamed).catch(() => {});
+
+  if (interaction.message?.editable) {
+    const refreshedControls = await buildTicketControls(guildId, resolvedPanelId, actionChannelId, config, { includeClaimButton: false, disableClaimButton: true });
+    await interaction.message.edit({ components: refreshedControls }).catch(() => {});
+  }
 
   await interaction.editReply({
     content: mentions.join(' ') || null,
@@ -3735,8 +3764,9 @@ function registerHandlers(client) {
             await interaction.reply(buildTicketMessagePayload('خطأ', '**ليس لديك صلاحية الحذف.**', { ephemeral: true }));
             return;
           }
+          interaction.channel.ticketMeta = ticket;
           const transcriptFile = await buildTicketTranscript(interaction.channel).catch(() => null);
-          const transcriptDelivered = await sendTranscriptOutsideTicket(interaction, transcriptFile, 'Transcript before manual delete');
+          ticket.deletedChannel = true;
           await syncTicketLogMessage({
             guild: interaction.guild,
             config,
@@ -3750,7 +3780,7 @@ function registerHandlers(client) {
           setGuildData(guildId, config, tickets, pendingRequests || {}, resolvedPanelId);
           await interaction.reply(buildTicketMessagePayload(
             'حذف',
-            `**سيتم حذف التكت خلال 3 ثواني.**${transcriptFile ? `\n**حالة الترانسكربت:** ${transcriptDelivered ? 'تم إرساله خارج التكت.' : 'تعذر إرساله خارج التكت.'}` : ''}`,
+            '**سيتم حذف التكت خلال 3 ثواني.**',
             { ephemeral: true }
           ));
           setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
@@ -3855,7 +3885,6 @@ function registerHandlers(client) {
 
           setGuildData(guildId, config, tickets, pendingRequests || {}, resolvedPanelId);
           await interaction.update({
-            embeds: [makeTicketEmbed('التكت مقفل', '**تم إقفال التكت، يمكنك استخدام أزرار الإدارة بالأسفل.**')],
             components: buildPostCloseControls(guildId, resolvedPanelId, channelId, ticket)
           });
           return;
@@ -3989,7 +4018,7 @@ function registerHandlers(client) {
           await handleTransferResponsibility(interaction, guildId, panelId, channelId, selected);
           const { panelId: resolvedPanelId, config, ticket, actionChannelId } = getTicketContextFromInteraction(guildId, interaction, channelId, panelId);
           if (ticket && interaction.message?.editable) {
-            const refreshedControls = await buildTicketControls(guildId, resolvedPanelId, actionChannelId, config, { includeClaimButton: true });
+            const refreshedControls = await buildTicketControls(guildId, resolvedPanelId, actionChannelId, config, { includeClaimButton: !ticket.transferredRoleIds?.length, disableClaimButton: Boolean(ticket.transferredRoleIds?.length) });
             await interaction.message.edit({ components: refreshedControls }).catch(() => {});
           }
           return;
