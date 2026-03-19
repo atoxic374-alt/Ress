@@ -1289,10 +1289,13 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId) {
   );
 
   const reason = config.reasons?.[ticket.reasonKey] || {};
-  const reasonImage = resolveImageForSend(reason.openImage || config.messages.ticketImage);
-  const requestText = `**العضو :** <@${ticket.memberId}>
-**السبب :** ${reason.name || `سبب ${ticket.reasonKey}`}
-**التكت :** <#${channelId}>`;
+  const reasonImage = resolveImageForSend(reason.claimImage || config.messages.ticketImage);
+  const requestText = [
+    '# طلب تغيير الاداري',
+    `**العضو :** <@${ticket.memberId}>`,
+    `**السبب :** ${reason.name || `سبب ${ticket.reasonKey}`}`,
+    `**التكت :** <#${channelId}>`
+  ].join('\n');
 
   try {
     for (const chunk of mentionChunks) {
@@ -1300,9 +1303,9 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId) {
     }
 
     if (reasonImage) {
-      await targetChannel.send(buildTicketMessagePayload('طلب استلام جديد', requestText, { files: [reasonImage], components: [requestRow] }));
+      await targetChannel.send({ content: requestText, files: [reasonImage], components: [requestRow] });
     } else {
-      await targetChannel.send(buildTicketMessagePayload('طلب استلام جديد', requestText, { components: [requestRow] }));
+      await targetChannel.send({ content: requestText, components: [requestRow] });
     }
   } catch {
     await interaction.reply(buildTicketMessagePayload('خطأ', '**فشل إرسال طلب تغيير المستلم في شات القبول، تم إلغاء العملية.**', { ephemeral: true }));
