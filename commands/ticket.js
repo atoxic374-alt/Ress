@@ -1984,7 +1984,9 @@ async function applyHideOnClaim(channel, guild, config, claimerId, memberId, ext
 }
 
 async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
-  await interaction.deferReply({ ephemeral: true }).catch(() => {});
+  if (!interaction.deferred && !interaction.replied) {
+    await interaction.reply(buildTicketMessagePayload('Request', '**يرجى الانتظار...**', { ephemeral: true })).catch(() => {});
+  }
   const guild = interaction.guild;
   const { config, tickets, pendingRequests } = getPanelData(guildId, panelId || 'default');
   if (resolveTicketBlockForMember(guildId, interaction.member)) {
