@@ -2250,6 +2250,10 @@ async function closeTicketCore({
     return true;
   }
 
+  const closePrefix = `closed-${sanitizeName(config.ticketNamePrefix || 'ticket')}`;
+  await channel.setName(closePrefix).catch(() => {});
+  if (config.closedCategoryId) await channel.setParent(config.closedCategoryId).catch(() => {});
+
   if (ticket.memberId) {
     await channel.permissionOverwrites.edit(ticket.memberId, {
       ViewChannel: false,
@@ -2292,10 +2296,6 @@ async function closeTicketCore({
   if (interaction?.message?.editable) {
     await interaction.message.edit({ components: [] }).catch(() => {});
   }
-
-  const closePrefix = `closed-${sanitizeName(config.ticketNamePrefix || 'ticket')}`;
-  await channel.setName(closePrefix).catch(() => {});
-  if (config.closedCategoryId) await channel.setParent(config.closedCategoryId).catch(() => {});
 
   await channel.send({
     embeds: [makeTicketEmbed(
