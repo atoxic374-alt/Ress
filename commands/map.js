@@ -99,6 +99,16 @@ function buildOpenPanelRows(config, configKey, activeCount) {
     return rows;
 }
 
+function registerOpenPanelMessage(config, channelId, messageId) {
+    if (!config?.open || !/^\d{17,19}$/.test(String(channelId)) || !/^\d{17,19}$/.test(String(messageId))) return false;
+    const existing = Array.isArray(config.open.panelMessages) ? config.open.panelMessages : [];
+    const filtered = existing.filter(item => item?.channelId && item?.messageId);
+    const deduped = filtered.filter(item => !(item.channelId === channelId && item.messageId === messageId));
+    deduped.unshift({ channelId, messageId, updatedAt: Date.now() });
+    config.open.panelMessages = deduped.slice(0, 20);
+    return true;
+}
+
 function resolveMapConfig(message, allConfigs) {
     const selectedConfigKey = (message.isGlobalOnly || !message.guild)
         ? 'global'
@@ -236,7 +246,14 @@ module.exports = {
 
                 if (buttonsImage) panelPayload.files = [buttonsImage];
 
-                await message.channel.send(panelPayload);
+                const panelMessage = await message.channel.send(panelPayload);
+                if (panelMessage?.id && panelMessage?.channelId) {
+                    const panelChanged = registerOpenPanelMessage(config, panelMessage.channelId, panelMessage.id);
+                    if (panelChanged) {
+                        allConfigs[configKey] = config;
+                        await saveAllConfigs(allConfigs);
+                    }
+                }
                 return;
             }
 

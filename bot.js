@@ -2597,6 +2597,11 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
                             cfg.open.activeUsers = currentActive.filter(id => id !== userId);
                             changed = true;
                         }
+
+                        if (roleWasAdded || roleWasRemoved) {
+                            const panelListChanged = await refreshMapOpenPanelsForConfig(newMember.guild, key, cfg);
+                            if (panelListChanged) changed = true;
+                        }
                     }
 
                     if (changed) {
@@ -3479,6 +3484,119 @@ async function checkExpiredReports() {
     }
 }
 
+function registerMapOpenPanelMessage(config, channelId, messageId) {
+    if (!config?.open || !/^\d{17,19}$/.test(channelId) || !/^\d{17,19}$/.test(messageId)) return false;
+    const existing = Array.isArray(config.open.panelMessages) ? config.open.panelMessages : [];
+    const filtered = existing.filter(item => item?.channelId && item?.messageId);
+    const deduped = filtered.filter(item => !(item.channelId === channelId && item.messageId === messageId));
+    deduped.unshift({ channelId, messageId, updatedAt: Date.now() });
+    config.open.panelMessages = deduped.slice(0, 20);
+    return true;
+}
+
+function buildMapOpenRows(config, configKey) {
+    const counterMode = config.open?.counterButton?.mode === 'label_number' ? 'label_number' : 'emoji_digits';
+    const digitMap = {
+        '0': '<:emoji_27:1482578058199302195>',
+        '1': '<:emoji_27:1482578008542937159>',
+        '2': '<:emoji_28:1482578088511672320>',
+        '3': '<:emoji_29:1482578116374433833>',
+        '4': '<:emoji_29:1482578165485277295>',
+        '5': '<:emoji_31:1482578227611435079>',
+        '6': '<:emoji_32:1482578278966366208>',
+        '7': '<:emoji_33:1482578299426177115>',
+        '8': '<:emoji_35:1482578353771905157>',
+        '9': '<:emoji_35:1482578379185324124>'
+    };
+    const activeCount = Array.isArray(config.open?.activeUsers) ? config.open.activeUsers.length : 0;
+
+    const openButton = new ButtonBuilder()
+        .setCustomId(`map_open_toggle_${configKey}`)
+        .setLabel((config.open?.openButton?.label || 'اوبن').slice(0, 80))
+        .setStyle(config.open?.openButton?.style || ButtonStyle.Success)
+        .setDisabled(!config.open?.roleId || !/^\d{17,19}$/.test(config.open.roleId));
+    if (config.open?.openButton?.emoji) openButton.setEmoji(config.open.openButton.emoji);
+
+    const counterStyle = config.open?.counterButton?.style || ButtonStyle.Secondary;
+    const rebuiltRows = [];
+
+    if (counterMode === 'label_number') {
+        const formattedCount = activeCount.toLocaleString('en-US');
+        const counterButton = new ButtonBuilder()
+            .setCustomId(`map_open_count_${configKey}`)
+            .setStyle(counterStyle)
+            .setDisabled(true)
+            .setLabel(formattedCount);
+
+        if (config.open?.counterButton?.emoji) counterButton.setEmoji(config.open.counterButton.emoji);
+        rebuiltRows.push(new ActionRowBuilder().addComponents(openButton, counterButton));
+        return rebuiltRows;
+    }
+
+    const digits = String(Math.max(0, Number(activeCount) || 0)).split('');
+    let digitIndex = 0;
+
+    const firstRow = new ActionRowBuilder().addComponents(openButton);
+    while (digitIndex < digits.length && firstRow.components.length < 5) {
+        const emoji = digitMap[digits[digitIndex]];
+        if (emoji) {
+            firstRow.addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`map_open_count_${configKey}_${digitIndex}`)
+                    .setStyle(counterStyle)
+                    .setDisabled(true)
+                    .setEmoji(emoji)
+            );
+        }
+        digitIndex += 1;
+    }
+    rebuiltRows.push(firstRow);
+
+    while (digitIndex < digits.length) {
+        const row = new ActionRowBuilder();
+        while (digitIndex < digits.length && row.components.length < 5) {
+            const emoji = digitMap[digits[digitIndex]];
+            if (emoji) {
+                row.addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(`map_open_count_${configKey}_${digitIndex}`)
+                        .setStyle(counterStyle)
+                        .setDisabled(true)
+                        .setEmoji(emoji)
+                );
+            }
+            digitIndex += 1;
+        }
+        if (row.components.length > 0) rebuiltRows.push(row);
+    }
+
+    return rebuiltRows;
+}
+
+async function refreshMapOpenPanelsForConfig(guild, configKey, config) {
+    if (!guild || !config?.open?.enabled) return false;
+    const entries = Array.isArray(config.open.panelMessages) ? config.open.panelMessages : [];
+    if (entries.length === 0) return false;
+
+    const updatedRows = buildMapOpenRows(config, configKey);
+    const keptEntries = [];
+
+    for (const entry of entries) {
+        if (!entry?.channelId || !entry?.messageId) continue;
+        const channel = guild.channels.cache.get(entry.channelId) || await guild.channels.fetch(entry.channelId).catch(() => null);
+        if (!channel?.isTextBased?.()) continue;
+        const msg = await channel.messages.fetch(entry.messageId).catch(() => null);
+        if (!msg) continue;
+        await msg.edit({ components: updatedRows }).catch(() => null);
+        keptEntries.push(entry);
+    }
+
+    const before = JSON.stringify(entries);
+    const after = JSON.stringify(keptEntries);
+    config.open.panelMessages = keptEntries;
+    return before !== after;
+}
+
 
 
 async function handleMapOpenInteraction(interaction) {
@@ -3530,6 +3648,14 @@ async function handleMapOpenInteraction(interaction) {
     }
 
     const hadRole = member.roles.cache.has(role.id);
+    let deferredReply = false;
+
+    try {
+        await interaction.deferReply({ ephemeral: true });
+        deferredReply = true;
+    } catch (_) {
+        deferredReply = false;
+    }
 
     try {
         if (hadRole) await member.roles.remove(role, 'إزالة رول Open عبر map open');
@@ -3538,7 +3664,8 @@ async function handleMapOpenInteraction(interaction) {
         const msg = roleManageErr?.code === 50013
             ? '❌ ما أقدر أعدل هذا الرول. تأكد أن رتبة البوت أعلى من الرول ومعه صلاحية Manage Roles.'
             : `❌ فشل تعديل الرول: ${roleManageErr.message || 'خطأ غير معروف'}`;
-        await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
+        if (deferredReply) await interaction.editReply({ content: msg }).catch(() => {});
+        else await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
         return true;
     }
 
@@ -3557,79 +3684,8 @@ async function handleMapOpenInteraction(interaction) {
     allConfigs[configKey] = config;
     await writeMapConfigsQueued(allConfigs);
 
-    const counterMode = config.open?.counterButton?.mode === 'label_number' ? 'label_number' : 'emoji_digits';
-    const digitMap = {
-        '0': '<:emoji_27:1482578058199302195>',
-        '1': '<:emoji_27:1482578008542937159>',
-        '2': '<:emoji_28:1482578088511672320>',
-        '3': '<:emoji_29:1482578116374433833>',
-        '4': '<:emoji_29:1482578165485277295>',
-        '5': '<:emoji_31:1482578227611435079>',
-        '6': '<:emoji_32:1482578278966366208>',
-        '7': '<:emoji_33:1482578299426177115>',
-        '8': '<:emoji_35:1482578353771905157>',
-        '9': '<:emoji_35:1482578379185324124>'
-    };
-    const activeCount = config.open.activeUsers.length;
-
-    const openButton = new ButtonBuilder()
-        .setCustomId(`map_open_toggle_${configKey}`)
-        .setLabel((config.open?.openButton?.label || 'اوبن').slice(0, 80))
-        .setStyle(config.open?.openButton?.style || ButtonStyle.Success)
-        .setDisabled(!config.open?.roleId || !/^\d{17,19}$/.test(config.open.roleId));
-    if (config.open?.openButton?.emoji) openButton.setEmoji(config.open.openButton.emoji);
-
-    const counterStyle = config.open?.counterButton?.style || ButtonStyle.Secondary;
-    const rebuiltRows = [];
-
-    if (counterMode === 'label_number') {
-        const formattedCount = activeCount.toLocaleString('en-US');
-        const counterButton = new ButtonBuilder()
-            .setCustomId(`map_open_count_${configKey}`)
-            .setStyle(counterStyle)
-            .setDisabled(true)
-            .setLabel(formattedCount);
-
-        if (config.open?.counterButton?.emoji) counterButton.setEmoji(config.open.counterButton.emoji);
-        rebuiltRows.push(new ActionRowBuilder().addComponents(openButton, counterButton));
-    } else {
-        const digits = String(Math.max(0, Number(activeCount) || 0)).split('');
-        let digitIndex = 0;
-
-        const firstRow = new ActionRowBuilder().addComponents(openButton);
-        while (digitIndex < digits.length && firstRow.components.length < 5) {
-            const emoji = digitMap[digits[digitIndex]];
-            if (emoji) {
-                firstRow.addComponents(
-                    new ButtonBuilder()
-                        .setCustomId(`map_open_count_${configKey}_${digitIndex}`)
-                        .setStyle(counterStyle)
-                        .setDisabled(true)
-                        .setEmoji(emoji)
-                );
-            }
-            digitIndex += 1;
-        }
-        rebuiltRows.push(firstRow);
-
-        while (digitIndex < digits.length) {
-            const row = new ActionRowBuilder();
-            while (digitIndex < digits.length && row.components.length < 5) {
-                const emoji = digitMap[digits[digitIndex]];
-                if (emoji) {
-                    row.addComponents(
-                        new ButtonBuilder()
-                            .setCustomId(`map_open_count_${configKey}_${digitIndex}`)
-                            .setStyle(counterStyle)
-                            .setDisabled(true)
-                            .setEmoji(emoji)
-                    );
-                }
-                digitIndex += 1;
-            }
-            if (row.components.length > 0) rebuiltRows.push(row);
-        }
-    }
+    registerMapOpenPanelMessage(config, interaction.channelId, interaction.message.id);
+    const rebuiltRows = buildMapOpenRows(config, configKey);
 
     try {
         await interaction.message.edit({ components: rebuiltRows });
@@ -3639,7 +3695,8 @@ async function handleMapOpenInteraction(interaction) {
 
     const grantMsg = config.open.grantMessage || '✅ تم اعطائك رول الاوبن الان يمكنك رؤيه الرومات.';
     const removeMsg = config.open.removeMessage || '✅ تم ازالة رول الاوبن ولم يعد بإمكانك رؤية الرومات.';
-    await interaction.reply({ content: hadRole ? removeMsg : grantMsg, ephemeral: true }).catch(() => {});
+    if (deferredReply) await interaction.editReply({ content: hadRole ? removeMsg : grantMsg }).catch(() => {});
+    else await interaction.reply({ content: hadRole ? removeMsg : grantMsg, ephemeral: true }).catch(() => {});
     return true;
 }
 
