@@ -869,9 +869,7 @@ async function sendClaimAnnounce({ channel, config, ticket, claimerId, claimImag
 
   const claimEmbed = makeTicketEmbed('Ticket claimed', `**Reason :** ${reasonName}\n**Admin :** <@${claimerId}>${modalSection}`);
 
-  const payload = { embeds: [claimEmbed] };
-  if (claimImage) payload.files = [claimImage];
-  await channel.send(payload).catch(() => {});
+  await channel.send({ embeds: [claimEmbed] }).catch(() => {});
 }
 
 function buildClaimRequestContent(ticket, config, claimerId = null) {
