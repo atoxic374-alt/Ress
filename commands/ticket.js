@@ -21,12 +21,13 @@ const { registerTicketInteractionRouter } = require('../utils/ticketInteractionR
 const colorManager = require('../utils/colorManager');
 
 const name = 'ticket';
-const aliases = ['تكت', 'tclose', 'اغلاق', 'قفل', 'اقفال', 'myticket', 'نقاطي', 'tadd', 'tremove', 'tchange', 'تغيير', 'ttop', 'نقاط', 'tname', 'اسم', 'remind', 'تنبيه', 'استدعاء', 'points', 'tm', 'treset', 'tmreset', 'tblock'];
+const aliases = ['تكت', 'tclose', 'اغلاق', 'قفل', 'اقفال', 'myticket', 'نقاطي', 'tadd', 'اضافه', 'اضافة', 'إضافة', 'tremove', 'ازاله', 'ازالة', 'إزالة', 'tchange', 'تغيير', 'تحويل', 'ttop', 'نقاط', 'tname', 'اسم', 'تسميه', 'تسمية', 'remind', 'تنبيه', 'استدعاء', 'points', 'tm', 'treset', 'tmreset', 'tblock'];
 const dataPath = path.join(__dirname, '..', 'data', 'ticketConfig.json');
 const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
 const ticketImagesDir = path.join(__dirname, '..', 'data', 'ticket_images');
 const pointsPath = path.join(__dirname, '..', 'data', 'points.json');
 const ticketSearchSessions = new Map();
+const pointsAdjustSessions = new Map();
 
 let handlersRegistered = false;
 const pingCooldowns = new Map();
@@ -343,10 +344,36 @@ function getTicketLogTimeline(ticket, limit = 8) {
     .join('<br>');
 }
 
+function renderTranscriptContent(channel, rawText = '') {
+  const guild = channel?.guild;
+  let html = escapeHtml(rawText || '');
+  html = html
+    .replace(/&lt;@!?(\d{16,20})&gt;/g, (_, id) => {
+      const member = guild?.members?.cache?.get?.(id);
+      const label = member?.displayName || member?.user?.username || id;
+      return `<span class="mention user-mention">@${escapeHtml(label)}</span>`;
+    })
+    .replace(/&lt;@&(\d{16,20})&gt;/g, (_, id) => {
+      const role = guild?.roles?.cache?.get?.(id);
+      const label = role?.name || id;
+      return `<span class="mention role-mention">@${escapeHtml(label)}</span>`;
+    })
+    .replace(/&lt;#(\d{16,20})&gt;/g, (_, id) => {
+      const linked = guild?.channels?.cache?.get?.(id);
+      const label = linked?.name || id;
+      return `<span class="mention channel-mention">#${escapeHtml(label)}</span>`;
+    });
+  html = html.replace(/(https?:\/\/[^\s<]+?\.(?:png|jpe?g|gif|webp|bmp|svg)(?:\?[^\s<]*)?)/gi, (url) => {
+    const safeUrl = escapeHtml(url);
+    return `<a href="${safeUrl}" target="_blank" rel="noreferrer">${safeUrl}</a><br><div class="media"><img src="${safeUrl}" alt="inline-image" loading="lazy"></div>`;
+  });
+  return html.replace(/\n/g, '<br>');
+}
+
 function formatDeletedTranscriptEntry(entry, channel = null) {
   const author = entry?.authorTag || entry?.authorName || entry?.authorId || 'unknown';
   const ts = new Date(Number(entry?.deletedAt || entry?.createdTimestamp || Date.now())).toLocaleString('en-GB', { hour12: false, timeZone: 'UTC' });
-  const content = renderTranscriptMentions(channel, escapeHtml(entry?.content || '')).replace(/\n/g, '<br>') || '<span class="muted">(empty)</span>';
+  const content = renderTranscriptContent(channel, entry?.content || '') || '<span class="muted">(empty)</span>';
   const avatar = entry?.avatarUrl
     ? `<img class="avatar-img" src="${escapeHtml(entry.avatarUrl)}" alt="${escapeHtml(author)}" loading="lazy">`
     : `<div class="avatar-fallback">${escapeHtml(String(author).slice(0, 2).toUpperCase())}</div>`;
@@ -376,26 +403,6 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function renderTranscriptMentions(channel, text) {
-  const guild = channel?.guild;
-  return String(text || '')
-    .replace(/<@!?(\d{16,20})>/g, (_, id) => {
-      const member = guild?.members?.cache?.get?.(id);
-      const label = member?.displayName || member?.user?.username || id;
-      return `<span class="mention user-mention">@${escapeHtml(label)}</span>`;
-    })
-    .replace(/<@&(\d{16,20})>/g, (_, id) => {
-      const role = guild?.roles?.cache?.get?.(id);
-      const label = role?.name || id;
-      return `<span class="mention role-mention">@${escapeHtml(label)}</span>`;
-    })
-    .replace(/<#(\d{16,20})>/g, (_, id) => {
-      const linked = guild?.channels?.cache?.get?.(id);
-      const label = linked?.name || id;
-      return `<span class="mention channel-mention">#${escapeHtml(label)}</span>`;
-    });
-}
-
 function formatTranscriptComponents(message) {
   const rows = Array.isArray(message?.components) ? message.components : [];
   if (!rows.length) return '';
@@ -418,6 +425,7 @@ function isImageLikeAttachment(attachment) {
   const url = String(attachment?.url || '').toLowerCase();
   const contentType = String(attachment?.contentType || '').toLowerCase();
   return contentType.startsWith('image/')
+    || (Number(attachment?.width || 0) > 0 && Number(attachment?.height || 0) > 0)
     || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name)
     || /\.(png|jpe?g|gif|webp|bmp|svg)(\?|$)/i.test(url);
 }
@@ -472,7 +480,7 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
       for (const msg of ordered) {
         const ts = new Date(msg.createdTimestamp).toLocaleString('en-GB', { hour12: false, timeZone: 'UTC' });
         const author = msg.author?.tag || msg.author?.username || msg.author?.id || 'unknown';
-        const content = renderTranscriptMentions(channel, escapeHtml((msg.content || '').trim())).replace(/\n/g, '<br>');
+        const content = renderTranscriptContent(channel, (msg.content || '').trim());
         const attachments = msg.attachments?.size
           ? [...msg.attachments.values()].map((a) => {
             const imagePreview = isImageLikeAttachment(a)
@@ -593,14 +601,6 @@ async function retryAsync(fn, attempts = 3) {
   return null;
 }
 
-async function sendTranscriptToLogChannel(logChannel, transcriptFile) {
-  if (!logChannel || !transcriptFile) return null;
-  const message = await retryAsync(() => logChannel.send({ files: [transcriptFile] }).catch(() => null), 2);
-  if (!message) return null;
-  const attachment = [...message.attachments.values()].find((item) => String(item.name || '').startsWith('transcript-'));
-  return attachment?.url || null;
-}
-
 async function finalizeTransferDmNotifications(ticket, guild, closedByLabel = 'غير محدد') {
   const notices = Array.isArray(ticket?.transferDmNotifications) ? ticket.transferDmNotifications : [];
   if (!notices.length || !guild?.client) return;
@@ -644,15 +644,14 @@ async function syncTicketLogMessage({
   const reason = config.reasons?.[ticket.reasonKey] || {};
   const historyText = (ticket.logHistory || []).slice(-12).map((line, index) => `${index + 1}) ${line}`).join('\n') || 'لا يوجد';
   const statusLabel = ticket.status === 'closed' ? 'Closed / مغلق' : 'Open / مفتوح';
-  const transcriptUrl = transcriptFile ? await sendTranscriptToLogChannel(logChannel, transcriptFile).catch(() => null) : (ticket.lastTranscriptUrl || null);
-  if (transcriptUrl) ticket.lastTranscriptUrl = transcriptUrl;
+  const transcriptAttached = Boolean(transcriptFile);
   const ticketLabel = ticket.deletedChannel ? 'Deleted' : (channelId ? `<#${channelId}>` : (ticket.channelId ? `<#${ticket.channelId}>` : 'غير محدد'));
   const summaryLines = [
     `**Ticket :** ${ticketLabel}`,
     `**Member :** ${ticket.memberId ? `<@${ticket.memberId}>` : 'غير محدد'}`,
     `**Reason :** ${reason.name || `سبب ${ticket.reasonKey || '-'}`}`,
     `**Status :** ${statusLabel}`,
-    transcriptUrl ? `**Transcript :** [Open transcript](${transcriptUrl})` : null,
+    transcriptAttached ? '**Transcript :** مرفق مع رسالة اللوق' : null,
     '',
     '**Results / النتائج :**',
     historyText
@@ -680,7 +679,10 @@ async function syncTicketLogMessage({
 
   embed.setAuthor({ name: guild.name || 'Server', iconURL: guild.iconURL?.({ dynamic: true, size: 128 }) || undefined });
 
-  const payload = { embeds: [embed] };
+  const payload = {
+    embeds: [embed],
+    ...(transcriptFile ? { files: [transcriptFile] } : {})
+  };
 
   let savedMessage = null;
   ticket.logSyncFailedAt = null;
@@ -1413,6 +1415,11 @@ function formatBlockDuration(expiresAt) {
   return `<t:${Math.floor(Number(expiresAt) / 1000)}:R>`;
 }
 
+function formatBlockDurationText(expiresAt) {
+  if (!expiresAt) return 'بدون مدة (دائم)';
+  return `حتى <t:${Math.floor(Number(expiresAt) / 1000)}:F> (${formatBlockDuration(expiresAt)})`;
+}
+
 async function syncTicketBlocks(guildId) {
   const data = getTicketBlockData(guildId);
   const cleaned = pruneTicketBlocks(data.blocks);
@@ -1442,6 +1449,29 @@ async function logTicketBlockAction(guild, actor, blockEntry, action = 'block') 
     { user: actor }
   );
   await channel.send({ embeds: [embed] }).catch(() => {});
+  return true;
+}
+
+async function notifyTicketBlockTarget(guild, actor, blockEntry, action = 'block') {
+  if (!guild || !actor || !blockEntry || blockEntry.targetType !== 'user') return false;
+  const user = await guild.client.users.fetch(blockEntry.targetId).catch(() => null);
+  if (!user) return false;
+
+  const description = action === 'unblock'
+    ? [
+      '**تم فك حظر التكت عنك.**',
+      `**بواسطة:** <@${actor.id}>`,
+      `**الوقت:** <t:${Math.floor(Date.now() / 1000)}:F>`
+    ].join('\n')
+    : [
+      '**تم حظرك من نظام التكت.**',
+      `**المدة:** ${formatBlockDurationText(blockEntry.expiresAt)}`,
+      `**السبب:** ${blockEntry.reason || 'بدون سبب'}`,
+      `**بواسطة:** <@${actor.id}>`,
+      `**الوقت:** <t:${Math.floor(Number(blockEntry.createdAt || Date.now()) / 1000)}:F>`
+    ].join('\n');
+
+  await user.send(buildTicketMessagePayload(action === 'unblock' ? 'فك حظر التكت' : 'حظر التكت', description, { user: actor })).catch(() => {});
   return true;
 }
 
@@ -2074,7 +2104,8 @@ async function closeTicketCore({
   ticket,
   interaction = null,
   closedByLabel = null,
-  autoClose = false
+  autoClose = false,
+  silentCloseNotice = false
 }) {
   if (!ticket || ticket.closedAt) return false;
 
@@ -2113,7 +2144,7 @@ async function closeTicketCore({
         '**سيتم حذف التكت خلال 3 ثواني.**',
         { ephemeral: true }
       )).catch(() => {});
-    } else {
+    } else if (!silentCloseNotice) {
       await channel.send(buildTicketMessagePayload('إغلاق تلقائي', `**تم إقفال هذا التكت تلقائيًا${closedByLabel ? ` بواسطة ${closedByLabel}` : ''} وسيتم حذفه خلال 3 ثواني.**`)).catch(() => {});
     }
 
@@ -2127,6 +2158,11 @@ async function closeTicketCore({
       SendMessages: false
     }).catch(() => {});
   }
+  await channel.permissionOverwrites.edit(channel.guild.roles.everyone.id, {
+    ViewChannel: false,
+    SendMessages: false,
+    ReadMessageHistory: false
+  }).catch(() => {});
 
   for (const userId of (ticket.transferredUserIds || [])) {
     await channel.permissionOverwrites.edit(userId, {
@@ -2208,7 +2244,7 @@ function resolveCloseContext(guildId, panelId, channelId, actor) {
     tickets,
     pendingRequests,
     ticket,
-    actionChannelId: channelId
+    actionChannelId: ticket?.channelId || channelId
   };
 }
 
@@ -2238,16 +2274,12 @@ async function handleClose(interaction, guildId, panelId, channelId) {
 }
 
 async function handleCloseAliasMessage(message) {
-  if (!message.guild || !message.channel) return;
+  if (!message.guild || !message.channel) return false;
   const guildId = message.guild.id;
   const channelId = message.channel.id;
   const resolved = resolveCloseContext(guildId, 'default', channelId, { member: message.member, guild: message.guild, user: message.author });
   if (resolved.error) {
-    await message.reply({
-      ...resolved.error,
-      flags: undefined
-    }).catch(() => {});
-    return;
+    return false;
   }
 
   const { panelId, config, tickets, pendingRequests, ticket, actionChannelId } = resolved;
@@ -2261,13 +2293,10 @@ async function handleCloseAliasMessage(message) {
     pendingRequests,
     ticket,
     interaction: null,
-    closedByLabel: `<@${message.author.id}>`
+    closedByLabel: `<@${message.author.id}>`,
+    silentCloseNotice: true
   });
-
-  await message.reply(buildTicketMessagePayload(
-    'اقفال',
-    config.keepClosedTickets ? '**تم اقفال التكت والاحتفاظ به.**' : '**سيتم حذف التكت خلال 3 ثواني.**'
-  )).catch(() => {});
+  return true;
 }
 
 function resolveTicketMessageContext(message) {
@@ -2277,21 +2306,29 @@ function resolveTicketMessageContext(message) {
   const guildId = message.guild.id;
   const channelId = message.channel.id;
   const panelId = findTicketPanel(guildId, channelId, 'default');
-  const { panelId: resolvedPanelId, config, tickets, pendingRequests, ticket, actionChannelId } = getTicketContext(guildId, channelId, panelId);
+  const { panelId: resolvedPanelId, config, tickets, pendingRequests, ticket } = getTicketContext(guildId, channelId, panelId);
+  const actionChannelId = ticket?.channelId || channelId;
   if (!ticket || channelId !== actionChannelId) {
     return { error: buildTicketMessagePayload('خطأ', '**يجب استخدام هذا الأمر داخل روم التكت.**') };
   }
   return { guildId, panelId: resolvedPanelId, channelId: actionChannelId, config, tickets, pendingRequests, ticket };
 }
 
-async function handleRenameAliasMessage(message, newNameRaw) {
+function resolveTicketAliasContext(message, { requireOpen = true } = {}) {
   const ctx = resolveTicketMessageContext(message);
-  if (ctx.error) return message.reply(ctx.error).catch(() => {});
+  if (ctx.error) return { ok: false, ctx: null };
+  if (requireOpen && ctx.ticket?.status !== 'open') return { ok: false, ctx: null };
+  return { ok: true, ctx };
+}
+
+async function handleRenameAliasMessage(message, newNameRaw) {
+  const { ok, ctx } = resolveTicketAliasContext(message, { requireOpen: false });
+  if (!ok) return false;
   if (!canManageTicket({ user: message.author, member: message.member, guild: message.guild }, ctx.ticket, ctx.config)) {
-    return message.reply(buildTicketMessagePayload('خطأ', '**ليس لديك صلاحية تغيير الاسم.**')).catch(() => {});
+    return false;
   }
   const newName = sanitizeName(newNameRaw);
-  if (!newName) return message.reply(buildTicketMessagePayload('خطأ', '**الاسم غير صالح.**')).catch(() => {});
+  if (!newName) return false;
   await message.channel.setName(newName).catch(() => {});
   await syncTicketLogMessage({
     guild: message.guild,
@@ -2301,24 +2338,24 @@ async function handleRenameAliasMessage(message, newNameRaw) {
     actionText: `تم تغيير اسم التكت عن طريق : <@${message.author.id}> -> ${newName}`,
     actor: message.author
   });
-  return message.reply(buildTicketMessagePayload('تم', `**تم تغيير الاسم :** ${newName}`)).catch(() => {});
+  return true;
 }
 
 async function handleAddRemoveAliasMessage(message, userInput, mode = 'add') {
-  const ctx = resolveTicketMessageContext(message);
-  if (ctx.error) return message.reply(ctx.error).catch(() => {});
+  const { ok, ctx } = resolveTicketAliasContext(message, { requireOpen: false });
+  if (!ok) return false;
   const actor = { user: message.author, member: message.member, guild: message.guild };
   if (!canManageTicket(actor, ctx.ticket, ctx.config)) {
-    return message.reply(buildTicketMessagePayload('خطأ', mode === 'add' ? '**ليس لديك صلاحية الاضافة.**' : '**ليس لديك صلاحية الازالة.**')).catch(() => {});
+    return false;
   }
   const userId = normalizeId(userInput);
-  if (!userId) return message.reply(buildTicketMessagePayload('خطأ', '**المدخل غير صالح.**')).catch(() => {});
+  if (!userId) return false;
   if (mode === 'add') {
     if (ctx.ticket.memberId === userId) {
-      return message.reply(buildTicketMessagePayload('خطأ', '**الشخص هو صاحب التكت بالفعل.**')).catch(() => {});
+      return false;
     }
     const targetMember = await message.guild.members.fetch(userId).catch(() => null);
-    if (!targetMember) return message.reply(buildTicketMessagePayload('خطأ', '**لا يمكن العثور على العضو.**')).catch(() => {});
+    if (!targetMember) return false;
     await message.channel.permissionOverwrites.edit(userId, {
       ViewChannel: true,
       SendMessages: true,
@@ -2334,11 +2371,11 @@ async function handleAddRemoveAliasMessage(message, userInput, mode = 'add') {
       actor: message.author
     });
     setGuildData(ctx.guildId, ctx.config, ctx.tickets, ctx.pendingRequests, ctx.panelId);
-    return message.reply(buildTicketMessagePayload('تم', `**تم اضافة الشخص :** <@${userId}>`)).catch(() => {});
+    return true;
   }
 
   if (ctx.ticket.memberId === userId) {
-    return message.reply(buildTicketMessagePayload('خطأ', '**لا يمكن إزالة صاحب التكت.**')).catch(() => {});
+    return false;
   }
   await message.channel.permissionOverwrites.edit(userId, { ViewChannel: false }).catch(() => {});
   ctx.ticket.extraMembers = (ctx.ticket.extraMembers || []).filter((id) => id !== userId);
@@ -2351,26 +2388,22 @@ async function handleAddRemoveAliasMessage(message, userInput, mode = 'add') {
     actor: message.author
   });
   setGuildData(ctx.guildId, ctx.config, ctx.tickets, ctx.pendingRequests, ctx.panelId);
-  return message.reply(buildTicketMessagePayload('تم', `**تم ازالة الشخص :** <@${userId}>`)).catch(() => {});
+  return true;
 }
 
 async function handlePingAliasMessage(message) {
-  const ctx = resolveTicketMessageContext(message);
-  if (ctx.error) return message.reply(ctx.error).catch(() => {});
+  const { ok, ctx } = resolveTicketAliasContext(message, { requireOpen: true });
+  if (!ok) return false;
   const actor = { user: message.author, member: message.member, guild: message.guild };
   if (!canManageTicket(actor, ctx.ticket, ctx.config)) {
-    return message.reply(buildTicketMessagePayload('خطأ', '**ليس لديك صلاحية الاستدعاء.**')).catch(() => {});
-  }
-  if (ctx.ticket.status !== 'open') {
-    return message.reply(buildTicketMessagePayload('تنبيه', '**لا يمكن الاستدعاء بعد إقفال التكت.**')).catch(() => {});
+    return false;
   }
   const cooldownKey = `${message.guild.id}:${ctx.channelId}:${message.author.id}`;
   const last = pingCooldowns.get(cooldownKey) || 0;
   const now = Date.now();
   const cooldownMs = 10 * 60 * 1000;
   if (now - last < cooldownMs) {
-    const left = Math.ceil((cooldownMs - (now - last)) / 1000);
-    return message.reply(buildTicketMessagePayload('كولداون', `**انتظر ${left} ثانية قبل استخدام الاستدعاء مرة أخرى.**`)).catch(() => {});
+    return false;
   }
   const user = await message.client.users.fetch(ctx.ticket.memberId).catch(() => null);
   const link = `https://discord.com/channels/${message.guild.id}/${message.channel.id}`;
@@ -2387,12 +2420,12 @@ async function handlePingAliasMessage(message) {
     actor: message.author
   });
   setGuildData(ctx.guildId, ctx.config, ctx.tickets, ctx.pendingRequests, ctx.panelId);
-  return message.reply(buildTicketMessagePayload('تم', `**تم استدعاء العضو :** <@${ctx.ticket.memberId}>`)).catch(() => {});
+  return true;
 }
 
 async function handleReassignAliasMessage(message) {
-  const ctx = resolveTicketMessageContext(message);
-  if (ctx.error) return message.reply(ctx.error).catch(() => {});
+  const { ok, ctx } = resolveTicketAliasContext(message, { requireOpen: true });
+  if (!ok) return false;
   const fakeInteraction = {
     guild: message.guild,
     channel: message.channel,
@@ -2403,64 +2436,152 @@ async function handleReassignAliasMessage(message) {
     deferred: false,
     replied: false,
     deferReply: async () => { fakeInteraction.deferred = true; },
-    editReply: async (payload) => { fakeInteraction.replied = true; return message.reply({ ...payload, flags: undefined }).catch(() => {}); },
+    editReply: async () => { fakeInteraction.replied = true; return null; },
     deleteReply: async () => {}
   };
-  return handleReassignRequest(fakeInteraction, message.guild.id, ctx.panelId, ctx.channelId);
+  return handleReassignRequest(fakeInteraction, message.guild.id, ctx.panelId, ctx.channelId, { silent: true });
 }
 
-async function handleMyTicketPointsMessage(message) {
+function buildMemberPointsEmbed({ requester, targetUser, targetId, guildId, note = null }) {
   const points = loadPoints();
-  const totalPoints = getUserTotalPoints(points, message.author.id);
-  const topAwarder = getTopPointAwarder(points, message.author.id);
-  const managerPoints = getManagerEvaluationCount(points, message.author.id);
-  const { guild: guildData } = getGuildData(message.guild.id);
+  const totalPoints = getUserTotalPoints(points, targetId);
+  const topAwarder = getTopPointAwarder(points, targetId);
+  const managerPoints = getManagerEvaluationCount(points, targetId);
+  const { guild: guildData } = getGuildData(guildId);
   let claimedTickets = 0;
   for (const panel of Object.values(guildData?.panels || {})) {
-    claimedTickets += Object.values(panel?.tickets || {}).filter((ticket) => ticket?.claimedBy === message.author.id).length;
+    claimedTickets += Object.values(panel?.tickets || {}).filter((ticket) => ticket?.claimedBy === targetId).length;
   }
-  return message.reply({
-    embeds: [makeTicketEmbed('نقاطي', `**التكتات المستلمة :** ${claimedTickets}\n**النقاط الحالية :** ${totalPoints}p\n**اكثر مسؤول عطاك نقاط :** ${topAwarder ? `<@${topAwarder.actorId}> (${topAwarder.total}p)` : 'غير معروف'}\n**نقاطك كمسؤول :** ${managerPoints}m\n**التكتات اللي قيمتها :** ${managerPoints}`, { user: message.author }).addFields(
-      { name: 'التكتات المستلمة', value: String(claimedTickets), inline: true },
-      { name: 'النقاط الحالية', value: `${totalPoints}p`, inline: true },
-      { name: 'اكثر مسؤول عطاك نقاط', value: topAwarder ? `<@${topAwarder.actorId}> (${topAwarder.total}p)` : 'غير معروف', inline: false },
-      { name: 'نقاطك كمسؤول', value: `${managerPoints}m`, inline: true },
-      { name: 'التكتات اللي قيمتها', value: String(managerPoints), inline: true }
-    )]
-  }).catch(() => {});
+
+  const embed = colorManager.createEmbed()
+    .setTitle('نقاط العضو')
+    .setDescription([
+      `**العضو:** <@${targetId}>`,
+      `**التكتات المستلمة:** ${claimedTickets}`,
+      `**النقاط الحالية:** ${totalPoints}p`,
+      `**أكثر مسؤول عطاه نقاط:** ${topAwarder ? `<@${topAwarder.actorId}> (${topAwarder.total}p)` : 'غير معروف'}`,
+      `**نقاطه كمسؤول:** ${managerPoints}m`,
+      note ? `\n${note}` : null
+    ].filter(Boolean).join('\n'))
+    .setThumbnail(targetUser?.displayAvatarURL?.({ forceStatic: false, size: 256 }) || null)
+    .setFooter({ text: `بواسطة ${requester?.username || requester?.tag || 'System'}` });
+
+  return embed;
 }
 
-async function handlePointsAdjustMessage(message, args) {
-  if (!canUseGeneralPointsCommand(message.member, message.guild.id, message.guild)) {
-    return message.reply(buildTicketMessagePayload('خطأ', '**هذا الأمر متاح للمسؤولين العامة فقط.**')).catch(() => {});
-  }
-  const action = String(args?.[0] || '').toLowerCase();
-  const targetId = normalizeId(args?.[1]);
-  const rawAmount = Number(args?.[2]);
-  if (!['add', 'remove', 'plus', 'minus', 'اضافة', 'إضافة', 'ازالة', 'إزالة'].includes(action) || !targetId || !Number.isFinite(rawAmount) || rawAmount <= 0) {
-    return message.reply(buildTicketMessagePayload('خطأ', '**الاستخدام:** points <add|remove> <@user|id> <amount>')).catch(() => {});
-  }
+async function handleMyTicketPointsMessage(message, targetInput = null) {
+  const targetId = normalizeId(targetInput) || message.author.id;
+  const targetUser = await message.client.users.fetch(targetId).catch(() => null);
+  const embed = buildMemberPointsEmbed({
+    requester: message.author,
+    targetUser,
+    targetId,
+    guildId: message.guild.id
+  });
+  return message.reply({ embeds: [embed] }).catch(() => {});
+}
+
+function applyManualPointsDelta({ targetId, actorId, delta }) {
   const points = loadPoints();
   const respName = 'general';
   if (!points[respName] || typeof points[respName] !== 'object') points[respName] = {};
   const existing = points[respName][targetId];
   const total = sumPointBucket(existing);
-  const delta = ['remove', 'minus', 'ازالة', 'إزالة'].includes(action) ? -Math.abs(rawAmount) : Math.abs(rawAmount);
   const next = Math.max(0, total + delta);
   const actualDelta = next - total;
-  const auditId = `${Date.now()}_${message.author.id}_${targetId}`;
+  const auditId = `${Date.now()}_${actorId}_${targetId}`;
   points[respName][targetId] = { ...(typeof existing === 'object' && existing ? existing : {}), [Date.now()]: actualDelta };
   appendPointAuditEntry(points, {
     id: auditId,
     targetId,
-    actorId: message.author.id,
+    actorId,
     delta: actualDelta,
     respName,
     source: 'manual_command',
     at: auditId
   });
   savePoints(points);
-  return message.reply(buildTicketMessagePayload('تم', `**تم ${actualDelta >= 0 ? 'إضافة' : 'إزالة'} ${Math.abs(actualDelta)} نقطة لـ** <@${targetId}>`)).catch(() => {});
+  return actualDelta;
+}
+
+async function handlePointsAdjustMessage(message, args) {
+  if (!canUseGeneralPointsCommand(message.member, message.guild.id, message.guild)) {
+    return message.reply(buildTicketMessagePayload('خطأ', '**هذا الأمر متاح للمسؤولين المحددين بإعدادات التكت فقط.**')).catch(() => {});
+  }
+
+  const targetId = normalizeId(args?.[0]);
+  if (!targetId) {
+    return message.reply(buildTicketMessagePayload('خطأ', '**الاستخدام:** points <@user|id>')).catch(() => {});
+  }
+  const targetUser = await message.client.users.fetch(targetId).catch(() => null);
+
+  const sessionId = `${message.guild.id}:${message.channel.id}:${message.author.id}:${targetId}:${Date.now()}`;
+  pointsAdjustSessions.set(sessionId, { targetId, actorId: message.author.id });
+
+  const actionRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`ticket_points_action_add_${sessionId}`).setLabel('إضافة').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`ticket_points_action_remove_${sessionId}`).setLabel('إزالة').setStyle(ButtonStyle.Danger)
+  );
+
+  const sent = await message.reply({
+    embeds: [buildMemberPointsEmbed({ requester: message.author, targetUser, targetId, guildId: message.guild.id, note: '**اختر العملية من الأزرار بالأسفل.**' })],
+    components: [actionRow]
+  }).catch(() => null);
+  if (!sent) return;
+
+  const collector = sent.createMessageComponentCollector({ time: 3 * 60 * 1000 });
+  collector.on('collect', async (interaction) => {
+    if (interaction.user.id !== message.author.id) {
+      await interaction.reply(buildTicketMessagePayload('خطأ', '**فقط صاحب الأمر يمكنه استخدام الأزرار.**', { ephemeral: true })).catch(() => {});
+      return;
+    }
+
+    const addPrefix = `ticket_points_action_add_${sessionId}`;
+    const removePrefix = `ticket_points_action_remove_${sessionId}`;
+    const amountPrefix = `ticket_points_amount_`;
+    if (interaction.customId === addPrefix || interaction.customId === removePrefix) {
+      const mode = interaction.customId === addPrefix ? 'add' : 'remove';
+      pointsAdjustSessions.set(sessionId, { ...(pointsAdjustSessions.get(sessionId) || {}), mode });
+      const amountRow = new ActionRowBuilder().addComponents(
+        [1, 2, 3, 4, 5].map((value) => new ButtonBuilder()
+          .setCustomId(`${amountPrefix}${mode}_${value}_${sessionId}`)
+          .setLabel(String(value))
+          .setStyle(mode === 'add' ? ButtonStyle.Success : ButtonStyle.Danger))
+      );
+      await interaction.update({
+        embeds: [buildMemberPointsEmbed({ requester: message.author, targetUser, targetId, guildId: message.guild.id, note: `**تم اختيار:** ${mode === 'add' ? 'إضافة' : 'إزالة'}\n**اختر العدد من 1 إلى 5.**` })],
+        components: [amountRow]
+      }).catch(() => {});
+      return;
+    }
+
+    if (interaction.customId.startsWith(amountPrefix) && interaction.customId.endsWith(`_${sessionId}`)) {
+      const [, , , mode, valueStr] = interaction.customId.split('_');
+      const amount = Number(valueStr);
+      if (!['add', 'remove'].includes(mode) || !Number.isFinite(amount) || amount <= 0) {
+        await interaction.reply(buildTicketMessagePayload('خطأ', '**خيار غير صالح.**', { ephemeral: true })).catch(() => {});
+        return;
+      }
+      const delta = mode === 'remove' ? -Math.abs(amount) : Math.abs(amount);
+      const actualDelta = applyManualPointsDelta({ targetId, actorId: message.author.id, delta });
+      collector.stop('done');
+      await interaction.update({
+        embeds: [buildMemberPointsEmbed({
+          requester: message.author,
+          targetUser,
+          targetId,
+          guildId: message.guild.id,
+          note: `**✅ تم ${actualDelta >= 0 ? 'إضافة' : 'إزالة'} ${Math.abs(actualDelta)} نقطة للعضو:** <@${targetId}>`
+        })],
+        components: []
+      }).catch(() => {});
+    }
+  });
+
+  collector.on('end', async () => {
+    pointsAdjustSessions.delete(sessionId);
+    await sent.edit({ components: [] }).catch(() => {});
+  });
 }
 
 async function handleTopPointsMessage(message, page = 1) {
@@ -2661,6 +2782,7 @@ async function handleTicketBlockApplyMessage(message, targetInput, BOT_OWNERS = 
     saveTicketBlockData(message.guild.id, { blocks: nextBlocks, blockChannelId: data.blockChannelId });
     await message.delete().catch(() => {});
     await logTicketBlockAction(message.guild, message.author, existing, 'unblock');
+    await notifyTicketBlockTarget(message.guild, message.author, existing, 'unblock');
     await message.channel.send(buildTicketMessagePayload('تم', `**تم فك بلوك التكت عن** ${targetType === 'role' ? `<@&${targetId}>` : `<@${targetId}>`}.`, { user: message.author })).catch(() => {});
     return;
   }
@@ -2696,36 +2818,42 @@ async function handleTicketBlockApplyMessage(message, targetInput, BOT_OWNERS = 
   const nextBlocks = pruneTicketBlocks([...data.blocks, blockEntry]);
   saveTicketBlockData(message.guild.id, { blocks: nextBlocks, blockChannelId: data.blockChannelId });
   await logTicketBlockAction(message.guild, message.author, blockEntry, 'block');
+  await notifyTicketBlockTarget(message.guild, message.author, blockEntry, 'block');
   await message.channel.send(buildTicketMessagePayload('تم', `**تم إعطاء بلوك تكت إلى** ${targetType === 'role' ? `<@&${targetId}>` : `<@${targetId}>`}.`, { user: message.author })).catch(() => {});
 }
 
-async function handleReassignRequest(interaction, guildId, panelId, channelId) {
-  await interaction.deferReply({ ephemeral: true }).catch(() => {});
+async function handleReassignRequest(interaction, guildId, panelId, channelId, options = {}) {
+  const silent = options?.silent === true;
+  if (!silent) await interaction.deferReply({ ephemeral: true }).catch(() => {});
+  const reply = async (payload) => {
+    if (silent) return;
+    await interaction.editReply(payload).catch(() => {});
+  };
   const { panelId: resolvedPanelId, config, tickets, pendingRequests, ticket, actionChannelId } = getTicketContextFromInteraction(guildId, interaction, channelId, panelId || 'default');
   if (!ticket || interaction.channelId !== actionChannelId) {
-    await interaction.editReply(buildTicketMessagePayload('خطأ', '**لا توجد بيانات لهذا التكت.**', { ephemeral: true }));
-    return;
+    await reply(buildTicketMessagePayload('خطأ', '**لا توجد بيانات لهذا التكت.**', { ephemeral: true }));
+    return false;
   }
   if (!isAdminOnly(interaction, config, ticket?.reasonKey)) {
-    await interaction.editReply(buildTicketMessagePayload('خطأ', '**ليس لديك صلاحية تغيير المستلم.**', { ephemeral: true }));
-    return;
+    await reply(buildTicketMessagePayload('خطأ', '**ليس لديك صلاحية تغيير المستلم.**', { ephemeral: true }));
+    return false;
   }
   if (ticket.status !== 'open') {
-    await interaction.editReply(buildTicketMessagePayload('تنبيه', '**تغيير المستلم متاح فقط قبل إغلاق التكت.**', { ephemeral: true }));
-    return;
+    await reply(buildTicketMessagePayload('تنبيه', '**تغيير المستلم متاح فقط قبل إغلاق التكت.**', { ephemeral: true }));
+    return false;
   }
 
   const previousClaimer = ticket.claimedBy || null;
   if (ticket.reassignPendingAt) {
-    await interaction.editReply(buildTicketMessagePayload('تنبيه', '**يوجد طلب تغيير مستلم معلّق بالفعل.**', { ephemeral: true }));
-    return;
+    await reply(buildTicketMessagePayload('تنبيه', '**يوجد طلب تغيير مستلم معلّق بالفعل.**', { ephemeral: true }));
+    return false;
   }
 
   const targetChannelId = config.claimFromDedicatedChannel ? config.claimChannelId : interaction.channelId;
   const targetChannel = await interaction.guild.channels.fetch(targetChannelId).catch(() => null);
   if (!targetChannel || targetChannel.type !== ChannelType.GuildText) {
-    await interaction.editReply(buildTicketMessagePayload('خطأ', '**شات القبول غير صالح أو غير متاح.**', { ephemeral: true }));
-    return;
+    await reply(buildTicketMessagePayload('خطأ', '**شات القبول غير صالح أو غير متاح.**', { ephemeral: true }));
+    return false;
   }
 
   const mentionChunks = buildMentionChunks(getAdminRoles(config, ticket?.reasonKey));
@@ -2768,8 +2896,8 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId) {
     }
   } catch {
     delete ticket.reassignRequestMessageRefs;
-    await interaction.editReply(buildTicketMessagePayload('خطأ', '**فشل إرسال طلب تغيير المستلم في شات القبول، تم إلغاء العملية.**', { ephemeral: true }));
-    return;
+    await reply(buildTicketMessagePayload('خطأ', '**فشل إرسال طلب تغيير المستلم في شات القبول، تم إلغاء العملية.**', { ephemeral: true }));
+    return false;
   }
 
   ticket.claimedBy = null;
@@ -2798,10 +2926,13 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId) {
     actionText: `تم تغيير المستلم عن طريق : <@${interaction.user.id}>`,
     actor: interaction.user
   });
-  await interaction.channel.send({
-    content: `**تم تغير المستلم :** ${previousClaimer ? `<@${previousClaimer}>` : (interaction.user.id ? `<@${interaction.user.id}>` : 'غير محدد')}\n**انتظر المستلم الجديد.**`
-  }).catch(() => {});
-  await interaction.editReply(buildTicketMessagePayload('تم', '**تم إخراجك من التكت وإرسال طلب استلام جديد.**', { ephemeral: true }));
+  if (!silent) {
+    await interaction.channel.send({
+      content: `**تم تغير المستلم :** ${previousClaimer ? `<@${previousClaimer}>` : (interaction.user.id ? `<@${interaction.user.id}>` : 'غير محدد')}\n**انتظر المستلم الجديد.**`
+    }).catch(() => {});
+  }
+  await reply(buildTicketMessagePayload('تم', '**تم إخراجك من التكت وإرسال طلب استلام جديد.**', { ephemeral: true }));
+  return true;
 }
 
 
@@ -2941,36 +3072,44 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
   const closeAliases = ['tclose', 'اغلاق', 'قفل', 'اقفال'];
   const isCloseAliasInvocation = closeAliases.some((alias) => invokedToken.endsWith(alias));
   if (isCloseAliasInvocation) {
-    await handleCloseAliasMessage(message);
+    const ok = await handleCloseAliasMessage(message);
+    await message.react(ok ? '✅' : '❌').catch(() => {});
     return;
   }
 
   if (['myticket', 'نقاطي'].some((alias) => invokedToken.endsWith(alias))) {
-    if (!hasGlobalAdmin) {
+    const targetArg = args?.[0] || null;
+    const hasTargetLookup = Boolean(normalizeId(targetArg));
+    if (hasTargetLookup && !hasGlobalAdmin) {
       await message.react('❌').catch(() => {});
       return;
     }
-    await handleMyTicketPointsMessage(message);
+    await handleMyTicketPointsMessage(message, targetArg);
     return;
   }
-  if (invokedToken.endsWith('tadd')) {
-    await handleAddRemoveAliasMessage(message, args?.join(' '), 'add');
+  if (['tadd', 'اضافه', 'اضافة', 'إضافة'].some((alias) => invokedToken.endsWith(alias))) {
+    const ok = await handleAddRemoveAliasMessage(message, args?.join(' '), 'add');
+    await message.react(ok ? '✅' : '❌').catch(() => {});
     return;
   }
-  if (invokedToken.endsWith('tremove')) {
-    await handleAddRemoveAliasMessage(message, args?.join(' '), 'remove');
+  if (['tremove', 'ازاله', 'ازالة', 'إزالة'].some((alias) => invokedToken.endsWith(alias))) {
+    const ok = await handleAddRemoveAliasMessage(message, args?.join(' '), 'remove');
+    await message.react(ok ? '✅' : '❌').catch(() => {});
     return;
   }
-  if (['tchange', 'تغيير'].some((alias) => invokedToken.endsWith(alias))) {
-    await handleReassignAliasMessage(message);
+  if (['tchange', 'تغيير', 'تحويل'].some((alias) => invokedToken.endsWith(alias))) {
+    const ok = await handleReassignAliasMessage(message);
+    await message.react(ok ? '✅' : '❌').catch(() => {});
     return;
   }
-  if (['tname', 'اسم'].some((alias) => invokedToken.endsWith(alias))) {
-    await handleRenameAliasMessage(message, args?.join(' '));
+  if (['tname', 'اسم', 'تسميه', 'تسمية'].some((alias) => invokedToken.endsWith(alias))) {
+    const ok = await handleRenameAliasMessage(message, args?.join(' '));
+    await message.react(ok ? '✅' : '❌').catch(() => {});
     return;
   }
   if (['remind', 'تنبيه', 'استدعاء'].some((alias) => invokedToken.endsWith(alias))) {
-    await handlePingAliasMessage(message);
+    const ok = await handlePingAliasMessage(message);
+    await message.react(ok ? '✅' : '❌').catch(() => {});
     return;
   }
   if (invokedToken.endsWith('ttop') || (invokedToken.endsWith('نقاط') && String(args?.[0] || '').toLowerCase() !== 'add')) {
@@ -4772,12 +4911,6 @@ function registerHandlers(client) {
             delta: actualDelta,
             respName,
             source: 'ticket_button',
-            at: now
-          });
-          appendManagerAuditEntry(points, {
-            ticketKey: `${guildId}:${resolvedPanelId}:${channelId}`,
-            actorId: interaction.user.id,
-            targetId,
             at: now
           });
           ticket.pointAward = { actorId: interaction.user.id, delta: actualDelta, respName, targetId, at: now, auditId: now };
