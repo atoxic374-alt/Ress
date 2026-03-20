@@ -678,15 +678,6 @@ async function retryAsync(fn, attempts = 3) {
   return null;
 }
 
-async function uploadTranscriptAndGetUrl(logChannel, transcriptFile) {
-  if (!logChannel || !transcriptFile) return null;
-  const uploadMessage = await retryAsync(() => logChannel.send({ files: [transcriptFile] }).catch(() => null), 2).catch(() => null);
-  if (!uploadMessage) return null;
-  const attachment = [...uploadMessage.attachments.values()].find((item) => String(item.name || '').startsWith('transcript-'));
-  const url = attachment?.url || null;
-  return url;
-}
-
 async function finalizeTransferDmNotifications(ticket, guild, closedByLabel = 'غير محدد') {
   const notices = Array.isArray(ticket?.transferDmNotifications) ? ticket.transferDmNotifications : [];
   if (!notices.length || !guild?.client) return;
@@ -734,40 +725,39 @@ async function syncTicketLogMessage({
   const statusLabel = ticket.status === 'closed' ? 'Closed' : 'Open';
   let transcriptUrl = ticket.lastTranscriptUrl || null;
   let transcriptUploadFailed = false;
-  if (transcriptFile) {
-    transcriptUrl = await uploadTranscriptAndGetUrl(logChannel, transcriptFile).catch(() => null);
-    if (!transcriptUrl) transcriptUploadFailed = true;
-  }
-  if (transcriptUrl) ticket.lastTranscriptUrl = transcriptUrl;
-  if (transcriptUploadFailed) ticket.logSyncError = 'TRANSCRIPT_UPLOAD_FAILED';
   const ticketLabel = ticket.deletedChannel ? 'Deleted' : (channelId ? `<#${channelId}>` : (ticket.channelId ? `<#${ticket.channelId}>` : 'غير محدد'));
-  const summaryLines = [
-    `**Ticket :** ${ticketLabel}`,
-    `**Member :** ${ticket.memberId ? `<@${ticket.memberId}>` : 'غير محدد'}`,
-    `**Reason :** ${reason.name || `سبب ${ticket.reasonKey || '-'}`}`,
-    `**Status :** ${statusLabel}`,
-    transcriptUrl ? `**Transcript :** [Open here](${transcriptUrl})` : null,
-    transcriptUploadFailed ? '**Transcript :** Failed to upload transcript file.' : null,
-    '',
-    '**Results :**',
-    historyText
-  ].filter(Boolean);
-
-  let description = summaryLines.join('\n');
-  if (description.length > 3800) {
-    const trimmedHistory = (ticket.logHistory || []).slice(-8).map((line, index) => `${index + 1}) ${line}`).join('\n') || 'لا يوجد';
-    description = [
+  const buildDescription = (url, uploadFailed) => {
+    const summaryLines = [
       `**Ticket :** ${ticketLabel}`,
       `**Member :** ${ticket.memberId ? `<@${ticket.memberId}>` : 'غير محدد'}`,
       `**Reason :** ${reason.name || `سبب ${ticket.reasonKey || '-'}`}`,
       `**Status :** ${statusLabel}`,
-      transcriptUrl ? `**Transcript :** [Open here](${transcriptUrl})` : null,
-      transcriptUploadFailed ? '**Transcript :** Failed to upload transcript file.' : null,
+      url ? `**Transcript :** [Open here](${url})` : null,
+      uploadFailed ? '**Transcript :** Failed to upload transcript file.' : null,
       '',
       '**Results :**',
-      trimmedHistory
-    ].filter(Boolean).join('\n');
-  }
+      historyText
+    ].filter(Boolean);
+
+    let nextDescription = summaryLines.join('\n');
+    if (nextDescription.length > 3800) {
+      const trimmedHistory = (ticket.logHistory || []).slice(-8).map((line, index) => `${index + 1}) ${line}`).join('\n') || 'لا يوجد';
+      nextDescription = [
+        `**Ticket :** ${ticketLabel}`,
+        `**Member :** ${ticket.memberId ? `<@${ticket.memberId}>` : 'غير محدد'}`,
+        `**Reason :** ${reason.name || `سبب ${ticket.reasonKey || '-'}`}`,
+        `**Status :** ${statusLabel}`,
+        url ? `**Transcript :** [Open here](${url})` : null,
+        uploadFailed ? '**Transcript :** Failed to upload transcript file.' : null,
+        '',
+        '**Results :**',
+        trimmedHistory
+      ].filter(Boolean).join('\n');
+    }
+    return nextDescription;
+  };
+
+  let description = buildDescription(transcriptUrl, transcriptUploadFailed);
 
   const embed = colorManager.createEmbed()
     .setTitle('Log')
@@ -778,23 +768,42 @@ async function syncTicketLogMessage({
   embed.setAuthor({ name: guild.name || 'Server', iconURL: guild.iconURL?.({ dynamic: true, size: 128 }) || undefined });
 
   const payload = { embeds: [embed] };
+  if (transcriptFile) payload.files = [transcriptFile];
 
-  let savedMessage = null;
+  let targetMessage = null;
   if (ticket.logMessageId) {
     const existing = await retryAsync(() => logChannel.messages.fetch(ticket.logMessageId).catch(() => null), 2).catch(() => null);
     if (existing?.editable) {
-      savedMessage = await retryAsync(() => existing.edit(payload).catch(() => null), 2).catch(() => null);
-      if (savedMessage) return true;
+      targetMessage = await retryAsync(() => existing.edit(payload).catch(() => null), 2).catch(() => null);
+    }
+  }
+  if (!targetMessage) {
+    targetMessage = await retryAsync(() => logChannel.send(payload).catch(() => null), 2).catch(() => null);
+    if (!targetMessage) {
+      ticket.logSyncFailedAt = Date.now();
+      ticket.logSyncError = 'LOG_MESSAGE_SEND_FAILED';
+      return false;
+    }
+  }
+  ticket.logMessageId = targetMessage.id;
+
+  if (transcriptFile) {
+    const transcriptAttachment = [...targetMessage.attachments.values()].find((item) => String(item.name || '').startsWith('transcript-'));
+    if (transcriptAttachment?.url) {
+      transcriptUrl = transcriptAttachment.url;
+      ticket.lastTranscriptUrl = transcriptUrl;
+    } else {
+      transcriptUploadFailed = true;
+      ticket.logSyncError = 'TRANSCRIPT_UPLOAD_FAILED';
+    }
+
+    const updatedDescription = buildDescription(transcriptUrl, transcriptUploadFailed);
+    if (updatedDescription !== description) {
+      embed.setDescription(updatedDescription);
+      await retryAsync(() => targetMessage.edit({ embeds: [embed] }).catch(() => null), 2).catch(() => null);
     }
   }
 
-  const sent = await retryAsync(() => logChannel.send(payload).catch(() => null), 2).catch(() => null);
-  if (!sent) {
-    ticket.logSyncFailedAt = Date.now();
-    ticket.logSyncError = 'LOG_MESSAGE_SEND_FAILED';
-    return false;
-  }
-  ticket.logMessageId = sent.id;
   return true;
 }
 
