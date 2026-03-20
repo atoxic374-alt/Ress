@@ -34,6 +34,31 @@ const pingCooldowns = new Map();
 const ticketClaimLocks = new Set();
 const activeTicketSetupSessions = new Map();
 const recentTicketCommandMessages = new Set();
+const TICKET_SEARCH_SESSION_TTL_MS = 30 * 60 * 1000;
+const PING_COOLDOWN_RETENTION_MS = 60 * 60 * 1000;
+const CLOSE_DELETE_DELAY_MS = 3 * 1000;
+const PING_COOLDOWN_MS = 3 * 1000;
+
+function logSilentError(scope, error) {
+  const msg = error?.message || error;
+  console.warn(`[ticket] ${scope}:`, msg);
+}
+
+function pruneTicketSearchSessions(now = Date.now()) {
+  for (const [sessionId, session] of ticketSearchSessions.entries()) {
+    if (!session?.createdAt || (now - Number(session.createdAt)) > TICKET_SEARCH_SESSION_TTL_MS) {
+      ticketSearchSessions.delete(sessionId);
+    }
+  }
+}
+
+function prunePingCooldowns(now = Date.now()) {
+  for (const [key, ts] of pingCooldowns.entries()) {
+    if (!ts || (now - Number(ts)) > PING_COOLDOWN_RETENTION_MS) {
+      pingCooldowns.delete(key);
+    }
+  }
+}
 
 function makeTicketEmbed(title, description, options = {}) {
   const embed = colorManager.createEmbed().setTitle(title).setDescription(description || null);
@@ -333,18 +358,20 @@ function appendTicketLogEntry(ticket, entry) {
   if (ticket.logHistory.length > 12) ticket.logHistory = ticket.logHistory.slice(-12);
 }
 
-function getTicketLogTimeline(ticket, limit = 8) {
+function getTicketLogTimeline(ticket, channel = null, limit = 8) {
   const events = Array.isArray(ticket?.logEvents) ? ticket.logEvents.slice(-limit) : [];
   return events
     .map((event) => {
       const at = Number(event?.at || 0);
       const time = at ? new Date(at).toISOString() : 'unknown-time';
-      return `• ${time} — ${escapeHtml(formatTicketLogEvent(event))}`;
+      const renderedMessage = renderTranscriptContent(channel, formatTicketLogEvent(event), { renderImageLinks: false }) || '<span class="muted">(empty)</span>';
+      return `<div class="timeline-entry"><span class="timeline-time">${escapeHtml(time)}</span> — <span class="timeline-text">${renderedMessage}</span></div>`;
     })
-    .join('<br>');
+    .join('');
 }
 
-function renderTranscriptContent(channel, rawText = '') {
+function renderTranscriptContent(channel, rawText = '', options = {}) {
+  const { renderImageLinks = true } = options;
   const guild = channel?.guild;
   let html = escapeHtml(rawText || '');
   html = html
@@ -365,11 +392,8 @@ function renderTranscriptContent(channel, rawText = '') {
     });
   html = html.replace(/(https?:\/\/[^\s<]+)/gi, (url) => {
     const safeUrl = escapeHtml(url);
-    const imageLike = /\.(png|jpe?g|gif|webp|bmp|svg)(\?|$)/i.test(url)
-      || /cdn\.discordapp\.com\/attachments\//i.test(url)
-      || /media\.discordapp\.net\/attachments\//i.test(url)
-      || /images?\./i.test(url);
-    if (imageLike) {
+    const imageLike = /\.(png|jpe?g|gif|webp|bmp|svg)(\?|$)/i.test(url);
+    if (renderImageLinks && imageLike) {
       return `<a href="${safeUrl}" target="_blank" rel="noreferrer">${safeUrl}</a><br><div class="media"><img src="${safeUrl}" alt="inline-image" loading="lazy"></div>`;
     }
     return `<a href="${safeUrl}" target="_blank" rel="noreferrer">${safeUrl}</a>`;
@@ -449,42 +473,82 @@ function buildTranscriptAvatar(author) {
   return `<div class="avatar-fallback">${escapeHtml(fallback)}</div>`;
 }
 
-function formatTranscriptEmbeds(embeds = []) {
+function formatTranscriptEmbeds(channel, embeds = []) {
   return embeds.map((e) => {
     const parts = [];
     if (e.author?.name) parts.push(`<div class="embed-author">${escapeHtml(e.author.name)}</div>`);
     if (e.title) parts.push(`<div class="embed-title">${escapeHtml(e.title)}</div>`);
-    if (e.description) parts.push(`<div class="embed-description">${escapeHtml(e.description).replace(/\n/g, '<br>')}</div>`);
+    if (e.description) parts.push(`<div class="embed-description">${renderTranscriptContent(channel, e.description, { renderImageLinks: false })}</div>`);
     if (Array.isArray(e.fields) && e.fields.length) {
-      const fields = e.fields.slice(0, 15).map((field) => `
+      const fields = e.fields.map((field) => `
         <div class="embed-field">
-          <div class="embed-field-name">${escapeHtml(field.name || '-')}</div>
-          <div class="embed-field-value">${escapeHtml(field.value || '-').replace(/\n/g, '<br>')}</div>
+          <div class="embed-field-name">${renderTranscriptContent(channel, field.name || '-', { renderImageLinks: false })}</div>
+          <div class="embed-field-value">${renderTranscriptContent(channel, field.value || '-', { renderImageLinks: false })}</div>
         </div>
       `).join('');
       parts.push(`<div class="embed-fields">${fields}</div>`);
     }
     if (e.footer?.text) parts.push(`<div class="embed-footer">${escapeHtml(e.footer.text)}</div>`);
-    const mediaUrl = e.image?.url || e.thumbnail?.url || null;
-    if (mediaUrl) parts.push(`<div class="media"><img src="${escapeHtml(mediaUrl)}" alt="embed-media" loading="lazy"></div>`);
+    const mediaUrls = [...new Set([e.image?.url, e.thumbnail?.url].filter(Boolean))];
+    if (mediaUrls.length) {
+      parts.push(mediaUrls.map((mediaUrl) => `<div class="media"><img src="${escapeHtml(mediaUrl)}" alt="embed-media" loading="lazy"></div>`).join(''));
+    }
     if (!parts.length) return '';
     return `<section class="embed-card">${parts.join('')}</section>`;
   }).filter(Boolean).join('');
 }
 
-async function buildTicketTranscript(channel, maxMessages = 200) {
+async function warmMentionCaches(channel, rawText = '') {
+  const guild = channel?.guild;
+  if (!guild || !rawText) return;
+  const text = String(rawText);
+  const memberIds = [...text.matchAll(/<@!?(\d{1,22})>/g)].map((m) => m[1]);
+  const roleIds = [...text.matchAll(/<@&(\d{1,22})>/g)].map((m) => m[1]);
+  const channelIds = [...text.matchAll(/<#(\d{1,22})>/g)].map((m) => m[1]);
+
+  for (const id of [...new Set(memberIds)]) {
+    if (!guild.members.cache.has(id)) {
+      await guild.members.fetch(id).catch(() => null);
+    }
+  }
+  for (const id of [...new Set(roleIds)]) {
+    if (!guild.roles.cache.has(id)) {
+      await guild.roles.fetch(id).catch(() => null);
+    }
+  }
+  for (const id of [...new Set(channelIds)]) {
+    if (!guild.channels.cache.has(id)) {
+      await guild.channels.fetch(id).catch(() => null);
+    }
+  }
+}
+
+async function buildTicketTranscript(channel, maxMessages = Infinity) {
   try {
     const rows = [];
     let lastId = null;
     let fetchedTotal = 0;
 
-    while (fetchedTotal < maxMessages) {
-      const remaining = Math.min(100, maxMessages - fetchedTotal);
+    while (true) {
+      if (Number.isFinite(maxMessages) && fetchedTotal >= maxMessages) break;
+      const remaining = Number.isFinite(maxMessages) ? Math.min(100, maxMessages - fetchedTotal) : 100;
       const batch = await channel.messages.fetch({ limit: remaining, before: lastId }).catch(() => null);
       if (!batch || batch.size === 0) break;
 
       const ordered = [...batch.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
       for (const msg of ordered) {
+        await warmMentionCaches(channel, msg.content || '');
+        if (Array.isArray(msg.embeds) && msg.embeds.length) {
+          for (const embed of msg.embeds) {
+            await warmMentionCaches(channel, embed?.description || '');
+            if (Array.isArray(embed?.fields)) {
+              for (const field of embed.fields) {
+                await warmMentionCaches(channel, field?.name || '');
+                await warmMentionCaches(channel, field?.value || '');
+              }
+            }
+          }
+        }
         const ts = new Date(msg.createdTimestamp).toLocaleString('en-GB', { hour12: false, timeZone: 'UTC' });
         const author = msg.author?.tag || msg.author?.username || msg.author?.id || 'unknown';
         const content = renderTranscriptContent(channel, (msg.content || '').trim());
@@ -496,7 +560,7 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
             return `<div class="attachment">${imagePreview}<a href="${escapeHtml(a.url)}" target="_blank" rel="noreferrer">${escapeHtml(a.name || a.url)}</a></div>`;
           }).join('<br>')
           : '';
-        const embeds = msg.embeds?.length ? formatTranscriptEmbeds(msg.embeds) : '';
+        const embeds = msg.embeds?.length ? formatTranscriptEmbeds(channel, msg.embeds) : '';
         const stickers = msg.stickers?.size
           ? `<div class="sticker-list">${[...msg.stickers.values()].map((sticker) => `🎟️ ${escapeHtml(sticker.name || sticker.id || 'sticker')}`).join('<br>')}</div>`
           : '';
@@ -533,7 +597,7 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
       : [];
     const combinedRows = [...rows, ...deletedRows].sort((a, b) => a.timestamp - b.timestamp).map((row) => row.html);
     if (combinedRows.length === 0) return null;
-    const logTimeline = getTicketLogTimeline(channel.ticketMeta || null);
+    const logTimeline = getTicketLogTimeline(channel.ticketMeta || null, channel);
     const fileName = `transcript-${channel.id}.html`;
     const html = `<!doctype html>
 <html lang="ar">
@@ -570,6 +634,8 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
     .embed-title, .embed-field-name { font-weight: 700; color: #fff; }
     .embed-fields { display: grid; gap: 8px; }
     .timeline { margin-bottom: 16px; background: #1e1f22; border: 1px solid #3f4147; border-radius: 12px; padding: 14px 16px; }
+    .timeline-entry { margin-top: 6px; line-height: 1.6; }
+    .timeline-time { color: #949ba4; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
     .deleted-message { background: rgba(237, 66, 69, 0.08); border: 1px solid rgba(237, 66, 69, 0.25); }
     .deleted-label, .deleted-body { color: #ff6b6b; }
     .muted { color: #949ba4; }
@@ -589,7 +655,8 @@ async function buildTicketTranscript(channel, maxMessages = 200) {
 </body>
 </html>`;
     return new AttachmentBuilder(Buffer.from(html, 'utf8'), { name: fileName });
-  } catch {
+  } catch (error) {
+    console.error('[ticket] buildTicketTranscript failed:', error?.message || error);
     return null;
   }
 }
@@ -603,17 +670,21 @@ async function retryAsync(fn, attempts = 3) {
     } catch (error) {
       lastError = error;
     }
+    if (i < attempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 250 * (i + 1)));
+    }
   }
   if (lastError) throw lastError;
   return null;
 }
 
-async function sendTranscriptToLogChannel(logChannel, transcriptFile) {
+async function uploadTranscriptAndGetUrl(logChannel, transcriptFile) {
   if (!logChannel || !transcriptFile) return null;
-  const message = await retryAsync(() => logChannel.send({ files: [transcriptFile] }).catch(() => null), 2);
-  if (!message) return null;
-  const attachment = [...message.attachments.values()].find((item) => String(item.name || '').startsWith('transcript-'));
-  return attachment?.url || null;
+  const uploadMessage = await retryAsync(() => logChannel.send({ files: [transcriptFile] }).catch(() => null), 2).catch(() => null);
+  if (!uploadMessage) return null;
+  const attachment = [...uploadMessage.attachments.values()].find((item) => String(item.name || '').startsWith('transcript-'));
+  const url = attachment?.url || null;
+  return url;
 }
 
 async function finalizeTransferDmNotifications(ticket, guild, closedByLabel = 'غير محدد') {
@@ -655,12 +726,20 @@ async function syncTicketLogMessage({
   }
 
   appendTicketLogEntry(ticket, typeof actionText === 'object' ? actionText : { type: 'action', message: actionText, actorId: actor?.id || null });
+  ticket.logSyncFailedAt = null;
+  ticket.logSyncError = null;
 
   const reason = config.reasons?.[ticket.reasonKey] || {};
   const historyText = (ticket.logHistory || []).slice(-12).map((line, index) => `${index + 1}) ${line}`).join('\n') || 'لا يوجد';
   const statusLabel = ticket.status === 'closed' ? 'Closed' : 'Open';
-  const transcriptUrl = transcriptFile ? await sendTranscriptToLogChannel(logChannel, transcriptFile).catch(() => null) : (ticket.lastTranscriptUrl || null);
+  let transcriptUrl = ticket.lastTranscriptUrl || null;
+  let transcriptUploadFailed = false;
+  if (transcriptFile) {
+    transcriptUrl = await uploadTranscriptAndGetUrl(logChannel, transcriptFile).catch(() => null);
+    if (!transcriptUrl) transcriptUploadFailed = true;
+  }
   if (transcriptUrl) ticket.lastTranscriptUrl = transcriptUrl;
+  if (transcriptUploadFailed) ticket.logSyncError = 'TRANSCRIPT_UPLOAD_FAILED';
   const ticketLabel = ticket.deletedChannel ? 'Deleted' : (channelId ? `<#${channelId}>` : (ticket.channelId ? `<#${ticket.channelId}>` : 'غير محدد'));
   const summaryLines = [
     `**Ticket :** ${ticketLabel}`,
@@ -668,6 +747,7 @@ async function syncTicketLogMessage({
     `**Reason :** ${reason.name || `سبب ${ticket.reasonKey || '-'}`}`,
     `**Status :** ${statusLabel}`,
     transcriptUrl ? `**Transcript :** [Open here](${transcriptUrl})` : null,
+    transcriptUploadFailed ? '**Transcript :** Failed to upload transcript file.' : null,
     '',
     '**Results :**',
     historyText
@@ -681,6 +761,8 @@ async function syncTicketLogMessage({
       `**Member :** ${ticket.memberId ? `<@${ticket.memberId}>` : 'غير محدد'}`,
       `**Reason :** ${reason.name || `سبب ${ticket.reasonKey || '-'}`}`,
       `**Status :** ${statusLabel}`,
+      transcriptUrl ? `**Transcript :** [Open here](${transcriptUrl})` : null,
+      transcriptUploadFailed ? '**Transcript :** Failed to upload transcript file.' : null,
       '',
       '**Results :**',
       trimmedHistory
@@ -698,8 +780,6 @@ async function syncTicketLogMessage({
   const payload = { embeds: [embed] };
 
   let savedMessage = null;
-  ticket.logSyncFailedAt = null;
-  ticket.logSyncError = null;
   if (ticket.logMessageId) {
     const existing = await retryAsync(() => logChannel.messages.fetch(ticket.logMessageId).catch(() => null), 2).catch(() => null);
     if (existing?.editable) {
@@ -1088,7 +1168,7 @@ function getClosedTicketViewerTargets(config, ticket, guild) {
 
 function normalizeId(input) {
   if (!input) return null;
-  const match = String(input).trim().match(/^(?:<@&?|<#)?(\d{16,20})>?$/);
+  const match = String(input).trim().match(/^(?:(?:<@!?)|(?:<@&)|(?:<#))?(\d{16,20})>?$/);
   return match ? match[1] : null;
 }
 
@@ -1184,6 +1264,7 @@ function searchResponsibilitiesByName(rawQuery, responsibilities = {}, limit = 1
 }
 
 function createResponsibilitySearchSession({ guildId, panelId, channelId, query, results }) {
+  pruneTicketSearchSessions();
   const sessionId = `${guildId}_${panelId}_${channelId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   ticketSearchSessions.set(sessionId, {
     guildId,
@@ -1296,14 +1377,11 @@ function countClaimedByAdmin(tickets, adminId) {
   return Object.values(tickets).filter((t) => t.status === 'open' && t.claimedBy === adminId).length;
 }
 
-function prunePendingRequests(pendingRequests, maxAgeMs = 2 * 60 * 60 * 1000) {
-  const now = Date.now();
+function prunePendingRequests(pendingRequests) {
   let changed = false;
   for (const [reqId, req] of Object.entries(pendingRequests || {})) {
     const createdAt = Number(req?.createdAt || 0);
-    const updatedAt = Number(req?.updatedAt || createdAt || 0);
-    const isClaimed = Boolean(req?.claimedAt);
-    if (!createdAt || (!isClaimed && now - updatedAt > maxAgeMs)) {
+    if (!req || typeof req !== 'object' || !createdAt) {
       delete pendingRequests[reqId];
       changed = true;
     }
@@ -1604,10 +1682,12 @@ async function buildTicketControls(guildId, panelId, channelId, config, options 
   if (includeClaimButton) row1Buttons.push(new ButtonBuilder().setCustomId(`ticket_claim_${guildId}_${panelId}_${channelId}`).setLabel('Claim').setEmoji('<:emoji_3:1484364952780144710>').setStyle(ButtonStyle.Success));
   row1Buttons.push(
     new ButtonBuilder().setCustomId(`ticket_close_${guildId}_${panelId}_${channelId}`).setLabel('Close').setEmoji('<:emoji_7:1484365118576918638>').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId(`ticket_reassign_${guildId}_${panelId}_${channelId}`).setLabel('Change').setEmoji('<:emoji_2:1484364894491902034>').setStyle(ButtonStyle.Success));
+    new ButtonBuilder().setCustomId(`ticket_reassign_${guildId}_${panelId}_${channelId}`).setLabel('Change').setEmoji('<:emoji_2:1484364894491902034>').setStyle(ButtonStyle.Success)
   );
   if (includeReassignButton) {
-    row1Buttons.push(new ButtonBuilder().setCustomId(`ticket_rename_${guildId}_${panelId}_${channelId}`).setLabel(' Name').setEmoji('<:emoji_5:1484364982094266428>').setStyle(ButtonStyle.Secondary)
+    row1Buttons.push(
+      new ButtonBuilder().setCustomId(`ticket_rename_${guildId}_${panelId}_${channelId}`).setLabel(' Name').setEmoji('<:emoji_5:1484364982094266428>').setStyle(ButtonStyle.Secondary)
+    );
   }
   const row1 = new ActionRowBuilder().addComponents(row1Buttons);
 
@@ -2159,14 +2239,14 @@ async function closeTicketCore({
     if (interaction) {
       await interaction.reply(buildTicketMessagePayload(
         autoClose ? 'إغلاق تلقائي' : 'اقفال',
-        '**سيتم حذف التكت خلال 3 ثواني.**',
+        `**سيتم حذف التكت خلال ${Math.floor(CLOSE_DELETE_DELAY_MS / 1000)} ثواني.**`,
         { ephemeral: true }
-      )).catch(() => {});
+      )).catch((error) => logSilentError('close.reply.delete-notice', error));
     } else if (!silentCloseNotice) {
-      await channel.send(buildTicketMessagePayload('إغلاق تلقائي', `**تم إقفال هذا التكت تلقائيًا${closedByLabel ? ` بواسطة ${closedByLabel}` : ''} وسيتم حذفه خلال 3 ثواني.**`)).catch(() => {});
+      await channel.send(buildTicketMessagePayload('إغلاق تلقائي', `**تم إقفال هذا التكت تلقائيًا${closedByLabel ? ` بواسطة ${closedByLabel}` : ''} وسيتم حذفه خلال ${Math.floor(CLOSE_DELETE_DELAY_MS / 1000)} ثواني.**`)).catch((error) => logSilentError('close.channel.delete-notice', error));
     }
 
-    setTimeout(() => channel.delete().catch(() => {}), 3000);
+    setTimeout(() => channel.delete().catch((error) => logSilentError('close.channel.delete', error)), CLOSE_DELETE_DELAY_MS);
     return true;
   }
 
@@ -2174,36 +2254,39 @@ async function closeTicketCore({
     await channel.permissionOverwrites.edit(ticket.memberId, {
       ViewChannel: false,
       SendMessages: false
-    }).catch(() => {});
+    }).catch((error) => logSilentError('close.permissions.member', error));
   }
   await channel.permissionOverwrites.edit(channel.guild.roles.everyone.id, {
     ViewChannel: false,
     SendMessages: false,
     ReadMessageHistory: false
-  }).catch(() => {});
+  }).catch((error) => logSilentError('close.permissions.everyone', error));
 
-  for (const userId of (ticket.transferredUserIds || [])) {
-    await channel.permissionOverwrites.edit(userId, {
+  const transferredResults = await Promise.allSettled((ticket.transferredUserIds || []).map((userId) => channel.permissionOverwrites.edit(userId, {
       ViewChannel: false,
       SendMessages: false,
       ReadMessageHistory: true
-    }).catch(() => {});
+    })));
+  if (transferredResults.some((item) => item.status === 'rejected')) {
+    logSilentError('close.permissions.transferred-users', `failed=${transferredResults.filter((item) => item.status === 'rejected').length}`);
   }
 
   const { roleIds: visibleRoleIds, userIds: visibleUserIds } = getClosedTicketViewerTargets(config, ticket, channel.guild);
-  for (const roleId of visibleRoleIds) {
-    await channel.permissionOverwrites.edit(roleId, {
+  const visibleRoleResults = await Promise.allSettled(visibleRoleIds.map((roleId) => channel.permissionOverwrites.edit(roleId, {
       ViewChannel: true,
       SendMessages: true,
       ReadMessageHistory: true
-    }).catch(() => {});
+    })));
+  if (visibleRoleResults.some((item) => item.status === 'rejected')) {
+    logSilentError('close.permissions.visible-roles', `failed=${visibleRoleResults.filter((item) => item.status === 'rejected').length}`);
   }
-  for (const userId of visibleUserIds) {
-    await channel.permissionOverwrites.edit(userId, {
+  const visibleUserResults = await Promise.allSettled(visibleUserIds.map((userId) => channel.permissionOverwrites.edit(userId, {
       ViewChannel: true,
       SendMessages: true,
       ReadMessageHistory: true
-    }).catch(() => {});
+    })));
+  if (visibleUserResults.some((item) => item.status === 'rejected')) {
+    logSilentError('close.permissions.visible-users', `failed=${visibleUserResults.filter((item) => item.status === 'rejected').length}`);
   }
 
   if (ticket.claimedBy) {
@@ -2211,7 +2294,7 @@ async function closeTicketCore({
       ViewChannel: false,
       SendMessages: false,
       ReadMessageHistory: true
-    }).catch(() => {});
+    }).catch((error) => logSilentError('close.permissions.claimer', error));
   }
 
   if (interaction?.message?.editable) {
@@ -2219,7 +2302,7 @@ async function closeTicketCore({
   }
 
   const closePrefix = `closed-${sanitizeName(config.ticketNamePrefix || 'ticket')}`;
-  await channel.setName(`${closePrefix}-${channelId.slice(-4)}`).catch(() => {});
+  await channel.setName(closePrefix).catch(() => {});
   if (config.closedCategoryId) await channel.setParent(config.closedCategoryId).catch(() => {});
 
   await channel.send({
@@ -2417,9 +2500,10 @@ async function handlePingAliasMessage(message) {
     return false;
   }
   const cooldownKey = `${message.guild.id}:${ctx.channelId}:${message.author.id}`;
+  prunePingCooldowns();
   const last = pingCooldowns.get(cooldownKey) || 0;
   const now = Date.now();
-  const cooldownMs = 10 * 60 * 1000;
+  const cooldownMs = PING_COOLDOWN_MS;
   if (now - last < cooldownMs) {
     return false;
   }
@@ -2570,7 +2654,7 @@ async function handlePointsAdjustMessage(message, args, { BOT_OWNERS = [] } = {}
 
   const targetId = normalizeId(args?.[0]);
   if (!targetId) {
-    return message.reply(buildTicketMessagePayload('خطأ فالاستخدام','Use it :** points 636930315503534110 | @user')).catch(() => {});
+    return message.reply(buildTicketMessagePayload('خطأ فالاستخدام','Use it :** points 636930315503534110 | @user **')).catch(() => {});
   }
   const targetUser = await message.client.users.fetch(targetId).catch(() => null);
   const targetMember = await message.guild.members.fetch(targetId).catch(() => null);
@@ -3180,7 +3264,8 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     await message.react(ok ? '<:emoji_42:1430334150057001042>' : '<:emoji_44:1430334506371645593>').catch(() => {});
     return;
   }
-  if (invokedToken.endsWith('ttop') || (invokedToken.endsWith('نقاط') && String(args?.[0] || '').toLowerCase() !== 'add')) {
+  const pointsTargetCandidate = normalizeId(args?.[0]);
+  if (invokedToken.endsWith('ttop') || (invokedToken.endsWith('نقاط') && !pointsTargetCandidate && String(args?.[0] || '').toLowerCase() !== 'add')) {
     if (!hasGlobalAdmin) {
       await message.react('<:emoji_44:1430334506371645593>').catch(() => {});
       return;
@@ -3197,6 +3282,10 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     return;
   }
   if (invokedToken.endsWith('points')) {
+    await handlePointsAdjustMessage(message, args, { BOT_OWNERS });
+    return;
+  }
+  if (invokedToken.endsWith('نقاط') && pointsTargetCandidate) {
     await handlePointsAdjustMessage(message, args, { BOT_OWNERS });
     return;
   }
@@ -5164,10 +5253,11 @@ function registerHandlers(client) {
             await interaction.reply(buildTicketMessagePayload('Alert', '**لا يمكن الاستدعاء بعد إقفال التكت.**', { ephemeral: true }));
             return;
           }
-          const cooldownKey = `${interaction.guild.id}:${channelId}:${interaction.user.id}`;
-          const last = pingCooldowns.get(cooldownKey) || 0;
+	          const cooldownKey = `${interaction.guild.id}:${channelId}:${interaction.user.id}`;
+	          prunePingCooldowns();
+	          const last = pingCooldowns.get(cooldownKey) || 0;
           const now = Date.now();
-          const cooldownMs = 10 * 60 * 1000;
+          const cooldownMs = PING_COOLDOWN_MS;
           if (now - last < cooldownMs) {
             const left = Math.ceil((cooldownMs - (now - last)) / 1000);
             await interaction.reply(buildTicketMessagePayload('كولداون', `**انتظر ${left} ثانية قبل استخدام الاستدعاء مرة أخرى.**`, { ephemeral: true }));
