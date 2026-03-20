@@ -2038,23 +2038,23 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
       });
       return new ActionRowBuilder().addComponents(updatedComponents);
     });
-    const mentionChunks = buildMentionChunks(getAdminRoles(config, ticket?.reasonKey));
-    const firstChunk = mentionChunks.shift() || null;
 
     if (config.deleteClaimMessageOnClaim) {
       await deleteClaimMessageIfEnabled(interaction, config);
     } else {
       await interaction.message.edit({
-        content: [firstChunk, buildClaimRequestContent(ticket, config, interaction.user.id)].filter(Boolean).join('\n'),
-        embeds: [],
         components: updatedRows
       }).catch(() => {});
     }
-
-    for (const chunk of mentionChunks) {
-      await interaction.channel.send({ content: chunk }).catch(() => {});
-    }
   }
+
+  await sendClaimAnnounce({
+    channel: interaction.channel,
+    config,
+    ticket,
+    claimerId: interaction.user.id,
+    claimImage: null
+  }).catch(() => {});
 
   await interaction.editReply(buildTicketMessagePayload('Claimed', '**تم استلام التكت بنجاح.**', { user: interaction.user }));
   } finally {
@@ -2307,8 +2307,12 @@ async function closeTicketCore({
     logSilentError('close.permissions.visible-users', `failed=${visibleUserResults.filter((item) => item.status === 'rejected').length}`);
   }
 
-  if (interaction?.message?.editable) {
-    await interaction.message.edit({ components: [] }).catch(() => {});
+  if (interaction?.message?.editable && interaction.message?.components?.length) {
+    const disabledRows = interaction.message.components.map((row) => {
+      const disabledComponents = row.components.map((component) => ButtonBuilder.from(component).setDisabled(true));
+      return new ActionRowBuilder().addComponents(disabledComponents);
+    });
+    await interaction.message.edit({ components: disabledRows }).catch(() => {});
   }
 
   await channel.send({
