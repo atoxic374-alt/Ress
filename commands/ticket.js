@@ -1989,10 +1989,22 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
   }
   const guild = interaction.guild;
   const { config, tickets, pendingRequests } = getPanelData(guildId, panelId || 'default');
-  if (resolveTicketBlockForMember(guildId, interaction.member)) {
+  const [isBlocked, duplicateRequest] = await Promise.all([
+    Promise.resolve(resolveTicketBlockForMember(guildId, interaction.member)),
+    Promise.resolve(Object.values(pendingRequests)
+      .find((req) => req.userId === interaction.user.id && req.panelId === (panelId || 'default') && !req.claimedAt))
+  ]);
+
+  if (isBlocked) {
     await interaction.editReply(buildTicketMessagePayload('Ticket Blocked', '**عندك بلوك تكت لا يمكنك فتح تكت.**'));
     return;
   }
+
+  if (duplicateRequest) {
+    await interaction.editReply(buildTicketMessagePayload('Alert', '**لديك طلب استلام معلّق بالفعل، انتظر حتى تتم معالجته.**'));
+    return;
+  }
+
   const pruned = prunePendingRequests(pendingRequests);
   if (pruned) setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
 
@@ -2006,8 +2018,10 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
     return;
   }
 
-  const openCount = countOpenMemberTickets(tickets, interaction.user.id);
-  const pendingCount = countPendingMemberRequests(pendingRequests, interaction.user.id);
+  const [openCount, pendingCount] = await Promise.all([
+    Promise.resolve(countOpenMemberTickets(tickets, interaction.user.id)),
+    Promise.resolve(countPendingMemberRequests(pendingRequests, interaction.user.id))
+  ]);
   if ((openCount + pendingCount) >= (config.memberOpenLimit || 1)) {
     await interaction.editReply(buildTicketMessagePayload('Alert', `**الحد : وصلت لاقصى تكت مفتوح (${config.memberOpenLimit}).**`));
     return;
@@ -2025,12 +2039,6 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
   }
 
   const reqId = `${guildId}_${panelId || 'default'}_${interaction.user.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const duplicateRequest = Object.values(pendingRequests)
-    .find((req) => req.userId === interaction.user.id && req.panelId === (panelId || 'default') && !req.claimedAt);
-  if (duplicateRequest) {
-    await interaction.editReply(buildTicketMessagePayload('Alert', '**لديك طلب استلام معلّق بالفعل، انتظر حتى تتم معالجته.**'));
-    return;
-  }
   pendingRequests[reqId] = {
     guildId,
     panelId: panelId || 'default',
