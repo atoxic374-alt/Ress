@@ -678,16 +678,6 @@ async function retryAsync(fn, attempts = 3) {
   return null;
 }
 
-async function uploadTranscriptAndGetUrl(logChannel, transcriptFile) {
-  if (!logChannel || !transcriptFile) return null;
-  const uploadMessage = await retryAsync(() => logChannel.send({ files: [transcriptFile] }).catch(() => null), 2).catch(() => null);
-  if (!uploadMessage) return null;
-  const attachment = [...uploadMessage.attachments.values()].find((item) => String(item.name || '').startsWith('transcript-'));
-  const url = attachment?.url || null;
-  await uploadMessage.delete().catch(() => {});
-  return url;
-}
-
 async function finalizeTransferDmNotifications(ticket, guild, closedByLabel = 'غير محدد') {
   const notices = Array.isArray(ticket?.transferDmNotifications) ? ticket.transferDmNotifications : [];
   if (!notices.length || !guild?.client) return;
@@ -735,40 +725,39 @@ async function syncTicketLogMessage({
   const statusLabel = ticket.status === 'closed' ? 'Closed' : 'Open';
   let transcriptUrl = ticket.lastTranscriptUrl || null;
   let transcriptUploadFailed = false;
-  if (transcriptFile) {
-    transcriptUrl = await uploadTranscriptAndGetUrl(logChannel, transcriptFile).catch(() => null);
-    if (!transcriptUrl) transcriptUploadFailed = true;
-  }
-  if (transcriptUrl) ticket.lastTranscriptUrl = transcriptUrl;
-  if (transcriptUploadFailed) ticket.logSyncError = 'TRANSCRIPT_UPLOAD_FAILED';
   const ticketLabel = ticket.deletedChannel ? 'Deleted' : (channelId ? `<#${channelId}>` : (ticket.channelId ? `<#${ticket.channelId}>` : 'غير محدد'));
-  const summaryLines = [
-    `**Ticket :** ${ticketLabel}`,
-    `**Member :** ${ticket.memberId ? `<@${ticket.memberId}>` : 'غير محدد'}`,
-    `**Reason :** ${reason.name || `سبب ${ticket.reasonKey || '-'}`}`,
-    `**Status :** ${statusLabel}`,
-    transcriptUrl ? `**Transcript :** [Open here](${transcriptUrl})` : null,
-    transcriptUploadFailed ? '**Transcript :** Failed to upload transcript file.' : null,
-    '',
-    '**Results :**',
-    historyText
-  ].filter(Boolean);
-
-  let description = summaryLines.join('\n');
-  if (description.length > 3800) {
-    const trimmedHistory = (ticket.logHistory || []).slice(-8).map((line, index) => `${index + 1}) ${line}`).join('\n') || 'لا يوجد';
-    description = [
+  const buildDescription = (url, uploadFailed) => {
+    const summaryLines = [
       `**Ticket :** ${ticketLabel}`,
       `**Member :** ${ticket.memberId ? `<@${ticket.memberId}>` : 'غير محدد'}`,
       `**Reason :** ${reason.name || `سبب ${ticket.reasonKey || '-'}`}`,
       `**Status :** ${statusLabel}`,
-      transcriptUrl ? `**Transcript :** [Open here](${transcriptUrl})` : null,
-      transcriptUploadFailed ? '**Transcript :** Failed to upload transcript file.' : null,
+      url ? `**Transcript :** [Open here](${url})` : null,
+      uploadFailed ? '**Transcript :** Failed to upload transcript file.' : null,
       '',
       '**Results :**',
-      trimmedHistory
-    ].filter(Boolean).join('\n');
-  }
+      historyText
+    ].filter(Boolean);
+
+    let nextDescription = summaryLines.join('\n');
+    if (nextDescription.length > 3800) {
+      const trimmedHistory = (ticket.logHistory || []).slice(-8).map((line, index) => `${index + 1}) ${line}`).join('\n') || 'لا يوجد';
+      nextDescription = [
+        `**Ticket :** ${ticketLabel}`,
+        `**Member :** ${ticket.memberId ? `<@${ticket.memberId}>` : 'غير محدد'}`,
+        `**Reason :** ${reason.name || `سبب ${ticket.reasonKey || '-'}`}`,
+        `**Status :** ${statusLabel}`,
+        url ? `**Transcript :** [Open here](${url})` : null,
+        uploadFailed ? '**Transcript :** Failed to upload transcript file.' : null,
+        '',
+        '**Results :**',
+        trimmedHistory
+      ].filter(Boolean).join('\n');
+    }
+    return nextDescription;
+  };
+
+  let description = buildDescription(transcriptUrl, transcriptUploadFailed);
 
   const embed = colorManager.createEmbed()
     .setTitle('Log')
@@ -779,23 +768,42 @@ async function syncTicketLogMessage({
   embed.setAuthor({ name: guild.name || 'Server', iconURL: guild.iconURL?.({ dynamic: true, size: 128 }) || undefined });
 
   const payload = { embeds: [embed] };
+  if (transcriptFile) payload.files = [transcriptFile];
 
-  let savedMessage = null;
+  let targetMessage = null;
   if (ticket.logMessageId) {
     const existing = await retryAsync(() => logChannel.messages.fetch(ticket.logMessageId).catch(() => null), 2).catch(() => null);
     if (existing?.editable) {
-      savedMessage = await retryAsync(() => existing.edit(payload).catch(() => null), 2).catch(() => null);
-      if (savedMessage) return true;
+      targetMessage = await retryAsync(() => existing.edit(payload).catch(() => null), 2).catch(() => null);
+    }
+  }
+  if (!targetMessage) {
+    targetMessage = await retryAsync(() => logChannel.send(payload).catch(() => null), 2).catch(() => null);
+    if (!targetMessage) {
+      ticket.logSyncFailedAt = Date.now();
+      ticket.logSyncError = 'LOG_MESSAGE_SEND_FAILED';
+      return false;
+    }
+  }
+  ticket.logMessageId = targetMessage.id;
+
+  if (transcriptFile) {
+    const transcriptAttachment = [...targetMessage.attachments.values()].find((item) => String(item.name || '').startsWith('transcript-'));
+    if (transcriptAttachment?.url) {
+      transcriptUrl = transcriptAttachment.url;
+      ticket.lastTranscriptUrl = transcriptUrl;
+    } else {
+      transcriptUploadFailed = true;
+      ticket.logSyncError = 'TRANSCRIPT_UPLOAD_FAILED';
+    }
+
+    const updatedDescription = buildDescription(transcriptUrl, transcriptUploadFailed);
+    if (updatedDescription !== description) {
+      embed.setDescription(updatedDescription);
+      await retryAsync(() => targetMessage.edit({ embeds: [embed] }).catch(() => null), 2).catch(() => null);
     }
   }
 
-  const sent = await retryAsync(() => logChannel.send(payload).catch(() => null), 2).catch(() => null);
-  if (!sent) {
-    ticket.logSyncFailedAt = Date.now();
-    ticket.logSyncError = 'LOG_MESSAGE_SEND_FAILED';
-    return false;
-  }
-  ticket.logMessageId = sent.id;
   return true;
 }
 
@@ -810,7 +818,7 @@ async function sendClaimAnnounce({ channel, config, ticket, claimerId, claimImag
     await channel.send({ content: chunk }).catch(() => {});
   }
 
-  const claimEmbed = makeTicketEmbed('Ticket claimed', `**السبب :** ${reasonName}\n**الإداري :** <@${claimerId}>`);
+  const claimEmbed = makeTicketEmbed('Ticket claimed', `**Reason :** ${reasonName}\n**Admin :** <@${claimerId}>`);
 
   await channel.send({
     embeds: [claimEmbed]
@@ -1169,7 +1177,7 @@ function getClosedTicketViewerTargets(config, ticket, guild) {
 
 function normalizeId(input) {
   if (!input) return null;
-  const match = String(input).trim().match(/^(?:<@&?|<#)?(\d{16,20})>?$/);
+  const match = String(input).trim().match(/^(?:(?:<@!?)|(?:<@&)|(?:<#))?(\d{16,20})>?$/);
   return match ? match[1] : null;
 }
 
@@ -2238,11 +2246,16 @@ async function closeTicketCore({
     setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
 
     if (interaction) {
-      await interaction.reply(buildTicketMessagePayload(
+      const closeNoticePayload = buildTicketMessagePayload(
         autoClose ? 'إغلاق تلقائي' : 'اقفال',
         `**سيتم حذف التكت خلال ${Math.floor(CLOSE_DELETE_DELAY_MS / 1000)} ثواني.**`,
         { ephemeral: true }
-      )).catch((error) => logSilentError('close.reply.delete-notice', error));
+      );
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply(closeNoticePayload).catch((error) => logSilentError('close.editReply.delete-notice', error));
+      } else {
+        await interaction.reply(closeNoticePayload).catch((error) => logSilentError('close.reply.delete-notice', error));
+      }
     } else if (!silentCloseNotice) {
       await channel.send(buildTicketMessagePayload('إغلاق تلقائي', `**تم إقفال هذا التكت تلقائيًا${closedByLabel ? ` بواسطة ${closedByLabel}` : ''} وسيتم حذفه خلال ${Math.floor(CLOSE_DELETE_DELAY_MS / 1000)} ثواني.**`)).catch((error) => logSilentError('close.channel.delete-notice', error));
     }
@@ -2250,6 +2263,10 @@ async function closeTicketCore({
     setTimeout(() => channel.delete().catch((error) => logSilentError('close.channel.delete', error)), CLOSE_DELETE_DELAY_MS);
     return true;
   }
+
+  const closePrefix = `closed-${sanitizeName(config.ticketNamePrefix || 'ticket')}`;
+  await channel.setName(closePrefix).catch(() => {});
+  if (config.closedCategoryId) await channel.setParent(config.closedCategoryId).catch(() => {});
 
   if (ticket.memberId) {
     await channel.permissionOverwrites.edit(ticket.memberId, {
@@ -2290,21 +2307,9 @@ async function closeTicketCore({
     logSilentError('close.permissions.visible-users', `failed=${visibleUserResults.filter((item) => item.status === 'rejected').length}`);
   }
 
-  if (ticket.claimedBy) {
-    await channel.permissionOverwrites.edit(ticket.claimedBy, {
-      ViewChannel: false,
-      SendMessages: false,
-      ReadMessageHistory: true
-    }).catch((error) => logSilentError('close.permissions.claimer', error));
-  }
-
   if (interaction?.message?.editable) {
     await interaction.message.edit({ components: [] }).catch(() => {});
   }
-
-  const closePrefix = `closed-${sanitizeName(config.ticketNamePrefix || 'ticket')}`;
-  await channel.setName(closePrefix).catch(() => {});
-  if (config.closedCategoryId) await channel.setParent(config.closedCategoryId).catch(() => {});
 
   await channel.send({
     embeds: [makeTicketEmbed(
@@ -2322,7 +2327,12 @@ async function closeTicketCore({
   setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
 
   if (interaction) {
-    await interaction.reply(buildTicketMessagePayload(autoClose ? 'Ticket;' : 'Ticket;', autoClose ? '**Done Closed Auto ✅️**' : '**Done closed ✅️.**', { ephemeral: true })).catch(() => {});
+    const donePayload = buildTicketMessagePayload(autoClose ? 'Ticket;' : 'Ticket;', autoClose ? '**Done Closed Auto ✅️**' : '**Done closed ✅️.**', { ephemeral: true });
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply(donePayload).catch(() => {});
+    } else {
+      await interaction.reply(donePayload).catch(() => {});
+    }
   }
 
   return true;
@@ -2360,6 +2370,9 @@ async function handleClose(interaction, guildId, panelId, channelId) {
   if (interaction.channelId !== actionChannelId) {
     await interaction.reply(buildTicketMessagePayload('Error', '**لا توجد بيانات لهذا التكت.**', { ephemeral: true }));
     return;
+  }
+  if (!interaction.deferred && !interaction.replied) {
+    await interaction.deferReply({ ephemeral: true }).catch(() => {});
   }
   await closeTicketCore({
     channel: interaction.channel,
@@ -2655,7 +2668,7 @@ async function handlePointsAdjustMessage(message, args, { BOT_OWNERS = [] } = {}
 
   const targetId = normalizeId(args?.[0]);
   if (!targetId) {
-    return message.reply(buildTicketMessagePayload('خطأ فالاستخدام','Use it :** points 636930315503534110 | @user')).catch(() => {});
+    return message.reply(buildTicketMessagePayload('خطأ فالاستخدام','Use it :** points 636930315503534110 | @user **')).catch(() => {});
   }
   const targetUser = await message.client.users.fetch(targetId).catch(() => null);
   const targetMember = await message.guild.members.fetch(targetId).catch(() => null);
@@ -2664,7 +2677,7 @@ async function handlePointsAdjustMessage(message, args, { BOT_OWNERS = [] } = {}
     return message.reply(buildTicketMessagePayload('No perms', '**لا يمكن تعديل نقاط المسؤولين إلا بواسطة مسؤولين المسؤوليات.**')).catch(() => {});
   }
 
-  const sessionId = `${message.guild.id}:${message.channel.id}:${message.author.id}:${targetId}:${Date.now()}`;
+  const sessionId = `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
   pointsAdjustSessions.set(sessionId, { targetId, actorId: message.author.id, targetIsResponsible });
 
   const actionRow = new ActionRowBuilder().addComponents(
@@ -2675,8 +2688,20 @@ async function handlePointsAdjustMessage(message, args, { BOT_OWNERS = [] } = {}
   const sent = await message.reply({
     embeds: [buildMemberPointsEmbed({ requester: message.author, targetUser, targetId, guildId: message.guild.id, targetIsResponsible, note: '**اختر العملية من الأزرار.**' })],
     components: [actionRow]
-  }).catch(() => null);
-  if (!sent) return;
+  }).catch(async (error) => {
+    logSilentError('points.adjust.reply', error);
+    return message.channel.send({
+      embeds: [buildMemberPointsEmbed({ requester: message.author, targetUser, targetId, guildId: message.guild.id, targetIsResponsible, note: '**اختر العملية من الأزرار.**' })],
+      components: [actionRow]
+    }).catch((fallbackError) => {
+      logSilentError('points.adjust.channel-send', fallbackError);
+      return null;
+    });
+  });
+  if (!sent) {
+    await message.channel.send(buildTicketMessagePayload('Error', '**تعذر فتح لوحة تعديل النقاط. تأكد من صلاحيات البوت في هذا الشات.**')).catch(() => {});
+    return;
+  }
 
   const collector = sent.createMessageComponentCollector({ time: 3 * 60 * 1000 });
   collector.on('collect', async (interaction) => {
@@ -3265,7 +3290,8 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     await message.react(ok ? '<:emoji_42:1430334150057001042>' : '<:emoji_44:1430334506371645593>').catch(() => {});
     return;
   }
-  if (invokedToken.endsWith('ttop') || (invokedToken.endsWith('نقاط') && String(args?.[0] || '').toLowerCase() !== 'add')) {
+  const pointsTargetCandidate = normalizeId(args?.[0]);
+  if (invokedToken.endsWith('ttop') || (invokedToken.endsWith('نقاط') && !pointsTargetCandidate && String(args?.[0] || '').toLowerCase() !== 'add')) {
     if (!hasGlobalAdmin) {
       await message.react('<:emoji_44:1430334506371645593>').catch(() => {});
       return;
@@ -3282,6 +3308,10 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     return;
   }
   if (invokedToken.endsWith('points')) {
+    await handlePointsAdjustMessage(message, args, { BOT_OWNERS });
+    return;
+  }
+  if (invokedToken.endsWith('نقاط') && pointsTargetCandidate) {
     await handlePointsAdjustMessage(message, args, { BOT_OWNERS });
     return;
   }
