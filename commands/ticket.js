@@ -2674,8 +2674,20 @@ async function handlePointsAdjustMessage(message, args, { BOT_OWNERS = [] } = {}
   const sent = await message.reply({
     embeds: [buildMemberPointsEmbed({ requester: message.author, targetUser, targetId, guildId: message.guild.id, targetIsResponsible, note: '**اختر العملية من الأزرار.**' })],
     components: [actionRow]
-  }).catch(() => null);
-  if (!sent) return;
+  }).catch(async (error) => {
+    logSilentError('points.adjust.reply', error);
+    return message.channel.send({
+      embeds: [buildMemberPointsEmbed({ requester: message.author, targetUser, targetId, guildId: message.guild.id, targetIsResponsible, note: '**اختر العملية من الأزرار.**' })],
+      components: [actionRow]
+    }).catch((fallbackError) => {
+      logSilentError('points.adjust.channel-send', fallbackError);
+      return null;
+    });
+  });
+  if (!sent) {
+    await message.channel.send(buildTicketMessagePayload('Error', '**تعذر فتح لوحة تعديل النقاط. تأكد من صلاحيات البوت في هذا الشات.**')).catch(() => {});
+    return;
+  }
 
   const collector = sent.createMessageComponentCollector({ time: 3 * 60 * 1000 });
   collector.on('collect', async (interaction) => {
