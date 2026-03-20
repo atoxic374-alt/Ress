@@ -2289,14 +2289,6 @@ async function closeTicketCore({
     logSilentError('close.permissions.visible-users', `failed=${visibleUserResults.filter((item) => item.status === 'rejected').length}`);
   }
 
-  if (ticket.claimedBy) {
-    await channel.permissionOverwrites.edit(ticket.claimedBy, {
-      ViewChannel: false,
-      SendMessages: false,
-      ReadMessageHistory: true
-    }).catch((error) => logSilentError('close.permissions.claimer', error));
-  }
-
   if (interaction?.message?.editable) {
     await interaction.message.edit({ components: [] }).catch(() => {});
   }
