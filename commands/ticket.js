@@ -28,7 +28,6 @@ const ticketImagesDir = path.join(__dirname, '..', 'data', 'ticket_images');
 const pointsPath = path.join(__dirname, '..', 'data', 'points.json');
 const ticketSearchSessions = new Map();
 const pointsAdjustSessions = new Map();
-const memberFetchInFlight = new Map();
 
 let handlersRegistered = false;
 const pingCooldowns = new Map();
@@ -43,38 +42,6 @@ const PING_COOLDOWN_MS = 3 * 1000;
 function logSilentError(scope, error) {
   const msg = error?.message || error;
   console.warn(`[ticket] ${scope}:`, msg);
-}
-
-async function runConcurrentTasks(tasks = [], scope = 'task.batch') {
-  const settled = await Promise.allSettled(tasks.filter(Boolean));
-  const failed = settled.filter((item) => item.status === 'rejected');
-  if (failed.length) {
-    logSilentError(scope, `failed=${failed.length}`);
-  }
-  return settled;
-}
-
-async function withTimeout(promise, timeoutMs = 2500) {
-  let timeoutRef;
-  const timeoutPromise = new Promise((resolve) => {
-    timeoutRef = setTimeout(() => resolve(null), timeoutMs);
-  });
-  const result = await Promise.race([promise, timeoutPromise]).catch(() => null);
-  clearTimeout(timeoutRef);
-  return result;
-}
-
-async function resolveGuildMember(guild, userId, timeoutMs = 2500) {
-  if (!guild || !userId) return null;
-  const cached = guild.members.cache.get(userId);
-  if (cached) return cached;
-  const key = `${guild.id}:${userId}`;
-  if (!memberFetchInFlight.has(key)) {
-    memberFetchInFlight.set(key, guild.members.fetch(userId).catch(() => null).finally(() => {
-      memberFetchInFlight.delete(key);
-    }));
-  }
-  return withTimeout(memberFetchInFlight.get(key), timeoutMs);
 }
 
 function pruneTicketSearchSessions(now = Date.now()) {
@@ -539,24 +506,21 @@ async function warmMentionCaches(channel, rawText = '') {
   const roleIds = [...text.matchAll(/<@&(\d{1,22})>/g)].map((m) => m[1]);
   const channelIds = [...text.matchAll(/<#(\d{1,22})>/g)].map((m) => m[1]);
 
-  await runConcurrentTasks(
-    [...new Set(memberIds)]
-      .filter((id) => !guild.members.cache.has(id))
-      .map((id) => resolveGuildMember(guild, id, 1500)),
-    'mentions.members.warm'
-  );
-  await runConcurrentTasks(
-    [...new Set(roleIds)]
-      .filter((id) => !guild.roles.cache.has(id))
-      .map((id) => withTimeout(guild.roles.fetch(id).catch(() => null), 1500)),
-    'mentions.roles.warm'
-  );
-  await runConcurrentTasks(
-    [...new Set(channelIds)]
-      .filter((id) => !guild.channels.cache.has(id))
-      .map((id) => withTimeout(guild.channels.fetch(id).catch(() => null), 1500)),
-    'mentions.channels.warm'
-  );
+  for (const id of [...new Set(memberIds)]) {
+    if (!guild.members.cache.has(id)) {
+      await guild.members.fetch(id).catch(() => null);
+    }
+  }
+  for (const id of [...new Set(roleIds)]) {
+    if (!guild.roles.cache.has(id)) {
+      await guild.roles.fetch(id).catch(() => null);
+    }
+  }
+  for (const id of [...new Set(channelIds)]) {
+    if (!guild.channels.cache.has(id)) {
+      await guild.channels.fetch(id).catch(() => null);
+    }
+  }
 }
 
 async function buildTicketTranscript(channel, maxMessages = Infinity) {
@@ -573,21 +537,18 @@ async function buildTicketTranscript(channel, maxMessages = Infinity) {
 
       const ordered = [...batch.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
       for (const msg of ordered) {
-        const warmTexts = [msg.content || ''];
+        await warmMentionCaches(channel, msg.content || '');
         if (Array.isArray(msg.embeds) && msg.embeds.length) {
           for (const embed of msg.embeds) {
-            warmTexts.push(embed?.description || '');
+            await warmMentionCaches(channel, embed?.description || '');
             if (Array.isArray(embed?.fields)) {
               for (const field of embed.fields) {
-                warmTexts.push(field?.name || '', field?.value || '');
+                await warmMentionCaches(channel, field?.name || '');
+                await warmMentionCaches(channel, field?.value || '');
               }
             }
           }
         }
-        await runConcurrentTasks(
-          warmTexts.filter(Boolean).map((textItem) => warmMentionCaches(channel, textItem)),
-          'transcript.warm.texts'
-        );
         const ts = new Date(msg.createdTimestamp).toLocaleString('en-GB', { hour12: false, timeZone: 'UTC' });
         const author = msg.author?.tag || msg.author?.username || msg.author?.id || 'unknown';
         const content = renderTranscriptContent(channel, (msg.content || '').trim());
@@ -853,25 +814,15 @@ async function sendClaimAnnounce({ channel, config, ticket, claimerId, claimImag
 
   const reasonName = config.reasons?.[ticket.reasonKey]?.name || `سبب ${ticket.reasonKey}`;
   const mentionChunks = buildMentionChunks(adminRoleIds);
-  await runConcurrentTasks(
-    mentionChunks.map((chunk) => channel.send({ content: chunk })),
-    'claim.announce.mentions'
-  );
+  for (const chunk of mentionChunks) {
+    await channel.send({ content: chunk }).catch(() => {});
+  }
 
-  const modalAnswers = ticket?.openModalAnswers && typeof ticket.openModalAnswers === 'object'
-    ? Object.entries(ticket.openModalAnswers)
-      .filter(([, value]) => String(value || '').trim().length > 0)
-      .slice(0, 8)
-      .map(([label, value]) => `**${String(label).slice(0, 80)} :** ${String(value).slice(0, 250)}`)
-      .join('\n')
-    : '';
-  const modalSection = modalAnswers ? `\n\n**Modal Answers :**\n${modalAnswers}` : '';
+  const claimEmbed = makeTicketEmbed('Ticket claimed', `**Reason :** ${reasonName}\n**Admin :** <@${claimerId}>`);
 
-  const claimEmbed = makeTicketEmbed('Ticket claimed', `**Reason :** ${reasonName}\n**Admin :** <@${claimerId}>${modalSection}`);
-
-  const payload = { embeds: [claimEmbed] };
-  if (claimImage) payload.files = [claimImage];
-  await channel.send(payload).catch(() => {});
+  await channel.send({
+    embeds: [claimEmbed]
+  }).catch(() => {});
 }
 
 function buildClaimRequestContent(ticket, config, claimerId = null) {
@@ -1793,18 +1744,7 @@ async function buildTicketControls(guildId, panelId, channelId, config, options 
   return [row1, row2, row3];
 }
 
-async function createTicketChannel({
-  guild,
-  member,
-  config,
-  reasonKey,
-  tickets,
-  pendingRequests,
-  includeClaimButton = true,
-  panelId = 'default',
-  openModalAnswers = null,
-  claimedByOnCreate = null
-}) {
+async function createTicketChannel({ guild, member, config, reasonKey, tickets, pendingRequests, includeClaimButton = true, panelId = 'default', openModalAnswers = null }) {
   const reasonSettings = getReasonVisualSettings(config, reasonKey);
   const reason = reasonSettings.reason;
   const prefix = sanitizeName(reason.ticketName || config.ticketNamePrefix || 'ticket') || 'ticket';
@@ -1818,49 +1758,21 @@ async function createTicketChannel({
   const channelName = `${prefix}-${suffix}`.slice(0, 90);
   const categoryId = reason.categoryId || config.openCategoryId || null;
 
-  const configuredStaffRoles = [...new Set([...(config.responsibleRoleIds || [])])]
+  const shouldExposeAdminRolesUntilClaim = includeClaimButton && !config.claimFromDedicatedChannel;
+  const bootstrapStaffRoles = shouldExposeAdminRolesUntilClaim
+    ? [...new Set([...(config.responsibleRoleIds || []), ...getAdminRoles(config, reasonKey)])]
+    : [...new Set([...(config.responsibleRoleIds || [])])];
+  const allowedStaffRoles = bootstrapStaffRoles
     .map((roleId) => String(roleId || '').trim())
     .filter((roleId) => /^\d{16,20}$/.test(roleId) && guild.roles.cache.has(roleId));
-  const adminRoles = getAdminRoles(config, reasonKey)
-    .map((roleId) => String(roleId || '').trim())
-    .filter((roleId) => /^\d{16,20}$/.test(roleId) && guild.roles.cache.has(roleId));
-  const allStaffRoles = [...new Set([...configuredStaffRoles, ...adminRoles])];
-  const shouldApplyHideOnCreate = Boolean(claimedByOnCreate && config.hideOnClaim);
 
-  const permissionOverwrites = [{ id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] }];
+  const permissionOverwrites = [
+    { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+    { id: memberId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
+  ];
 
-  if (shouldApplyHideOnCreate) {
-    permissionOverwrites.push({
-      id: memberId,
-      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory]
-    });
-    if (claimedByOnCreate !== memberId) {
-      permissionOverwrites.push({
-        id: claimedByOnCreate,
-        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory]
-      });
-    }
-    for (const roleId of allStaffRoles) {
-      const shouldSee = configuredStaffRoles.includes(roleId);
-      permissionOverwrites.push(shouldSee
-        ? { id: roleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
-        : { id: roleId, deny: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] });
-    }
-  } else {
-    const shouldExposeAdminRolesUntilClaim = includeClaimButton && !config.claimFromDedicatedChannel;
-    const bootstrapStaffRoles = shouldExposeAdminRolesUntilClaim
-      ? [...new Set([...configuredStaffRoles, ...adminRoles])]
-      : [...new Set([...configuredStaffRoles])];
-    permissionOverwrites.push({
-      id: memberId,
-      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory]
-    });
-    for (const roleId of bootstrapStaffRoles) {
-      permissionOverwrites.push({
-        id: roleId,
-        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory]
-      });
-    }
+  for (const roleId of allowedStaffRoles) {
+    permissionOverwrites.push({ id: roleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] });
   }
 
   const channel = await guild.channels.create({
@@ -1890,7 +1802,7 @@ async function createTicketChannel({
     panelId,
     memberId,
     reasonKey,
-    claimedBy: claimedByOnCreate || null,
+    claimedBy: null,
     status: 'open',
     extraMembers: [],
     logMessageId: null,
@@ -1925,37 +1837,40 @@ async function applyHideOnClaim(channel, guild, config, claimerId, memberId, ext
   const visibleStaffRoles = [...configuredStaffRoles];
   const allStaffRoles = [...new Set([...adminRoles, ...configuredStaffRoles])];
 
-  const tasks = [
-    channel.permissionOverwrites.edit(guild.roles.everyone.id, {
-      ViewChannel: false,
-      SendMessages: false,
-      ReadMessageHistory: false
-    }),
-    channel.permissionOverwrites.edit(claimerId, {
+  await channel.permissionOverwrites.edit(guild.roles.everyone.id, {
+    ViewChannel: false,
+    SendMessages: false,
+    ReadMessageHistory: false
+  }).catch(() => {});
+
+  for (const roleId of allStaffRoles) {
+    const shouldSee = visibleStaffRoles.includes(roleId);
+    await channel.permissionOverwrites.edit(roleId, {
+      ViewChannel: shouldSee,
+      SendMessages: shouldSee,
+      ReadMessageHistory: shouldSee
+    }).catch(() => {});
+  }
+
+  await channel.permissionOverwrites.edit(claimerId, {
+    ViewChannel: true,
+    SendMessages: true,
+    ReadMessageHistory: true
+  }).catch(() => {});
+
+  await channel.permissionOverwrites.edit(memberId, {
+    ViewChannel: true,
+    SendMessages: true,
+    ReadMessageHistory: true
+  }).catch(() => {});
+
+  for (const userId of extraMembers) {
+    await channel.permissionOverwrites.edit(userId, {
       ViewChannel: true,
       SendMessages: true,
       ReadMessageHistory: true
-    }),
-    channel.permissionOverwrites.edit(memberId, {
-      ViewChannel: true,
-      SendMessages: true,
-      ReadMessageHistory: true
-    }),
-    ...allStaffRoles.map((roleId) => {
-      const shouldSee = visibleStaffRoles.includes(roleId);
-      return channel.permissionOverwrites.edit(roleId, {
-        ViewChannel: shouldSee,
-        SendMessages: shouldSee,
-        ReadMessageHistory: shouldSee
-      });
-    }),
-    ...extraMembers.map((userId) => channel.permissionOverwrites.edit(userId, {
-      ViewChannel: true,
-      SendMessages: true,
-      ReadMessageHistory: true
-    }))
-  ];
-  await runConcurrentTasks(tasks, 'claim.hide.permissions');
+    }).catch(() => {});
+  }
 }
 
 async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
@@ -2036,12 +1951,8 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
 
   const mentionChunks = buildMentionChunks(getAdminRoles(config, reasonKey));
 
-  const mentionMessages = await Promise.allSettled(
-    mentionChunks.map((chunk) => targetChannel.send({ content: chunk }))
-  );
-  for (const item of mentionMessages) {
-    if (item.status !== 'fulfilled') continue;
-    const sent = item.value;
+  for (const chunk of mentionChunks) {
+    const sent = await targetChannel.send({ content: chunk }).catch(() => null);
     if (sent?.id) {
       pendingRequests[reqId].claimMessageRefs.push({ channelId: sent.channelId || targetChannel.id, messageId: sent.id });
     }
@@ -2103,42 +2014,20 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
 
   ticket.claimedBy = interaction.user.id;
   touchTicketActivity(ticket);
-  setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
-  await interaction.editReply(buildTicketMessagePayload('Claimed', '**تم استلام التكت بنجاح.**', { user: interaction.user }));
+  if (config.hideOnClaim || !config.claimFromDedicatedChannel) {
+    await applyHideOnClaim(interaction.channel, interaction.guild, config, interaction.user.id, ticket.memberId, ticket.extraMembers || [], ticket.reasonKey);
+  }
 
-  await sendClaimAnnounce({
-    channel: interaction.channel,
+  await syncTicketLogMessage({
+    guild: interaction.guild,
     config,
     ticket,
-    claimerId: interaction.user.id,
-    claimImage: null
-  }).catch(() => {});
+    channelId: actionChannelId,
+    actionText: `تم الاستلام عن طريق : <@${interaction.user.id}>`,
+    actor: interaction.user
+  });
 
-  const postClaimTasks = [];
-  if (config.hideOnClaim || !config.claimFromDedicatedChannel) {
-    postClaimTasks.push(
-      applyHideOnClaim(
-        interaction.channel,
-        interaction.guild,
-        config,
-        interaction.user.id,
-        ticket.memberId,
-        ticket.extraMembers || [],
-        ticket.reasonKey
-      )
-    );
-  }
-  postClaimTasks.push(
-    syncTicketLogMessage({
-      guild: interaction.guild,
-      config,
-      ticket,
-      channelId: actionChannelId,
-      actionText: `تم الاستلام عن طريق : <@${interaction.user.id}>`,
-      actor: interaction.user
-    })
-  );
-
+  setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
   if (interaction.message?.components?.length) {
     const updatedRows = interaction.message.components.map((row) => {
       const updatedComponents = row.components.map((component) => {
@@ -2150,16 +2039,20 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
       return new ActionRowBuilder().addComponents(updatedComponents);
     });
 
-    if (config.deleteClaimMessageOnClaim) {
-      postClaimTasks.push(deleteClaimMessageIfEnabled(interaction, config));
-    } else {
-      postClaimTasks.push(interaction.message.edit({
-        components: updatedRows
-      }));
-    }
+    await interaction.message.edit({
+      components: updatedRows
+    }).catch(() => {});
   }
 
-  await Promise.allSettled(postClaimTasks);
+  await sendClaimAnnounce({
+    channel: interaction.channel,
+    config,
+    ticket,
+    claimerId: interaction.user.id,
+    claimImage: null
+  }).catch(() => {});
+
+  await interaction.editReply(buildTicketMessagePayload('Claimed', '**تم استلام التكت بنجاح.**', { user: interaction.user }));
   } finally {
     ticketClaimLocks.delete(lockKey);
   }
@@ -2205,7 +2098,7 @@ async function handleClaimFromRequest(interaction, reqId) {
     return;
   }
 
-  const member = await resolveGuildMember(interaction.guild, req.userId);
+  const member = await interaction.guild.members.fetch(req.userId).catch(() => null);
   if (!member) {
     delete pendingRequests[reqId];
     setGuildData(guildId, config, tickets, pendingRequests, panelId);
@@ -2229,8 +2122,7 @@ async function handleClaimFromRequest(interaction, reqId) {
       pendingRequests,
       includeClaimButton: false,
       panelId: req.panelId || panelId,
-      openModalAnswers: req.openModalAnswers || null,
-      claimedByOnCreate: interaction.user.id
+      openModalAnswers: req.openModalAnswers || null
     });
   } catch (error) {
     req.claimedAt = null;
@@ -2242,56 +2134,50 @@ async function handleClaimFromRequest(interaction, reqId) {
     await interaction.editReply(buildTicketMessagePayload('Error', '**فشل انشاء التكت من طلب الاستلام، تأكد من صلاحيات .**', { user: interaction.user }));
     return;
   }
+  tickets[channel.id].claimedBy = interaction.user.id;
+  touchTicketActivity(tickets[channel.id]);
+
+  if (config.hideOnClaim) {
+    await applyHideOnClaim(channel, interaction.guild, config, interaction.user.id, member.id, tickets[channel.id].extraMembers || [], tickets[channel.id].reasonKey);
+  }
+
   const createdTicket = tickets[channel.id];
-  createdTicket.claimedBy = interaction.user.id;
-  touchTicketActivity(createdTicket);
+  const claimImage = resolveImageForSend(getReasonVisualSettings(config, createdTicket.reasonKey).claimImage);
+  await sendClaimAnnounce({ channel, config, ticket: createdTicket, claimerId: interaction.user.id, claimImage });
+  await syncTicketLogMessage({
+    guild: interaction.guild,
+    config,
+    ticket: createdTicket,
+    channelId: channel.id,
+    actionText: `تم الاستلام عن طريق : <@${interaction.user.id}>`,
+    actor: interaction.user
+  });
+
+  if (interaction.message?.editable) {
+    const updatedRows = interaction.message.components.map((row) => {
+      const components = row.components.map((component) => {
+        if (component.customId?.startsWith('ticket_claimreq_')) {
+          return ButtonBuilder.from(component).setDisabled(true).setEmoji('<:emoji_3:1484364952780144710>').setLabel('Claimed');
+        }
+        return component;
+      });
+      return new ActionRowBuilder().addComponents(components);
+    });
+    if (config.deleteClaimMessageOnClaim) {
+      await deleteTrackedMessages(interaction.guild, req?.claimMessageRefs, interaction.message.id);
+      await deleteClaimMessageIfEnabled(interaction, config);
+    } else {
+      await interaction.message.edit({
+        content: buildClaimRequestContent(createdTicket, config, interaction.user.id),
+        embeds: [],
+        components: updatedRows
+      }).catch(() => {});
+    }
+  }
 
   delete pendingRequests[reqId];
   setGuildData(guildId, config, tickets, pendingRequests, panelId);
   await interaction.editReply(buildTicketMessagePayload('Claimed', `**تم الاستلام والانشاء :** <#${channel.id}>`));
-
-  const claimImage = resolveImageForSend(getReasonVisualSettings(config, createdTicket.reasonKey).claimImage);
-  await sendClaimAnnounce({ channel, config, ticket: createdTicket, claimerId: interaction.user.id, claimImage });
-
-  const postClaimTasks = [];
-  // الصلاحيات تُضبط أثناء إنشاء التكت عند تفعيل hideOnClaim لتفادي أي تأخير بعد الإنشاء.
-  postClaimTasks.push(
-    syncTicketLogMessage({
-      guild: interaction.guild,
-      config,
-      ticket: createdTicket,
-      channelId: channel.id,
-      actionText: `تم الاستلام عن طريق : <@${interaction.user.id}>`,
-      actor: interaction.user
-    })
-  );
-
-  if (interaction.message?.editable) {
-    postClaimTasks.push((async () => {
-      const updatedRows = interaction.message.components.map((row) => {
-        const components = row.components.map((component) => {
-          if (component.customId?.startsWith('ticket_claimreq_')) {
-            return ButtonBuilder.from(component).setDisabled(true).setEmoji('<:emoji_3:1484364952780144710>').setLabel('Claimed');
-          }
-          return component;
-        });
-        return new ActionRowBuilder().addComponents(components);
-      });
-      if (config.deleteClaimMessageOnClaim) {
-        await deleteTrackedMessages(interaction.guild, req?.claimMessageRefs, interaction.message.id);
-        await deleteClaimMessageIfEnabled(interaction, config);
-      } else {
-        await interaction.message.edit({
-          content: buildClaimRequestContent(createdTicket, config, interaction.user.id),
-          embeds: [],
-          components: updatedRows
-        });
-      }
-    })());
-  }
-
-  await Promise.allSettled(postClaimTasks);
-
   } finally {
     ticketClaimLocks.delete(lockKey);
   }
@@ -2305,8 +2191,7 @@ async function sendAutoCloseWarning(channel, ticket, dueAt) {
   await channel.send({
     content: mentions || undefined,
     ...buildTicketMessagePayload(
-      'Auto Close',
-      `**هذا التكت سيتم قفله تلقائيًا قريبًا.**\n**موعد الإقفال :** <t:${Math.floor(dueAt / 1000)}:R>\n**أي رسالة جديدة داخل التكت ستعيد المدة من البداية.**`
+      'Auto Close'    `**هذا التكت سيتم قفله تلقائيًا قريبًا.**\n**موعد الإقفال :** <t:${Math.floor(dueAt / 1000)}:R>\n**أي رسالة جديدة داخل التكت ستعيد المدة من البداية.**`
     )
   }).catch(() => {});
 }
@@ -2333,27 +2218,24 @@ async function closeTicketCore({
   ticket.memberHidden = true;
   ticket.claimerHidden = true;
   delete ticket.autoCloseWarningSentAt;
-  setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
 
   channel.ticketMeta = ticket;
   const transcriptFile = await buildTicketTranscript(channel).catch(() => null);
   const logTranscriptFile = config.keepClosedTickets ? null : transcriptFile;
-  await Promise.allSettled([
-    syncTicketLogMessage({
-      guild: channel.guild,
-      config,
-      ticket,
-      channelId,
-      actionText: {
-        type: autoClose ? 'auto_close' : 'close',
-        message: `تم الغلق عن طريق : ${closedByLabel || (autoClose ? 'خمول التكت' : 'غير محدد')}`,
-        actorId: interaction?.user?.id || null
-      },
-      actor: interaction?.user || null,
-      transcriptFile: logTranscriptFile
-    }),
-    finalizeTransferDmNotifications(ticket, channel.guild, closedByLabel || (autoClose ? 'خمول التكت' : 'غير محدد'))
-  ]);
+  await syncTicketLogMessage({
+    guild: channel.guild,
+    config,
+    ticket,
+    channelId,
+    actionText: {
+      type: autoClose ? 'auto_close' : 'close',
+      message: `تم الغلق عن طريق : ${closedByLabel || (autoClose ? 'خمول التكت' : 'غير محدد')}`,
+      actorId: interaction?.user?.id || null
+    },
+    actor: interaction?.user || null,
+    transcriptFile: logTranscriptFile
+  });
+  await finalizeTransferDmNotifications(ticket, channel.guild, closedByLabel || (autoClose ? 'خمول التكت' : 'غير محدد'));
 
   if (!config.keepClosedTickets) {
     delete tickets[channelId];
@@ -2378,42 +2260,21 @@ async function closeTicketCore({
     return true;
   }
 
-  let closeSuffix = '';
-  if (config.ticketNameMode === 'user') {
-    const memberName = channel.guild.members.cache.get(ticket.memberId)?.user?.username
-      || channel.guild.members.cache.get(ticket.memberId)?.displayName
-      || ticket.memberId;
-    closeSuffix = sanitizeName(memberName || 'user');
-  } else {
-    const parts = String(channel.name || '').split('-').filter(Boolean);
-    closeSuffix = sanitizeName(parts[parts.length - 1] || String(config.counter || 1));
-  }
-  const closedChannelName = `closed-${closeSuffix || 'ticket'}`.slice(0, 90);
-  await Promise.allSettled([
-    channel.setName(closedChannelName),
-    config.closedCategoryId ? channel.setParent(config.closedCategoryId) : Promise.resolve()
-  ]);
+  const closePrefix = `closed-${sanitizeName(config.ticketNamePrefix || 'ticket')}`;
+  await channel.setName(closePrefix).catch(() => {});
+  if (config.closedCategoryId) await channel.setParent(config.closedCategoryId).catch(() => {});
 
-  const basePermissionTasks = [];
   if (ticket.memberId) {
-    basePermissionTasks.push(
-      channel.permissionOverwrites.edit(ticket.memberId, {
-        ViewChannel: false,
-        SendMessages: false
-      })
-    );
-  }
-  basePermissionTasks.push(
-    channel.permissionOverwrites.edit(channel.guild.roles.everyone.id, {
+    await channel.permissionOverwrites.edit(ticket.memberId, {
       ViewChannel: false,
-      SendMessages: false,
-      ReadMessageHistory: false
-    })
-  );
-  const basePermissionResults = await Promise.allSettled(basePermissionTasks);
-  if (basePermissionResults.some((item) => item.status === 'rejected')) {
-    logSilentError('close.permissions.base', `failed=${basePermissionResults.filter((item) => item.status === 'rejected').length}`);
+      SendMessages: false
+    }).catch((error) => logSilentError('close.permissions.member', error));
   }
+  await channel.permissionOverwrites.edit(channel.guild.roles.everyone.id, {
+    ViewChannel: false,
+    SendMessages: false,
+    ReadMessageHistory: false
+  }).catch((error) => logSilentError('close.permissions.everyone', error));
 
   const transferredResults = await Promise.allSettled((ticket.transferredUserIds || []).map((userId) => channel.permissionOverwrites.edit(userId, {
       ViewChannel: false,
@@ -2608,7 +2469,7 @@ async function handleAddRemoveAliasMessage(message, userInput, mode = 'add') {
     if (ctx.ticket.memberId === userId) {
       return false;
     }
-    const targetMember = await resolveGuildMember(message.guild, userId);
+    const targetMember = await message.guild.members.fetch(userId).catch(() => null);
     if (!targetMember) return false;
     await message.channel.permissionOverwrites.edit(userId, {
       ViewChannel: true,
@@ -2733,7 +2594,7 @@ function buildMemberPointsEmbed({ requester, targetUser, targetId, guildId, targ
 async function handleMyTicketPointsMessage(message, targetInput = null) {
   const targetId = normalizeId(targetInput) || message.author.id;
   const targetUser = await message.client.users.fetch(targetId).catch(() => null);
-  const targetMember = await resolveGuildMember(message.guild, targetId);
+  const targetMember = await message.guild.members.fetch(targetId).catch(() => null);
   const targetIsResponsible = targetMember ? canUseGeneralPointsCommand(targetMember, message.guild.id, message.guild) : false;
   const embed = buildMemberPointsEmbed({
     requester: message.author,
@@ -2810,7 +2671,7 @@ async function handlePointsAdjustMessage(message, args, { BOT_OWNERS = [] } = {}
     return message.reply(buildTicketMessagePayload('خطأ فالاستخدام','Use it :** points 636930315503534110 | @user **')).catch(() => {});
   }
   const targetUser = await message.client.users.fetch(targetId).catch(() => null);
-  const targetMember = await resolveGuildMember(message.guild, targetId);
+  const targetMember = await message.guild.members.fetch(targetId).catch(() => null);
   const targetIsResponsible = targetMember ? canUseGeneralPointsCommand(targetMember, message.guild.id, message.guild) : false;
   if (targetIsResponsible && !actorIsOwner) {
     return message.reply(buildTicketMessagePayload('No perms', '**لا يمكن تعديل نقاط المسؤولين إلا بواسطة مسؤولين المسؤوليات.**')).catch(() => {});
@@ -2916,7 +2777,7 @@ async function handleTopPointsMessage(message, page = 1) {
       return `#${rank} - <@${entry.userId}> : ${entry.total}p\n**اكثر من عطاه نقاط المسؤول :** ${topAwarder ? `<@${topAwarder.actorId}>` : 'N/A'}`;
     }).join('\n\n')
     : '**لا توجد نقاط مسجلة حالياً.**';
-  const embed = makeTicketEmbed('Top Ticket', description, { user: message.author })
+  const embed = makeTicketEmbed('Top', description, { user: message.author })
     .setFooter({ text: `Page ${currentPage}/${totalPages} • Your Points : ${getUserTotalPoints(points, message.author.id)}` });
 
   const row = new ActionRowBuilder().addComponents(
@@ -3378,7 +3239,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
   setTimeout(() => recentTicketCommandMessages.delete(dedupeKey), 60 * 1000);
 
   const invokedToken = String(message.content || '').trim().split(/\s+/)[0]?.toLowerCase() || '';
-  const member = await resolveGuildMember(message.guild, message.author.id);
+  const member = await message.guild.members.fetch(message.author.id).catch(() => null);
   if (!member) return;
   const hasGlobalAdmin = hasGlobalAdminAccess(member, message, BOT_OWNERS, ADMIN_ROLES);
   const activeBlock = resolveTicketBlockForMember(message.guild.id, member);
@@ -4741,17 +4602,14 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   const adminRoles = getAdminRoles(config, ticket?.reasonKey);
   const allKnownRoles = [...new Set([...generalResponsibleRoles, ...targetRoles, ...adminRoles])];
 
-  await runConcurrentTasks(
-    allKnownRoles.map((roleId) => {
-      const shouldSee = targetRoles.includes(roleId) || generalResponsibleRoles.includes(roleId);
-      return interaction.channel.permissionOverwrites.edit(roleId, {
-        ViewChannel: shouldSee,
-        SendMessages: shouldSee,
-        ReadMessageHistory: shouldSee
-      });
-    }),
-    'transfer.roles.permissions'
-  );
+  for (const roleId of allKnownRoles) {
+    const shouldSee = targetRoles.includes(roleId) || generalResponsibleRoles.includes(roleId);
+    await interaction.channel.permissionOverwrites.edit(roleId, {
+      ViewChannel: shouldSee,
+      SendMessages: shouldSee,
+      ReadMessageHistory: shouldSee
+    }).catch(() => {});
+  }
 
   ticket.transferredRoleIds = [...targetRoles];
   await syncTicketLogMessage({
@@ -4769,28 +4627,27 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     .filter((id) => /^\d{16,20}$/.test(id));
   const shouldGrantIndividualTransferUsers = targetRoles.length === 0;
 
-  await runConcurrentTasks(
-    [...new Set([...previousTransferredUserIds, ...responsibleUsers])].map((userId) => {
-      const shouldSee = shouldGrantIndividualTransferUsers && responsibleUsers.includes(userId);
-      return interaction.channel.permissionOverwrites.edit(userId, {
-        ViewChannel: shouldSee,
-        SendMessages: shouldSee,
-        ReadMessageHistory: true
-      });
-    }),
-    'transfer.users.permissions'
-  );
+  for (const userId of [...new Set([...previousTransferredUserIds, ...responsibleUsers])]) {
+    const shouldSee = shouldGrantIndividualTransferUsers && responsibleUsers.includes(userId);
+    await interaction.channel.permissionOverwrites.edit(userId, {
+      ViewChannel: shouldSee,
+      SendMessages: shouldSee,
+      ReadMessageHistory: true
+    }).catch(() => {});
+  }
 
   const mentions = [
     ...targetRoles.map((id) => `<@&${id}>`),
     ...responsibleUsers.map((id) => `<@${id}>`)
   ];
 
-  const onlineResolved = await Promise.allSettled(responsibleUsers.map((uid) => resolveGuildMember(interaction.guild, uid, 1200)));
-  const onlineResponsibleMentions = onlineResolved
-    .map((item, idx) => ({ item, uid: responsibleUsers[idx] }))
-    .filter(({ item }) => item.status === 'fulfilled' && item.value?.presence?.status && item.value.presence.status !== 'offline')
-    .map(({ uid }) => `<@${uid}>`);
+  const onlineResponsibleMentions = responsibleUsers
+    .filter((uid) => {
+      const member = interaction.guild.members.cache.get(uid);
+      const status = member?.presence?.status;
+      return status && status !== 'offline';
+    })
+    .map((uid) => `<@${uid}>`);
 
   if (previousClaimer) {
     await interaction.channel.permissionOverwrites.edit(previousClaimer, { ViewChannel: false, SendMessages: false }).catch(() => {});
@@ -4798,44 +4655,38 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   ticket.transferredUserIds = shouldGrantIndividualTransferUsers ? [...responsibleUsers] : [];
   const dmEmbed = makeTicketEmbed('Ticket Change', `يوجد تكت تم تحويله لمسؤوليتكم في <#${actionChannelId}>`);
   if (!Array.isArray(ticket.transferDmNotifications)) ticket.transferDmNotifications = [];
-  const dmResults = await Promise.allSettled(
-    responsibleUsers.map(async (uid) => {
-      const user = await interaction.client.users.fetch(uid).catch(() => null);
-      if (!user) return null;
-      const sentDm = await user.send({ embeds: [dmEmbed] }).catch(() => null);
-      if (!sentDm) return null;
-      return {
-        userId: uid,
-        messageId: sentDm.id,
-        transferredById: interaction.user.id
-      };
-    })
-  );
-  for (const item of dmResults) {
-    if (item.status === 'fulfilled' && item.value) {
-      ticket.transferDmNotifications.push(item.value);
+  for (const uid of responsibleUsers) {
+    const user = await interaction.client.users.fetch(uid).catch(() => null);
+    if (user) {
+      const sentDm = await user.send({
+        embeds: [dmEmbed]
+      }).catch(() => null);
+      if (sentDm) {
+        ticket.transferDmNotifications.push({
+          userId: uid,
+          messageId: sentDm.id,
+          transferredById: interaction.user.id
+        });
+      }
     }
   }
 
   const mentionChunks = buildMentionChunks(targetRoles);
-  await runConcurrentTasks(
-    mentionChunks.map((chunk) => interaction.channel.send({ content: chunk })),
-    'transfer.mentions.send'
-  );
+  for (const chunk of mentionChunks) {
+    await interaction.channel.send({ content: chunk }).catch(() => {});
+  }
 
   const renamed = `مسؤولين-${sanitizeName(respName)}`.slice(0, 90);
-  const transferUiTasks = [interaction.channel.setName(renamed)];
+  await interaction.channel.setName(renamed).catch(() => {});
+
   if (interaction.message?.editable) {
-    transferUiTasks.push((async () => {
-      const refreshedControls = await buildTicketControls(guildId, resolvedPanelId, actionChannelId, config, {
-        includeClaimButton: false,
-        disableClaimButton: true,
-        hideReassignButton: true
-      });
-      await interaction.message.edit({ components: refreshedControls });
-    })());
+    const refreshedControls = await buildTicketControls(guildId, resolvedPanelId, actionChannelId, config, {
+      includeClaimButton: false,
+      disableClaimButton: true,
+      hideReassignButton: true
+    });
+    await interaction.message.edit({ components: refreshedControls }).catch(() => {});
   }
-  await runConcurrentTasks(transferUiTasks, 'transfer.ui.update');
 
   await interaction.editReply({
     content: mentions.join(' ') || null,
@@ -5147,35 +4998,25 @@ function registerHandlers(client) {
             await interaction.reply(buildTicketMessagePayload('Perms', '**ليس لديك صلاحية الحذف.**', { ephemeral: true }));
             return;
           }
-          if (!interaction.deferred && !interaction.replied) {
-            await interaction.deferReply({ ephemeral: true }).catch(() => {});
-          }
-          await interaction.editReply(buildTicketMessagePayload(
+          interaction.channel.ticketMeta = ticket;
+          const transcriptFile = await buildTicketTranscript(interaction.channel).catch(() => null);
+          ticket.deletedChannel = true;
+          await syncTicketLogMessage({
+            guild: interaction.guild,
+            config,
+            ticket,
+            channelId,
+            actionText: `تم حذف التكت عن طريق : <@${interaction.user.id}>`,
+            actor: interaction.user,
+            transcriptFile
+          });
+          delete tickets[channelId];
+          setGuildData(guildId, config, tickets, pendingRequests || {}, resolvedPanelId);
+          await interaction.reply(buildTicketMessagePayload(
             'Deleted',
             '**سيتم حذف التكت خلال 3 ثواني.**',
             { ephemeral: true }
-          )).catch(() => {});
-
-          interaction.channel.ticketMeta = ticket;
-          ticket.deletedChannel = true;
-          await Promise.allSettled([
-            (async () => {
-              const transcriptFile = await buildTicketTranscript(interaction.channel).catch(() => null);
-              await syncTicketLogMessage({
-                guild: interaction.guild,
-                config,
-                ticket,
-                channelId,
-                actionText: `تم حذف التكت عن طريق : <@${interaction.user.id}>`,
-                actor: interaction.user,
-                transcriptFile
-              });
-            })(),
-            (async () => {
-              delete tickets[channelId];
-              setGuildData(guildId, config, tickets, pendingRequests || {}, resolvedPanelId);
-            })()
-          ]);
+          ));
           setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
           return;
         }
@@ -5592,7 +5433,7 @@ function registerHandlers(client) {
             await interaction.reply(buildTicketMessagePayload('Failed', '**الشخص هو صاحب التكت بالفعل.**', { ephemeral: true }));
             return;
           }
-          const targetMember = await resolveGuildMember(interaction.guild, userId);
+          const targetMember = await interaction.guild.members.fetch(userId).catch(() => null);
           if (!targetMember) {
             await interaction.reply(buildTicketMessagePayload('Failed', '**لا يمكن العثور على العضو.**', { ephemeral: true }));
             return;
