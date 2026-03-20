@@ -2663,7 +2663,7 @@ async function handlePointsAdjustMessage(message, args, { BOT_OWNERS = [] } = {}
     return message.reply(buildTicketMessagePayload('No perms', '**لا يمكن تعديل نقاط المسؤولين إلا بواسطة مسؤولين المسؤوليات.**')).catch(() => {});
   }
 
-  const sessionId = `${message.guild.id}:${message.channel.id}:${message.author.id}:${targetId}:${Date.now()}`;
+  const sessionId = `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
   pointsAdjustSessions.set(sessionId, { targetId, actorId: message.author.id, targetIsResponsible });
 
   const actionRow = new ActionRowBuilder().addComponents(
