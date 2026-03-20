@@ -1168,7 +1168,7 @@ function getClosedTicketViewerTargets(config, ticket, guild) {
 
 function normalizeId(input) {
   if (!input) return null;
-  const match = String(input).trim().match(/^(?:<@&?|<#)?(\d{16,20})>?$/);
+  const match = String(input).trim().match(/^(?:(?:<@!?)|(?:<@&)|(?:<#))?(\d{16,20})>?$/);
   return match ? match[1] : null;
 }
 
@@ -2654,7 +2654,7 @@ async function handlePointsAdjustMessage(message, args, { BOT_OWNERS = [] } = {}
 
   const targetId = normalizeId(args?.[0]);
   if (!targetId) {
-    return message.reply(buildTicketMessagePayload('خطأ فالاستخدام','Use it :** points 636930315503534110 | @user')).catch(() => {});
+    return message.reply(buildTicketMessagePayload('خطأ فالاستخدام','Use it :** points 636930315503534110 | @user **')).catch(() => {});
   }
   const targetUser = await message.client.users.fetch(targetId).catch(() => null);
   const targetMember = await message.guild.members.fetch(targetId).catch(() => null);
