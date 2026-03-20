@@ -1378,14 +1378,11 @@ function countClaimedByAdmin(tickets, adminId) {
   return Object.values(tickets).filter((t) => t.status === 'open' && t.claimedBy === adminId).length;
 }
 
-function prunePendingRequests(pendingRequests, maxAgeMs = 2 * 60 * 60 * 1000) {
-  const now = Date.now();
+function prunePendingRequests(pendingRequests) {
   let changed = false;
   for (const [reqId, req] of Object.entries(pendingRequests || {})) {
     const createdAt = Number(req?.createdAt || 0);
-    const updatedAt = Number(req?.updatedAt || createdAt || 0);
-    const isClaimed = Boolean(req?.claimedAt);
-    if (!createdAt || (!isClaimed && now - updatedAt > maxAgeMs)) {
+    if (!req || typeof req !== 'object' || !createdAt) {
       delete pendingRequests[reqId];
       changed = true;
     }
