@@ -33,6 +33,7 @@ const memberFetchInFlight = new Map();
 let handlersRegistered = false;
 const pingCooldowns = new Map();
 const ticketClaimLocks = new Set();
+const ticketOpenRequestLocks = new Set();
 const activeTicketSetupSessions = new Map();
 const recentTicketCommandMessages = new Set();
 const TICKET_SEARCH_SESSION_TTL_MS = 30 * 60 * 1000;
@@ -1462,6 +1463,52 @@ function prunePendingRequests(pendingRequests) {
   return changed;
 }
 
+function removeClaimMessageRefFromPendingRequests(pendingRequests, channelId, messageId) {
+  let changed = false;
+  let releasedRequests = 0;
+  const safeChannelId = String(channelId || '');
+  const safeMessageId = String(messageId || '');
+  if (!safeChannelId || !safeMessageId) return { changed: false, releasedRequests: 0 };
+
+  for (const [reqId, req] of Object.entries(pendingRequests || {})) {
+    if (!req || !Array.isArray(req.claimMessageRefs) || !req.claimMessageRefs.length) continue;
+
+    const nextRefs = req.claimMessageRefs.filter((ref) => {
+      const refChannelId = String(ref?.channelId || '');
+      const refMessageId = String(ref?.messageId || '');
+      return !(refChannelId === safeChannelId && refMessageId === safeMessageId);
+    });
+
+    if (nextRefs.length === req.claimMessageRefs.length) continue;
+
+    changed = true;
+    req.claimMessageRefs = nextRefs;
+    req.updatedAt = Date.now();
+
+    if (!nextRefs.length && !req.claimedAt) {
+      delete pendingRequests[reqId];
+      releasedRequests += 1;
+    }
+  }
+
+  return { changed, releasedRequests };
+}
+
+function removeClaimMessageRefFromGuildPanels(guildId, channelId, messageId) {
+  const { guild } = getGuildData(guildId);
+  let changedPanels = 0;
+
+  for (const panelId of Object.keys(guild?.panels || {})) {
+    const { config, tickets, pendingRequests } = getPanelData(guildId, panelId);
+    const result = removeClaimMessageRefFromPendingRequests(pendingRequests, channelId, messageId);
+    if (!result.changed) continue;
+    setGuildData(guildId, config, tickets, pendingRequests, panelId);
+    changedPanels += 1;
+  }
+
+  return changedPanels;
+}
+
 function hasStaffAccess(member, config, reasonKey = null, ticket = null) {
   if (member?.user?.bot || member?.bot) return true;
   if (resolveTicketBlockForMember(member?.guild?.id, member)) return false;
@@ -1982,15 +2029,23 @@ async function applyHideOnClaim(channel, guild, config, claimerId, memberId, ext
 }
 
 async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
+  const safePanelId = panelId || 'default';
+  const lockKey = `openreq:${guildId}:${safePanelId}:${interaction.user.id}`;
   if (!interaction.deferred && !interaction.replied) {
     await interaction.reply(buildTicketMessagePayload('Request', '**يرجى الانتظار...**', { ephemeral: true })).catch(() => {});
   }
+  if (ticketOpenRequestLocks.has(lockKey)) {
+    await interaction.editReply(buildTicketMessagePayload('Alert', '**جاري تنفيذ طلبك، انتظر لحظات ولا تضغط أكثر من مرة.**'));
+    return;
+  }
+  ticketOpenRequestLocks.add(lockKey);
+  try {
   const guild = interaction.guild;
-  const { config, tickets, pendingRequests } = getPanelData(guildId, panelId || 'default');
+  const { config, tickets, pendingRequests } = getPanelData(guildId, safePanelId);
   const [isBlocked, duplicateRequest] = await Promise.all([
     Promise.resolve(resolveTicketBlockForMember(guildId, interaction.member)),
     Promise.resolve(Object.values(pendingRequests)
-      .find((req) => req.userId === interaction.user.id && req.panelId === (panelId || 'default') && !req.claimedAt))
+      .find((req) => req.userId === interaction.user.id && req.panelId === safePanelId && !req.claimedAt))
   ]);
 
   if (isBlocked) {
@@ -2004,7 +2059,7 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
   }
 
   const pruned = prunePendingRequests(pendingRequests);
-  if (pruned) setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
+  if (pruned) setGuildData(guildId, config, tickets, pendingRequests, safePanelId);
 
   if (!config.autoCreateOnRequest && !config.claimFromDedicatedChannel && !interaction.channelId) {
     await interaction.editReply(buildTicketMessagePayload('Eror', '**لا يمكن إنشاء طلب الاستلام بدون شات صالح.**'));
@@ -2027,7 +2082,7 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
 
   if (config.autoCreateOnRequest) {
     try {
-      const channel = await createTicketChannel({ guild, member: interaction.member, config, reasonKey, tickets, pendingRequests, panelId: panelId || 'default', openModalAnswers: interaction.ticketModalAnswers || null });
+      await createTicketChannel({ guild, member: interaction.member, config, reasonKey, tickets, pendingRequests, panelId: safePanelId, openModalAnswers: interaction.ticketModalAnswers || null });
       await interaction.editReply(buildTicketMessagePayload('Request', ` ** تم ارسال طلبك للإدارة يرجى الانتظار.. ** `));
     } catch (error) {
       console.error('ticket open create channel error:', error?.message || error);
@@ -2036,10 +2091,10 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
     return;
   }
 
-  const reqId = `${guildId}_${panelId || 'default'}_${interaction.user.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const reqId = `${guildId}_${safePanelId}_${interaction.user.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   pendingRequests[reqId] = {
     guildId,
-    panelId: panelId || 'default',
+    panelId: safePanelId,
     userId: interaction.user.id,
     reasonKey,
     sourceChannelId: interaction.channelId,
@@ -2054,7 +2109,7 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
   const targetChannel = await guild.channels.fetch(targetChannelId).catch(() => null);
   if (!targetChannel || targetChannel.type !== ChannelType.GuildText) {
     delete pendingRequests[reqId];
-    setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
+    setGuildData(guildId, config, tickets, pendingRequests, safePanelId);
     await interaction.editReply(buildTicketMessagePayload('خطأ', '**فشل : شات الاستلام غير صالح.**'));
     return;
   }
@@ -2069,33 +2124,46 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
 
   const mentionChunks = buildMentionChunks(getAdminRoles(config, reasonKey));
 
-  const mentionMessages = await Promise.allSettled(
-    mentionChunks.map((chunk) => targetChannel.send({ content: chunk }))
-  );
-  for (const item of mentionMessages) {
-    if (item.status !== 'fulfilled') continue;
-    const sent = item.value;
-    if (sent?.id) {
-      pendingRequests[reqId].claimMessageRefs.push({ channelId: sent.channelId || targetChannel.id, messageId: sent.id });
+  try {
+    const mentionMessages = await Promise.allSettled(
+      mentionChunks.map((chunk) => targetChannel.send({ content: chunk }))
+    );
+    for (const item of mentionMessages) {
+      if (item.status !== 'fulfilled') continue;
+      const sent = item.value;
+      if (sent?.id) {
+        pendingRequests[reqId].claimMessageRefs.push({ channelId: sent.channelId || targetChannel.id, messageId: sent.id });
+      }
     }
+
+    const requestSummary = `**العضو :** <@${interaction.user.id}>\n**السبب :** ${reasonData.name || `سبب ${reasonKey}`}${reasonData.description ? `\n**الوصف :** ${reasonData.description}` : ''}`;
+
+    if (claimImage) {
+      const sent = await targetChannel.send({ content: requestSummary, files: [claimImage], components: [row] });
+      if (sent?.id) {
+        pendingRequests[reqId].claimMessageRefs.push({ channelId: sent.channelId || targetChannel.id, messageId: sent.id });
+      }
+    } else {
+      const sent = await targetChannel.send({ content: requestSummary, components: [row] });
+      if (sent?.id) {
+        pendingRequests[reqId].claimMessageRefs.push({ channelId: sent.channelId || targetChannel.id, messageId: sent.id });
+      }
+    }
+  } catch (error) {
+    const refsToDelete = Array.isArray(pendingRequests[reqId]?.claimMessageRefs) ? [...pendingRequests[reqId].claimMessageRefs] : [];
+    delete pendingRequests[reqId];
+    setGuildData(guildId, config, tickets, pendingRequests, safePanelId);
+    await deleteTrackedMessages(guild, refsToDelete).catch(() => {});
+    console.error('ticket open request send error:', error?.message || error);
+    await interaction.editReply(buildTicketMessagePayload('Error', '**فشل إرسال طلب التكت، حاول مرة أخرى بعد قليل.**'));
+    return;
   }
 
-  const requestSummary = `**العضو :** <@${interaction.user.id}>\n**السبب :** ${reasonData.name || `سبب ${reasonKey}`}${reasonData.description ? `\n**الوصف :** ${reasonData.description}` : ''}`;
-
-  if (claimImage) {
-    const sent = await targetChannel.send({ content: requestSummary, files: [claimImage], components: [row] });
-    if (sent?.id) {
-      pendingRequests[reqId].claimMessageRefs.push({ channelId: sent.channelId || targetChannel.id, messageId: sent.id });
-    }
-  } else {
-    const sent = await targetChannel.send({ content: requestSummary, components: [row] });
-    if (sent?.id) {
-      pendingRequests[reqId].claimMessageRefs.push({ channelId: sent.channelId || targetChannel.id, messageId: sent.id });
-    }
-  }
-
-  setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
+  setGuildData(guildId, config, tickets, pendingRequests, safePanelId);
   await interaction.editReply(buildTicketMessagePayload('Request', '**تم ارسال طلبك للإدارة يرجى الانتظار..**'));
+  } finally {
+    ticketOpenRequestLocks.delete(lockKey);
+  }
 }
 
 async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
@@ -4989,10 +5057,14 @@ function registerTicketMessageActivityTracker(client) {
     const guildId = message.guild.id;
     const channelId = message.channel.id;
     const { panelId, config, tickets, pendingRequests, ticket } = getTicketContext(guildId, channelId, 'default');
-    if (!ticket) return;
-    if (rememberDeletedTicketMessage(ticket, message)) {
+    let changed = false;
+    if (ticket && rememberDeletedTicketMessage(ticket, message)) {
+      changed = true;
+    }
+    if (changed) {
       setGuildData(guildId, config, tickets, pendingRequests, panelId);
     }
+    removeClaimMessageRefFromGuildPanels(guildId, channelId, message.id);
   });
 
   client.on('messageDeleteBulk', async (messages) => {
@@ -5001,13 +5073,17 @@ function registerTicketMessageActivityTracker(client) {
     const guildId = first.guild.id;
     const channelId = first.channel.id;
     const { panelId, config, tickets, pendingRequests, ticket } = getTicketContext(guildId, channelId, 'default');
-    if (!ticket) return;
     let changed = false;
     for (const message of messages.values()) {
-      changed = rememberDeletedTicketMessage(ticket, message) || changed;
+      if (ticket) {
+        changed = rememberDeletedTicketMessage(ticket, message) || changed;
+      }
     }
     if (changed) {
       setGuildData(guildId, config, tickets, pendingRequests, panelId);
+    }
+    for (const message of messages.values()) {
+      removeClaimMessageRefFromGuildPanels(guildId, channelId, message.id);
     }
   });
 }
