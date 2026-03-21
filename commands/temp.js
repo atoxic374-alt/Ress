@@ -116,7 +116,6 @@ function migrateDataStructure(raw) {
   for (const guildConfig of Object.values(migrated.guilds)) {
     if (!guildConfig || typeof guildConfig !== 'object') continue;
     if (!guildConfig.enabledControls) guildConfig.enabledControls = defaultEnabledControls();
-    if (!guildConfig.controlStatus) guildConfig.controlStatus = CONTROL_CARD_SIGNATURE;
     if (!('controlMessageId' in guildConfig)) guildConfig.controlMessageId = null;
     if (!('logChannelId' in guildConfig)) guildConfig.logChannelId = null;
     if (!('musicChannelId' in guildConfig)) guildConfig.musicChannelId = null;
@@ -213,7 +212,6 @@ function getGuildConfig(guildId) {
       musicChannelId: null,
       controlCardColorMode: 'avatar',
       controlCardCustomColor: null,
-      controlStatus: CONTROL_CARD_SIGNATURE,
       autoCleanEnabled: false,
       autoCleanIntervalMs: DEFAULT_AUTO_CLEAN_MS,
       maxRoomAgeMs: 0,
@@ -225,11 +223,6 @@ function getGuildConfig(guildId) {
 
   if (!data.guilds[guildId].enabledControls) {
     data.guilds[guildId].enabledControls = defaultEnabledControls();
-    scheduleSave();
-  }
-
-  if (typeof data.guilds[guildId].controlStatus !== 'string') {
-    data.guilds[guildId].controlStatus = CONTROL_CARD_SIGNATURE;
     scheduleSave();
   }
 
@@ -568,11 +561,6 @@ function getModeratableRoomMembers(roomChannel, ownerId, profile) {
   return roomChannel.members
     .filter(member => !isProtectedModerationTarget(member, ownerId, profile))
     .sort((a, b) => getRoomMemberPriority(a, ownerId, profile) - getRoomMemberPriority(b, ownerId, profile));
-}
-
-function normalizeStatusText(text) {
-  const normalized = String(text || CONTROL_CARD_SIGNATURE).trim().replace(/\s+/g, ' ');
-  return normalized.slice(0, 140) || CONTROL_CARD_SIGNATURE;
 }
 
 function getTempButtonStyle(key = null) {
@@ -1195,7 +1183,6 @@ function fitTextSize(ctx, text, maxWidth, startSize, minSize, fontFamily, weight
 
 
 async function buildGeneralControlCard(guild) {
-  const config = getGuildConfig(guild.id);
   const width = 1600;
   const height = 1040;
   const canvas = createCanvas(width, height);
@@ -1329,7 +1316,6 @@ async function buildGeneralControlCard(guild) {
   });
 
   const roomCount = Object.keys(getRoomStore(guild.id)).length;
-  const statusText = normalizeStatusText(config.controlStatus);
   const footerLineY = panelY + panelHeight - 78;
   const footerPadding = 66;
   const footerBlockWidth = 420;
@@ -1364,15 +1350,10 @@ async function buildGeneralControlCard(guild) {
   const serverLabelWidth = ctx.measureText('Server :').width;
   ctx.fillText('Server :', serverNameX - serverLabelWidth - 16, footerLineY);
 
-  drawRoundedRect(ctx, Math.round(width / 2) - 260, panelY + panelHeight - 126, 520, 56, 18, 'rgba(255,255,255,0.05)', null, 'rgba(255,255,255,0.07)');
   ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(255,255,255,0.86)';
-  ctx.font = `600 24px ${ARABIC_FONT_FAMILY}`;
-  ctx.fillText(statusText, width / 2, panelY + panelHeight - 98);
-
   ctx.fillStyle = 'rgba(255,255,255,0.52)';
   ctx.font = `600 19px ${LATIN_FONT_FAMILY}`;
-  ctx.fillText(`Quick Actions Menu • ${CONTROL_CARD_SIGNATURE}`, width / 2, panelY + panelHeight - 30);
+  ctx.fillText(CONTROL_CARD_SIGNATURE, width / 2, panelY + panelHeight - 30);
 
   ctx.shadowBlur = 0;
   return new AttachmentBuilder(canvas.toBuffer('image/png'), { name: `temp-general-control-${guild.id}.png` });
@@ -1417,9 +1398,8 @@ function createGeneralControlMessageContent() {
   return '**Temp Voice Control**';
 }
 
-async function ensureGuildControlPanel(guild, statusText = null) {
+async function ensureGuildControlPanel(guild) {
   const config = getGuildConfig(guild.id);
-  if (statusText) config.controlStatus = normalizeStatusText(statusText);
   if (!config.controlChannelId) {
     scheduleSave();
     return null;
@@ -1622,7 +1602,7 @@ async function createOrMoveToTempRoom(member) {
   ]);
   await roomChannel.setPosition(1).catch(() => {});
   await scheduleRoomLifecycleJob(guild.id, member.id);
-  await ensureGuildControlPanel(guild, CONTROL_CARD_SIGNATURE);
+  await ensureGuildControlPanel(guild);
   await logTempRoomState(guild, {
     title: hadExistingRoom ? '🔁 **استخدام روم مؤقت قائم**' : '🎙️ **إنشاء روم مؤقت جديد**',
     description: hadExistingRoom ? '**تم استخدام الروم المؤقت الحالي ونقل المالك إليه.**' : '**تم إنشاء روم مؤقت جديد ونقل المالك إليه.**',
@@ -1680,12 +1660,12 @@ async function scheduleRoomLifecycleJob(guildId, ownerId) {
     const liveConfig = getGuildConfig(guildId);
     if (liveConfig.maxRoomAgeMs > 0 && Date.now() - currentRecord.createdAt >= liveConfig.maxRoomAgeMs) {
       await deleteTempRoom(liveGuild, ownerId, 'Temp room lifetime reached');
-      await updateGeneralPanelStatus(liveGuild, 'ℹ️ تم حذف روم مؤقت لانتهاء مدته المحددة.');
+      await updateGeneralPanelStatus(liveGuild);
       return;
     }
     if (currentRecord.ownerLeftAt && Date.now() - currentRecord.ownerLeftAt >= liveConfig.deleteAfterLeaveMs) {
       await deleteTempRoom(liveGuild, ownerId, 'Owner left timeout reached');
-      await updateGeneralPanelStatus(liveGuild, 'ℹ️ تم حذف روم مؤقت بعد انتهاء مهلة خروج المالك.');
+      await updateGeneralPanelStatus(liveGuild);
       return;
     }
     await scheduleRoomLifecycleJob(guildId, ownerId);
@@ -1808,8 +1788,8 @@ async function editEphemeral(interaction, content, extra = {}) {
   return replyEphemeral(interaction, content, extra);
 }
 
-async function updateGeneralPanelStatus(guild, statusText) {
-  await ensureGuildControlPanel(guild, statusText);
+async function updateGeneralPanelStatus(guild) {
+  await ensureGuildControlPanel(guild);
 }
 
 async function expireAccessGrant(guild, ownerId, profile, roomChannel, type, userId, reason = 'Expired') {
@@ -2427,7 +2407,7 @@ async function handleSettingsSelect(interaction) {
     await interaction.update({ content: `✅ تم تحديد روم التحكم إلى <#${interaction.values[0]}>.`, components: [] }).catch(() => {});
     await Promise.all([
       updateSettingsPanelMessage(interaction.guild, userId),
-      ensureGuildControlPanel(interaction.guild, CONTROL_CARD_SIGNATURE)
+      ensureGuildControlPanel(interaction.guild)
     ]);
     await sendTempLog(interaction.guild, {
       title: '📌 **تحديث روم التحكم**',
