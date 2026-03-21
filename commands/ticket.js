@@ -251,6 +251,11 @@ function ensureManagerAudit(points) {
   return points.__managerAudit;
 }
 
+function ensureManagerPointsAudit(points) {
+  if (!Array.isArray(points.__managerPointsAudit)) points.__managerPointsAudit = [];
+  return points.__managerPointsAudit;
+}
+
 function sumPointBucket(bucket) {
   if (bucket && typeof bucket === 'object') {
     return Object.values(bucket).reduce((sum, value) => sum + Number(value || 0), 0);
@@ -330,6 +335,51 @@ function appendManagerAuditEntry(points, entry) {
   return true;
 }
 
+function recordManagerClosePoint(points, { guildId, panelId = 'default', channelId, actorId, targetId = '', at = Date.now() } = {}) {
+  if (!points || !guildId || !channelId || !actorId) return false;
+  return appendManagerAuditEntry(points, {
+    ticketKey: `${guildId}:${panelId || 'default'}:${channelId}`,
+    actorId,
+    targetId,
+    at
+  });
+}
+
+function appendManagerPointEntry(points, entry) {
+  const audit = ensureManagerPointsAudit(points);
+  if (audit.some((item) => String(item?.ticketKey || '') === String(entry?.ticketKey || ''))) return false;
+  audit.push({
+    ticketKey: String(entry?.ticketKey || ''),
+    actorId: String(entry?.actorId || ''),
+    targetId: String(entry?.targetId || ''),
+    at: String(entry?.at || Date.now())
+  });
+  return true;
+}
+
+function removeManagerPointEntry(points, ticketKey) {
+  const audit = ensureManagerPointsAudit(points);
+  const before = audit.length;
+  points.__managerPointsAudit = audit.filter((entry) => String(entry?.ticketKey || '') !== String(ticketKey || ''));
+  return points.__managerPointsAudit.length !== before;
+}
+
+function recordManagerPoint(points, { guildId, panelId = 'default', channelId, actorId, targetId = '', at = Date.now() } = {}) {
+  if (!points || !guildId || !channelId || !actorId) return false;
+  return appendManagerPointEntry(points, {
+    ticketKey: `${guildId}:${panelId || 'default'}:${channelId}`,
+    actorId,
+    targetId,
+    at
+  });
+}
+
+function getManagerPointCount(points, userId) {
+  const targetId = String(userId || '').trim();
+  const audit = Array.isArray(points?.__managerPointsAudit) ? points.__managerPointsAudit : [];
+  return audit.filter((entry) => String(entry?.actorId || '') === targetId).length;
+}
+
 function getManagerEvaluationCount(points, userId) {
   const targetId = String(userId || '').trim();
   const audit = Array.isArray(points?.__managerAudit) ? points.__managerAudit : [];
@@ -338,7 +388,7 @@ function getManagerEvaluationCount(points, userId) {
 
 function getTopManagers(points, limit = 10) {
   const totals = new Map();
-  const audit = Array.isArray(points?.__managerAudit) ? points.__managerAudit : [];
+  const audit = Array.isArray(points?.__managerPointsAudit) ? points.__managerPointsAudit : [];
   for (const entry of audit) {
     const actorId = String(entry?.actorId || '').trim();
     if (!actorId) continue;
@@ -1528,6 +1578,23 @@ function hasStaffAccess(member, config, reasonKey = null, ticket = null) {
   return hasRole;
 }
 
+function hasStrictClaimAccess(member, config, reasonKey = null) {
+  if (member?.user?.bot || member?.bot) return true;
+  if (resolveTicketBlockForMember(member?.guild?.id, member)) return false;
+
+  const adminRoles = getAdminRoles(config, reasonKey).map((id) => String(id));
+  if (!adminRoles.length) return false;
+
+  let roleIds = [];
+  if (member?.roles?.cache) roleIds = [...member.roles.cache.keys()];
+  else if (Array.isArray(member?.roles)) roleIds = member.roles;
+  else if (Array.isArray(member?.roles?.value)) roleIds = member.roles.value;
+  else if (Array.isArray(member?.roles?.ids)) roleIds = member.roles.ids;
+
+  roleIds = roleIds.map((id) => String(id));
+  return roleIds.some((id) => adminRoles.includes(id));
+}
+
 function hasResponsibleTicketAccess(member, config, guild, ticket = null) {
   if (resolveTicketBlockForMember(guild?.id, member)) return false;
   const allowedRoleIds = getActiveResponsibleRoleIds(config, guild, ticket);
@@ -1578,6 +1645,11 @@ function canUseGeneralPointsCommand(member, guildId, guild) {
   if (member?.roles?.cache) memberRoleIds = [...member.roles.cache.keys()];
   else if (Array.isArray(member?.roles)) memberRoleIds = member.roles;
   return memberRoleIds.map((id) => String(id)).some((id) => allowedRoleIds.includes(id));
+}
+
+function shouldShowManagerStats({ points, guildId, guild, targetId, targetMember = null }) {
+  if (!targetMember) return false;
+  return canUseGeneralPointsCommand(targetMember, guildId, guild);
 }
 
 function hasGlobalAdminAccess(member, message, BOT_OWNERS = [], ADMIN_ROLES = []) {
@@ -2181,7 +2253,7 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
     return;
   }
 
-  if (!hasStaffAccess(interaction.member, config, ticket?.reasonKey, ticket)) {
+  if (!hasStrictClaimAccess(interaction.member, config, ticket?.reasonKey)) {
     await interaction.editReply(buildTicketMessagePayload('Alert', '**ليس لديك صلاحية الاستلام.**', { user: interaction.user }));
     return;
   }
@@ -2299,7 +2371,7 @@ async function handleClaimFromRequest(interaction, reqId) {
     ({ panelId, config, tickets, pendingRequests, req } = requestContext);
   }
 
-  if (!hasStaffAccess(interaction.member, config, req?.reasonKey)) {
+  if (!hasStrictClaimAccess(interaction.member, config, req?.reasonKey)) {
     await interaction.editReply(buildTicketMessagePayload('Alert', '**ليس لديك صلاحية الاستلام.**', { user: interaction.user }));
     return;
   }
@@ -2433,6 +2505,7 @@ async function closeTicketCore({
   ticket,
   interaction = null,
   closedByLabel = null,
+  closedByUserId = null,
   autoClose = false,
   silentCloseNotice = false
 }) {
@@ -2443,7 +2516,25 @@ async function closeTicketCore({
   ticket.deletedChannel = !config.keepClosedTickets;
   ticket.memberHidden = true;
   ticket.claimerHidden = true;
+  ticket.closedBy = closedByUserId || null;
   delete ticket.autoCloseWarningSentAt;
+
+  if (!autoClose && closedByUserId) {
+    const closerMember = await resolveGuildMember(channel.guild, closedByUserId);
+    if (closerMember && canUseGeneralPointsCommand(closerMember, guildId, channel.guild)) {
+      const points = loadPoints();
+      const appended = recordManagerClosePoint(points, {
+        guildId,
+        panelId,
+        channelId,
+        actorId: closedByUserId,
+        targetId: ticket.memberId || '',
+        at: ticket.closedAt
+      });
+      if (appended) savePoints(points);
+    }
+  }
+
   setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
 
   channel.ticketMeta = ticket;
@@ -2634,7 +2725,8 @@ async function handleClose(interaction, guildId, panelId, channelId) {
     pendingRequests,
     ticket,
     interaction,
-    closedByLabel: `<@${interaction.user.id}>`
+    closedByLabel: `<@${interaction.user.id}>`,
+    closedByUserId: interaction.user.id
   });
 }
 
@@ -2659,6 +2751,7 @@ async function handleCloseAliasMessage(message) {
     ticket,
     interaction: null,
     closedByLabel: `<@${message.author.id}>`,
+    closedByUserId: message.author.id,
     silentCloseNotice: true
   });
   return true;
@@ -2812,7 +2905,8 @@ function buildMemberPointsEmbed({ requester, targetUser, targetId, guildId, targ
   const points = loadPoints();
   const totalPoints = getUserTotalPoints(points, targetId);
   const topAwarder = getTopPointAwarder(points, targetId);
-  const managerPoints = getManagerEvaluationCount(points, targetId);
+  const managerPoints = getManagerPointCount(points, targetId);
+  const managerClosedTickets = getManagerEvaluationCount(points, targetId);
   const { guild: guildData } = getGuildData(guildId);
   let claimedTickets = 0;
   for (const panel of Object.values(guildData?.panels || {})) {
@@ -2825,7 +2919,7 @@ function buildMemberPointsEmbed({ requester, targetUser, targetId, guildId, targ
       ? [
         `**العضو :** <@${targetId}>`,
         `**نقاطه كمسؤول :** ${managerPoints}m`,
-        `**عدد التكتات الذي قيمها :** ${managerPoints}`,
+        `**عدد التكتات الذي اقفلها :** ${managerClosedTickets}`,
         note ? `\n${note}` : null
       ].filter(Boolean).join('\n')
       : [
@@ -2845,7 +2939,13 @@ async function handleMyTicketPointsMessage(message, targetInput = null) {
   const targetId = normalizeId(targetInput) || message.author.id;
   const targetUser = await message.client.users.fetch(targetId).catch(() => null);
   const targetMember = await resolveGuildMember(message.guild, targetId);
-  const targetIsResponsible = targetMember ? canUseGeneralPointsCommand(targetMember, message.guild.id, message.guild) : false;
+  const targetIsResponsible = shouldShowManagerStats({
+    points: loadPoints(),
+    guildId: message.guild.id,
+    guild: message.guild,
+    targetId,
+    targetMember
+  });
   const embed = buildMemberPointsEmbed({
     requester: message.author,
     targetUser,
@@ -2881,12 +2981,12 @@ function applyManualPointsDelta({ targetId, actorId, delta }) {
 
 function applyManagerPointsDelta({ targetId, delta }) {
   const points = loadPoints();
-  if (!Array.isArray(points.__managerAudit)) points.__managerAudit = [];
+  if (!Array.isArray(points.__managerPointsAudit)) points.__managerPointsAudit = [];
   const amount = Math.max(0, Math.abs(Number(delta || 0)));
   if (!amount) return 0;
   if (delta > 0) {
     for (let i = 0; i < amount; i += 1) {
-      points.__managerAudit.push({
+      points.__managerPointsAudit.push({
         ticketKey: `manual_manager_${Date.now()}_${i}`,
         actorId: targetId,
         targetId: targetId,
@@ -2899,9 +2999,9 @@ function applyManagerPointsDelta({ targetId, delta }) {
   }
 
   let removed = 0;
-  for (let i = points.__managerAudit.length - 1; i >= 0 && removed < amount; i -= 1) {
-    if (String(points.__managerAudit[i]?.actorId || '') === String(targetId)) {
-      points.__managerAudit.splice(i, 1);
+  for (let i = points.__managerPointsAudit.length - 1; i >= 0 && removed < amount; i -= 1) {
+    if (String(points.__managerPointsAudit[i]?.actorId || '') === String(targetId)) {
+      points.__managerPointsAudit.splice(i, 1);
       removed += 1;
     }
   }
@@ -2922,7 +3022,13 @@ async function handlePointsAdjustMessage(message, args, { BOT_OWNERS = [] } = {}
   }
   const targetUser = await message.client.users.fetch(targetId).catch(() => null);
   const targetMember = await resolveGuildMember(message.guild, targetId);
-  const targetIsResponsible = targetMember ? canUseGeneralPointsCommand(targetMember, message.guild.id, message.guild) : false;
+  const targetIsResponsible = shouldShowManagerStats({
+    points: loadPoints(),
+    guildId: message.guild.id,
+    guild: message.guild,
+    targetId,
+    targetMember
+  });
   if (targetIsResponsible && !actorIsOwner) {
     return message.reply(buildTicketMessagePayload('No perms', '**لا يمكن تعديل نقاط المسؤولين إلا بواسطة مسؤولين المسؤوليات.**')).catch(() => {});
   }
@@ -3055,7 +3161,13 @@ async function handleTopPointsMessage(message, page = 1) {
 
 async function handleTopManagersMessage(message, page = 1) {
   const points = loadPoints();
-  const entries = getTopManagers(points, 1000);
+  const rawEntries = getTopManagers(points, 1000);
+  const entries = [];
+  for (const entry of rawEntries) {
+    const member = await resolveGuildMember(message.guild, entry.userId, 1200);
+    if (!member || !canUseGeneralPointsCommand(member, message.guild.id, message.guild)) continue;
+    entries.push(entry);
+  }
   const safePage = Math.max(1, Number(page || 1));
   const pageSize = 10;
   const totalPages = Math.max(1, Math.ceil(entries.length / pageSize));
@@ -3066,7 +3178,7 @@ async function handleTopManagersMessage(message, page = 1) {
     ? pageEntries.map((entry, index) => `#${start + index + 1} - <@${entry.userId}> : ${entry.total}m`).join('\n\n')
     : '**لا توجد نقاط مسؤولين مسجلة حالياً.**';
   const embed = makeTicketEmbed('توب المسؤولين', description, { user: message.author })
-    .setFooter({ text: `Page ${currentPage}/${totalPages} • تقييماتك : ${getManagerEvaluationCount(points, message.author.id)}m` });
+    .setFooter({ text: `Page ${currentPage}/${totalPages} • نقاطك كمسؤول : ${getManagerPointCount(points, message.author.id)}m` });
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`ticket_tm_prev_${message.author.id}_${currentPage}`).setLabel('السابق').setStyle(ButtonStyle.Secondary).setDisabled(currentPage <= 1),
     new ButtonBuilder().setCustomId(`ticket_tm_next_${message.author.id}_${currentPage}`).setLabel('التالي').setStyle(ButtonStyle.Primary).setDisabled(currentPage >= totalPages)
@@ -3118,6 +3230,7 @@ async function handleResetPointsMessage(message, { ownerOnly = false } = {}) {
     const nextPoints = loadPoints();
     if (ownerOnly) {
       nextPoints.__managerAudit = [];
+      nextPoints.__managerPointsAudit = [];
     } else {
       for (const key of Object.keys(nextPoints)) {
         if (!key.startsWith('__')) delete nextPoints[key];
@@ -3378,7 +3491,7 @@ async function handleReassignClaim(interaction, guildId, panelId, channelId) {
     await interaction.editReply(buildTicketMessagePayload('Error', '**لا توجد بيانات لهذا التكت.**'));
     return;
   }
-  if (!hasStaffAccess(interaction.member, config, ticket?.reasonKey, ticket)) {
+  if (!hasStrictClaimAccess(interaction.member, config, ticket?.reasonKey)) {
     await interaction.editReply(buildTicketMessagePayload('No perms', '**ليس لديك صلاحية الاستلام.**'));
     return;
   }
@@ -5378,7 +5491,25 @@ function registerHandlers(client) {
             source: 'ticket_button',
             at: now
           });
-          ticket.pointAward = { actorId: interaction.user.id, delta: actualDelta, respName, targetId, at: now, auditId: now };
+          if (canUseGeneralPointsCommand(interaction.member, guildId, interaction.guild)) {
+            recordManagerPoint(points, {
+              guildId,
+              panelId: resolvedPanelId,
+              channelId,
+              actorId: interaction.user.id,
+              targetId: ticket.memberId || '',
+              at: now
+            });
+          }
+          ticket.pointAward = {
+            actorId: interaction.user.id,
+            delta: actualDelta,
+            respName,
+            targetId,
+            at: now,
+            auditId: now,
+            managerPointKey: `${guildId}:${resolvedPanelId}:${channelId}`
+          };
           savePoints(points);
 
           await syncTicketLogMessage({
@@ -5424,6 +5555,7 @@ function registerHandlers(client) {
             delete bucket[existingAward.at];
           }
           removePointAuditEntry(points, existingAward.auditId || existingAward.at);
+          removeManagerPointEntry(points, existingAward.managerPointKey || `${guildId}:${resolvedPanelId}:${channelId}`);
           delete ticket.pointAward;
           savePoints(points);
           setGuildData(guildId, config, tickets, pendingRequests || {}, resolvedPanelId);
