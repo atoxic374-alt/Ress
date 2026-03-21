@@ -1099,6 +1099,56 @@ function drawRoundedRect(ctx, x, y, w, h, r, fillStyle, shadow = null, strokeSty
   ctx.restore();
 }
 
+async function drawCircularServerIcon(ctx, guild, centerX, centerY, size, accent) {
+  const ringSize = size + 10;
+  const ringGradient = ctx.createLinearGradient(centerX - ringSize, centerY - ringSize, centerX + ringSize, centerY + ringSize);
+  ringGradient.addColorStop(0, toRgba(mixHexColors(accent, '#ffffff', 0.35), 0.95));
+  ringGradient.addColorStop(1, toRgba(mixHexColors(accent, '#0a1323', 0.45), 0.92));
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, ringSize / 2, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.fillStyle = ringGradient;
+  ctx.shadowColor = toRgba(accent, 0.24);
+  ctx.shadowBlur = 18;
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, (size + 4) / 2, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(10,16,31,0.88)';
+  ctx.fill();
+  ctx.restore();
+
+  const iconUrl = guild.iconURL({ extension: 'png', size: 256 });
+  if (!iconUrl) return false;
+
+  const image = await loadImage(iconUrl).catch(() => null);
+  if (!image) return false;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, size / 2, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+  ctx.drawImage(image, centerX - (size / 2), centerY - (size / 2), size, size);
+  ctx.restore();
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, size / 2, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.restore();
+
+  return true;
+}
+
 function drawWrappedText(ctx, text, x, y, maxWidth, lineHeight, maxLines = 2) {
   const words = String(text || '').split(/\s+/);
   const lines = [];
@@ -1323,6 +1373,9 @@ async function buildGeneralControlCard(guild) {
   const rightFooterRightX = panelX + panelWidth - footerPadding;
   const footerLabelFont = `600 27px ${LATIN_FONT_FAMILY}`;
   const footerValueFont = `700 30px ${LATIN_FONT_FAMILY}`;
+  const footerIconCenterX = width / 2;
+  const footerIconCenterY = panelY + panelHeight - 94;
+  const footerIconSize = 58;
 
   ctx.textBaseline = 'middle';
   ctx.shadowColor = 'rgba(0,0,0,0.18)';
@@ -1349,6 +1402,8 @@ async function buildGeneralControlCard(guild) {
   ctx.fillStyle = 'rgba(255,255,255,0.72)';
   const serverLabelWidth = ctx.measureText('Server :').width;
   ctx.fillText('Server :', serverNameX - serverLabelWidth - 16, footerLineY);
+
+  await drawCircularServerIcon(ctx, guild, footerIconCenterX, footerIconCenterY, footerIconSize, accent);
 
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(255,255,255,0.52)';
