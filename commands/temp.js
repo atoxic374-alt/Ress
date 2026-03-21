@@ -1038,9 +1038,10 @@ async function buildGeneralControlCard(guild, statusText) {
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
   const accent = await resolveControlCardAccent(guild);
-  const accentSoft = mixHexColors(accent, '#ffffff', 0.18);
-  const accentDeep = mixHexColors(accent, '#08101f', 0.72);
-  const accentGlow = mixHexColors(accent, '#dfe8ff', 0.3);
+  const accentSoft = mixHexColors(accent, '#ffffff', 0.2);
+  const accentDeep = mixHexColors(accent, '#08101f', 0.68);
+  const accentGlow = mixHexColors(accent, '#dfe8ff', 0.34);
+  const accentPanel = mixHexColors(accent, '#111a2d', 0.45);
 
   const background = ctx.createLinearGradient(0, 0, width, height);
   background.addColorStop(0, '#050816');
@@ -1050,28 +1051,35 @@ async function buildGeneralControlCard(guild, statusText) {
   ctx.fillStyle = background;
   ctx.fillRect(0, 0, width, height);
 
-  const glow = ctx.createRadialGradient(width * 0.76, height * 0.16, 80, width * 0.76, height * 0.16, 460);
-  glow.addColorStop(0, toRgba(accentGlow, 0.22));
-  glow.addColorStop(0.35, toRgba(accent, 0.07));
+  const glow = ctx.createRadialGradient(width * 0.76, height * 0.16, 80, width * 0.76, height * 0.16, 500);
+  glow.addColorStop(0, toRgba(accentGlow, 0.3));
+  glow.addColorStop(0.32, toRgba(accent, 0.11));
   glow.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, width, height);
 
-  const edgeGlowLeft = ctx.createRadialGradient(120, height - 120, 40, 120, height - 120, 240);
-  edgeGlowLeft.addColorStop(0, toRgba(accentSoft, 0.14));
+  const edgeGlowLeft = ctx.createRadialGradient(120, height - 120, 40, 120, height - 120, 260);
+  edgeGlowLeft.addColorStop(0, toRgba(accentSoft, 0.18));
   edgeGlowLeft.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = edgeGlowLeft;
   ctx.fillRect(0, 0, width, height);
 
-  const edgeGlowRight = ctx.createRadialGradient(width - 140, 120, 30, width - 140, 120, 220);
-  edgeGlowRight.addColorStop(0, toRgba(accentSoft, 0.12));
+  const edgeGlowRight = ctx.createRadialGradient(width - 140, 120, 30, width - 140, 120, 240);
+  edgeGlowRight.addColorStop(0, toRgba(accentSoft, 0.16));
   edgeGlowRight.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = edgeGlowRight;
   ctx.fillRect(0, 0, width, height);
 
-  drawRoundedRect(ctx, 34, 34, width - 68, height - 68, 40, 'rgba(7,11,24,0.58)', { color: toRgba(accent, 0.12), blur: 58, x: 0, y: 20 }, 'rgba(255,255,255,0.08)');
-  drawRoundedRect(ctx, 58, 58, width - 116, 220, 34, 'rgba(255,255,255,0.075)', { color: toRgba(accentSoft, 0.12), blur: 18, x: 0, y: -4 }, 'rgba(255,255,255,0.12)');
-  drawRoundedRect(ctx, 74, 308, width - 148, height - 392, 32, 'rgba(255,255,255,0.038)', { color: toRgba(accent, 0.09), blur: 28, x: 0, y: 14 }, 'rgba(255,255,255,0.085)');
+  const panelAccentGlow = ctx.createLinearGradient(74, 308, width - 74, height - 84);
+  panelAccentGlow.addColorStop(0, toRgba(accentPanel, 0.08));
+  panelAccentGlow.addColorStop(0.5, toRgba(accentGlow, 0.12));
+  panelAccentGlow.addColorStop(1, toRgba(accentPanel, 0.06));
+  ctx.fillStyle = panelAccentGlow;
+  ctx.fillRect(80, 312, width - 160, height - 400);
+
+  drawRoundedRect(ctx, 34, 34, width - 68, height - 68, 40, 'rgba(7,11,24,0.58)', { color: toRgba(accent, 0.16), blur: 62, x: 0, y: 20 }, 'rgba(255,255,255,0.08)');
+  drawRoundedRect(ctx, 58, 58, width - 116, 220, 34, 'rgba(255,255,255,0.075)', { color: toRgba(accentSoft, 0.16), blur: 20, x: 0, y: -4 }, 'rgba(255,255,255,0.12)');
+  drawRoundedRect(ctx, 74, 308, width - 148, height - 392, 32, 'rgba(255,255,255,0.042)', { color: toRgba(accent, 0.14), blur: 34, x: 0, y: 14 }, 'rgba(255,255,255,0.085)');
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -1150,41 +1158,45 @@ async function buildGeneralControlCard(guild, statusText) {
   });
 
   const roomCount = Object.keys(getRoomStore(guild.id)).length;
-  const footerY = panelY + panelHeight - 74;
-  const footerValueY = footerY + 34;
+  const footerLineY = panelY + panelHeight - 78;
   const footerPadding = 66;
-  const footerBlockWidth = 320;
+  const footerBlockWidth = 420;
   const leftFooterX = panelX + footerPadding;
-  const rightFooterX = panelX + panelWidth - footerPadding - footerBlockWidth;
-  const footerTitleFont = `600 27px ${LATIN_FONT_FAMILY}`;
-  const footerValueFont = `700 26px ${ARABIC_FONT_FAMILY}`;
+  const rightFooterRightX = panelX + panelWidth - footerPadding;
+  const footerLabelFont = `600 27px ${LATIN_FONT_FAMILY}`;
+  const footerValueFont = `700 30px ${LATIN_FONT_FAMILY}`;
 
-  ctx.textBaseline = 'alphabetic';
+  ctx.textBaseline = 'middle';
   ctx.shadowColor = 'rgba(0,0,0,0.25)';
   ctx.shadowBlur = 10;
 
   ctx.textAlign = 'left';
   ctx.fillStyle = 'rgba(255,255,255,0.72)';
-  ctx.font = footerTitleFont;
-  ctx.fillText('All rooms :', leftFooterX, footerY);
+  ctx.font = footerLabelFont;
+  ctx.fillText('All rooms :', leftFooterX, footerLineY);
+  const allRoomsLabelWidth = ctx.measureText('All rooms :').width;
   ctx.fillStyle = '#ffffff';
   ctx.font = footerValueFont;
-  ctx.fillText(String(roomCount), leftFooterX, footerValueY);
+  ctx.fillText(String(roomCount), leftFooterX + allRoomsLabelWidth + 16, footerLineY);
 
-  ctx.textAlign = 'right';
-  ctx.fillStyle = 'rgba(255,255,255,0.72)';
-  ctx.font = footerTitleFont;
-  ctx.fillText('Server :', rightFooterX + footerBlockWidth, footerY);
-  ctx.fillStyle = '#ffffff';
-  const serverNameSize = fitTextSize(ctx, guild.name || 'Unknown Server', footerBlockWidth, 28, 18, LATIN_FONT_FAMILY, '700');
+  const serverName = guild.name || 'Unknown Server';
+  const serverNameSize = fitTextSize(ctx, serverName, footerBlockWidth, 30, 18, LATIN_FONT_FAMILY, '700');
   ctx.font = `700 ${serverNameSize}px ${LATIN_FONT_FAMILY}`;
-  ctx.fillText(guild.name || 'Unknown Server', rightFooterX + footerBlockWidth, footerValueY);
+  const serverNameWidth = ctx.measureText(serverName).width;
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'left';
+  const serverNameX = rightFooterRightX - serverNameWidth;
+  ctx.fillText(serverName, serverNameX, footerLineY);
+  ctx.font = footerLabelFont;
+  ctx.fillStyle = 'rgba(255,255,255,0.72)';
+  const serverLabelWidth = ctx.measureText('Server :').width;
+  ctx.fillText('Server :', serverNameX - serverLabelWidth - 16, footerLineY);
 
   if (statusText) {
     ctx.textAlign = 'center';
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.font = `500 18px ${ARABIC_FONT_FAMILY}`;
-    ctx.fillText(String(statusText), width / 2, panelY + panelHeight - 26);
+    ctx.fillText(String(statusText), width / 2, panelY + panelHeight - 30);
   }
 
   ctx.shadowBlur = 0;
@@ -2043,7 +2055,7 @@ async function handleSettingsButton(interaction) {
     modal.addComponents(new ActionRowBuilder().addComponents(
       new TextInputBuilder()
         .setCustomId('value')
-        .setLabel('Color value مثال: #5865F2 أو rgb(88,101,242) أو gold')
+.setLabel('Color value (#5865F2 / rgb / gold)')
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
         .setValue(config.controlCardCustomColor || '#5865F2')
