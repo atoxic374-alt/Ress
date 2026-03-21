@@ -24,9 +24,11 @@ const DATA_PATH = path.join(__dirname, '..', 'data', 'tempVoiceSystem.json');
 const DEFAULT_CREATOR_NAME = 'Create temp room ...';
 const DEFAULT_DELETE_AFTER_LEAVE_MS = 5 * 60 * 1000;
 const DEFAULT_AUTO_CLEAN_MS = 10 * 60 * 1000;
+const CONTROL_CARD_SIGNATURE = 'By Ahmed';
 const SESSION_TTL_MS = 12 * 60 * 1000;
 const HEARTBEAT_MS = 45000;
-const DATA_VERSION = 2;
+const INVITE_TTL_MS = 60 * 60 * 1000;
+const DATA_VERSION = 3;
 
 const SETTING_CONTROL_KEYS = [
   'open', 'lock', 'show', 'hide', 'invite',
@@ -36,13 +38,13 @@ const SETTING_CONTROL_KEYS = [
 
 const CONTROL_LAYOUT_ORDER = [
   'open', 'lock', 'show', 'hide',
-  'invite', 'allow', 'reject', 'admin',
-  'rename', 'limit', 'region', 'transfer',
-  'music', 'actions'
+  'rename', 'limit', 'allow', 'reject',
+  'region', 'invite', 'admin', 'music',
+  'transfer'
 ];
 
 const LATIN_FONT_FAMILY = '"Segoe UI", "Arial", sans-serif';
-const ARABIC_FONT_FAMILY = '"Noto Sans Arabic", "Segoe UI", "Arial", sans-serif';
+const ARABIC_FONT_FAMILY = '"Cairo", "Tajawal", "Noto Sans Arabic", "Segoe UI", "Arial", sans-serif';
 
 const CONTROL_META = {
   open: { label: 'Open', description: 'فتح الروم والسماح بالدخول' },
@@ -62,10 +64,10 @@ const CONTROL_META = {
 };
 
 const ACTION_OPTIONS = [
-  { label: 'Voice Mute', value: 'voice_mute', description: 'منع العضو من التحدث' },
-  { label: 'Voice Unmute', value: 'voice_unmute', description: 'فك الميوت الصوتي' },
-  { label: 'Text Mute', value: 'text_mute', description: 'منع العضو من الكتابة' },
-  { label: 'Text Unmute', value: 'text_unmute', description: 'فك الميوت الكتابي' },
+  { label: 'Mute Member', value: 'mute_member', description: 'إعطاء ميوت صوتي أو كتابي أو الاثنين' },
+  { label: 'Unmute', value: 'unmute_member', description: 'إزالة الميوت عن عضو محدد' },
+  { label: 'Mute All', value: 'mute_all', description: 'إعطاء ميوت لكل الموجودين حالياً في الروم' },
+  { label: 'Unmute All', value: 'unmute_all', description: 'إزالة الميوت من كل الأعضاء' },
   { label: 'Kick', value: 'kick', description: 'طرد العضو من الروم' },
   { label: 'Ban', value: 'ban', description: 'حظر العضو من الروم' },
   { label: 'Unban', value: 'unban', description: 'فك الحظر من الروم' }
@@ -114,9 +116,12 @@ function migrateDataStructure(raw) {
   for (const guildConfig of Object.values(migrated.guilds)) {
     if (!guildConfig || typeof guildConfig !== 'object') continue;
     if (!guildConfig.enabledControls) guildConfig.enabledControls = defaultEnabledControls();
-    if (!guildConfig.controlStatus) guildConfig.controlStatus = 'جاهز للاستخدام — ادخل رومك المؤقت ثم استخدم الأزرار هنا.';
+    if (!guildConfig.controlStatus) guildConfig.controlStatus = CONTROL_CARD_SIGNATURE;
     if (!('controlMessageId' in guildConfig)) guildConfig.controlMessageId = null;
     if (!('logChannelId' in guildConfig)) guildConfig.logChannelId = null;
+    if (!('musicChannelId' in guildConfig)) guildConfig.musicChannelId = null;
+    if (!('controlCardColorMode' in guildConfig)) guildConfig.controlCardColorMode = 'avatar';
+    if (!('controlCardCustomColor' in guildConfig)) guildConfig.controlCardCustomColor = null;
   }
 
   for (const profile of Object.values(migrated.users)) {
@@ -130,6 +135,16 @@ function migrateDataStructure(raw) {
     if (!Array.isArray(profile.allowHistory)) profile.allowHistory = [];
     if (!Array.isArray(profile.moderationHistory)) profile.moderationHistory = [];
     if (!Array.isArray(profile.ownershipHistory)) profile.ownershipHistory = [];
+    if (!profile.allowedEntries || typeof profile.allowedEntries !== 'object') profile.allowedEntries = {};
+    if (!profile.managerEntries || typeof profile.managerEntries !== 'object') profile.managerEntries = {};
+    if (!profile.voiceMutedEntries || typeof profile.voiceMutedEntries !== 'object') profile.voiceMutedEntries = {};
+    if (!profile.textMutedEntries || typeof profile.textMutedEntries !== 'object') profile.textMutedEntries = {};
+    if (!profile.bannedEntries || typeof profile.bannedEntries !== 'object') profile.bannedEntries = {};
+    if (!profile.pendingInvites || typeof profile.pendingInvites !== 'object') profile.pendingInvites = {};
+    if (!Array.isArray(profile.roomNameRotationNames)) profile.roomNameRotationNames = [];
+    if (!Number.isFinite(profile.roomNameRotationIntervalMs)) profile.roomNameRotationIntervalMs = 0;
+    if (!Number.isFinite(profile.roomNameRotationIndex)) profile.roomNameRotationIndex = 0;
+    if (!Number.isFinite(profile.roomNameRotationNextAt)) profile.roomNameRotationNextAt = 0;
     if (!('lastKnownDisplayName' in profile)) profile.lastKnownDisplayName = null;
     if (!('lastUsedAt' in profile)) profile.lastUsedAt = 0;
   }
@@ -195,7 +210,10 @@ function getGuildConfig(guildId) {
       controlChannelId: null,
       controlMessageId: null,
       logChannelId: null,
-      controlStatus: 'جاهز للاستخدام — ادخل رومك المؤقت ثم استخدم الأزرار هنا.',
+      musicChannelId: null,
+      controlCardColorMode: 'avatar',
+      controlCardCustomColor: null,
+      controlStatus: CONTROL_CARD_SIGNATURE,
       autoCleanEnabled: false,
       autoCleanIntervalMs: DEFAULT_AUTO_CLEAN_MS,
       maxRoomAgeMs: 0,
@@ -211,7 +229,7 @@ function getGuildConfig(guildId) {
   }
 
   if (typeof data.guilds[guildId].controlStatus !== 'string') {
-    data.guilds[guildId].controlStatus = 'جاهز للاستخدام — ادخل رومك المؤقت ثم استخدم الأزرار هنا.';
+    data.guilds[guildId].controlStatus = CONTROL_CARD_SIGNATURE;
     scheduleSave();
   }
 
@@ -239,11 +257,54 @@ function getUserProfile(guildId, userId) {
       managerHistory: [],
       allowHistory: [],
       moderationHistory: [],
-      ownershipHistory: []
+      ownershipHistory: [],
+      allowedEntries: {},
+      managerEntries: {},
+      voiceMutedEntries: {},
+      textMutedEntries: {},
+      bannedEntries: {},
+      pendingInvites: {},
+      roomNameRotationNames: [],
+      roomNameRotationIntervalMs: 0,
+      roomNameRotationIndex: 0,
+      roomNameRotationNextAt: 0
     };
     scheduleSave();
   }
+  if (!data.users[key].allowedEntries || typeof data.users[key].allowedEntries !== 'object') data.users[key].allowedEntries = {};
+  if (!data.users[key].managerEntries || typeof data.users[key].managerEntries !== 'object') data.users[key].managerEntries = {};
+  if (!data.users[key].voiceMutedEntries || typeof data.users[key].voiceMutedEntries !== 'object') data.users[key].voiceMutedEntries = {};
+  if (!data.users[key].textMutedEntries || typeof data.users[key].textMutedEntries !== 'object') data.users[key].textMutedEntries = {};
+  if (!data.users[key].bannedEntries || typeof data.users[key].bannedEntries !== 'object') data.users[key].bannedEntries = {};
+  if (!data.users[key].pendingInvites || typeof data.users[key].pendingInvites !== 'object') data.users[key].pendingInvites = {};
+  if (!Array.isArray(data.users[key].roomNameRotationNames)) data.users[key].roomNameRotationNames = [];
+  if (!Number.isFinite(data.users[key].roomNameRotationIntervalMs)) data.users[key].roomNameRotationIntervalMs = 0;
+  if (!Number.isFinite(data.users[key].roomNameRotationIndex)) data.users[key].roomNameRotationIndex = 0;
+  if (!Number.isFinite(data.users[key].roomNameRotationNextAt)) data.users[key].roomNameRotationNextAt = 0;
   return data.users[key];
+}
+
+function resetUserProfileState(profile) {
+  profile.roomNameTemplate = null;
+  profile.allowedUsers = [];
+  profile.allowedEntries = {};
+  profile.pendingInvites = {};
+  profile.bannedUsers = [];
+  profile.bannedEntries = {};
+  profile.managers = [];
+  profile.managerEntries = {};
+  profile.locked = false;
+  profile.hidden = false;
+  profile.userLimit = 0;
+  profile.rtcRegion = null;
+  profile.voiceMutedUsers = [];
+  profile.textMutedUsers = [];
+  profile.voiceMutedEntries = {};
+  profile.textMutedEntries = {};
+  profile.roomNameRotationNames = [];
+  profile.roomNameRotationIntervalMs = 0;
+  profile.roomNameRotationIndex = 0;
+  profile.roomNameRotationNextAt = 0;
 }
 
 function getRoomStore(guildId) {
@@ -310,6 +371,14 @@ function parseFlexibleDuration(input) {
   return null;
 }
 
+function parseCommaSeparatedNames(input) {
+  return String(input || '')
+    .split(',')
+    .map(entry => sanitizeRoomName(entry, ''))
+    .filter(Boolean)
+    .slice(0, 10);
+}
+
 function formatDuration(ms) {
   if (!ms || ms <= 0) return '**بدون مدة**';
   const totalSeconds = Math.floor(ms / 1000);
@@ -344,6 +413,345 @@ function pushLimitedHistory(list, entry, limit = 12) {
   finalList.unshift(entry);
   if (finalList.length > limit) finalList.length = limit;
   return finalList;
+}
+
+function setTimedAccessEntry(collection, userId, value = {}) {
+  collection[userId] = {
+    grantedAt: value.grantedAt || Date.now(),
+    grantedBy: value.grantedBy || null,
+    expiresAt: value.expiresAt || null,
+    source: value.source || 'manual'
+  };
+}
+
+function setTimedModerationEntry(collection, userId, value = {}) {
+  collection[userId] = {
+    at: value.at || Date.now(),
+    by: value.by || null,
+    expiresAt: value.expiresAt || null
+  };
+}
+
+function setTimedBanEntry(profile, userId, value = {}) {
+  if (!profile.bannedUsers.includes(userId)) profile.bannedUsers.push(userId);
+  setTimedModerationEntry(profile.bannedEntries, userId, value);
+}
+
+function removeTimedAccessEntry(profile, type, userId) {
+  if (type === 'allow') {
+    profile.allowedUsers = profile.allowedUsers.filter(id => id !== userId);
+    if (profile.allowedEntries) delete profile.allowedEntries[userId];
+  }
+  if (type === 'admin') {
+    profile.managers = profile.managers.filter(id => id !== userId);
+    if (profile.managerEntries) delete profile.managerEntries[userId];
+  }
+}
+
+function applyMuteScopeToProfile(profile, userId, scope, expiresAt = null, actorId = null) {
+  if (scope === 'voice' || scope === 'all') {
+    if (!profile.voiceMutedUsers.includes(userId)) profile.voiceMutedUsers.push(userId);
+    setTimedModerationEntry(profile.voiceMutedEntries, userId, { by: actorId, expiresAt });
+  }
+  if (scope === 'text' || scope === 'all') {
+    if (!profile.textMutedUsers.includes(userId)) profile.textMutedUsers.push(userId);
+    setTimedModerationEntry(profile.textMutedEntries, userId, { by: actorId, expiresAt });
+  }
+}
+
+function removeMuteScopeFromProfile(profile, userId, scope) {
+  if (scope === 'voice' || scope === 'all') {
+    profile.voiceMutedUsers = profile.voiceMutedUsers.filter(id => id !== userId);
+    if (profile.voiceMutedEntries) delete profile.voiceMutedEntries[userId];
+  }
+  if (scope === 'text' || scope === 'all') {
+    profile.textMutedUsers = profile.textMutedUsers.filter(id => id !== userId);
+    if (profile.textMutedEntries) delete profile.textMutedEntries[userId];
+  }
+}
+
+function removeBanFromProfile(profile, userId) {
+  profile.bannedUsers = profile.bannedUsers.filter(id => id !== userId);
+  if (profile.bannedEntries) delete profile.bannedEntries[userId];
+}
+
+function listMutedTargets(profile, scope) {
+  const voice = new Set(profile.voiceMutedUsers || []);
+  const text = new Set(profile.textMutedUsers || []);
+  if (scope === 'voice') return [...voice];
+  if (scope === 'text') return [...text];
+  return [...new Set([...voice, ...text])];
+}
+
+function getBanSummary(profile, userId) {
+  const hasBan = (profile.bannedUsers || []).includes(userId);
+  if (!hasBan) return { active: false, remaining: null, expiresAt: null };
+  const entry = profile.bannedEntries?.[userId] || null;
+  return {
+    active: true,
+    remaining: describePenaltyRemaining(entry?.expiresAt),
+    expiresAt: entry?.expiresAt || null
+  };
+}
+
+function isProtectedModerationTarget(member, ownerId, profile) {
+  if (!member) return false;
+  return Boolean(
+    member.id === ownerId ||
+    member.user?.bot ||
+    member.permissions?.has?.(PermissionsBitField.Flags.Administrator) ||
+    profile.managers.includes(member.id)
+  );
+}
+
+function validateModerationTarget({ member, user, ownerId, profile, actionType, actorId }) {
+  const targetId = member?.id || user?.id || null;
+  if (!targetId) return { ok: false, message: '❌ تعذر تحديد العضو المطلوب.' };
+  if (targetId === ownerId) return { ok: false, message: '❌ لا يمكن استهداف مالك الروم من هذا المسار.' };
+  if (member?.user?.bot || user?.bot) return { ok: false, message: `❌ لا يمكن ${actionType} بوت من هذا المسار.` };
+  if (member?.permissions?.has?.(PermissionsBitField.Flags.Administrator)) {
+    return { ok: false, message: `❌ لا يمكن ${actionType} إداري السيرفر من هذا المسار.` };
+  }
+  if (profile.managers.includes(targetId) && actorId !== ownerId) {
+    return { ok: false, message: `❌ لا يمكن ${actionType} مسؤول الروم إلا بواسطة المالك مباشرة.` };
+  }
+  return { ok: true };
+}
+
+async function disconnectMemberFromVoice(member, reason) {
+  if (!member?.voice?.channelId) return true;
+  const guild = member.guild;
+  const memberId = member.id;
+  await member.voice.disconnect(reason).catch(() => member.voice.setChannel(null).catch(() => null));
+  const refreshed = await guild.members.fetch(memberId).catch(() => member);
+  return !refreshed?.voice?.channelId;
+}
+
+async function moveMemberToRoom(member, roomChannel) {
+  if (!member?.voice?.channelId || !roomChannel) return false;
+  const guild = member.guild;
+  const memberId = member.id;
+  await member.voice.setChannel(roomChannel).catch(() => null);
+  const refreshed = await guild.members.fetch(memberId).catch(() => member);
+  return refreshed?.voice?.channelId === roomChannel.id;
+}
+
+function isRoomAccessRestricted(profile) {
+  return Boolean(profile.locked || profile.hidden);
+}
+
+function canMemberBypassTempRestrictions(member, ownerId, profile) {
+  return Boolean(
+    member && (
+      member.id === ownerId ||
+      profile.allowedUsers.includes(member.id) ||
+      profile.managers.includes(member.id) ||
+      member.permissions.has(PermissionsBitField.Flags.Administrator)
+    )
+  );
+}
+
+function getScopeLabel(scope) {
+  return scope === 'voice' ? 'صوتي' : scope === 'text' ? 'كتابي' : 'الكل';
+}
+
+function getRoomMemberPriority(member, ownerId, profile) {
+  if (!member) return 99;
+  if (member.id === ownerId) return 0;
+  if (member.permissions.has(PermissionsBitField.Flags.Administrator)) return 1;
+  if (profile.managers.includes(member.id)) return 2;
+  if (profile.allowedUsers.includes(member.id)) return 3;
+  return 4;
+}
+
+function getModeratableRoomMembers(roomChannel, ownerId, profile) {
+  return roomChannel.members
+    .filter(member => !isProtectedModerationTarget(member, ownerId, profile))
+    .sort((a, b) => getRoomMemberPriority(a, ownerId, profile) - getRoomMemberPriority(b, ownerId, profile));
+}
+
+function normalizeStatusText(text) {
+  const normalized = String(text || CONTROL_CARD_SIGNATURE).trim().replace(/\s+/g, ' ');
+  return normalized.slice(0, 140) || CONTROL_CARD_SIGNATURE;
+}
+
+function getTempButtonStyle(key = null) {
+  return key === 'transfer' ? ButtonStyle.Danger : ButtonStyle.Secondary;
+}
+
+function buildScopeButtons(baseAction, ownerId) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`${baseAction}:${ownerId}:voice`).setLabel('صوتي').setStyle(getTempButtonStyle()),
+      new ButtonBuilder().setCustomId(`${baseAction}:${ownerId}:text`).setLabel('كتابي').setStyle(getTempButtonStyle()),
+      new ButtonBuilder().setCustomId(`${baseAction}:${ownerId}:all`).setLabel('الكل').setStyle(getTempButtonStyle())
+    )
+  ];
+}
+
+function describePenaltyRemaining(expiresAt) {
+  if (!expiresAt) return 'دائمة';
+  const remaining = expiresAt - Date.now();
+  return remaining > 0 ? formatDuration(remaining) : 'منتهية';
+}
+
+function getMutePenaltySummary(profile, userId, scope) {
+  const voiceEntry = profile.voiceMutedEntries?.[userId] || null;
+  const textEntry = profile.textMutedEntries?.[userId] || null;
+  const hasVoice = (profile.voiceMutedUsers || []).includes(userId);
+  const hasText = (profile.textMutedUsers || []).includes(userId);
+
+  if (scope === 'voice' && hasVoice) {
+    return { active: true, label: 'ميوت صوتي', remaining: describePenaltyRemaining(voiceEntry?.expiresAt), parts: [`صوتي: ${describePenaltyRemaining(voiceEntry?.expiresAt)}`] };
+  }
+  if (scope === 'text' && hasText) {
+    return { active: true, label: 'ميوت كتابي', remaining: describePenaltyRemaining(textEntry?.expiresAt), parts: [`كتابي: ${describePenaltyRemaining(textEntry?.expiresAt)}`] };
+  }
+
+  const parts = [];
+  if (hasVoice) parts.push(`صوتي: ${describePenaltyRemaining(voiceEntry?.expiresAt)}`);
+  if (hasText) parts.push(`كتابي: ${describePenaltyRemaining(textEntry?.expiresAt)}`);
+  if (!parts.length) return { active: false, label: null, remaining: null, parts: [] };
+  return {
+    active: true,
+    label: scope === 'all' && hasVoice && hasText ? 'ميوت كامل' : 'ميوت قائم',
+    remaining: parts.join(' • '),
+    parts
+  };
+}
+
+function buildPenaltyStatusLines(guild, profile, userIds, scope) {
+  return (userIds || []).map(userId => {
+    const summary = getMutePenaltySummary(profile, userId, scope);
+    if (!summary.active) return null;
+    const details = summary.parts.map(part => `- ${part}`).join('\n  ');
+    return `• <@${userId}> — **${getDisplayNameFromGuild(guild, userId)}**\n  ${details}`;
+  }).filter(Boolean);
+}
+
+function buildMuteMemberDurationModal(ownerId, scope) {
+  const modal = new ModalBuilder().setCustomId(`temp_room_action_mute_member_modal:${ownerId}:${scope}`).setTitle('Mute Member');
+  modal.addComponents(new ActionRowBuilder().addComponents(
+    new TextInputBuilder()
+      .setCustomId('duration')
+      .setLabel('Duration: off or 30m / 2h / 7d')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(false)
+      .setValue('off')
+  ));
+  return modal;
+}
+
+function buildMuteAllDurationModal(ownerId, scope) {
+  const modal = new ModalBuilder().setCustomId(`temp_room_action_mute_all_modal:${ownerId}:${scope}`).setTitle('Mute All');
+  modal.addComponents(new ActionRowBuilder().addComponents(
+    new TextInputBuilder()
+      .setCustomId('duration')
+      .setLabel('Duration: off or 30m / 2h / 7d')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(false)
+      .setValue('off')
+  ));
+  return modal;
+}
+
+function buildBanDurationModal(ownerId) {
+  const modal = new ModalBuilder().setCustomId(`temp_room_action_ban_modal:${ownerId}`).setTitle('Ban Member');
+  modal.addComponents(new ActionRowBuilder().addComponents(
+    new TextInputBuilder()
+      .setCustomId('duration')
+      .setLabel('Duration: off or 30m / 2h / 7d')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(false)
+      .setValue('off')
+  ));
+  return modal;
+}
+
+function getOrCreateOverwrite(map, userId) {
+  const key = String(userId);
+  if (!map.has(key)) map.set(key, { id: userId, allow: new Set(), deny: new Set() });
+  return map.get(key);
+}
+
+function addOverwriteAllows(map, userId, permissions = []) {
+  const overwrite = getOrCreateOverwrite(map, userId);
+  permissions.filter(Boolean).forEach(permission => {
+    overwrite.deny.delete(permission);
+    overwrite.allow.add(permission);
+  });
+}
+
+function addOverwriteDenies(map, userId, permissions = []) {
+  const overwrite = getOrCreateOverwrite(map, userId);
+  permissions.filter(Boolean).forEach(permission => {
+    overwrite.allow.delete(permission);
+    overwrite.deny.add(permission);
+  });
+}
+
+function finalizeOverwrites(map) {
+  return [...map.values()].map(entry => ({
+    id: entry.id,
+    allow: [...entry.allow],
+    deny: [...entry.deny]
+  }));
+}
+
+async function cleanupInviteRecord(guild, ownerId, profile, userId, { removeAccess = true, deleteMessage = true } = {}) {
+  const inviteRecord = getActiveInvite(profile, userId);
+  if (!inviteRecord) return false;
+  const user = await guild.client.users.fetch(userId).catch(() => null);
+  if (deleteMessage) await deleteTrackedDmMessage(user, inviteRecord);
+  if (removeAccess && inviteRecord.temporaryAccessGranted) {
+    if (inviteRecord.hadAllowAlready && inviteRecord.previousAllowEntry) {
+      setTimedAccessEntry(profile.allowedEntries, userId, inviteRecord.previousAllowEntry);
+      if (!profile.allowedUsers.includes(userId)) profile.allowedUsers.push(userId);
+    } else {
+      removeTimedAccessEntry(profile, 'allow', userId);
+    }
+  }
+  delete profile.pendingInvites[userId];
+  return true;
+}
+
+function getActiveInvite(profile, userId) {
+  if (!profile.pendingInvites || !profile.pendingInvites[userId]) return null;
+  return profile.pendingInvites[userId];
+}
+
+function getRoomDisplayBaseName(profile, member) {
+  if (Array.isArray(profile.roomNameRotationNames) && profile.roomNameRotationNames.length) {
+    const index = Math.max(0, Math.min(profile.roomNameRotationNames.length - 1, profile.roomNameRotationIndex || 0));
+    return sanitizeRoomName(profile.roomNameRotationNames[index], member?.displayName || member?.user?.username || 'Temp Room');
+  }
+  return sanitizeRoomName(profile.roomNameTemplate || member?.displayName || member?.user?.username, `${member?.displayName || member?.user?.username || 'Temp'} room`);
+}
+
+function getRoomOccupancyCount(roomChannel) {
+  if (!roomChannel?.members) return 0;
+  return roomChannel.members.filter(member => !member.user.bot).size;
+}
+
+async function deleteTrackedDmMessage(user, record) {
+  if (!user || !record?.dmMessageId) return;
+  const channel = record.dmChannelId
+    ? user.client.channels?.cache?.get(record.dmChannelId) || await user.client.channels?.fetch?.(record.dmChannelId).catch(() => null)
+    : await user.createDM().catch(() => null);
+  if (!channel?.messages?.fetch) return;
+  const message = await channel.messages.fetch(record.dmMessageId).catch(() => null);
+  if (message) await message.delete().catch(() => null);
+}
+
+async function notifyUser(user, payload) {
+  if (!user) return null;
+  const dm = await user.createDM().catch(() => null);
+  if (!dm) return null;
+  return dm.send(payload).catch(() => null);
+}
+
+function describeTimedAccess(expiresAt) {
+  return expiresAt ? `حتى ${formatDiscordTimestamp(expiresAt)}` : '**بشكل دائم**';
 }
 
 
@@ -451,6 +859,87 @@ async function getGuildAccent(guild) {
   }
 }
 
+function clampColorChannel(value) {
+  return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function rgbToHex({ r, g, b }) {
+  return `#${[r, g, b].map(channel => clampColorChannel(channel).toString(16).padStart(2, '0')).join('')}`;
+}
+
+function parseCssColor(color) {
+  if (!color) return null;
+  const sample = createCanvas(1, 1);
+  const ctx = sample.getContext('2d');
+  try {
+    ctx.fillStyle = '#000000';
+    ctx.fillStyle = String(color).trim();
+    const normalized = ctx.fillStyle;
+    if (typeof normalized !== 'string') return null;
+    if (normalized.startsWith('#')) {
+      const hex = normalized.length === 4
+        ? `#${normalized.slice(1).split('').map(ch => ch + ch).join('')}`
+        : normalized;
+      if (hex.length === 7) {
+        return {
+          r: parseInt(hex.slice(1, 3), 16),
+          g: parseInt(hex.slice(3, 5), 16),
+          b: parseInt(hex.slice(5, 7), 16)
+        };
+      }
+    }
+    const match = normalized.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+    if (match) {
+      return { r: Number(match[1]), g: Number(match[2]), b: Number(match[3]) };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function normalizeControlCardColorInput(color) {
+  const parsed = parseCssColor(color);
+  return parsed ? rgbToHex(parsed) : null;
+}
+
+function mixHexColors(primary, secondary, ratio = 0.5) {
+  const first = parseCssColor(primary);
+  const second = parseCssColor(secondary);
+  if (!first && !second) return '#5865F2';
+  if (!first) return rgbToHex(second);
+  if (!second) return rgbToHex(first);
+  const weight = Math.max(0, Math.min(1, ratio));
+  return rgbToHex({
+    r: first.r + ((second.r - first.r) * weight),
+    g: first.g + ((second.g - first.g) * weight),
+    b: first.b + ((second.b - first.b) * weight)
+  });
+}
+
+function toRgba(color, alpha = 1) {
+  const parsed = parseCssColor(color) || { r: 88, g: 101, b: 242 };
+  const opacity = Math.max(0, Math.min(1, alpha));
+  return `rgba(${clampColorChannel(parsed.r)}, ${clampColorChannel(parsed.g)}, ${clampColorChannel(parsed.b)}, ${opacity})`;
+}
+
+async function resolveControlCardAccent(guild) {
+  const config = guild ? getGuildConfig(guild.id) : null;
+  if (config?.controlCardColorMode === 'custom') {
+    const custom = normalizeControlCardColorInput(config.controlCardCustomColor);
+    if (custom) return custom;
+  }
+  return getGuildAccent(guild);
+}
+
+function getControlCardColorSummary(config) {
+  if (!config) return '**Avatar**';
+  if (config.controlCardColorMode === 'custom' && config.controlCardCustomColor) {
+    return `**Custom** — \`${config.controlCardCustomColor}\``;
+  }
+  return '**Avatar** — **يتم استخراج اللون من صورة السيرفر**';
+}
+
 function isGuildAdmin(member, BOT_OWNERS = []) {
   return Boolean(
     member && (
@@ -494,6 +983,7 @@ function createSettingsEmbed(guild, actorId) {
   const creator = config.creatorChannelId ? guild.channels.cache.get(config.creatorChannelId) : null;
   const controlRoom = config.controlChannelId ? guild.channels.cache.get(config.controlChannelId) : null;
   const logRoom = config.logChannelId ? guild.channels.cache.get(config.logChannelId) : null;
+  const musicRoom = config.musicChannelId ? guild.channels.cache.get(config.musicChannelId) : null;
 
   return colorManager.createEmbed()
     .setTitle('**Temp Voice Settings**')
@@ -507,6 +997,8 @@ function createSettingsEmbed(guild, actorId) {
       `**Control Room:** ${controlRoom ? `<#${controlRoom.id}>` : '**غير محدد**'}`,
       `**General Control Message:** ${config.controlMessageId ? `**جاهزة**` : '**غير منشأة**'}`,
       `**Log Room:** ${logRoom ? `<#${logRoom.id}>` : '**غير محدد**'}`,
+      `**Music Bot Room:** ${musicRoom ? `<#${musicRoom.id}>` : '**غير محدد**'}`,
+      `**Controller Card Color:** ${getControlCardColorSummary(config)}`,
       `**Auto Clean:** ${boolText(config.autoCleanEnabled)} — ${formatDuration(config.autoCleanIntervalMs)}`,
       `**Room Lifetime:** ${formatDuration(config.maxRoomAgeMs)}`,
       `**Delete After Owner Leaves:** ${formatDuration(config.deleteAfterLeaveMs)}`,
@@ -521,20 +1013,22 @@ function createSettingsEmbed(guild, actorId) {
 function buildSettingsRows(userId) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`temp_settings_category:${userId}`).setLabel('Category').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId(`temp_settings_name:${userId}`).setLabel('Creator Name').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId(`temp_settings_control:${userId}`).setLabel('Control Room').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId(`temp_settings_log:${userId}`).setLabel('Log Room').setStyle(ButtonStyle.Primary)
+      new ButtonBuilder().setCustomId(`temp_settings_category:${userId}`).setLabel('Category').setStyle(getTempButtonStyle()),
+      new ButtonBuilder().setCustomId(`temp_settings_name:${userId}`).setLabel('Creator Name').setStyle(getTempButtonStyle()),
+      new ButtonBuilder().setCustomId(`temp_settings_control:${userId}`).setLabel('Control Room').setStyle(getTempButtonStyle()),
+      new ButtonBuilder().setCustomId(`temp_settings_log:${userId}`).setLabel('Log Room').setStyle(getTempButtonStyle()),
+      new ButtonBuilder().setCustomId(`temp_settings_music:${userId}`).setLabel('Music Room').setStyle(getTempButtonStyle())
     ),
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`temp_settings_autoclean:${userId}`).setLabel('Auto Clean').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`temp_settings_lifetime:${userId}`).setLabel('Lifetime').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`temp_settings_leave:${userId}`).setLabel('Leave Delete').setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId(`temp_settings_card_color:${userId}`).setLabel('Card Color').setStyle(getTempButtonStyle()),
+      new ButtonBuilder().setCustomId(`temp_settings_autoclean:${userId}`).setLabel('Auto Clean').setStyle(getTempButtonStyle()),
+      new ButtonBuilder().setCustomId(`temp_settings_lifetime:${userId}`).setLabel('Lifetime').setStyle(getTempButtonStyle()),
+      new ButtonBuilder().setCustomId(`temp_settings_leave:${userId}`).setLabel('Leave Delete').setStyle(getTempButtonStyle())
     ),
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`temp_settings_controls:${userId}`).setLabel('Controls').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`temp_settings_refresh:${userId}`).setLabel('Refresh').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`temp_settings_close:${userId}`).setLabel('Close').setStyle(ButtonStyle.Danger)
+      new ButtonBuilder().setCustomId(`temp_settings_controls:${userId}`).setLabel('Controls').setStyle(getTempButtonStyle()),
+      new ButtonBuilder().setCustomId(`temp_settings_refresh:${userId}`).setLabel('Refresh').setStyle(getTempButtonStyle()),
+      new ButtonBuilder().setCustomId(`temp_settings_close:${userId}`).setLabel('Close').setStyle(getTempButtonStyle())
     )
   ];
 }
@@ -638,6 +1132,56 @@ function drawWrappedText(ctx, text, x, y, maxWidth, lineHeight, maxLines = 2) {
   lines.forEach((entry, index) => ctx.fillText(entry, x, y + index * lineHeight));
 }
 
+function wrapText(ctx, text, maxWidth, maxLines = 2) {
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const lines = [];
+  let line = '';
+
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word;
+    if (ctx.measureText(next).width > maxWidth && line) {
+      lines.push(line);
+      line = word;
+      if (lines.length >= maxLines - 1) break;
+    } else {
+      line = next;
+    }
+  }
+
+  if (line && lines.length < maxLines) lines.push(line);
+  if (words.length && lines.length === maxLines) {
+    lines[maxLines - 1] = clampText(ctx, lines[maxLines - 1], maxWidth);
+  }
+
+  return lines;
+}
+
+function fitWrappedTextSize(ctx, text, maxWidth, maxHeight, startSize, minSize, fontFamily, weight = '600', lineHeightRatio = 1.3, maxLines = 3) {
+  let size = startSize;
+  while (size > minSize) {
+    ctx.font = `${weight} ${size}px ${fontFamily}`;
+    const lines = wrapText(ctx, text, maxWidth, maxLines);
+    const lineHeight = Math.round(size * lineHeightRatio);
+    if (lines.length && (lines.length * lineHeight) <= maxHeight) {
+      return { size, lines, lineHeight };
+    }
+    size -= 1;
+  }
+
+  ctx.font = `${weight} ${minSize}px ${fontFamily}`;
+  return {
+    size: minSize,
+    lines: wrapText(ctx, text, maxWidth, maxLines),
+    lineHeight: Math.round(minSize * lineHeightRatio)
+  };
+}
+
+function drawCenteredTextBlock(ctx, lines, centerX, centerY, lineHeight) {
+  const totalHeight = Math.max(lineHeight, lines.length * lineHeight);
+  const startY = centerY - (totalHeight / 2) + (lineHeight / 2);
+  lines.forEach((line, index) => ctx.fillText(line, centerX, startY + index * lineHeight));
+}
 
 function fitTextSize(ctx, text, maxWidth, startSize, minSize, fontFamily, weight = 'bold') {
   let size = startSize;
@@ -650,81 +1194,187 @@ function fitTextSize(ctx, text, maxWidth, startSize, minSize, fontFamily, weight
 }
 
 
-async function buildGeneralControlCard(guild, statusText) {
+async function buildGeneralControlCard(guild) {
+  const config = getGuildConfig(guild.id);
   const width = 1600;
   const height = 1040;
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
-  const accent = await getGuildAccent(guild);
+  const accent = await resolveControlCardAccent(guild);
+  const accentSoft = mixHexColors(accent, '#ffffff', 0.24);
+  const accentDeep = mixHexColors(accent, '#08101f', 0.7);
+  const accentGlow = mixHexColors(accent, '#dfe8ff', 0.32);
+  const accentPanel = mixHexColors(accent, '#111a2d', 0.48);
+  const accentGlass = mixHexColors(accent, '#f7fbff', 0.42);
 
   const background = ctx.createLinearGradient(0, 0, width, height);
-  background.addColorStop(0, '#050816');
-  background.addColorStop(0.45, '#0b1426');
-  background.addColorStop(0.8, accent);
-  background.addColorStop(1, '#070b15');
+  background.addColorStop(0, '#060918');
+  background.addColorStop(0.36, '#0c1628');
+  background.addColorStop(0.78, accentDeep);
+  background.addColorStop(1, '#080c17');
   ctx.fillStyle = background;
   ctx.fillRect(0, 0, width, height);
 
-  const glow = ctx.createRadialGradient(width * 0.74, height * 0.18, 50, width * 0.74, height * 0.18, 420);
-  glow.addColorStop(0, 'rgba(255,255,255,0.18)');
-  glow.addColorStop(0.25, 'rgba(255,255,255,0.06)');
+  const glow = ctx.createRadialGradient(width * 0.76, height * 0.16, 80, width * 0.76, height * 0.16, 520);
+  glow.addColorStop(0, toRgba(accentGlow, 0.24));
+  glow.addColorStop(0.32, toRgba(accent, 0.1));
   glow.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, width, height);
 
-  drawRoundedRect(ctx, 34, 34, width - 68, height - 68, 40, 'rgba(7,11,24,0.56)', { color: 'rgba(0,0,0,0.56)', blur: 52, x: 0, y: 22 }, 'rgba(255,255,255,0.08)');
-  drawRoundedRect(ctx, 58, 58, width - 116, 220, 34, 'rgba(255,255,255,0.07)', { color: 'rgba(255,255,255,0.08)', blur: 18, x: 0, y: -4 }, 'rgba(255,255,255,0.12)');
-  drawRoundedRect(ctx, 74, 308, width - 148, height - 392, 32, 'rgba(255,255,255,0.035)', { color: 'rgba(0,0,0,0.3)', blur: 26, x: 0, y: 14 }, 'rgba(255,255,255,0.085)');
+  const edgeGlowLeft = ctx.createRadialGradient(120, height - 120, 40, 120, height - 120, 260);
+  edgeGlowLeft.addColorStop(0, toRgba(accentSoft, 0.18));
+  edgeGlowLeft.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = edgeGlowLeft;
+  ctx.fillRect(0, 0, width, height);
+
+  const edgeGlowRight = ctx.createRadialGradient(width - 140, 120, 30, width - 140, 120, 240);
+  edgeGlowRight.addColorStop(0, toRgba(accentSoft, 0.16));
+  edgeGlowRight.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = edgeGlowRight;
+  ctx.fillRect(0, 0, width, height);
+
+  const panelAccentGlow = ctx.createLinearGradient(74, 308, width - 74, height - 84);
+  panelAccentGlow.addColorStop(0, toRgba(accentPanel, 0.06));
+  panelAccentGlow.addColorStop(0.5, toRgba(accentGlow, 0.1));
+  panelAccentGlow.addColorStop(1, toRgba(accentPanel, 0.05));
+  ctx.fillStyle = panelAccentGlow;
+  ctx.fillRect(80, 312, width - 160, height - 400);
+
+  const glassSheen = ctx.createLinearGradient(120, 80, width - 120, height - 120);
+  glassSheen.addColorStop(0, 'rgba(255,255,255,0.075)');
+  glassSheen.addColorStop(0.22, toRgba(accentGlass, 0.03));
+  glassSheen.addColorStop(0.58, 'rgba(255,255,255,0.012)');
+  glassSheen.addColorStop(1, 'rgba(255,255,255,0)');
+
+  drawRoundedRect(ctx, 34, 34, width - 68, height - 68, 40, 'rgba(7,11,24,0.5)', { color: toRgba(accent, 0.12), blur: 54, x: 0, y: 18 }, 'rgba(255,255,255,0.07)');
+  drawRoundedRect(ctx, 40, 40, width - 80, height - 80, 36, glassSheen, null, null);
+  drawRoundedRect(ctx, 58, 58, width - 116, 220, 34, 'rgba(255,255,255,0.062)', { color: toRgba(accentSoft, 0.12), blur: 18, x: 0, y: -4 }, 'rgba(255,255,255,0.11)');
+  drawRoundedRect(ctx, 74, 308, width - 148, height - 392, 32, 'rgba(255,255,255,0.03)', { color: toRgba(accent, 0.1), blur: 28, x: 0, y: 12 }, 'rgba(255,255,255,0.078)');
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#ffffff';
-  ctx.shadowColor = 'rgba(0,0,0,0.35)';
-  ctx.shadowBlur = 18;
+  ctx.shadowColor = 'rgba(0,0,0,0.26)';
+  ctx.shadowBlur = 12;
   ctx.font = `bold 72px ${LATIN_FONT_FAMILY}`;
   ctx.fillText('Temp Voice Control', width / 2, 168);
   ctx.shadowBlur = 0;
 
-  const enabledKeys = CONTROL_LAYOUT_ORDER.filter(key => getGuildConfig(guild.id).enabledControls[key]);
-  const cols = 4;
-  const boxWidth = 328;
-  const boxHeight = 126;
-  const gapX = 26;
+  const layoutRows = [
+    ['open', 'lock', 'show', 'hide'],
+    ['rename', 'limit', 'allow', 'reject'],
+    ['region', 'invite', 'admin', 'music', 'transfer']
+  ];
+  const visibleKeys = layoutRows.flat();
+  const panelX = 74;
+  const panelY = 308;
+  const panelWidth = width - 148;
+  const panelHeight = height - 392;
+  const contentPaddingX = 34;
+  const contentTop = 360;
+  const gapX = 22;
   const gapY = 24;
-  const totalWidth = cols * boxWidth + (cols - 1) * gapX;
-  const startX = Math.round((width - totalWidth) / 2);
-  const startY = 360;
+  const boxHeight = 126;
+  const maxColumns = 5;
+  const availableWidth = panelWidth - (contentPaddingX * 2);
+  const boxWidth = Math.floor((availableWidth - ((maxColumns - 1) * gapX)) / maxColumns);
+  const englishInset = 14;
+  const englishPanelWidth = 96;
+  const englishPanelX = boxWidth - englishPanelWidth - englishInset;
+  const textStartX = 18;
+  const textMaxWidth = englishPanelX - textStartX - 14;
 
-  enabledKeys.forEach((key, index) => {
-    const row = Math.floor(index / cols);
-    const col = index % cols;
-    const x = startX + col * (boxWidth + gapX);
-    const y = startY + row * (boxHeight + gapY);
+  let uniformEnglishSize = 34;
+  while (uniformEnglishSize > 16) {
+    ctx.font = `bold ${uniformEnglishSize}px ${LATIN_FONT_FAMILY}`;
+    const widestWidth = Math.max(...visibleKeys.map(key => ctx.measureText(CONTROL_META[key].label).width), 0);
+    if (widestWidth <= (englishPanelWidth - 18)) break;
+    uniformEnglishSize -= 1;
+  }
+  if (uniformEnglishSize <= 16) uniformEnglishSize = 16;
 
-    drawRoundedRect(ctx, x, y, boxWidth, boxHeight, 28, 'rgba(255,255,255,0.082)', { color: 'rgba(0,0,0,0.42)', blur: 28, x: 0, y: 16 }, 'rgba(255,255,255,0.12)');
-    drawRoundedRect(ctx, x + 184, y + 14, 126, boxHeight - 28, 22, 'rgba(255,255,255,0.16)', { color: 'rgba(255,255,255,0.14)', blur: 12, x: 0, y: -2 }, 'rgba(255,255,255,0.18)');
+  layoutRows.forEach((rowKeys, rowIndex) => {
+    const totalWidth = rowKeys.length * boxWidth + (rowKeys.length - 1) * gapX;
+    const startX = Math.round((width - totalWidth) / 2);
 
-    const buttonGlow = ctx.createLinearGradient(x + 184, y + 14, x + 310, y + boxHeight - 14);
-    buttonGlow.addColorStop(0, 'rgba(255,255,255,0.18)');
-    buttonGlow.addColorStop(1, 'rgba(255,255,255,0.06)');
-    drawRoundedRect(ctx, x + 190, y + 20, 114, boxHeight - 40, 18, buttonGlow, null, 'rgba(255,255,255,0.08)');
+    rowKeys.forEach((key, colIndex) => {
+      const x = startX + colIndex * (boxWidth + gapX);
+      const y = contentTop + rowIndex * (boxHeight + gapY);
 
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#ffffff';
-    ctx.shadowColor = 'rgba(0,0,0,0.28)';
-    ctx.shadowBlur = 12;
-    const latinSize = fitTextSize(ctx, CONTROL_META[key].label, 112, 34, 21, LATIN_FONT_FAMILY, 'bold');
-    ctx.font = `bold ${latinSize}px ${LATIN_FONT_FAMILY}`;
-    ctx.fillText(CONTROL_META[key].label, x + 247, y + (boxHeight / 2) + 1);
-    ctx.shadowBlur = 0;
+      drawRoundedRect(ctx, x, y, boxWidth, boxHeight, 28, 'rgba(255,255,255,0.065)', { color: 'rgba(0,0,0,0.18)', blur: 18, x: 0, y: 12 }, 'rgba(255,255,255,0.1)');
+      drawRoundedRect(ctx, x + englishPanelX, y + 14, englishPanelWidth, boxHeight - 28, 22, 'rgba(255,255,255,0.13)', { color: toRgba(accentSoft, 0.08), blur: 9, x: 0, y: -2 }, 'rgba(255,255,255,0.15)');
 
-    ctx.textAlign = 'right';
-    ctx.fillStyle = 'rgba(255,255,255,0.97)';
-    ctx.font = `600 22px ${ARABIC_FONT_FAMILY}`;
-    drawWrappedText(ctx, CONTROL_META[key].description, x + 162, y + 48, 134, 28, 3);
+      const buttonGlow = ctx.createLinearGradient(x + englishPanelX, y + 14, x + englishPanelX + englishPanelWidth, y + boxHeight - 14);
+      buttonGlow.addColorStop(0, toRgba(accentGlow, 0.18));
+      buttonGlow.addColorStop(1, 'rgba(255,255,255,0.045)');
+      drawRoundedRect(ctx, x + englishPanelX + 6, y + 20, englishPanelWidth - 12, boxHeight - 40, 18, buttonGlow, null, 'rgba(255,255,255,0.08)');
+
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = 'rgba(0,0,0,0.26)';
+      ctx.shadowBlur = 10;
+      ctx.font = `bold ${uniformEnglishSize}px ${LATIN_FONT_FAMILY}`;
+      ctx.fillText(CONTROL_META[key].label, x + englishPanelX + (englishPanelWidth / 2), y + (boxHeight / 2) + 1);
+
+      ctx.shadowColor = 'rgba(0,0,0,0.16)';
+      ctx.shadowBlur = 5;
+      ctx.fillStyle = 'rgba(243,246,251,0.88)';
+      const arabicText = fitWrappedTextSize(ctx, CONTROL_META[key].description, textMaxWidth, boxHeight - 34, 24, 16, ARABIC_FONT_FAMILY, '600', 1.16, 3);
+      ctx.font = `600 ${arabicText.size}px ${ARABIC_FONT_FAMILY}`;
+      drawCenteredTextBlock(ctx, arabicText.lines, x + textStartX + (textMaxWidth / 2), y + (boxHeight / 2), arabicText.lineHeight);
+      ctx.shadowBlur = 0;
+    });
   });
 
+  const roomCount = Object.keys(getRoomStore(guild.id)).length;
+  const statusText = normalizeStatusText(config.controlStatus);
+  const footerLineY = panelY + panelHeight - 78;
+  const footerPadding = 66;
+  const footerBlockWidth = 420;
+  const leftFooterX = panelX + footerPadding;
+  const rightFooterRightX = panelX + panelWidth - footerPadding;
+  const footerLabelFont = `600 27px ${LATIN_FONT_FAMILY}`;
+  const footerValueFont = `700 30px ${LATIN_FONT_FAMILY}`;
+
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0,0,0,0.18)';
+  ctx.shadowBlur = 6;
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(255,255,255,0.72)';
+  ctx.font = footerLabelFont;
+  ctx.fillText('All rooms :', leftFooterX, footerLineY);
+  const allRoomsLabelWidth = ctx.measureText('All rooms :').width;
+  ctx.fillStyle = '#ffffff';
+  ctx.font = footerValueFont;
+  ctx.fillText(String(roomCount), leftFooterX + allRoomsLabelWidth + 16, footerLineY);
+
+  const serverName = guild.name || 'Unknown Server';
+  const serverNameSize = fitTextSize(ctx, serverName, footerBlockWidth, 30, 18, LATIN_FONT_FAMILY, '700');
+  ctx.font = `700 ${serverNameSize}px ${LATIN_FONT_FAMILY}`;
+  const serverNameWidth = ctx.measureText(serverName).width;
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'left';
+  const serverNameX = rightFooterRightX - serverNameWidth;
+  ctx.fillText(serverName, serverNameX, footerLineY);
+  ctx.font = footerLabelFont;
+  ctx.fillStyle = 'rgba(255,255,255,0.72)';
+  const serverLabelWidth = ctx.measureText('Server :').width;
+  ctx.fillText('Server :', serverNameX - serverLabelWidth - 16, footerLineY);
+
+  drawRoundedRect(ctx, Math.round(width / 2) - 260, panelY + panelHeight - 126, 520, 56, 18, 'rgba(255,255,255,0.05)', null, 'rgba(255,255,255,0.07)');
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.86)';
+  ctx.font = `600 24px ${ARABIC_FONT_FAMILY}`;
+  ctx.fillText(statusText, width / 2, panelY + panelHeight - 98);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.52)';
+  ctx.font = `600 19px ${LATIN_FONT_FAMILY}`;
+  ctx.fillText(`Quick Actions Menu • ${CONTROL_CARD_SIGNATURE}`, width / 2, panelY + panelHeight - 30);
+
+  ctx.shadowBlur = 0;
   return new AttachmentBuilder(canvas.toBuffer('image/png'), { name: `temp-general-control-${guild.id}.png` });
 }
 
@@ -733,17 +1383,15 @@ function buildGeneralControlRows(guildId) {
   const enabled = key => config.enabledControls[key] !== false;
   const rows = [];
 
-  const createButton = key => new ButtonBuilder().setCustomId(`temp_room_${key}`).setLabel(CONTROL_META[key].label).setStyle(
-    key === 'open' || key === 'allow' ? ButtonStyle.Success :
-      key === 'lock' || key === 'reject' || key === 'transfer' ? ButtonStyle.Danger :
-        key === 'show' || key === 'invite' || key === 'rename' || key === 'limit' ? ButtonStyle.Primary :
-          ButtonStyle.Secondary
-  );
+  const createButton = key => new ButtonBuilder()
+    .setCustomId(`temp_room_${key}`)
+    .setLabel(CONTROL_META[key].label)
+    .setStyle(getTempButtonStyle(key));
 
   const rowDefinitions = [
     ['open', 'lock', 'show', 'hide'],
-    ['invite', 'allow', 'reject', 'admin'],
-    ['rename', 'limit', 'region', 'transfer', 'music']
+    ['rename', 'limit', 'allow', 'reject'],
+    ['region', 'invite', 'admin', 'music', 'transfer']
   ];
 
   for (const keys of rowDefinitions) {
@@ -771,7 +1419,7 @@ function createGeneralControlMessageContent() {
 
 async function ensureGuildControlPanel(guild, statusText = null) {
   const config = getGuildConfig(guild.id);
-  if (statusText) config.controlStatus = statusText;
+  if (statusText) config.controlStatus = normalizeStatusText(statusText);
   if (!config.controlChannelId) {
     scheduleSave();
     return null;
@@ -784,7 +1432,7 @@ async function ensureGuildControlPanel(guild, statusText = null) {
     return null;
   }
 
-  const attachment = await buildGeneralControlCard(guild, config.controlStatus || 'جاهز للاستخدام');
+  const attachment = await buildGeneralControlCard(guild);
   const content = createGeneralControlMessageContent(guild);
   const components = buildGeneralControlRows(guild.id);
 
@@ -809,91 +1457,116 @@ async function ensureGuildControlPanel(guild, statusText = null) {
 
 async function applyRoomState(roomChannel, ownerId) {
   const profile = getUserProfile(roomChannel.guild.id, ownerId);
-  const overwrites = [
-    {
-      id: roomChannel.guild.roles.everyone.id,
-      allow: [
-        profile.hidden ? null : PermissionsBitField.Flags.ViewChannel,
-        profile.locked ? null : PermissionsBitField.Flags.Connect
-      ].filter(Boolean),
-      deny: [
-        profile.hidden ? PermissionsBitField.Flags.ViewChannel : null,
-        profile.locked ? PermissionsBitField.Flags.Connect : null
-      ].filter(Boolean)
-    },
-    {
-      id: ownerId,
-      allow: [
-        PermissionsBitField.Flags.ViewChannel,
-        PermissionsBitField.Flags.Connect,
-        PermissionsBitField.Flags.Speak,
-        PermissionsBitField.Flags.Stream,
-        PermissionsBitField.Flags.UseVAD,
-        PermissionsBitField.Flags.SendMessages,
-        PermissionsBitField.Flags.ReadMessageHistory,
-        PermissionsBitField.Flags.AttachFiles,
-        PermissionsBitField.Flags.EmbedLinks,
-        PermissionsBitField.Flags.UseApplicationCommands
-      ]
-    }
-  ];
+  const roomIsFull = profile.userLimit > 0 && getRoomOccupancyCount(roomChannel) >= profile.userLimit;
+  const overwriteMap = new Map();
+
+  addOverwriteAllows(overwriteMap, roomChannel.guild.roles.everyone.id, [
+    profile.hidden ? null : PermissionsBitField.Flags.ViewChannel,
+    profile.locked || roomIsFull ? null : PermissionsBitField.Flags.Connect
+  ]);
+  addOverwriteDenies(overwriteMap, roomChannel.guild.roles.everyone.id, [
+    profile.hidden ? PermissionsBitField.Flags.ViewChannel : null,
+    profile.locked || roomIsFull ? PermissionsBitField.Flags.Connect : null
+  ]);
+
+  addOverwriteAllows(overwriteMap, ownerId, [
+    PermissionsBitField.Flags.CreateInstantInvite,
+    PermissionsBitField.Flags.ViewChannel,
+    PermissionsBitField.Flags.Connect,
+    PermissionsBitField.Flags.Speak,
+    PermissionsBitField.Flags.Stream,
+    PermissionsBitField.Flags.UseSoundboard,
+    PermissionsBitField.Flags.UseExternalSounds,
+    PermissionsBitField.Flags.UseVAD,
+    PermissionsBitField.Flags.UseEmbeddedActivities,
+    PermissionsBitField.Flags.PrioritySpeaker,
+    PermissionsBitField.Flags.SendMessages,
+    PermissionsBitField.Flags.EmbedLinks,
+    PermissionsBitField.Flags.AttachFiles,
+    PermissionsBitField.Flags.AddReactions,
+    PermissionsBitField.Flags.UseExternalEmojis,
+    PermissionsBitField.Flags.UseExternalStickers,
+    PermissionsBitField.Flags.ManageMessages,
+    PermissionsBitField.Flags.ManageWebhooks,
+    PermissionsBitField.Flags.BypassSlowmode,
+    PermissionsBitField.Flags.ReadMessageHistory,
+    PermissionsBitField.Flags.SendTTSMessages,
+    PermissionsBitField.Flags.SendVoiceMessages,
+    PermissionsBitField.Flags.SendPolls,
+    PermissionsBitField.Flags.UseApplicationCommands
+  ]);
 
   for (const userId of profile.allowedUsers) {
-    overwrites.push({
-      id: userId,
-      allow: [
-        PermissionsBitField.Flags.ViewChannel,
-        PermissionsBitField.Flags.Connect,
-        PermissionsBitField.Flags.Speak,
-        PermissionsBitField.Flags.SendMessages,
-        PermissionsBitField.Flags.ReadMessageHistory
-      ]
-    });
+    addOverwriteAllows(overwriteMap, userId, [
+      PermissionsBitField.Flags.ViewChannel,
+      PermissionsBitField.Flags.Connect,
+      PermissionsBitField.Flags.Speak,
+      PermissionsBitField.Flags.SendMessages,
+      PermissionsBitField.Flags.ReadMessageHistory
+    ]);
   }
 
   for (const userId of profile.managers) {
-    overwrites.push({
-      id: userId,
-      allow: [
-        PermissionsBitField.Flags.ViewChannel,
-        PermissionsBitField.Flags.Connect,
-        PermissionsBitField.Flags.Speak,
-        PermissionsBitField.Flags.SendMessages,
-        PermissionsBitField.Flags.ReadMessageHistory,
-        PermissionsBitField.Flags.MoveMembers,
-        PermissionsBitField.Flags.MuteMembers,
-        PermissionsBitField.Flags.DeafenMembers
-      ]
-    });
+    addOverwriteAllows(overwriteMap, userId, [
+      PermissionsBitField.Flags.ViewChannel,
+      PermissionsBitField.Flags.Connect,
+      PermissionsBitField.Flags.Speak,
+      PermissionsBitField.Flags.SendMessages,
+      PermissionsBitField.Flags.ReadMessageHistory,
+      PermissionsBitField.Flags.MoveMembers,
+      PermissionsBitField.Flags.MuteMembers,
+      PermissionsBitField.Flags.DeafenMembers
+    ]);
   }
 
   for (const userId of profile.bannedUsers) {
-    overwrites.push({
-      id: userId,
-      deny: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect]
-    });
+    addOverwriteDenies(overwriteMap, userId, [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect]);
   }
 
   for (const userId of profile.voiceMutedUsers) {
-    overwrites.push({
-      id: userId,
-      allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect],
-      deny: [PermissionsBitField.Flags.Speak]
-    });
+    addOverwriteAllows(overwriteMap, userId, [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect]);
+    addOverwriteDenies(overwriteMap, userId, [PermissionsBitField.Flags.Speak]);
   }
 
   for (const userId of profile.textMutedUsers) {
-    overwrites.push({
-      id: userId,
-      allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect],
-      deny: [PermissionsBitField.Flags.SendMessages]
-    });
+    addOverwriteAllows(overwriteMap, userId, [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect]);
+    addOverwriteDenies(overwriteMap, userId, [
+      PermissionsBitField.Flags.SendMessages,
+      PermissionsBitField.Flags.SendVoiceMessages,
+      PermissionsBitField.Flags.SendPolls,
+      PermissionsBitField.Flags.AddReactions
+    ]);
   }
 
   await Promise.all([
-    roomChannel.permissionOverwrites.set(overwrites, 'Sync temp voice room state').catch(() => null),
+    roomChannel.permissionOverwrites.set(finalizeOverwrites(overwriteMap), 'Sync temp voice room state').catch(() => null),
     roomChannel.edit({ userLimit: profile.userLimit || 0, rtcRegion: profile.rtcRegion || null }).catch(() => null)
   ]);
+
+  await enforceRoomOccupancyRules(roomChannel, ownerId, profile);
+}
+
+async function enforceRoomOccupancyRules(roomChannel, ownerId, profile = null) {
+  const effectiveProfile = profile || getUserProfile(roomChannel.guild.id, ownerId);
+  const members = [...(roomChannel.members?.values?.() || [])].filter(member => !member.user.bot);
+  const sortedMembers = [...members].sort((a, b) => getRoomMemberPriority(a, ownerId, effectiveProfile) - getRoomMemberPriority(b, ownerId, effectiveProfile));
+  const overLimitMembers = effectiveProfile.userLimit > 0 && sortedMembers.length > effectiveProfile.userLimit
+    ? sortedMembers.slice(effectiveProfile.userLimit)
+    : [];
+
+  for (const member of members) {
+    if (effectiveProfile.bannedUsers.includes(member.id)) {
+      await member.voice.disconnect('Banned from temp room').catch(() => member.voice.setChannel(null).catch(() => null));
+      continue;
+    }
+    if (isRoomAccessRestricted(effectiveProfile) && !canMemberBypassTempRestrictions(member, ownerId, effectiveProfile)) {
+      await member.voice.disconnect('Unauthorized temp room entry').catch(() => member.voice.setChannel(null).catch(() => null));
+      continue;
+    }
+    if (overLimitMembers.some(target => target.id === member.id)) {
+      await member.voice.disconnect('Temp room limit reached').catch(() => member.voice.setChannel(null).catch(() => null));
+    }
+  }
 }
 
 async function createOrMoveToTempRoom(member) {
@@ -914,12 +1587,14 @@ async function createOrMoveToTempRoom(member) {
   const hadExistingRoom = Boolean(roomChannel);
 
   if (!roomChannel) {
-    const desiredName = sanitizeRoomName(profile.roomNameTemplate || member.displayName || member.user.username, `${member.displayName || member.user.username} room`);
+    profile.locked = true;
+    profile.hidden = false;
+    const desiredName = getRoomDisplayBaseName(profile, member);
     roomChannel = await guild.channels.create({
       name: desiredName,
       type: ChannelType.GuildVoice,
       parent: config.categoryId,
-      userLimit: profile.userLimit || 0,
+      userLimit: 0,
       rtcRegion: profile.rtcRegion || null,
       reason: `Temp voice room for ${member.user.tag}`
     });
@@ -947,7 +1622,7 @@ async function createOrMoveToTempRoom(member) {
   ]);
   await roomChannel.setPosition(1).catch(() => {});
   await scheduleRoomLifecycleJob(guild.id, member.id);
-  await ensureGuildControlPanel(guild, `جاهز — آخر تحديث: تم تجهيز روم مؤقت جديد للاستخدام.`);
+  await ensureGuildControlPanel(guild, CONTROL_CARD_SIGNATURE);
   await logTempRoomState(guild, {
     title: hadExistingRoom ? '🔁 **استخدام روم مؤقت قائم**' : '🎙️ **إنشاء روم مؤقت جديد**',
     description: hadExistingRoom ? '**تم استخدام الروم المؤقت الحالي ونقل المالك إليه.**' : '**تم إنشاء روم مؤقت جديد ونقل المالك إليه.**',
@@ -957,7 +1632,7 @@ async function createOrMoveToTempRoom(member) {
     roomName: roomChannel.name,
     roomRecord,
     extra: `**نوع العملية:** ${hadExistingRoom ? '**استرجاع روم موجود**' : '**إنشاء روم جديد**'}
-**الحد الحالي:** **${roomChannel.userLimit || 0}**
+**الحد الحالي:** **${profile.userLimit || 0}**
 **الريجن:** **${profile.rtcRegion || 'auto'}**
 **عدد الأعضاء بعد النقل:** **${roomChannel.members.size}**`
   });
@@ -1137,6 +1812,137 @@ async function updateGeneralPanelStatus(guild, statusText) {
   await ensureGuildControlPanel(guild, statusText);
 }
 
+async function expireAccessGrant(guild, ownerId, profile, roomChannel, type, userId, reason = 'Expired') {
+  removeTimedAccessEntry(profile, type, userId);
+  if (type === 'allow' && profile.pendingInvites?.[userId]) {
+    const record = profile.pendingInvites[userId];
+    const user = await guild.client.users.fetch(userId).catch(() => null);
+    await deleteTrackedDmMessage(user, record);
+    delete profile.pendingInvites[userId];
+  }
+  scheduleSave();
+  await applyRoomState(roomChannel, ownerId);
+  const user = await guild.client.users.fetch(userId).catch(() => null);
+  await notifyUser(user, {
+    content: `انتهت صلاحية ${type === 'allow' ? 'السماح' : 'الإدارة'} الخاصة بك في روم <#${roomChannel.id}>. السبب: ${reason}`
+  });
+}
+
+async function cleanupExpiredAccess(guild, ownerId, profile, roomChannel) {
+  let changed = false;
+  const now = Date.now();
+
+  for (const [userId, entry] of Object.entries(profile.allowedEntries || {})) {
+    if (entry?.expiresAt && entry.expiresAt <= now) {
+      await expireAccessGrant(guild, ownerId, profile, roomChannel, 'allow', userId, 'انتهاء المدة');
+      changed = true;
+    }
+  }
+
+  for (const [userId, entry] of Object.entries(profile.managerEntries || {})) {
+    if (entry?.expiresAt && entry.expiresAt <= now) {
+      await expireAccessGrant(guild, ownerId, profile, roomChannel, 'admin', userId, 'انتهاء المدة');
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+async function cleanupExpiredMutes(guild, ownerId, profile, roomChannel) {
+  let changed = false;
+  const now = Date.now();
+
+  for (const [userId, entry] of Object.entries(profile.voiceMutedEntries || {})) {
+    if (entry?.expiresAt && entry.expiresAt <= now) {
+      removeMuteScopeFromProfile(profile, userId, 'voice');
+      changed = true;
+      const user = await guild.client.users.fetch(userId).catch(() => null);
+      await notifyUser(user, { content: `انتهى الميوت الصوتي الخاص بك في روم <#${roomChannel.id}>.` });
+    }
+  }
+
+  for (const [userId, entry] of Object.entries(profile.textMutedEntries || {})) {
+    if (entry?.expiresAt && entry.expiresAt <= now) {
+      removeMuteScopeFromProfile(profile, userId, 'text');
+      changed = true;
+      const user = await guild.client.users.fetch(userId).catch(() => null);
+      await notifyUser(user, { content: `انتهى الميوت الكتابي الخاص بك في روم <#${roomChannel.id}>.` });
+    }
+  }
+
+  if (changed) {
+    scheduleSave();
+    await applyRoomState(roomChannel, ownerId);
+  }
+
+  return changed;
+}
+
+async function cleanupExpiredBans(guild, ownerId, profile, roomChannel) {
+  let changed = false;
+  const now = Date.now();
+
+  for (const [userId, entry] of Object.entries(profile.bannedEntries || {})) {
+    if (entry?.expiresAt && entry.expiresAt <= now) {
+      removeBanFromProfile(profile, userId);
+      changed = true;
+      const user = await guild.client.users.fetch(userId).catch(() => null);
+      await notifyUser(user, { content: `انتهى الحظر الخاص بك في روم <#${roomChannel.id}>.` });
+    }
+  }
+
+  if (changed) {
+    scheduleSave();
+    await applyRoomState(roomChannel, ownerId);
+  }
+
+  return changed;
+}
+
+async function cleanupExpiredInvites(guild, ownerId, profile, roomChannel) {
+  let changed = false;
+  const now = Date.now();
+  for (const [userId, inviteRecord] of Object.entries(profile.pendingInvites || {})) {
+    if (!inviteRecord) continue;
+    const expired = (inviteRecord.expiresAt && inviteRecord.expiresAt <= now) || (!inviteRecord.joinedAt && inviteRecord.createdAt && (now - inviteRecord.createdAt) >= INVITE_TTL_MS);
+    if (!expired) continue;
+    await cleanupInviteRecord(guild, ownerId, profile, userId, { removeAccess: true, deleteMessage: true });
+    changed = true;
+  }
+  if (changed) {
+    scheduleSave();
+    await applyRoomState(roomChannel, ownerId);
+  }
+  return changed;
+}
+
+async function processRotatingRoomName(guild, ownerId, profile, roomChannel) {
+  const names = Array.isArray(profile.roomNameRotationNames) ? profile.roomNameRotationNames.filter(Boolean) : [];
+  if (names.length < 2 || !profile.roomNameRotationIntervalMs || !profile.roomNameRotationNextAt) return false;
+  if (Date.now() < profile.roomNameRotationNextAt) return false;
+  const nextIndex = (profile.roomNameRotationIndex + 1) % names.length;
+  const nextName = sanitizeRoomName(names[nextIndex], roomChannel.name);
+  if (roomChannel.name !== nextName) {
+    const renamed = await roomChannel.setName(nextName).then(() => true).catch(() => false);
+    if (!renamed) return false;
+  }
+  profile.roomNameRotationIndex = nextIndex;
+  profile.roomNameRotationNextAt = Date.now() + profile.roomNameRotationIntervalMs;
+  profile.roomNameTemplate = nextName;
+  scheduleSave();
+  await logTempRoomState(guild, {
+    title: '🔁 **تحديث اسم الروم تلقائياً**',
+    description: '**تم تدوير اسم الروم المؤقت تلقائياً حسب الجدول المحدد.**',
+    ownerId,
+    roomId: roomChannel.id,
+    roomName: nextName,
+    roomRecord: getRoomRecord(guild.id, ownerId),
+    extra: `**الاسم الجديد:** **${nextName}**`
+  });
+  return true;
+}
+
 async function heartbeat() {
   if (!runtimeClient) return;
   const data = loadData();
@@ -1170,6 +1976,13 @@ async function heartbeat() {
         await deleteTempRoom(guild, ownerId, 'Owner left timeout reached');
         continue;
       }
+
+      await cleanupExpiredAccess(guild, ownerId, getUserProfile(guildId, ownerId), channel);
+      await cleanupExpiredMutes(guild, ownerId, getUserProfile(guildId, ownerId), channel);
+      await cleanupExpiredBans(guild, ownerId, getUserProfile(guildId, ownerId), channel);
+      await cleanupExpiredInvites(guild, ownerId, getUserProfile(guildId, ownerId), channel);
+      await processRotatingRoomName(guild, ownerId, getUserProfile(guildId, ownerId), channel);
+      await applyRoomState(channel, ownerId);
 
       if (config.autoCleanEnabled && config.autoCleanIntervalMs > 0 && channel.isTextBased()) {
         const lastClean = roomRecord.lastAutoCleanAt || 0;
@@ -1215,6 +2028,7 @@ async function handleVoiceStateUpdate(oldState, newState) {
     roomRecord.ownerDisplayName = guild.members.cache.get(ownerId)?.displayName || roomRecord.ownerDisplayName;
     setRoomRecord(guild.id, ownerId, roomRecord);
     await scheduleRoomLifecycleJob(guild.id, ownerId);
+    await applyRoomState(channel, ownerId);
 
     if (!previousOwnerLeftAt && roomRecord.ownerLeftAt) {
       await logTempRoomState(guild, {
@@ -1242,6 +2056,39 @@ async function handleVoiceStateUpdate(oldState, newState) {
 
     const joinedTemp = newState.channelId === roomRecord.channelId && oldState.channelId !== roomRecord.channelId;
     const leftTemp = oldState.channelId === roomRecord.channelId && newState.channelId !== roomRecord.channelId;
+    const ownerProfile = getUserProfile(guild.id, ownerId);
+    if (joinedTemp && ownerProfile.bannedUsers.includes(newState.member.id)) {
+      const user = await guild.client.users.fetch(newState.member.id).catch(() => null);
+      await notifyUser(user, { content: `أنت محظور من روم <#${channel.id}> ولا يمكنك الدخول إليه.` });
+      await newState.member.voice.disconnect('Banned from temp room').catch(() => newState.member.voice.setChannel(null).catch(() => null));
+      continue;
+    }
+    if (
+      joinedTemp &&
+      isRoomAccessRestricted(ownerProfile) &&
+      !canMemberBypassTempRestrictions(newState.member, ownerId, ownerProfile)
+    ) {
+      await newState.member.voice.disconnect('Unauthorized temp room entry').catch(() => newState.member.voice.setChannel(null).catch(() => null));
+      continue;
+    }
+    const joinedInvite = joinedTemp ? getActiveInvite(ownerProfile, newState.member.id) : null;
+    if (joinedInvite && !joinedInvite.joinedAt) {
+      joinedInvite.joinedAt = Date.now();
+      scheduleSave();
+    }
+    if (leftTemp) {
+      const leavingId = oldState.member?.id;
+      const activeInvite = getActiveInvite(ownerProfile, leavingId);
+      if (activeInvite?.joinedAt && activeInvite.temporaryAccessGranted) {
+        await cleanupInviteRecord(guild, ownerId, ownerProfile, leavingId, { removeAccess: true, deleteMessage: true });
+        ownerProfile.allowHistory = pushLimitedHistory(ownerProfile.allowHistory, { action: 'invite_cleanup', userId: leavingId, by: ownerId, at: Date.now() });
+        scheduleSave();
+        await applyRoomState(channel, ownerId);
+      } else if (activeInvite?.joinedAt && !activeInvite.temporaryAccessGranted) {
+        delete ownerProfile.pendingInvites[leavingId];
+        scheduleSave();
+      }
+    }
     if (joinedTemp || leftTemp) {
       const movedMember = newState.member || oldState.member;
       await sendTempLog(guild, {
@@ -1296,6 +2143,7 @@ async function handleSettingsButton(interaction) {
   const { action, args } = parseCustomId(interaction.customId);
   const userId = args[0];
   if (!(await ensureSettingsOwner(interaction, userId))) return true;
+  const config = getGuildConfig(interaction.guild.id);
 
   if (action === 'temp_settings_refresh') {
     await interaction.update({ embeds: [createSettingsEmbed(interaction.guild, userId)], components: buildSettingsRows(userId) }).catch(() => {});
@@ -1355,8 +2203,70 @@ async function handleSettingsButton(interaction) {
     return true;
   }
 
+  if (action === 'temp_settings_music') {
+    await interaction.reply({
+      content: '**اختر روم الفويس الذي تنتظر فيه بوتات الميوزك ليتم سحبها عند الضغط على زر Music.**',
+      components: [new ActionRowBuilder().addComponents(
+        new ChannelSelectMenuBuilder()
+          .setCustomId(`temp_settings_music_select:${userId}`)
+          .setPlaceholder('اختر روم الموسيقى')
+          .setChannelTypes(ChannelType.GuildVoice)
+          .setMinValues(1)
+          .setMaxValues(1)
+      )],
+      ephemeral: true
+    }).catch(() => {});
+    return true;
+  }
+
+  if (action === 'temp_settings_card_color') {
+    await interaction.reply({
+      content: '**اختر مصدر لون صورة الكنترول: لون صورة السيرفر أو لون مخصص من اختيارك.**',
+      components: [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`temp_settings_card_color_avatar:${userId}`).setLabel('Avatar Color').setStyle(getTempButtonStyle()),
+        new ButtonBuilder().setCustomId(`temp_settings_card_color_custom:${userId}`).setLabel('Other Color').setStyle(getTempButtonStyle())
+      )],
+      ephemeral: true
+    }).catch(() => {});
+    return true;
+  }
+
+  if (action === 'temp_settings_card_color_avatar') {
+    config.controlCardColorMode = 'avatar';
+    config.controlCardCustomColor = null;
+    scheduleSave();
+    await interaction.update({ content: '✅ تم تفعيل لون صورة السيرفر لصورة الكنترول.', components: [] }).catch(() => {});
+    await Promise.all([
+      updateSettingsPanelMessage(interaction.guild, userId),
+      ensureGuildControlPanel(interaction.guild)
+    ]);
+    await sendTempLog(interaction.guild, {
+      title: '🎨 **تحديث لون صورة الكنترول**',
+      description: '**تم ضبط لون صورة الكنترول على لون صورة السيرفر.**',
+      fields: [
+        { name: '**المنفذ**', value: `<@${interaction.user.id}>`, inline: true },
+        { name: '**الوضع**', value: '**Avatar Color**', inline: true }
+      ]
+    });
+    return true;
+  }
+
+  if (action === 'temp_settings_card_color_custom') {
+    const modal = new ModalBuilder().setCustomId(`temp_settings_card_color_custom_modal:${userId}`).setTitle('Controller Card Color');
+    modal.addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('value')
+.setLabel('Color value (#5865F2 / rgb / gold)')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setValue(config.controlCardCustomColor || '#5865F2')
+        .setMaxLength(60)
+    ));
+    await interaction.showModal(modal).catch(() => {});
+    return true;
+  }
+
   if (['temp_settings_name', 'temp_settings_autoclean', 'temp_settings_lifetime', 'temp_settings_leave'].includes(action)) {
-    const config = getGuildConfig(interaction.guild.id);
     const modal = new ModalBuilder().setCustomId(`${action}_modal:${userId}`).setTitle('Temp Voice Settings');
 
     if (action === 'temp_settings_name') {
@@ -1440,9 +2350,9 @@ async function handleSettingsButton(interaction) {
             .setMaxValues(SETTING_CONTROL_KEYS.length)
         ),
         new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`temp_settings_controls_save:${userId}`).setLabel('Save').setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId(`temp_settings_controls_reset:${userId}`).setLabel('Reset').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`temp_settings_controls_cancel:${userId}`).setLabel('Cancel').setStyle(ButtonStyle.Danger)
+          new ButtonBuilder().setCustomId(`temp_settings_controls_save:${userId}`).setLabel('Save').setStyle(getTempButtonStyle()),
+          new ButtonBuilder().setCustomId(`temp_settings_controls_reset:${userId}`).setLabel('Reset').setStyle(getTempButtonStyle()),
+          new ButtonBuilder().setCustomId(`temp_settings_controls_cancel:${userId}`).setLabel('Cancel').setStyle(getTempButtonStyle())
         )
       ],
       ephemeral: true
@@ -1517,7 +2427,7 @@ async function handleSettingsSelect(interaction) {
     await interaction.update({ content: `✅ تم تحديد روم التحكم إلى <#${interaction.values[0]}>.`, components: [] }).catch(() => {});
     await Promise.all([
       updateSettingsPanelMessage(interaction.guild, userId),
-      ensureGuildControlPanel(interaction.guild, 'جاهز للاستخدام — لوحة عامة ثابتة للجميع.')
+      ensureGuildControlPanel(interaction.guild, CONTROL_CARD_SIGNATURE)
     ]);
     await sendTempLog(interaction.guild, {
       title: '📌 **تحديث روم التحكم**',
@@ -1546,6 +2456,22 @@ async function handleSettingsSelect(interaction) {
     return true;
   }
 
+  if (action === 'temp_settings_music_select') {
+    config.musicChannelId = interaction.values[0];
+    scheduleSave();
+    await interaction.update({ content: `✅ تم تحديد روم بوتات الميوزك إلى <#${interaction.values[0]}>.`, components: [] }).catch(() => {});
+    await updateSettingsPanelMessage(interaction.guild, userId);
+    await sendTempLog(interaction.guild, {
+      title: '🎵 **تحديث روم بوتات الميوزك**',
+      description: '**تم تحديد روم الفويس الخاص بانتظار بوتات الميوزك.**',
+      fields: [
+        { name: '**المنفذ**', value: `<@${interaction.user.id}>`, inline: true },
+        { name: '**الروم المحدد**', value: `<#${interaction.values[0]}>`, inline: true }
+      ]
+    });
+    return true;
+  }
+
   if (action === 'temp_settings_controls_select') {
     const session = getSession(userId);
     session.tempControls = Object.fromEntries(SETTING_CONTROL_KEYS.map(key => [key, interaction.values.includes(key)]));
@@ -1561,6 +2487,32 @@ async function handleSettingsModal(interaction) {
   const userId = args[0];
   if (!(await ensureSettingsOwner(interaction, userId))) return true;
   const config = getGuildConfig(interaction.guild.id);
+
+  if (action === 'temp_settings_card_color_custom_modal') {
+    const rawColor = interaction.fields.getTextInputValue('value').trim();
+    const normalizedColor = normalizeControlCardColorInput(rawColor);
+    if (!normalizedColor) {
+      await replyEphemeral(interaction, '❌ اللون غير صالح. استخدم مثلاً #5865F2 أو rgb(88,101,242) أو اسم لون معروف مثل gold.');
+      return true;
+    }
+    config.controlCardColorMode = 'custom';
+    config.controlCardCustomColor = normalizedColor;
+    scheduleSave();
+    await replyEphemeral(interaction, `✅ تم تحديث لون صورة الكنترول إلى ${normalizedColor}.`);
+    await Promise.all([
+      updateSettingsPanelMessage(interaction.guild, userId),
+      ensureGuildControlPanel(interaction.guild)
+    ]);
+    await sendTempLog(interaction.guild, {
+      title: '🎨 **تحديث لون صورة الكنترول**',
+      description: '**تم ضبط لون مخصص لصورة الكنترول.**',
+      fields: [
+        { name: '**المنفذ**', value: `<@${interaction.user.id}>`, inline: true },
+        { name: '**اللون**', value: `**${normalizedColor}**`, inline: true }
+      ]
+    });
+    return true;
+  }
 
   if (action === 'temp_settings_name_modal') {
     config.creatorChannelName = sanitizeRoomName(interaction.fields.getTextInputValue('value'), DEFAULT_CREATOR_NAME);
@@ -1744,36 +2696,40 @@ async function performGeneralAction(interaction, action, resolverResult = null) 
   }
 
   if (action === 'temp_room_invite') {
-    const invite = await roomChannel.createInvite({ maxAge: 3600, maxUses: 0, unique: true, reason: 'Temp room invite' }).catch(() => null);
-    if (!invite) {
-      await editEphemeral(interaction, '❌ تعذر إنشاء الدعوة حالياً.');
-      return true;
-    }
-    await editEphemeral(interaction, `✅ رابط الدعوة الخاص برومك: ${invite.url}`);
-    await logTempRoomState(guild, {
-      title: '🔗 **إنشاء دعوة لروم مؤقت**',
-      description: '**تم إنشاء دعوة مباشرة للروم المؤقت.**',
-      actorId: interaction.user.id,
-      ownerId,
-      roomId: roomChannel.id,
-      roomName: roomChannel.name,
-      roomRecord,
-      extra: `**رابط الدعوة:** ${invite.url}`
+    await editEphemeral(interaction, 'اختر العضو الذي تريد إرسال دعوة خاصة له.', {
+      components: [new ActionRowBuilder().addComponents(
+        new UserSelectMenuBuilder()
+          .setCustomId(`temp_room_invite_select:${ownerId}`)
+          .setPlaceholder('اختر العضو')
+          .setMinValues(1)
+          .setMaxValues(1)
+      )]
     });
     return true;
   }
 
   if (action === 'temp_room_rename') {
     const modal = new ModalBuilder().setCustomId(`temp_room_rename_modal:${ownerId}`).setTitle('Rename Temp Room');
-    modal.addComponents(new ActionRowBuilder().addComponents(
-      new TextInputBuilder()
-        .setCustomId('value')
-        .setLabel('New room name')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setMaxLength(96)
-        .setValue(roomChannel.name)
-    ));
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('value')
+          .setLabel('Name or comma-separated names')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+          .setMaxLength(200)
+          .setValue((profile.roomNameRotationNames || []).length ? profile.roomNameRotationNames.join(', ') : roomChannel.name)
+      ),
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('interval')
+          .setLabel('Rotation interval, off or 1h+')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+          .setMaxLength(20)
+          .setValue(profile.roomNameRotationIntervalMs ? `${Math.max(1, Math.round(profile.roomNameRotationIntervalMs / 3600000))}h` : 'off')
+      )
+    );
     await interaction.showModal(modal).catch(() => {});
     return true;
   }
@@ -1786,7 +2742,7 @@ async function performGeneralAction(interaction, action, resolverResult = null) 
         .setLabel('User limit from 0 to 99')
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
-        .setValue(String(roomChannel.userLimit || 0))
+        .setValue(String(profile.userLimit || 0))
     ));
     await interaction.showModal(modal).catch(() => {});
     return true;
@@ -1822,7 +2778,6 @@ async function performGeneralAction(interaction, action, resolverResult = null) 
   if (action === 'temp_room_reject') {
     const options = [];
     for (const userId of profile.allowedUsers) options.push({ label: `Allow • ${getDisplayNameFromGuild(guild, userId)}`.slice(0, 100), value: `allow:${userId}`, description: 'إزالة السماح' });
-    for (const userId of profile.bannedUsers) options.push({ label: `Ban • ${getDisplayNameFromGuild(guild, userId)}`.slice(0, 100), value: `ban:${userId}`, description: 'فك الحظر' });
     for (const userId of profile.managers) options.push({ label: `Admin • ${getDisplayNameFromGuild(guild, userId)}`.slice(0, 100), value: `admin:${userId}`, description: 'إزالة المسؤول' });
 
     if (!options.length) {
@@ -1830,7 +2785,7 @@ async function performGeneralAction(interaction, action, resolverResult = null) 
       return true;
     }
 
-    await editEphemeral(interaction, 'اختر العناصر التي تريد حذفها من السماح أو الحظر أو المسؤولين.', {
+    await editEphemeral(interaction, 'اختر العناصر التي تريد حذفها من السماح أو المسؤولين.', {
       components: [new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(`temp_room_reject_select:${ownerId}`)
@@ -1844,14 +2799,27 @@ async function performGeneralAction(interaction, action, resolverResult = null) 
   }
 
   if (action === 'temp_room_music') {
-    const musicBot = guild.members.cache.find(member =>
+    const config = getGuildConfig(guild.id);
+    if (!config.musicChannelId) {
+      await editEphemeral(interaction, '❌ لم يتم تحديد روم بوتات الميوزك من إعدادات temp بعد.');
+      return true;
+    }
+    const sourceChannel = guild.channels.cache.get(config.musicChannelId) || await guild.channels.fetch(config.musicChannelId).catch(() => null);
+    if (!sourceChannel?.isVoiceBased?.()) {
+      await editEphemeral(interaction, '❌ روم بوتات الميوزك المحدد غير صالح حالياً.');
+      return true;
+    }
+    const existingBot = roomChannel.members.find(member => member.user.bot);
+    if (existingBot) {
+      await editEphemeral(interaction, `ℹ️ يوجد بالفعل بوت داخل الروم: ${existingBot.user.username}.`);
+      return true;
+    }
+    const musicBot = sourceChannel.members.find(member =>
       member.user.bot &&
-      member.voice?.channelId &&
-      member.voice.channelId !== roomChannel.id &&
       /music|song|player|luna|hydra|probot/i.test(member.user.username)
     );
     if (!musicBot) {
-      await editEphemeral(interaction, 'ℹ️ لم يتم العثور على بوت أغاني مناسب للنقل حالياً.');
+      await editEphemeral(interaction, 'ℹ️ لم يتم العثور على بوت أغاني داخل روم الميوزك المحدد.');
       return true;
     }
     await musicBot.voice.setChannel(roomChannel).catch(() => null);
@@ -1864,7 +2832,8 @@ async function performGeneralAction(interaction, action, resolverResult = null) 
       roomId: roomChannel.id,
       roomName: roomChannel.name,
       roomRecord,
-      extra: `**البوت:** **${musicBot.user.username}**`
+      extra: `**البوت:** **${musicBot.user.username}**
+**روم المصدر:** <#${sourceChannel.id}>`
     });
     return true;
   }
@@ -1881,8 +2850,8 @@ ${managersText}
 ${recentManagerLog}`)],
       components: allowedAdminActions ? [
         new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`temp_room_admin_add:${ownerId}`).setLabel('Add').setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId(`temp_room_admin_remove:${ownerId}`).setLabel('Remove').setStyle(ButtonStyle.Danger)
+          new ButtonBuilder().setCustomId(`temp_room_admin_add:${ownerId}`).setLabel('Add').setStyle(getTempButtonStyle()),
+          new ButtonBuilder().setCustomId(`temp_room_admin_remove:${ownerId}`).setLabel('Remove').setStyle(getTempButtonStyle())
         )
       ] : []
     });
@@ -1912,6 +2881,151 @@ ${recentManagerLog}`)],
 async function handleRoomButton(interaction) {
   const { action, args } = parseCustomId(interaction.customId);
   const ownerId = args[0] || null;
+
+  if (action.startsWith('temp_room_action_scope_')) {
+    const scope = args[1];
+    const access = await resolveManagedRoom(interaction, ownerId);
+    if (!access) return true;
+    const { ownerId: resolvedOwnerId, profile, roomChannel } = access;
+
+    if (action === 'temp_room_action_scope_mute_member') {
+      const roomMembers = getModeratableRoomMembers(roomChannel, resolvedOwnerId, profile);
+      if (!roomMembers.size) {
+        await replyEphemeral(interaction, 'ℹ️ لا يوجد أعضاء داخل الروم لاختيارهم حالياً.');
+        return true;
+      }
+      const session = getSession(interaction.user.id);
+      session.pendingModerationScope = { ownerId: resolvedOwnerId, action: 'mute_member', scope };
+      await replyEphemeral(interaction, `اختر العضو الذي تريد إعطاءه ميوت ${getScopeLabel(scope)}.`, {
+        components: [new ActionRowBuilder().addComponents(
+          new UserSelectMenuBuilder()
+            .setCustomId(`temp_room_action_pick_mute_member:${resolvedOwnerId}`)
+            .setPlaceholder('اختر العضو')
+            .setMinValues(1)
+            .setMaxValues(1)
+        )]
+      });
+      return true;
+    }
+
+    if (action === 'temp_room_action_scope_unmute_member') {
+      const mutedTargets = listMutedTargets(profile, scope);
+      if (!mutedTargets.length) {
+        await replyEphemeral(interaction, `ℹ️ لا يوجد أعضاء لديهم ميوت ${getScopeLabel(scope)} حالياً.`);
+        return true;
+      }
+      const session = getSession(interaction.user.id);
+      session.pendingModerationScope = { ownerId: resolvedOwnerId, action: 'unmute_member', scope };
+      await replyEphemeral(interaction, `اختر العضو الذي تريد إزالة ميوت ${getScopeLabel(scope)} عنه.`, {
+        components: [new ActionRowBuilder().addComponents(
+          new UserSelectMenuBuilder()
+            .setCustomId(`temp_room_action_pick_unmute_member:${resolvedOwnerId}`)
+            .setPlaceholder('اختر العضو')
+            .setMinValues(1)
+            .setMaxValues(1)
+        )]
+      });
+      return true;
+    }
+
+    if (action === 'temp_room_action_scope_mute_all') {
+      const targets = [...getModeratableRoomMembers(roomChannel, resolvedOwnerId, profile).values()].map(member => member.id);
+      if (!targets.length) {
+        await replyEphemeral(interaction, 'ℹ️ لا يوجد أعضاء حالياً داخل الروم لتطبيق الميوت عليهم.');
+        return true;
+      }
+      const session = getSession(interaction.user.id);
+      session.pendingMuteAll = { ownerId: resolvedOwnerId, scope, targetIds: targets };
+      const penaltyLines = buildPenaltyStatusLines(interaction.guild, profile, targets, scope);
+      if (penaltyLines.length) {
+        await replyEphemeral(interaction, `**الأعضاء الذين لديهم عقوبة ${getScopeLabel(scope)} قائمة حالياً:**\n\n${penaltyLines.join('\n\n')}`, {
+          components: [new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`temp_room_action_renew_mute_all:${resolvedOwnerId}:${scope}`).setLabel('تجديد العقوبة').setStyle(getTempButtonStyle())
+          )]
+        });
+        return true;
+      }
+      await interaction.showModal(buildMuteAllDurationModal(resolvedOwnerId, scope)).catch(() => {});
+      return true;
+    }
+
+    if (action === 'temp_room_action_scope_unmute_all') {
+      const targets = listMutedTargets(profile, scope);
+      if (!targets.length) {
+        await replyEphemeral(interaction, `ℹ️ لا يوجد ميوت ${getScopeLabel(scope)} مفعل حالياً.`);
+        return true;
+      }
+      for (const userId of targets) {
+        removeMuteScopeFromProfile(profile, userId, scope);
+      }
+      profile.moderationHistory = pushLimitedHistory(profile.moderationHistory, { action: `unmute_all_${scope}`, userId: 'all', by: interaction.user.id, at: Date.now() });
+      scheduleSave();
+      await applyRoomState(roomChannel, resolvedOwnerId);
+      await replyEphemeral(interaction, `✅ تم فك الميوت ${getScopeLabel(scope)} عن الجميع.`);
+      return true;
+    }
+  }
+
+  if (action === 'temp_room_action_renew_mute') {
+    const scope = args[1];
+    const access = await resolveManagedRoom(interaction, ownerId);
+    if (!access) return true;
+    const session = getSession(interaction.user.id);
+    if (!session.pendingModerationTarget || session.pendingModerationTarget.ownerId !== access.ownerId || session.pendingModerationTarget.scope !== scope) {
+      await replyEphemeral(interaction, '❌ انتهت جلسة تجديد العقوبة. اختر العضو من جديد.');
+      return true;
+    }
+    await interaction.showModal(buildMuteMemberDurationModal(access.ownerId, scope)).catch(() => {});
+    return true;
+  }
+
+  if (action === 'temp_room_action_renew_mute_all') {
+    const scope = args[1];
+    const access = await resolveManagedRoom(interaction, ownerId);
+    if (!access) return true;
+    const session = getSession(interaction.user.id);
+    if (!session.pendingMuteAll || session.pendingMuteAll.ownerId !== access.ownerId || session.pendingMuteAll.scope !== scope) {
+      await replyEphemeral(interaction, '❌ انتهت جلسة تجديد العقوبة الجماعية. حاول من جديد.');
+      return true;
+    }
+    await interaction.showModal(buildMuteAllDurationModal(access.ownerId, scope)).catch(() => {});
+    return true;
+  }
+
+  if (action === 'temp_room_action_renew_ban') {
+    const access = await resolveManagedRoom(interaction, ownerId);
+    if (!access) return true;
+    const session = getSession(interaction.user.id);
+    if (!session.pendingBanTarget || session.pendingBanTarget.ownerId !== access.ownerId) {
+      await replyEphemeral(interaction, '❌ انتهت جلسة تجديد الحظر. اختر العضو من جديد.');
+      return true;
+    }
+    await interaction.showModal(buildBanDurationModal(access.ownerId)).catch(() => {});
+    return true;
+  }
+
+  if (action === 'temp_room_action_kick_all') {
+    const access = await resolveManagedRoom(interaction, ownerId);
+    if (!access) return true;
+    const { ownerId: resolvedOwnerId, profile, roomChannel } = access;
+    const targets = [...getModeratableRoomMembers(roomChannel, resolvedOwnerId, profile).values()].map(member => member.id);
+    const kickedIds = [];
+    for (const targetId of targets) {
+      const member = await interaction.guild.members.fetch(targetId).catch(() => null);
+      if (!member || member.voice.channelId !== roomChannel.id) continue;
+      const moved = await disconnectMemberFromVoice(member, 'Kicked from temp room');
+      if (!moved) continue;
+      profile.moderationHistory = pushLimitedHistory(profile.moderationHistory, { action: 'kick', userId: targetId, by: interaction.user.id, at: Date.now() });
+      kickedIds.push(targetId);
+    }
+    if (!kickedIds.length) {
+      await replyEphemeral(interaction, '❌ تعذر طرد أي عضو فعلياً من الروم.');
+      return true;
+    }
+    scheduleSave();
+    await replyEphemeral(interaction, `✅ تم طرد ${kickedIds.length} عضو من الروم.`);
+    return true;
+  }
 
   if (action === 'temp_room_admin_add' || action === 'temp_room_admin_remove') {
     const access = await resolveManagedRoom(interaction, ownerId);
@@ -1964,41 +3078,42 @@ async function handleRoomSelect(interaction) {
   }
 
   if (action === 'temp_room_allow_select') {
-    for (const userId of interaction.values) {
-      if (!profile.allowedUsers.includes(userId)) profile.allowedUsers.push(userId);
-      profile.bannedUsers = profile.bannedUsers.filter(id => id !== userId);
-      profile.allowHistory = pushLimitedHistory(profile.allowHistory, { action: 'allow', userId, by: interaction.user.id, at: Date.now() });
-    }
-    scheduleSave();
-    await applyRoomState(roomChannel, resolvedOwnerId);
-    await replyEphemeral(interaction, `✅ تم حفظ السماح لـ ${interaction.values.map(id => `<@${id}>`).join('، ')}.`);
-    await logTempRoomState(interaction.guild, {
-      title: '✅ **تحديث قائمة السماح**',
-      description: '**تمت إضافة أعضاء إلى قائمة السماح الخاصة بالروم المؤقت.**',
-      actorId: interaction.user.id,
-      ownerId: resolvedOwnerId,
-      roomId: roomChannel.id,
-      roomName: roomChannel.name,
-      roomRecord,
-      extra: interaction.values.map(id => `<@${id}>`).join('، ')
-    });
+    const session = getSession(interaction.user.id);
+    session.pendingAllowSelection = { ownerId: resolvedOwnerId, userIds: interaction.values };
+    const modal = new ModalBuilder().setCustomId(`temp_room_allow_duration_modal:${resolvedOwnerId}`).setTitle('Allow Access');
+    modal.addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId('duration')
+        .setLabel('Duration: off or 30m / 2h / 7d')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
+        .setValue('off')
+    ));
+    await interaction.showModal(modal).catch(() => {});
     return true;
   }
 
   if (action === 'temp_room_reject_select') {
     for (const entry of interaction.values) {
       const [type, userId] = entry.split(':');
-      if (type === 'allow') profile.allowedUsers = profile.allowedUsers.filter(id => id !== userId);
-      if (type === 'ban') profile.bannedUsers = profile.bannedUsers.filter(id => id !== userId);
-      if (type === 'admin') profile.managers = profile.managers.filter(id => id !== userId);
+      if (type === 'allow') removeTimedAccessEntry(profile, 'allow', userId);
+      if (type === 'admin') removeTimedAccessEntry(profile, 'admin', userId);
       profile.allowHistory = pushLimitedHistory(profile.allowHistory, { action: `remove_${type}`, userId, by: interaction.user.id, at: Date.now() });
+      const user = await interaction.guild.client.users.fetch(userId).catch(() => null);
+      if (type === 'allow' && profile.pendingInvites?.[userId]) {
+        await deleteTrackedDmMessage(user, profile.pendingInvites[userId]);
+        delete profile.pendingInvites[userId];
+      }
+      await notifyUser(user, {
+        content: `تمت إزالة ${type === 'allow' ? 'السماح' : 'الإدارة'} الخاصة بك من روم <#${roomChannel.id}> بواسطة <@${interaction.user.id}>.`
+      });
     }
     scheduleSave();
     await applyRoomState(roomChannel, resolvedOwnerId);
     await replyEphemeral(interaction, '✅ تم حذف العناصر المحددة.');
     await logTempRoomState(interaction.guild, {
       title: '🧹 **تنظيف قوائم الروم**',
-      description: '**تم حذف عناصر من قوائم السماح أو الحظر أو المسؤولين.**',
+      description: '**تم حذف عناصر من قوائم السماح أو المسؤولين.**',
       actorId: interaction.user.id,
       ownerId: resolvedOwnerId,
       roomId: roomChannel.id,
@@ -2009,17 +3124,282 @@ async function handleRoomSelect(interaction) {
     return true;
   }
 
+  if (action === 'temp_room_invite_select') {
+    const targetId = interaction.values[0];
+    if (targetId === resolvedOwnerId) {
+      await replyEphemeral(interaction, 'ℹ️ لا تحتاج إلى دعوة نفسك.');
+      return true;
+    }
+    const targetUser = await interaction.guild.client.users.fetch(targetId).catch(() => null);
+    const targetMember = await interaction.guild.members.fetch(targetId).catch(() => null);
+    if (!targetUser || !targetMember || targetUser.bot) {
+      await replyEphemeral(interaction, '❌ لا يمكن دعوة هذا العضو.');
+      return true;
+    }
+    if (targetMember.voice?.channelId === roomChannel.id) {
+      await replyEphemeral(interaction, 'ℹ️ العضو موجود بالفعل داخل الروم.');
+      return true;
+    }
+
+    if (profile.pendingInvites?.[targetId]) {
+      await cleanupInviteRecord(interaction.guild, resolvedOwnerId, profile, targetId, { removeAccess: true, deleteMessage: true });
+    }
+
+    const needsTemporaryAccess = isRoomAccessRestricted(profile);
+    const previousAllowEntry = profile.allowedEntries?.[targetId] ? { ...profile.allowedEntries[targetId] } : null;
+    const hadAllowAlready = profile.allowedUsers.includes(targetId);
+    if (needsTemporaryAccess) {
+      if (!hadAllowAlready) profile.allowedUsers.push(targetId);
+      setTimedAccessEntry(profile.allowedEntries, targetId, { grantedBy: interaction.user.id, source: 'invite' });
+    }
+    const inviteRecord = {
+      userId: targetId,
+      invitedBy: interaction.user.id,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + INVITE_TTL_MS,
+      roomId: roomChannel.id,
+      joinedAt: null,
+      previousAllowEntry,
+      hadAllowAlready,
+      temporaryAccessGranted: needsTemporaryAccess
+    };
+    profile.pendingInvites[targetId] = inviteRecord;
+    scheduleSave();
+    await applyRoomState(roomChannel, resolvedOwnerId);
+
+    const inviteMessage = await notifyUser(targetUser, {
+      content: [
+        `مالك الروم <@${interaction.user.id}> يريد سحبك إلى الروم <#${roomChannel.id}>.`,
+        profile.locked ? 'تم فتح السماح لك للدخول إلى الروم.' : null,
+        profile.hidden ? 'تم إظهار الروم لك حتى تتمكن من الدخول.' : null
+      ].filter(Boolean).join('\n'),
+      components: [
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`temp_invite_go:${interaction.guild.id}:${roomChannel.id}:${targetId}`)
+            .setLabel('ودني')
+            .setStyle(getTempButtonStyle())
+        )
+      ]
+    });
+
+    if (!inviteMessage) {
+      if (needsTemporaryAccess) {
+        if (hadAllowAlready && previousAllowEntry) setTimedAccessEntry(profile.allowedEntries, targetId, previousAllowEntry);
+        else removeTimedAccessEntry(profile, 'allow', targetId);
+      }
+      delete profile.pendingInvites[targetId];
+      scheduleSave();
+      await applyRoomState(roomChannel, resolvedOwnerId);
+      await replyEphemeral(interaction, '❌ تعذر إرسال الدعوة في الخاص. تأكد أن العضو يسمح بالرسائل الخاصة.');
+      return true;
+    }
+
+    inviteRecord.dmChannelId = inviteMessage.channel.id;
+    inviteRecord.dmMessageId = inviteMessage.id;
+    scheduleSave();
+    await replyEphemeral(interaction, `✅ تم إرسال الدعوة الخاصة إلى <@${targetId}>.`);
+    await logTempRoomState(interaction.guild, {
+      title: '📨 **دعوة عضو إلى الروم**',
+      description: '**تم إرسال دعوة خاصة لعضو مع زر سحب مباشر إلى الروم المؤقت.**',
+      actorId: interaction.user.id,
+      ownerId: resolvedOwnerId,
+      roomId: roomChannel.id,
+      roomName: roomChannel.name,
+      roomRecord,
+      extra: `**المدعو:** <@${targetId}>`
+    });
+    return true;
+  }
+
   if (action === 'temp_room_actions') {
     const selectedAction = interaction.values[0];
-    await replyEphemeral(interaction, `اختر العضو لتنفيذ الإجراء: ${selectedAction}.`, {
-      components: [new ActionRowBuilder().addComponents(
-        new UserSelectMenuBuilder()
-          .setCustomId(`temp_room_action_target:${resolvedOwnerId}:${selectedAction}`)
-          .setPlaceholder('اختر العضو المستهدف')
-          .setMinValues(1)
-          .setMaxValues(1)
-      )]
-    });
+    if (selectedAction === 'mute_member') {
+      await replyEphemeral(interaction, 'اختر نوع الميوت أولاً.', { components: buildScopeButtons('temp_room_action_scope_mute_member', resolvedOwnerId) });
+      return true;
+    }
+    if (selectedAction === 'unmute_member') {
+      await replyEphemeral(interaction, 'اختر نوع فك الميوت أولاً.', { components: buildScopeButtons('temp_room_action_scope_unmute_member', resolvedOwnerId) });
+      return true;
+    }
+    if (selectedAction === 'mute_all') {
+      await replyEphemeral(interaction, 'اختر نوع الميوت الذي تريد تطبيقه على كل الموجودين حالياً بالروم.', { components: buildScopeButtons('temp_room_action_scope_mute_all', resolvedOwnerId) });
+      return true;
+    }
+    if (selectedAction === 'unmute_all') {
+      await replyEphemeral(interaction, 'اختر نوع فك الميوت الذي تريد تطبيقه على الجميع.', { components: buildScopeButtons('temp_room_action_scope_unmute_all', resolvedOwnerId) });
+      return true;
+    }
+    if (selectedAction === 'kick') {
+      const roomMembers = getModeratableRoomMembers(roomChannel, resolvedOwnerId, profile);
+      if (!roomMembers.size) {
+        await replyEphemeral(interaction, 'ℹ️ لا يوجد أعضاء داخل الروم لطردهم حالياً.');
+        return true;
+      }
+      await replyEphemeral(interaction, 'اختر الكل أو الأعضاء الذين تريد طردهم من الفويس.', {
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`temp_room_action_kick_all:${resolvedOwnerId}`)
+              .setLabel('Kick All')
+              .setStyle(getTempButtonStyle())
+          ),
+          new ActionRowBuilder().addComponents(
+            new UserSelectMenuBuilder()
+              .setCustomId(`temp_room_action_pick_kick:${resolvedOwnerId}`)
+              .setPlaceholder('اختر الأعضاء')
+              .setMinValues(1)
+              .setMaxValues(Math.min(25, roomMembers.size))
+          )
+        ]
+      });
+      return true;
+    }
+    if (selectedAction === 'ban') {
+      await replyEphemeral(interaction, 'اختر العضو الذي تريد حظره من الروم.', {
+        components: [new ActionRowBuilder().addComponents(
+          new UserSelectMenuBuilder()
+            .setCustomId(`temp_room_action_pick_ban:${resolvedOwnerId}`)
+            .setPlaceholder('اختر العضو')
+            .setMinValues(1)
+            .setMaxValues(1)
+        )]
+      });
+      return true;
+    }
+    if (selectedAction === 'unban') {
+      const bannedTargets = profile.bannedUsers || [];
+      if (!bannedTargets.length) {
+        await replyEphemeral(interaction, 'ℹ️ لا يوجد أعضاء محظورون حالياً.');
+        return true;
+      }
+      await replyEphemeral(interaction, 'اختر المحظورين الذين تريد فك حظرهم.', {
+        components: [new ActionRowBuilder().addComponents(
+          new UserSelectMenuBuilder()
+            .setCustomId(`temp_room_action_pick_unban:${resolvedOwnerId}`)
+            .setPlaceholder('اختر المحظورين')
+            .setMinValues(1)
+            .setMaxValues(Math.min(25, bannedTargets.length))
+        )]
+      });
+      return true;
+    }
+    return true;
+  }
+
+  if (action === 'temp_room_action_pick_mute_member') {
+    const session = getSession(interaction.user.id);
+    if (!session.pendingModerationScope || session.pendingModerationScope.ownerId !== resolvedOwnerId || session.pendingModerationScope.action !== 'mute_member') {
+      await replyEphemeral(interaction, '❌ انتهت جلسة اختيار الميوت. حاول من جديد.');
+      return true;
+    }
+    const targetId = interaction.values[0];
+    const member = await interaction.guild.members.fetch(targetId).catch(() => null);
+    if (!member || member.voice.channelId !== roomChannel.id) {
+      await replyEphemeral(interaction, '❌ العضو المحدد ليس داخل الروم حالياً.');
+      return true;
+    }
+    const validation = validateModerationTarget({ member, ownerId: resolvedOwnerId, profile, actionType: 'إعطاء ميوت', actorId: interaction.user.id });
+    if (!validation.ok) {
+      await replyEphemeral(interaction, validation.message);
+      return true;
+    }
+    session.pendingModerationTarget = { ...session.pendingModerationScope, targetId };
+    const summary = getMutePenaltySummary(profile, targetId, session.pendingModerationScope.scope);
+    if (summary.active) {
+      await replyEphemeral(interaction, `**العقوبة الحالية على <@${targetId}>:**\n\n${summary.parts.map(part => `• ${part}`).join('\n')}\n\nاضغط **تجديد العقوبة** إذا كنت تريد تمديدها أو استبدال مدتها.`, {
+        components: [new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`temp_room_action_renew_mute:${resolvedOwnerId}:${session.pendingModerationScope.scope}`).setLabel('تجديد العقوبة').setStyle(getTempButtonStyle())
+        )]
+      });
+      return true;
+    }
+    await interaction.showModal(buildMuteMemberDurationModal(resolvedOwnerId, session.pendingModerationScope.scope)).catch(() => {});
+    return true;
+  }
+
+  if (action === 'temp_room_action_pick_unmute_member') {
+    const session = getSession(interaction.user.id);
+    if (!session.pendingModerationScope || session.pendingModerationScope.ownerId !== resolvedOwnerId || session.pendingModerationScope.action !== 'unmute_member') {
+      await replyEphemeral(interaction, '❌ انتهت جلسة اختيار فك الميوت. حاول من جديد.');
+      return true;
+    }
+    const targetId = interaction.values[0];
+    const scope = session.pendingModerationScope.scope;
+    if (!listMutedTargets(profile, scope).includes(targetId)) {
+      await replyEphemeral(interaction, `❌ العضو المحدد لا يملك ميوت ${getScopeLabel(scope)} حالياً.`);
+      return true;
+    }
+    removeMuteScopeFromProfile(profile, targetId, scope);
+    profile.moderationHistory = pushLimitedHistory(profile.moderationHistory, { action: `unmute_${scope}`, userId: targetId, by: interaction.user.id, at: Date.now() });
+    session.pendingModerationScope = null;
+    scheduleSave();
+    await applyRoomState(roomChannel, resolvedOwnerId);
+    await replyEphemeral(interaction, `✅ تم فك الميوت ${getScopeLabel(scope)} عن <@${targetId}>.`);
+    return true;
+  }
+
+  if (action === 'temp_room_action_pick_kick') {
+    const selectedIds = interaction.values;
+    const kickedIds = [];
+    for (const targetId of selectedIds) {
+      const member = await interaction.guild.members.fetch(targetId).catch(() => null);
+      if (!member || member.voice.channelId !== roomChannel.id) continue;
+      const validation = validateModerationTarget({ member, ownerId: resolvedOwnerId, profile, actionType: 'طرد', actorId: interaction.user.id });
+      if (!validation.ok) continue;
+      const moved = await disconnectMemberFromVoice(member, 'Kicked from temp room');
+      if (!moved) continue;
+      profile.moderationHistory = pushLimitedHistory(profile.moderationHistory, { action: 'kick', userId: targetId, by: interaction.user.id, at: Date.now() });
+      kickedIds.push(targetId);
+    }
+    if (!kickedIds.length) {
+      await replyEphemeral(interaction, '❌ لا يوجد أعضاء مطابقون داخل الروم حالياً للطرد.');
+      return true;
+    }
+    scheduleSave();
+    await replyEphemeral(interaction, `✅ تم طرد ${kickedIds.map(id => `<@${id}>`).join('، ')} من الروم.`);
+    return true;
+  }
+
+  if (action === 'temp_room_action_pick_ban') {
+    const targetId = interaction.values[0];
+    const user = await interaction.guild.client.users.fetch(targetId).catch(() => null);
+    const member = await interaction.guild.members.fetch(targetId).catch(() => null);
+    const validation = validateModerationTarget({ member, user, ownerId: resolvedOwnerId, profile, actionType: 'حظر', actorId: interaction.user.id });
+    if (!validation.ok) {
+      await replyEphemeral(interaction, validation.message);
+      return true;
+    }
+    const summary = getBanSummary(profile, targetId);
+    const session = getSession(interaction.user.id);
+    session.pendingBanTarget = { ownerId: resolvedOwnerId, targetId };
+    if (summary.active) {
+      await replyEphemeral(interaction, `**الحظر الحالي على <@${targetId}>:** ${summary.remaining}\n\nاضغط **تجديد الحظر** إذا كنت تريد تمديده أو استبدال مدته.`, {
+        components: [new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`temp_room_action_renew_ban:${resolvedOwnerId}`).setLabel('تجديد الحظر').setStyle(getTempButtonStyle())
+        )]
+      });
+      return true;
+    }
+    await interaction.showModal(buildBanDurationModal(resolvedOwnerId)).catch(() => {});
+    return true;
+  }
+
+  if (action === 'temp_room_action_pick_unban') {
+    let changed = 0;
+    for (const targetId of interaction.values) {
+      if (!profile.bannedUsers.includes(targetId)) continue;
+      removeBanFromProfile(profile, targetId);
+      profile.moderationHistory = pushLimitedHistory(profile.moderationHistory, { action: 'unban', userId: targetId, by: interaction.user.id, at: Date.now() });
+      changed += 1;
+    }
+    if (!changed) {
+      await replyEphemeral(interaction, '❌ لم يتم اختيار أي عضو محظور فعلياً.');
+      return true;
+    }
+    scheduleSave();
+    await applyRoomState(roomChannel, resolvedOwnerId);
+    await replyEphemeral(interaction, '✅ تم فك الحظر عن الأعضاء المحددين.');
     return true;
   }
 
@@ -2061,8 +3441,19 @@ async function handleRoomSelect(interaction) {
       targetProfile.userLimit = oldProfile.userLimit;
       targetProfile.rtcRegion = oldProfile.rtcRegion;
       targetProfile.roomNameTemplate = oldProfile.roomNameTemplate || roomChannel.name;
+      targetProfile.allowedEntries = { ...(oldProfile.allowedEntries || {}) };
+      targetProfile.managerEntries = { ...(oldProfile.managerEntries || {}) };
+      targetProfile.voiceMutedEntries = { ...(oldProfile.voiceMutedEntries || {}) };
+      targetProfile.textMutedEntries = { ...(oldProfile.textMutedEntries || {}) };
+      targetProfile.bannedEntries = { ...(oldProfile.bannedEntries || {}) };
+      targetProfile.pendingInvites = { ...(oldProfile.pendingInvites || {}) };
+      targetProfile.roomNameRotationNames = [...(oldProfile.roomNameRotationNames || [])];
+      targetProfile.roomNameRotationIntervalMs = oldProfile.roomNameRotationIntervalMs || 0;
+      targetProfile.roomNameRotationIndex = oldProfile.roomNameRotationIndex || 0;
+      targetProfile.roomNameRotationNextAt = oldProfile.roomNameRotationNextAt || 0;
       targetProfile.ownershipHistory = pushLimitedHistory(targetProfile.ownershipHistory, { action: 'received', from: resolvedOwnerId, by: interaction.user.id, at: Date.now() });
       oldProfile.ownershipHistory = pushLimitedHistory(oldProfile.ownershipHistory, { action: 'transferred', to: newOwnerId, by: interaction.user.id, at: Date.now() });
+      resetUserProfileState(oldProfile);
 
       deleteRoomRecord(interaction.guild.id, resolvedOwnerId);
       roomRecord.ownerId = newOwnerId;
@@ -2087,11 +3478,30 @@ async function handleRoomSelect(interaction) {
     }
 
     const adding = action === 'temp_room_admin_add_select';
+    if (adding) {
+      const session = getSession(interaction.user.id);
+      session.pendingAdminSelection = { ownerId: resolvedOwnerId, userIds: interaction.values };
+      const modal = new ModalBuilder().setCustomId(`temp_room_admin_add_duration_modal:${resolvedOwnerId}`).setTitle('Room Admin Access');
+      modal.addComponents(new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId('duration')
+          .setLabel('Duration: off or 30m / 2h / 7d')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(false)
+          .setValue('off')
+      ));
+      await interaction.showModal(modal).catch(() => {});
+      return true;
+    }
+
     for (const userId of interaction.values) {
-      if (adding) {
-        if (userId !== resolvedOwnerId && !profile.managers.includes(userId)) profile.managers.push(userId);
-      } else {
+      if (!adding) {
         profile.managers = profile.managers.filter(id => id !== userId);
+        if (profile.managerEntries) delete profile.managerEntries[userId];
+        const user = await interaction.guild.client.users.fetch(userId).catch(() => null);
+        await notifyUser(user, {
+          content: `تمت إزالة صلاحية الإدارة الخاصة بك من روم <#${roomChannel.id}> بواسطة <@${interaction.user.id}>.`
+        });
       }
       profile.managerHistory = pushLimitedHistory(profile.managerHistory, { action: adding ? 'add' : 'remove', userId, by: interaction.user.id, at: Date.now() });
     }
@@ -2115,63 +3525,88 @@ async function handleRoomSelect(interaction) {
   return true;
 }
 
-async function handleActionTargetSelect(interaction) {
-  const parts = String(interaction.customId).split(':');
-  const ownerId = parts[1];
-  const actionType = parts[2];
-  const access = await resolveManagedRoom(interaction, ownerId);
-  if (!access) return true;
-  const { ownerId: resolvedOwnerId, profile, roomChannel } = access;
-  const targetId = interaction.values[0];
-  const member = await interaction.guild.members.fetch(targetId).catch(() => null);
-  if (!member) {
-    await replyEphemeral(interaction, '❌ العضو غير موجود.');
+async function handleInviteButton(interaction) {
+  const { action, args } = parseCustomId(interaction.customId);
+  if (action !== 'temp_invite_go') return false;
+  const [guildId, roomIdOrOwnerId, targetId] = args;
+  if (interaction.user.id !== targetId) {
+    await replyEphemeral(interaction, '❌ هذه الدعوة ليست لك.');
     return true;
   }
 
-  if (actionType === 'voice_mute') {
-    if (!profile.voiceMutedUsers.includes(targetId)) profile.voiceMutedUsers.push(targetId);
-  }
-  if (actionType === 'voice_unmute') {
-    profile.voiceMutedUsers = profile.voiceMutedUsers.filter(id => id !== targetId);
-  }
-  if (actionType === 'text_mute') {
-    if (!profile.textMutedUsers.includes(targetId)) profile.textMutedUsers.push(targetId);
-  }
-  if (actionType === 'text_unmute') {
-    profile.textMutedUsers = profile.textMutedUsers.filter(id => id !== targetId);
-  }
-  if (actionType === 'kick' && member.voice.channelId === roomChannel.id) {
-    await member.voice.disconnect('Kicked from temp room').catch(() => member.voice.setChannel(null).catch(() => null));
-  }
-  if (actionType === 'ban') {
-    if (!profile.bannedUsers.includes(targetId)) profile.bannedUsers.push(targetId);
-    profile.allowedUsers = profile.allowedUsers.filter(id => id !== targetId);
-    profile.voiceMutedUsers = profile.voiceMutedUsers.filter(id => id !== targetId);
-    profile.textMutedUsers = profile.textMutedUsers.filter(id => id !== targetId);
-    if (member.voice.channelId === roomChannel.id) {
-      await member.voice.disconnect('Banned from temp room').catch(() => member.voice.setChannel(null).catch(() => null));
-    }
-  }
-  if (actionType === 'unban') {
-    profile.bannedUsers = profile.bannedUsers.filter(id => id !== targetId);
+  const guild = runtimeClient?.guilds?.cache?.get(guildId) || await runtimeClient?.guilds?.fetch?.(guildId).catch(() => null);
+  if (!guild) {
+    await replyEphemeral(interaction, '❌ السيرفر غير متوفر حالياً.');
+    return true;
   }
 
-  profile.moderationHistory = pushLimitedHistory(profile.moderationHistory, { action: actionType, userId: targetId, by: interaction.user.id, at: Date.now() });
+  let ownerId = null;
+  let roomRecord = null;
+  let roomChannel = guild.channels.cache.get(roomIdOrOwnerId) || await guild.channels.fetch(roomIdOrOwnerId).catch(() => null);
+  if (roomChannel) {
+    for (const [candidateOwnerId, candidateRecord] of Object.entries(getRoomStore(guildId))) {
+      if (candidateRecord.channelId === roomChannel.id) {
+        ownerId = candidateOwnerId;
+        roomRecord = candidateRecord;
+        break;
+      }
+    }
+  }
+  if (!roomRecord) {
+    ownerId = roomIdOrOwnerId;
+    roomRecord = getRoomRecord(guildId, ownerId);
+    roomChannel = roomRecord?.channelId ? guild.channels.cache.get(roomRecord.channelId) || await guild.channels.fetch(roomRecord.channelId).catch(() => null) : null;
+  }
+  if (!roomRecord || !roomChannel) {
+    await replyEphemeral(interaction, '❌ هذه الدعوة انتهت لأن الروم لم يعد موجوداً.');
+    return true;
+  }
+
+  if (!roomChannel?.isVoiceBased?.()) {
+    await replyEphemeral(interaction, '❌ الروم الصوتي غير متوفر حالياً.');
+    return true;
+  }
+
+  const profile = getUserProfile(guildId, ownerId);
+  const inviteRecord = getActiveInvite(profile, targetId);
+  if (!inviteRecord) {
+    await replyEphemeral(interaction, '❌ الدعوة لم تعد فعالة.');
+    return true;
+  }
+  if (inviteRecord.expiresAt && inviteRecord.expiresAt <= Date.now()) {
+    await cleanupInviteRecord(guild, ownerId, profile, targetId, { removeAccess: true, deleteMessage: true });
+    scheduleSave();
+    await applyRoomState(roomChannel, ownerId);
+    await replyEphemeral(interaction, '❌ انتهت صلاحية هذه الدعوة.');
+    return true;
+  }
+
+  const member = guild.members.cache.get(targetId) || await guild.members.fetch(targetId).catch(() => null);
+  if (!member) {
+    await replyEphemeral(interaction, '❌ العضو غير موجود داخل السيرفر.');
+    return true;
+  }
+
+  if (member.voice?.channelId === roomChannel.id) {
+    if (!inviteRecord.joinedAt) inviteRecord.joinedAt = Date.now();
+    scheduleSave();
+    await replyEphemeral(interaction, 'ℹ️ أنت موجود بالفعل داخل هذا الروم.');
+    return true;
+  }
+
+  if (!member.voice?.channelId) {
+    await replyEphemeral(interaction, `✅ الدعوة ما زالت فعالة. ادخل أي فويس أولاً ثم اضغط الزر مرة أخرى ليتم سحبك إلى <#${roomChannel.id}>.`);
+    return true;
+  }
+
+  const moved = await moveMemberToRoom(member, roomChannel);
+  if (!moved) {
+    await replyEphemeral(interaction, '❌ تعذر سحبك إلى الروم حالياً. جرّب الدخول إلى فويس آخر ثم أعد المحاولة.');
+    return true;
+  }
+  inviteRecord.joinedAt = Date.now();
   scheduleSave();
-  await applyRoomState(roomChannel, resolvedOwnerId);
-  await replyEphemeral(interaction, `✅ تم تنفيذ الإجراء ${actionType} على <@${targetId}>.`);
-  await logTempRoomState(interaction.guild, {
-    title: '⚖️ **إجراء إداري داخل الروم**',
-    description: '**تم تنفيذ إجراء إداري على أحد أعضاء الروم المؤقت.**',
-    actorId: interaction.user.id,
-    ownerId: resolvedOwnerId,
-    roomId: roomChannel.id,
-    roomName: roomChannel.name,
-    roomRecord: access.roomRecord,
-    extra: `**الإجراء:** **${actionType}**
-**الهدف:** <@${targetId}>`
-  });
+  await replyEphemeral(interaction, `✅ تم سحبك إلى <#${roomChannel.id}>.`);
   return true;
 }
 
@@ -2182,25 +3617,218 @@ async function handleRoomModal(interaction) {
   if (!access) return true;
   const { profile, roomChannel } = access;
 
-  if (action === 'temp_room_rename_modal') {
-    const value = sanitizeRoomName(interaction.fields.getTextInputValue('value'), roomChannel.name);
-    if (value === roomChannel.name) {
-      await replyEphemeral(interaction, 'ℹ️ الاسم الجديد مطابق للاسم الحالي.');
+  if (action === 'temp_room_allow_duration_modal') {
+    const session = getSession(interaction.user.id);
+    const pending = session.pendingAllowSelection;
+    if (!pending || pending.ownerId !== ownerId || !pending.userIds?.length) {
+      await replyEphemeral(interaction, '❌ انتهت جلسة اختيار أعضاء السماح. حاول من جديد.');
       return true;
     }
-    profile.roomNameTemplate = value;
+    const duration = parseFlexibleDuration(interaction.fields.getTextInputValue('duration') || 'off');
+    if (duration === null) {
+      await replyEphemeral(interaction, '❌ مدة السماح غير صحيحة.');
+      return true;
+    }
+    const expiresAt = duration > 0 ? Date.now() + duration : null;
+    for (const userId of pending.userIds) {
+      const pendingInvite = profile.pendingInvites?.[userId] || null;
+      if (pendingInvite) {
+        const user = await interaction.guild.client.users.fetch(userId).catch(() => null);
+        await cleanupInviteRecord(interaction.guild, ownerId, profile, userId, { removeAccess: false, deleteMessage: true });
+        if (user) await notifyUser(user, { content: `تم تحويل دعوتك المؤقتة إلى سماح يدوي دائم/مؤقت في روم <#${roomChannel.id}>.` });
+      }
+      if (!profile.allowedUsers.includes(userId)) profile.allowedUsers.push(userId);
+      removeBanFromProfile(profile, userId);
+      setTimedAccessEntry(profile.allowedEntries, userId, { grantedBy: interaction.user.id, expiresAt, source: 'manual' });
+      profile.allowHistory = pushLimitedHistory(profile.allowHistory, { action: 'allow', userId, by: interaction.user.id, at: Date.now(), expiresAt });
+      const user = await interaction.guild.client.users.fetch(userId).catch(() => null);
+      await notifyUser(user, {
+        content: `تم إعطاؤك سماح دخول إلى روم <#${roomChannel.id}> بواسطة <@${interaction.user.id}>.\nالمدة: ${describeTimedAccess(expiresAt)}`
+      });
+    }
+    session.pendingAllowSelection = null;
     scheduleSave();
-    await roomChannel.setName(value).catch(() => null);
-    await replyEphemeral(interaction, `✅ تم تغيير اسم الروم إلى ${value}.`);
+    await applyRoomState(roomChannel, ownerId);
+    await replyEphemeral(interaction, `✅ تم حفظ السماح لـ ${pending.userIds.map(id => `<@${id}>`).join('، ')}.`);
+    await logTempRoomState(interaction.guild, {
+      title: '✅ **تحديث قائمة السماح**',
+      description: '**تمت إضافة أعضاء إلى قائمة السماح الخاصة بالروم المؤقت.**',
+      actorId: interaction.user.id,
+      ownerId,
+      roomId: roomChannel.id,
+      roomName: roomChannel.name,
+      roomRecord: access.roomRecord,
+      extra: `**الأعضاء:** ${pending.userIds.map(id => `<@${id}>`).join('، ')}\n**المدة:** ${describeTimedAccess(expiresAt)}`
+    });
+    return true;
+  }
+
+  if (action === 'temp_room_action_ban_modal') {
+    const session = getSession(interaction.user.id);
+    const pending = session.pendingBanTarget;
+    if (!pending || pending.ownerId !== ownerId || !pending.targetId) {
+      await replyEphemeral(interaction, '❌ انتهت جلسة الحظر. حاول من جديد.');
+      return true;
+    }
+    const duration = parseFlexibleDuration(interaction.fields.getTextInputValue('duration') || 'off');
+    if (duration === null) {
+      await replyEphemeral(interaction, '❌ مدة الحظر غير صحيحة.');
+      return true;
+    }
+    const targetId = pending.targetId;
+    const user = await interaction.guild.client.users.fetch(targetId).catch(() => null);
+    const member = await interaction.guild.members.fetch(targetId).catch(() => null);
+    const expiresAt = duration > 0 ? Date.now() + duration : null;
+    if (profile.pendingInvites?.[targetId]) {
+      await cleanupInviteRecord(interaction.guild, ownerId, profile, targetId, { removeAccess: true, deleteMessage: true });
+    }
+    removeTimedAccessEntry(profile, 'allow', targetId);
+    removeTimedAccessEntry(profile, 'admin', targetId);
+    removeMuteScopeFromProfile(profile, targetId, 'all');
+    setTimedBanEntry(profile, targetId, { by: interaction.user.id, expiresAt });
+    profile.moderationHistory = pushLimitedHistory(profile.moderationHistory, { action: 'ban', userId: targetId, by: interaction.user.id, at: Date.now(), expiresAt });
+    session.pendingBanTarget = null;
+    scheduleSave();
+    await applyRoomState(roomChannel, ownerId);
+    let disconnected = true;
+    if (member?.voice.channelId === roomChannel.id) disconnected = await disconnectMemberFromVoice(member, 'Banned from temp room');
+    await notifyUser(user, { content: `تم حظرك من روم <#${roomChannel.id}> بواسطة <@${interaction.user.id}>.\nالمدة: ${describeTimedAccess(expiresAt)}` });
+    await replyEphemeral(interaction, disconnected
+      ? `✅ تم حظر <@${targetId}> من الروم لمدة ${describeTimedAccess(expiresAt)}.`
+      : `⚠️ تم تسجيل الحظر على <@${targetId}> لكن تعذر فصله من الروم فوراً. سيتم منعه من الدخول والمحاولة مجدداً عند تحديث الحالة.`);
+    return true;
+  }
+
+  if (action === 'temp_room_admin_add_duration_modal') {
+    const session = getSession(interaction.user.id);
+    const pending = session.pendingAdminSelection;
+    if (!pending || pending.ownerId !== ownerId || !pending.userIds?.length) {
+      await replyEphemeral(interaction, '❌ انتهت جلسة اختيار المسؤولين. حاول من جديد.');
+      return true;
+    }
+    const duration = parseFlexibleDuration(interaction.fields.getTextInputValue('duration') || 'off');
+    if (duration === null) {
+      await replyEphemeral(interaction, '❌ مدة المسؤول غير صحيحة.');
+      return true;
+    }
+    const expiresAt = duration > 0 ? Date.now() + duration : null;
+    for (const userId of pending.userIds) {
+      if (userId !== ownerId && !profile.managers.includes(userId)) profile.managers.push(userId);
+      setTimedAccessEntry(profile.managerEntries, userId, { grantedBy: interaction.user.id, expiresAt, source: 'manual' });
+      profile.managerHistory = pushLimitedHistory(profile.managerHistory, { action: 'add', userId, by: interaction.user.id, at: Date.now(), expiresAt });
+      const user = await interaction.guild.client.users.fetch(userId).catch(() => null);
+      await notifyUser(user, {
+        content: `تم تعيينك مسؤولاً في روم <#${roomChannel.id}> بواسطة <@${interaction.user.id}>.\nالمدة: ${describeTimedAccess(expiresAt)}`
+      });
+    }
+    session.pendingAdminSelection = null;
+    scheduleSave();
+    await applyRoomState(roomChannel, ownerId);
+    await replyEphemeral(interaction, `✅ تم إضافة المسؤولين المحددين (${pending.userIds.length}).`);
+    await logTempRoomState(interaction.guild, {
+      title: '🛡️ **إضافة مسؤولين للروم**',
+      description: '**تمت إضافة مسؤولين جدد للروم المؤقت.**',
+      actorId: interaction.user.id,
+      ownerId,
+      roomId: roomChannel.id,
+      roomName: roomChannel.name,
+      roomRecord: access.roomRecord,
+      extra: `**الأعضاء:** ${pending.userIds.map(id => `<@${id}>`).join('، ')}\n**المدة:** ${describeTimedAccess(expiresAt)}`
+    });
+    return true;
+  }
+
+  if (action === 'temp_room_action_mute_member_modal') {
+    const session = getSession(interaction.user.id);
+    const pending = session.pendingModerationTarget;
+    if (!pending || pending.ownerId !== ownerId || pending.action !== 'mute_member') {
+      await replyEphemeral(interaction, '❌ انتهت جلسة الميوت. حاول من جديد.');
+      return true;
+    }
+    const duration = parseFlexibleDuration(interaction.fields.getTextInputValue('duration') || 'off');
+    if (duration === null) {
+      await replyEphemeral(interaction, '❌ مدة الميوت غير صحيحة.');
+      return true;
+    }
+    const expiresAt = duration > 0 ? Date.now() + duration : null;
+    applyMuteScopeToProfile(profile, pending.targetId, pending.scope, expiresAt, interaction.user.id);
+    profile.moderationHistory = pushLimitedHistory(profile.moderationHistory, { action: `mute_${pending.scope}`, userId: pending.targetId, by: interaction.user.id, at: Date.now(), expiresAt });
+    session.pendingModerationTarget = null;
+    session.pendingModerationScope = null;
+    scheduleSave();
+    await applyRoomState(roomChannel, ownerId);
+    await replyEphemeral(interaction, `✅ تم إعطاء ميوت ${getScopeLabel(pending.scope)} لـ <@${pending.targetId}>.`);
+    return true;
+  }
+
+  if (action === 'temp_room_action_mute_all_modal') {
+    const session = getSession(interaction.user.id);
+    const pending = session.pendingMuteAll;
+    if (!pending || pending.ownerId !== ownerId) {
+      await replyEphemeral(interaction, '❌ انتهت جلسة ميوت الكل. حاول من جديد.');
+      return true;
+    }
+    const duration = parseFlexibleDuration(interaction.fields.getTextInputValue('duration') || 'off');
+    if (duration === null) {
+      await replyEphemeral(interaction, '❌ مدة الميوت غير صحيحة.');
+      return true;
+    }
+    const expiresAt = duration > 0 ? Date.now() + duration : null;
+    for (const userId of pending.targetIds) {
+      applyMuteScopeToProfile(profile, userId, pending.scope, expiresAt, interaction.user.id);
+      profile.moderationHistory = pushLimitedHistory(profile.moderationHistory, { action: `mute_all_${pending.scope}`, userId, by: interaction.user.id, at: Date.now(), expiresAt });
+    }
+    session.pendingMuteAll = null;
+    scheduleSave();
+    await applyRoomState(roomChannel, ownerId);
+    await replyEphemeral(interaction, `✅ تم إعطاء ميوت ${getScopeLabel(pending.scope)} لكل الموجودين حالياً في الروم.`);
+    return true;
+  }
+
+  if (action === 'temp_room_rename_modal') {
+    const names = parseCommaSeparatedNames(interaction.fields.getTextInputValue('value'));
+    if (!names.length) {
+      await replyEphemeral(interaction, '❌ أدخل اسماً صالحاً واحداً على الأقل.');
+      return true;
+    }
+    const intervalInput = interaction.fields.getTextInputValue('interval') || 'off';
+    const interval = parseFlexibleDuration(intervalInput);
+    if (interval === null) {
+      await replyEphemeral(interaction, '❌ مدة تدوير الاسم غير صحيحة.');
+      return true;
+    }
+    if (names.length > 1 && interval < 3600000) {
+      await replyEphemeral(interaction, '❌ أقل مدة لتدوير الأسماء هي ساعة واحدة عند استخدام أكثر من اسم.');
+      return true;
+    }
+    const shouldRenameNow = roomChannel.name !== names[0];
+    if (shouldRenameNow) {
+      const renamed = await roomChannel.setName(names[0]).then(() => true).catch(() => false);
+      if (!renamed) {
+        await replyEphemeral(interaction, '❌ تم حفظ الإدخال لكن تعذر تغيير اسم الروم حالياً. حاول مرة أخرى بعد قليل.');
+        return true;
+      }
+    }
+    profile.roomNameTemplate = names[0];
+    profile.roomNameRotationNames = names.length > 1 ? names : [];
+    profile.roomNameRotationIntervalMs = names.length > 1 ? interval : 0;
+    profile.roomNameRotationIndex = 0;
+    profile.roomNameRotationNextAt = names.length > 1 ? Date.now() + interval : 0;
+    scheduleSave();
+    await replyEphemeral(interaction, names.length > 1
+      ? `✅ تم ضبط تدوير أسماء الروم: ${names.join('، ')} كل ${formatDuration(interval)}.`
+      : `✅ تم تغيير اسم الروم إلى ${names[0]}.`);
     await logTempRoomState(interaction.guild, {
       title: '✏️ **تغيير اسم روم مؤقت**',
       description: '**تم تعديل اسم الروم المؤقت.**',
       actorId: interaction.user.id,
       ownerId,
       roomId: roomChannel.id,
-      roomName: value,
+      roomName: names[0],
       roomRecord: access.roomRecord,
-      extra: `**الاسم الجديد:** **${value}**`
+      extra: names.length > 1
+        ? `**الأسماء:** ${names.map(name => `**${name}**`).join('، ')}\n**المدة:** ${formatDuration(interval)}`
+        : `**الاسم الجديد:** **${names[0]}**`
     });
     return true;
   }
@@ -2211,13 +3839,13 @@ async function handleRoomModal(interaction) {
       await replyEphemeral(interaction, '❌ الحد يجب أن يكون بين 0 و 99.');
       return true;
     }
-    if ((roomChannel.userLimit || 0) === limit) {
+    if ((profile.userLimit || 0) === limit) {
       await replyEphemeral(interaction, 'ℹ️ الحد الحالي مطابق للقيمة المدخلة.');
       return true;
     }
     profile.userLimit = limit;
     scheduleSave();
-    await roomChannel.setUserLimit(limit).catch(() => null);
+    await applyRoomState(roomChannel, ownerId);
     await replyEphemeral(interaction, `✅ تم تحديث الحد إلى ${limit}.`);
     await logTempRoomState(interaction.guild, {
       title: '👥 **تحديث حد الروم**',
@@ -2250,12 +3878,16 @@ function registerInteractionHandler(client) {
   interactionRouter.register('temp_room_', async interaction => {
     if (interaction.isButton()) return handleRoomButton(interaction);
     if (interaction.isStringSelectMenu() || interaction.isUserSelectMenu()) {
-      if (interaction.customId.startsWith('temp_room_action_target:')) return handleActionTargetSelect(interaction);
       return handleRoomSelect(interaction);
     }
     if (interaction.isModalSubmit()) return handleRoomModal(interaction);
     return false;
   }, { name: 'temp-room', priority: 80, types: ['button', 'stringSelect', 'userSelect', 'modal'] });
+
+  interactionRouter.register('temp_invite_', async interaction => {
+    if (interaction.isButton()) return handleInviteButton(interaction);
+    return false;
+  }, { name: 'temp-invite', priority: 80, types: ['button'] });
 
   client.on('voiceStateUpdate', handleVoiceStateUpdate);
 
