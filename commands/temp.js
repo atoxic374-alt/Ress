@@ -34,6 +34,16 @@ const SETTING_CONTROL_KEYS = [
   'music', 'admin', 'transfer', 'actions'
 ];
 
+const CONTROL_LAYOUT_ORDER = [
+  'open', 'lock', 'show', 'hide',
+  'invite', 'allow', 'reject', 'admin',
+  'rename', 'limit', 'region', 'transfer',
+  'music', 'actions'
+];
+
+const LATIN_FONT_FAMILY = '"Segoe UI", "Arial", sans-serif';
+const ARABIC_FONT_FAMILY = '"Noto Sans Arabic", "Segoe UI", "Arial", sans-serif';
+
 const CONTROL_META = {
   open: { label: 'Open', description: 'فتح الروم والسماح بالدخول' },
   lock: { label: 'Lock', description: 'قفل الروم ومنع الدخول العام' },
@@ -629,75 +639,61 @@ function drawWrappedText(ctx, text, x, y, maxWidth, lineHeight, maxLines = 2) {
 }
 
 
+function fitTextSize(ctx, text, maxWidth, startSize, minSize, fontFamily, weight = 'bold') {
+  let size = startSize;
+  while (size > minSize) {
+    ctx.font = `${weight} ${size}px ${fontFamily}`;
+    if (ctx.measureText(String(text || '')).width <= maxWidth) return size;
+    size -= 1;
+  }
+  return minSize;
+}
+
+
 async function buildGeneralControlCard(guild, statusText) {
   const width = 1600;
-  const height = 980;
+  const height = 1040;
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
   const accent = await getGuildAccent(guild);
 
   const background = ctx.createLinearGradient(0, 0, width, height);
-  background.addColorStop(0, '#050814');
-  background.addColorStop(0.35, '#0d172a');
-  background.addColorStop(0.72, accent);
-  background.addColorStop(1, '#070b14');
+  background.addColorStop(0, '#050816');
+  background.addColorStop(0.45, '#0b1426');
+  background.addColorStop(0.8, accent);
+  background.addColorStop(1, '#070b15');
   ctx.fillStyle = background;
   ctx.fillRect(0, 0, width, height);
 
-  drawRoundedRect(ctx, 36, 36, width - 72, height - 72, 42, 'rgba(7,12,24,0.58)', { color: 'rgba(0,0,0,0.50)', blur: 48, x: 0, y: 18 }, 'rgba(255,255,255,0.08)');
-  drawRoundedRect(ctx, 58, 58, width - 116, 236, 34, 'rgba(255,255,255,0.06)', { color: 'rgba(255,255,255,0.08)', blur: 14, x: 0, y: -6 }, 'rgba(255,255,255,0.12)');
-  drawRoundedRect(ctx, 76, 310, width - 152, height - 410, 30, 'rgba(255,255,255,0.035)', { color: 'rgba(0,0,0,0.25)', blur: 22, x: 0, y: 12 }, 'rgba(255,255,255,0.08)');
+  const glow = ctx.createRadialGradient(width * 0.74, height * 0.18, 50, width * 0.74, height * 0.18, 420);
+  glow.addColorStop(0, 'rgba(255,255,255,0.18)');
+  glow.addColorStop(0.25, 'rgba(255,255,255,0.06)');
+  glow.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, width, height);
 
-  const iconUrl = guild.iconURL({ extension: 'png', size: 256 });
-  if (iconUrl) {
-    try {
-      const icon = await loadImage(iconUrl);
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(160, 175, 74, 0, Math.PI * 2);
-      ctx.closePath();
-      ctx.clip();
-      ctx.drawImage(icon, 86, 101, 148, 148);
-      ctx.restore();
-      ctx.beginPath();
-      ctx.arc(160, 175, 74, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(255,255,255,0.45)';
-      ctx.lineWidth = 4;
-      ctx.stroke();
-    } catch (error) {
-      console.error('[temp] canvas icon load failed:', error.message);
-    }
-  }
+  drawRoundedRect(ctx, 34, 34, width - 68, height - 68, 40, 'rgba(7,11,24,0.56)', { color: 'rgba(0,0,0,0.56)', blur: 52, x: 0, y: 22 }, 'rgba(255,255,255,0.08)');
+  drawRoundedRect(ctx, 58, 58, width - 116, 220, 34, 'rgba(255,255,255,0.07)', { color: 'rgba(255,255,255,0.08)', blur: 18, x: 0, y: -4 }, 'rgba(255,255,255,0.12)');
+  drawRoundedRect(ctx, 74, 308, width - 148, height - 392, 32, 'rgba(255,255,255,0.035)', { color: 'rgba(0,0,0,0.3)', blur: 26, x: 0, y: 14 }, 'rgba(255,255,255,0.085)');
 
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
   ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 62px Sans';
-  ctx.textAlign = 'left';
-  ctx.fillText('General Temp Voice Control', 270, 145);
+  ctx.shadowColor = 'rgba(0,0,0,0.35)';
+  ctx.shadowBlur = 18;
+  ctx.font = `bold 72px ${LATIN_FONT_FAMILY}`;
+  ctx.fillText('Temp Voice Control', width / 2, 168);
+  ctx.shadowBlur = 0;
 
-  ctx.textAlign = 'right';
-  ctx.fillStyle = 'rgba(255,255,255,0.92)';
-  ctx.font = 'bold 30px Sans';
-  ctx.fillText('لوحة تحكم عامة وثابتة للرومات المؤقتة', 1430, 150);
-  ctx.font = '26px Sans';
-  ctx.fillStyle = 'rgba(255,255,255,0.82)';
-  ctx.fillText('استخدم الأزرار من هذه الرسالة فقط — بلا رسائل كنترول إضافية', 1430, 195);
-  ctx.fillText('ادخل رومك المؤقت أولاً أو كن مسؤولاً فيه لتظهر العمليات بشكل صحيح', 1430, 232);
-
-  drawRoundedRect(ctx, 270, 220, 1110, 48, 18, 'rgba(255,255,255,0.09)');
-  ctx.textAlign = 'right';
-  ctx.fillStyle = 'rgba(255,255,255,0.96)';
-  ctx.font = 'bold 23px Sans';
-  ctx.fillText(clampText(ctx, `آخر حالة: ${statusText}`, 1040), 1340, 251);
-
-  const enabledKeys = SETTING_CONTROL_KEYS.filter(key => getGuildConfig(guild.id).enabledControls[key]);
-  const cols = 3;
-  const boxWidth = 418;
-  const boxHeight = 116;
-  const gapX = 32;
-  const gapY = 28;
+  const enabledKeys = CONTROL_LAYOUT_ORDER.filter(key => getGuildConfig(guild.id).enabledControls[key]);
+  const cols = 4;
+  const boxWidth = 328;
+  const boxHeight = 126;
+  const gapX = 26;
+  const gapY = 24;
   const totalWidth = cols * boxWidth + (cols - 1) * gapX;
   const startX = Math.round((width - totalWidth) / 2);
-  const startY = 350;
+  const startY = 360;
 
   enabledKeys.forEach((key, index) => {
     const row = Math.floor(index / cols);
@@ -705,25 +701,29 @@ async function buildGeneralControlCard(guild, statusText) {
     const x = startX + col * (boxWidth + gapX);
     const y = startY + row * (boxHeight + gapY);
 
-    drawRoundedRect(ctx, x, y, boxWidth, boxHeight, 28, 'rgba(255,255,255,0.085)', { color: 'rgba(0,0,0,0.38)', blur: 26, x: 0, y: 16 }, 'rgba(255,255,255,0.1)');
-    drawRoundedRect(ctx, x + 212, y + 12, 188, boxHeight - 24, 22, 'rgba(255,255,255,0.13)', { color: 'rgba(255,255,255,0.10)', blur: 10, x: 0, y: -2 }, 'rgba(255,255,255,0.14)');
+    drawRoundedRect(ctx, x, y, boxWidth, boxHeight, 28, 'rgba(255,255,255,0.082)', { color: 'rgba(0,0,0,0.42)', blur: 28, x: 0, y: 16 }, 'rgba(255,255,255,0.12)');
+    drawRoundedRect(ctx, x + 184, y + 14, 126, boxHeight - 28, 22, 'rgba(255,255,255,0.16)', { color: 'rgba(255,255,255,0.14)', blur: 12, x: 0, y: -2 }, 'rgba(255,255,255,0.18)');
+
+    const buttonGlow = ctx.createLinearGradient(x + 184, y + 14, x + 310, y + boxHeight - 14);
+    buttonGlow.addColorStop(0, 'rgba(255,255,255,0.18)');
+    buttonGlow.addColorStop(1, 'rgba(255,255,255,0.06)');
+    drawRoundedRect(ctx, x + 190, y + 20, 114, boxHeight - 40, 18, buttonGlow, null, 'rgba(255,255,255,0.08)');
 
     ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 36px Sans';
-    ctx.fillText(clampText(ctx, CONTROL_META[key].label, 155), x + 306, y + 68);
+    ctx.shadowColor = 'rgba(0,0,0,0.28)';
+    ctx.shadowBlur = 12;
+    const latinSize = fitTextSize(ctx, CONTROL_META[key].label, 112, 34, 21, LATIN_FONT_FAMILY, 'bold');
+    ctx.font = `bold ${latinSize}px ${LATIN_FONT_FAMILY}`;
+    ctx.fillText(CONTROL_META[key].label, x + 247, y + (boxHeight / 2) + 1);
+    ctx.shadowBlur = 0;
 
     ctx.textAlign = 'right';
-    ctx.fillStyle = 'rgba(255,255,255,0.93)';
-    ctx.font = '27px Sans';
-    drawWrappedText(ctx, CONTROL_META[key].description, x + 180, y + 48, 160, 31, 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.97)';
+    ctx.font = `600 22px ${ARABIC_FONT_FAMILY}`;
+    drawWrappedText(ctx, CONTROL_META[key].description, x + 162, y + 48, 134, 28, 3);
   });
-
-  drawRoundedRect(ctx, 110, height - 106, width - 220, 54, 22, 'rgba(255,255,255,0.065)', { color: 'rgba(0,0,0,0.18)', blur: 12, x: 0, y: 6 });
-  ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(255,255,255,0.85)';
-  ctx.font = '24px Sans';
-  ctx.fillText('ألوان ديناميكية من أيقونة السيرفر • ظلال أقوى • RTL مضبوط • نفس الرسالة تتحدث مع كل تفاعل', width / 2, height - 72);
 
   return new AttachmentBuilder(canvas.toBuffer('image/png'), { name: `temp-general-control-${guild.id}.png` });
 }
@@ -733,27 +733,23 @@ function buildGeneralControlRows(guildId) {
   const enabled = key => config.enabledControls[key] !== false;
   const rows = [];
 
-  const row1 = [];
-  if (enabled('open')) row1.push(new ButtonBuilder().setCustomId('temp_room_open').setLabel('Open').setStyle(ButtonStyle.Success));
-  if (enabled('lock')) row1.push(new ButtonBuilder().setCustomId('temp_room_lock').setLabel('Lock').setStyle(ButtonStyle.Danger));
-  if (enabled('show')) row1.push(new ButtonBuilder().setCustomId('temp_room_show').setLabel('Show').setStyle(ButtonStyle.Primary));
-  if (enabled('hide')) row1.push(new ButtonBuilder().setCustomId('temp_room_hide').setLabel('Hide').setStyle(ButtonStyle.Secondary));
-  if (enabled('invite')) row1.push(new ButtonBuilder().setCustomId('temp_room_invite').setLabel('Invite').setStyle(ButtonStyle.Primary));
-  if (row1.length) rows.push(new ActionRowBuilder().addComponents(row1));
+  const createButton = key => new ButtonBuilder().setCustomId(`temp_room_${key}`).setLabel(CONTROL_META[key].label).setStyle(
+    key === 'open' || key === 'allow' ? ButtonStyle.Success :
+      key === 'lock' || key === 'reject' || key === 'transfer' ? ButtonStyle.Danger :
+        key === 'show' || key === 'invite' || key === 'rename' || key === 'limit' ? ButtonStyle.Primary :
+          ButtonStyle.Secondary
+  );
 
-  const row2 = [];
-  if (enabled('rename')) row2.push(new ButtonBuilder().setCustomId('temp_room_rename').setLabel('Rename').setStyle(ButtonStyle.Primary));
-  if (enabled('limit')) row2.push(new ButtonBuilder().setCustomId('temp_room_limit').setLabel('Limit').setStyle(ButtonStyle.Primary));
-  if (enabled('region')) row2.push(new ButtonBuilder().setCustomId('temp_room_region').setLabel('Region').setStyle(ButtonStyle.Secondary));
-  if (enabled('allow')) row2.push(new ButtonBuilder().setCustomId('temp_room_allow').setLabel('Allow').setStyle(ButtonStyle.Success));
-  if (enabled('reject')) row2.push(new ButtonBuilder().setCustomId('temp_room_reject').setLabel('Reject').setStyle(ButtonStyle.Danger));
-  if (row2.length) rows.push(new ActionRowBuilder().addComponents(row2));
+  const rowDefinitions = [
+    ['open', 'lock', 'show', 'hide'],
+    ['invite', 'allow', 'reject', 'admin'],
+    ['rename', 'limit', 'region', 'transfer', 'music']
+  ];
 
-  const row3 = [];
-  if (enabled('music')) row3.push(new ButtonBuilder().setCustomId('temp_room_music').setLabel('Music').setStyle(ButtonStyle.Secondary));
-  if (enabled('admin')) row3.push(new ButtonBuilder().setCustomId('temp_room_admin').setLabel('Admin').setStyle(ButtonStyle.Secondary));
-  if (enabled('transfer')) row3.push(new ButtonBuilder().setCustomId('temp_room_transfer').setLabel('Transfer').setStyle(ButtonStyle.Danger));
-  if (row3.length) rows.push(new ActionRowBuilder().addComponents(row3));
+  for (const keys of rowDefinitions) {
+    const buttons = keys.filter(enabled).map(createButton);
+    if (buttons.length) rows.push(new ActionRowBuilder().addComponents(buttons));
+  }
 
   if (enabled('actions')) {
     rows.push(new ActionRowBuilder().addComponents(
@@ -769,16 +765,8 @@ function buildGeneralControlRows(guildId) {
   return rows;
 }
 
-function createGeneralControlMessageContent(guild) {
-  const config = getGuildConfig(guild.id);
-  return [
-    '**Temp Voice General Control**',
-    '**لوحة عامة وثابتة لكل الرومات المؤقتة.**',
-    '**لا يوجد هنا عرض لروم معيّن أو تفاصيل مالك معيّن.**',
-    '**ادخل رومك المؤقت أو كن مسؤولًا فيه ثم استخدم الأزرار.**',
-    '',
-    `**الحالة الأخيرة:** ${config.controlStatus || 'جاهز للاستخدام'}`
-  ].join('\n');
+function createGeneralControlMessageContent() {
+  return '**Temp Voice Control**';
 }
 
 async function ensureGuildControlPanel(guild, statusText = null) {
