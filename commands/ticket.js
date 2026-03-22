@@ -2329,15 +2329,13 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
 
   ticket.claimedBy = interaction.user.id;
   touchTicketActivity(ticket);
-  if (canUseGeneralPointsCommand(interaction.member, guildId, interaction.guild)) {
-    recordClaimPointIfNeeded(ticket, {
-      guildId,
-      panelId: resolvedPanelId,
-      channelId: actionChannelId,
-      actorId: interaction.user.id,
-      targetId: ticket.memberId || ''
-    });
-  }
+  recordClaimPointIfNeeded(ticket, {
+    guildId,
+    panelId: resolvedPanelId,
+    channelId: actionChannelId,
+    actorId: interaction.user.id,
+    targetId: ticket.memberId || ''
+  });
   setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
   await interaction.editReply(buildTicketMessagePayload('Claimed', '**تم استلام التكت بنجاح.**', { user: interaction.user }));
 
@@ -2484,15 +2482,13 @@ async function handleClaimFromRequest(interaction, reqId) {
   const createdTicket = tickets[channel.id];
   createdTicket.claimedBy = interaction.user.id;
   touchTicketActivity(createdTicket);
-  if (canUseGeneralPointsCommand(interaction.member, guildId, interaction.guild)) {
-    recordClaimPointIfNeeded(createdTicket, {
-      guildId,
-      panelId,
-      channelId: channel.id,
-      actorId: interaction.user.id,
-      targetId: createdTicket.memberId || ''
-    });
-  }
+  recordClaimPointIfNeeded(createdTicket, {
+    guildId,
+    panelId,
+    channelId: channel.id,
+    actorId: interaction.user.id,
+    targetId: createdTicket.memberId || ''
+  });
 
   delete pendingRequests[reqId];
   setGuildData(guildId, config, tickets, pendingRequests, panelId);
