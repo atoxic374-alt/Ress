@@ -374,6 +374,23 @@ function recordManagerPoint(points, { guildId, panelId = 'default', channelId, a
   });
 }
 
+function recordClaimPointIfNeeded(ticket, { guildId, panelId = 'default', channelId, actorId, targetId = '' } = {}) {
+  if (!ticket || ticket.claimPointRecordedAt) return false;
+  const points = loadPoints();
+  const appended = recordManagerPoint(points, {
+    guildId,
+    panelId,
+    channelId,
+    actorId,
+    targetId,
+    at: Date.now()
+  });
+  if (!appended) return false;
+  savePoints(points);
+  ticket.claimPointRecordedAt = Date.now();
+  return true;
+}
+
 function getManagerPointCount(points, userId) {
   const targetId = String(userId || '').trim();
   const audit = Array.isArray(points?.__managerPointsAudit) ? points.__managerPointsAudit : [];
@@ -1204,6 +1221,19 @@ function getTicketContextFromInteraction(guildId, interaction, channelId, prefer
   };
 }
 
+function parseTicketGuildPanelChannel(customId, guildIndex) {
+  const parts = String(customId || '').split('_');
+  const guildId = String(parts[guildIndex] || '').trim();
+  const channelId = String(parts[parts.length - 1] || '').trim();
+  const panelSlice = parts.slice(guildIndex + 1, -1);
+  const panelId = panelSlice.length ? panelSlice.join('_') : 'default';
+  return {
+    guildId,
+    panelId: panelId || 'default',
+    channelId
+  };
+}
+
 function findPendingRequestContext(guildId, reqId, preferredPanelId = 'default') {
   const direct = getPanelData(guildId, preferredPanelId || 'default');
   if (direct.pendingRequests?.[reqId]) {
@@ -1501,11 +1531,30 @@ async function countClaimedByAdminSafe(guild, tickets, adminId) {
   return { count: countClaimedByAdmin(tickets, adminId), changed };
 }
 
-function prunePendingRequests(pendingRequests) {
+function prunePendingRequests(pendingRequests, config = null) {
   let changed = false;
   for (const [reqId, req] of Object.entries(pendingRequests || {})) {
     const createdAt = Number(req?.createdAt || 0);
     if (!req || typeof req !== 'object' || !createdAt) {
+      delete pendingRequests[reqId];
+      changed = true;
+      continue;
+    }
+
+    const hasClaimRefs = Array.isArray(req?.claimMessageRefs) && req.claimMessageRefs.length > 0;
+    if (config?.autoCreateOnRequest) {
+      delete pendingRequests[reqId];
+      changed = true;
+      continue;
+    }
+
+    if (config?.claimFromDedicatedChannel && !config?.claimChannelId) {
+      delete pendingRequests[reqId];
+      changed = true;
+      continue;
+    }
+
+    if (!hasClaimRefs && !req?.claimedAt) {
       delete pendingRequests[reqId];
       changed = true;
     }
@@ -2130,7 +2179,7 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
     return;
   }
 
-  const pruned = prunePendingRequests(pendingRequests);
+  const pruned = prunePendingRequests(pendingRequests, config);
   if (pruned) setGuildData(guildId, config, tickets, pendingRequests, safePanelId);
 
   if (!config.autoCreateOnRequest && !config.claimFromDedicatedChannel && !interaction.channelId) {
@@ -2280,6 +2329,15 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
 
   ticket.claimedBy = interaction.user.id;
   touchTicketActivity(ticket);
+  if (canUseGeneralPointsCommand(interaction.member, guildId, interaction.guild)) {
+    recordClaimPointIfNeeded(ticket, {
+      guildId,
+      panelId: resolvedPanelId,
+      channelId: actionChannelId,
+      actorId: interaction.user.id,
+      targetId: ticket.memberId || ''
+    });
+  }
   setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
   await interaction.editReply(buildTicketMessagePayload('Claimed', '**تم استلام التكت بنجاح.**', { user: interaction.user }));
 
@@ -2360,7 +2418,7 @@ async function handleClaimFromRequest(interaction, reqId) {
   }
 
   let { panelId, config, tickets, pendingRequests, req } = requestContext;
-  const pruned = prunePendingRequests(pendingRequests);
+  const pruned = prunePendingRequests(pendingRequests, config);
   if (pruned) {
     setGuildData(guildId, config, tickets, pendingRequests, panelId);
     requestContext = findPendingRequestContext(guildId, reqId, panelId);
@@ -2426,6 +2484,15 @@ async function handleClaimFromRequest(interaction, reqId) {
   const createdTicket = tickets[channel.id];
   createdTicket.claimedBy = interaction.user.id;
   touchTicketActivity(createdTicket);
+  if (canUseGeneralPointsCommand(interaction.member, guildId, interaction.guild)) {
+    recordClaimPointIfNeeded(createdTicket, {
+      guildId,
+      panelId,
+      channelId: channel.id,
+      actorId: interaction.user.id,
+      targetId: createdTicket.memberId || ''
+    });
+  }
 
   delete pendingRequests[reqId];
   setGuildData(guildId, config, tickets, pendingRequests, panelId);
@@ -5217,6 +5284,9 @@ function startTicketAutoCloseWatcher(client) {
         const warningMs = Math.max(1, Number(config.autoCloseWarningMinutes || 10)) * 60 * 1000;
 
         let changed = false;
+        if (prunePendingRequests(pendingRequests, config)) {
+          changed = true;
+        }
         for (const [channelId, ticket] of Object.entries(tickets || {})) {
           if (!ticket || ticket.status !== 'open') continue;
           const dueAt = getTicketDueAt(ticket, config);
@@ -5304,15 +5374,18 @@ function registerHandlers(client) {
         if (id.startsWith('ticket_open_btn_')) {
           const parts = id.split('_');
           const guildId = parts[3];
-          const panelId = parts.length >= 6 ? parts[4] : 'default';
-          const reasonKey = parts.length >= 6 ? parts[5] : parts[4];
+          const payloadParts = parts.slice(4);
+          const panelId = payloadParts.length > 1 ? payloadParts.slice(0, -1).join('_') : 'default';
+          const reasonKey = payloadParts.length ? payloadParts[payloadParts.length - 1] : parts[4];
           await handleOpenWithReasonModal(interaction, guildId, panelId, reasonKey, client);
           return;
         }
 
         if (interaction.isStringSelectMenu() && id.startsWith('ticket_open_menu_')) {
           const raw = id.replace('ticket_open_menu_', '');
-          const [guildId, panelId = 'default'] = raw.split('_');
+          const rawParts = raw.split('_');
+          const guildId = rawParts[0];
+          const panelId = rawParts.length > 1 ? rawParts.slice(1).join('_') : 'default';
           const value = interaction.values?.[0] || 'reason_0';
           const reasonKey = value.replace('reason_', '');
           await handleOpenWithReasonModal(interaction, guildId, panelId, reasonKey, client);
@@ -5330,46 +5403,31 @@ function registerHandlers(client) {
         }
 
         if (id.startsWith('ticket_claim_')) {
-          const parts = id.split('_');
-          const guildId = parts[2];
-          const panelId = parts.length >= 5 ? parts[3] : 'default';
-          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(id, 2);
           await handleClaimInTicket(interaction, guildId, panelId, channelId);
           return;
         }
 
         if (id.startsWith('ticket_close_')) {
-          const parts = id.split('_');
-          const guildId = parts[2];
-          const panelId = parts.length >= 5 ? parts[3] : 'default';
-          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(id, 2);
           await handleClose(interaction, guildId, panelId, channelId);
           return;
         }
 
         if (id.startsWith('ticket_reassign_claim_')) {
-          const parts = id.split('_');
-          const guildId = parts[3];
-          const panelId = parts.length >= 6 ? parts[4] : 'default';
-          const channelId = parts.length >= 6 ? parts[5] : parts[4];
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(id, 3);
           await handleReassignClaim(interaction, guildId, panelId, channelId);
           return;
         }
 
         if (id.startsWith('ticket_reassign_')) {
-          const parts = id.split('_');
-          const guildId = parts[2];
-          const panelId = parts.length >= 5 ? parts[3] : 'default';
-          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(id, 2);
           await handleReassignRequest(interaction, guildId, panelId, channelId);
           return;
         }
 
         if (id.startsWith('ticket_delete_')) {
-          const parts = id.split('_');
-          const guildId = parts[2];
-          const panelId = parts.length >= 5 ? parts[3] : findTicketPanel(guildId, parts[3], 'default');
-          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(id, 2);
           const { panelId: resolvedPanelId, config, tickets, pendingRequests, ticket, actionChannelId } = getTicketContextFromInteraction(guildId, interaction, channelId, panelId);
           if (!ticket || interaction.channelId !== actionChannelId) {
             await interaction.reply(buildTicketMessagePayload('Error', '**لا توجد بيانات لهذا التكت.**', { ephemeral: true }));
@@ -5417,10 +5475,7 @@ function registerHandlers(client) {
         }
 
         if (id.startsWith('ticket_down2_') || id.startsWith('ticket_down_') || id.startsWith('ticket_up1_') || id.startsWith('ticket_up2_')) {
-          const parts = id.split('_');
-          const guildId = parts[2];
-          const panelId = parts.length >= 5 ? parts[3] : findTicketPanel(guildId, parts[3], 'default');
-          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(id, 2);
           const { panelId: resolvedPanelId, config, tickets, pendingRequests, ticket, actionChannelId } = getTicketContextFromInteraction(guildId, interaction, channelId, panelId);
           if (!ticket || interaction.channelId !== actionChannelId) {
             await interaction.reply(buildTicketMessagePayload('Error', '**لا توجد بيانات لهذا التكت.**', { ephemeral: true }));
@@ -5527,10 +5582,7 @@ function registerHandlers(client) {
         }
 
         if (id.startsWith('ticket_points_revert_') || id.startsWith('ticket_points_cancel_')) {
-          const parts = id.split('_');
-          const guildId = parts[3];
-          const panelId = parts[4];
-          const channelId = parts[5];
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(id, 3);
           if (id.startsWith('ticket_points_cancel_')) {
             await interaction.update({ components: [] });
             return;
@@ -5608,10 +5660,7 @@ function registerHandlers(client) {
         }
 
         if (id.startsWith('ticket_rename_')) {
-          const parts = id.split('_');
-          const guildId = parts[2];
-          const panelId = parts.length >= 5 ? parts[3] : 'default';
-          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(id, 2);
           const { panelId: resolvedPanelId, config, ticket, actionChannelId } = getTicketContextFromInteraction(guildId, interaction, channelId, panelId);
           if (!ticket || interaction.channelId !== actionChannelId) {
             await interaction.reply(buildTicketMessagePayload('Error', '**لا توجد بيانات لهذا التكت.**', { ephemeral: true }));
@@ -5640,10 +5689,7 @@ function registerHandlers(client) {
         }
 
         if (id.startsWith('ticket_add_')) {
-          const parts = id.split('_');
-          const guildId = parts[2];
-          const panelId = parts.length >= 5 ? parts[3] : 'default';
-          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(id, 2);
           const { panelId: resolvedPanelId, config, ticket, actionChannelId } = getTicketContextFromInteraction(guildId, interaction, channelId, panelId);
           if (!ticket || interaction.channelId !== actionChannelId) {
             await interaction.reply(buildTicketMessagePayload('Error', '**لا توجد بيانات لهذا التكت.**', { ephemeral: true }));
@@ -5658,10 +5704,7 @@ function registerHandlers(client) {
         }
 
         if (id.startsWith('ticket_remove_')) {
-          const parts = id.split('_');
-          const guildId = parts[2];
-          const panelId = parts.length >= 5 ? parts[3] : 'default';
-          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(id, 2);
           const { panelId: resolvedPanelId, config, ticket, actionChannelId } = getTicketContextFromInteraction(guildId, interaction, channelId, panelId);
           if (!ticket || interaction.channelId !== actionChannelId) {
             await interaction.reply(buildTicketMessagePayload('Error', '**لا توجد بيانات لهذا التكت.**', { ephemeral: true }));
@@ -5676,10 +5719,7 @@ function registerHandlers(client) {
         }
 
         if (id.startsWith('ticket_ping_')) {
-          const parts = id.split('_');
-          const guildId = parts[2];
-          const panelId = parts.length >= 5 ? parts[3] : 'default';
-          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(id, 2);
           const { panelId: resolvedPanelId, tickets, config, pendingRequests, ticket, actionChannelId } = getTicketContextFromInteraction(guildId, interaction, channelId, panelId);
           if (!ticket || interaction.channelId !== actionChannelId) {
             await interaction.reply(buildTicketMessagePayload('Error', '**لا توجد بيانات لهذا التكت.**', { ephemeral: true }));
@@ -5724,10 +5764,7 @@ function registerHandlers(client) {
         }
 
         if (interaction.isStringSelectMenu() && id.startsWith('ticket_transfer_')) {
-          const parts = id.split('_');
-          const guildId = parts[2];
-          const panelId = parts.length >= 5 ? parts[3] : 'default';
-          const channelId = parts.length >= 5 ? parts[4] : parts[3];
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(id, 2);
           const selected = interaction.values?.[0] || 'resp_none';
           if (selected === 'resp_search') {
             await showResponsibilitySearchModal(interaction, guildId, panelId, channelId);
@@ -5748,10 +5785,7 @@ function registerHandlers(client) {
         }
 
         if (interaction.isStringSelectMenu() && id.startsWith('ticket_transfer_confirm_')) {
-          const parts = id.split('_');
-          const guildId = parts[3];
-          const panelId = parts.length >= 6 ? parts[4] : 'default';
-          const channelId = parts.length >= 6 ? parts[5] : parts[4];
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(id, 3);
           const selected = interaction.values?.[0] || 'resp_none';
           await handleTransferResponsibility(interaction, guildId, panelId, channelId, selected);
           return;
@@ -5799,7 +5833,7 @@ function registerHandlers(client) {
         }
 
         if (modalId.startsWith('ticket_rename_modal_')) {
-          const [, , , guildId, panelId = 'default', channelId] = modalId.split('_');
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(modalId, 3);
           const newName = sanitizeName(interaction.fields.getTextInputValue('value'));
           if (!newName) {
             await interaction.reply(buildTicketMessagePayload('Failed', '**الاسم غير صالح.**', { ephemeral: true }));
@@ -5828,7 +5862,7 @@ function registerHandlers(client) {
         }
 
         if (modalId.startsWith('ticket_add_modal_')) {
-          const [, , , guildId, panelId = 'default', channelId] = modalId.split('_');
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(modalId, 3);
           const userId = normalizeId(interaction.fields.getTextInputValue('value'));
           if (!userId) {
             await interaction.reply(buildTicketMessagePayload('Error', '**المدخل غير صالح.**', { ephemeral: true }));
@@ -5872,7 +5906,7 @@ function registerHandlers(client) {
         }
 
         if (modalId.startsWith('ticket_remove_modal_')) {
-          const [, , , guildId, panelId = 'default', channelId] = modalId.split('_');
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(modalId, 3);
           const userId = normalizeId(interaction.fields.getTextInputValue('value'));
           if (!userId) {
             await interaction.reply(buildTicketMessagePayload('Error', '**المدخل غير صالح.**', { ephemeral: true }));
