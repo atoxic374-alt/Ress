@@ -48,46 +48,62 @@ const LATIN_FONT_FAMILY = '"Segoe UI", "Arial", sans-serif';
 const ARABIC_FONT_FAMILY = '"Cairo", "Tajawal", "Noto Sans Arabic", "Segoe UI", "Arial", sans-serif';
 
 const CONTROL_META = {
-  open: { label: 'Open', description: 'فتح الروم والسماح بالدخول' },
-  lock: { label: 'Lock', description: 'قفل الروم ومنع الدخول العام' },
-  show: { label: 'Show', description: 'إظهار الروم للجميع' },
-  hide: { label: 'Hide', description: 'إخفاء الروم عن الجميع' },
-  invite: { label: 'Invite', description: 'إنشاء دعوة مباشرة للروم' },
-  rename: { label: 'Rename', description: 'تغيير اسم الروم' },
-  limit: { label: 'Limit', description: 'تعديل حد أعضاء الروم' },
-  region: { label: 'Region', description: 'تغيير ريجن الصوت' },
-  allow: { label: 'Allow', description: 'السماح لعضو بالدخول والرؤية' },
-  reject: { label: 'Reject', description: 'إزالة سماح أو حظر أو مسؤول' },
-  music: { label: 'Music', description: 'سحب بوت أغاني إلى الروم إن أمكن' },
-  admin: { label: 'Admin', description: 'إدارة مسؤولي الروم' },
-  transfer: { label: 'Transfer', description: 'نقل ملكية الروم' },
-  actions: { label: 'Actions', description: 'عقوبات وتحكم سريع بالأعضاء' }
+  open: { label: 'Open', emoji: '<:emoji_15:1485476015688908830>', description: 'فتح الروم والسماح بالدخول' },
+  lock: { label: 'Lock', emoji: '<:emoji_18:1485476234199826472>', description: 'قفل الروم ومنع الدخول العام' },
+  show: { label: 'Show', emoji: '<:emoji_17:1485476188091580446>', description: 'إظهار الروم للجميع' },
+  hide: { label: 'Hide', emoji: '<:emoji_17:1485476100774821938>', description: 'إخفاء الروم عن الجميع' },
+  invite: { label: 'Invite', emoji: '<:emoji_28:1485476567239888907>', description: 'إنشاء دعوة مباشرة للروم' },
+  rename: { label: 'Rename', emoji: '<:emoji_5:1484364982094266428>', description: 'تغيير اسم الروم' },
+  limit: { label: 'Limit', emoji: '<:emoji_19:1485476294966640781>', description: 'تعديل حد أعضاء الروم' },
+  region: { label: 'Region', emoji: '<:emoji_23:1485476473153392721>', description: 'تغيير ريجن الصوت' },
+  allow: { label: 'Allow', emoji: '<:emoji_21:1485476368740519986>', description: 'السماح لعضو بالدخول والرؤية' },
+  reject: { label: 'Deny', emoji: '<:emoji_23:1485476405151268904>', description: 'إزالة سماح أو حظر أو مسؤول' },
+  music: { label: 'Music', emoji: '<:emoji_26:1485476531818987641>', description: 'سحب بوت أغاني إلى الروم إن أمكن' },
+  admin: { label: 'Admin', emoji: '<:emoji_21:1485476329171320855>', description: 'إدارة مسؤولي الروم' },
+  transfer: { label: 'Transfer', emoji: '<:emoji_23:1485476446330945777>', description: 'نقل ملكية الروم' },
+  actions: { label: 'Actions', emoji: '⚡', description: 'عقوبات وتحكم سريع بالأعضاء' }
+};
+
+const TEMP_SETTINGS_META = {
+  category: { label: 'Category'  },
+  name: { label: 'Creator Name'  },
+  control: { label: 'Control Room'  },
+  log: { label: 'Log Room'  },
+  music: { label: 'Music Room'  },
+  card_color: { label: 'Card Color'  },
+  autoclean: { label: 'Auto Clean'  },
+  lifetime: { label: 'Lifetime' },
+  leave: { label: 'Leave Delete'},
+  top: { label: 'Top',},
+  controls: { label: 'Controls' },
+  refresh: { label: 'Refresh'},
+  close: { label: 'Close' }
 };
 
 const ACTION_OPTIONS = [
-  { label: 'Mute Member', value: 'mute_member', description: 'إعطاء ميوت صوتي أو كتابي أو الاثنين' },
-  { label: 'Unmute', value: 'unmute_member', description: 'إزالة الميوت عن عضو محدد' },
-  { label: 'Mute All', value: 'mute_all', description: 'إعطاء ميوت لكل الموجودين حالياً في الروم' },
-  { label: 'Unmute All', value: 'unmute_all', description: 'إزالة الميوت من كل الأعضاء' },
-  { label: 'Kick', value: 'kick', description: 'طرد العضو من الروم' },
-  { label: 'Ban', value: 'ban', description: 'حظر العضو من الروم' },
-  { label: 'Unban', value: 'unban', description: 'فك الحظر من الروم' }
+  { label: 'Mute Member', value: 'mute_member', emoji: '<:emoji_28:1485476660055638146>', description: 'إعطاء ميوت صوتي أو كتابي أو الاثنين' },
+  { label: 'Unmute', value: 'unmute_member', emoji: '<:emoji_30:1485476749889503334>', description: 'إزالة الميوت عن عضو محدد' },
+  { label: 'Mute All', value: 'mute_all', emoji: '<:emoji_28:1485476660055638146>', description: 'إعطاء ميوت لكل الموجودين حالياً في الروم' },
+  { label: 'Unmute All', value: 'unmute_all', emoji: '<:emoji_30:1485476749889503334>', description: 'إزالة الميوت من كل الأعضاء' },
+  { label: 'Kick', value: 'kick', emoji: '<:emoji_33:1485476862619680788>', description: 'طرد العضو من الروم' },
+  { label: 'Ban', value: 'ban', emoji: '<:emoji_30:1485476785914122270>', description: 'حظر العضو من الروم' },
+  { label: 'Unban', value: 'unban', emoji: '<:emoji_30:1485476807947063306>', description: 'فك الحظر من الروم' }
 ];
 
 const REGION_OPTIONS = [
-  { label: 'Auto', value: 'auto', description: 'أفضل ريجن تلقائياً' },
-  { label: 'Brazil', value: 'brazil', description: 'Brazil' },
-  { label: 'Hong Kong', value: 'hongkong', description: 'Hong Kong' },
-  { label: 'India', value: 'india', description: 'India' },
-  { label: 'Japan', value: 'japan', description: 'Japan' },
-  { label: 'Rotterdam', value: 'rotterdam', description: 'Rotterdam' },
-  { label: 'Singapore', value: 'singapore', description: 'Singapore' },
-  { label: 'South Africa', value: 'southafrica', description: 'South Africa' },
-  { label: 'Sydney', value: 'sydney', description: 'Sydney' },
-  { label: 'US Central', value: 'us-central', description: 'US Central' },
-  { label: 'US East', value: 'us-east', description: 'US East' },
-  { label: 'US South', value: 'us-south', description: 'US South' },
-  { label: 'US West', value: 'us-west', description: 'US West' }
+  { label: 'Auto', value: 'auto', emoji: '<:emoji_23:1485476425686323262>', description: 'أفضل ريجن تلقائياً' },
+  { label: 'Brazil', value: 'brazil', emoji: '🇧🇷', description: 'Brazil' },
+  { label: 'Hong Kong', value: 'hongkong', emoji: '🇭🇰', description: 'Hong Kong' },
+  { label: 'India', value: 'india', emoji: '🇮🇳', description: 'India' },
+  { label: 'Japan', value: 'japan', emoji: '🇯🇵', description: 'Japan' },
+  { label: 'Rotterdam', value: 'rotterdam', emoji: '🇳🇱', description: 'Rotterdam' },
+  { label: 'Singapore', value: 'singapore', emoji: '🇸🇬', description: 'Singapore' },
+  { label: 'South Africa', value: 'southafrica', emoji: '🇿🇦', description: 'South Africa' },
+  { label: 'Sydney', value: 'sydney', emoji: '🇦🇺', description: 'Sydney' },
+  { label: 'US Central', value: 'us-central', emoji: '🇺🇸', description: 'US Central' },
+  { label: 'US East', value: 'us-east', emoji: '🇺🇸', description: 'US East' },
+  { label: 'US South', value: 'us-south', emoji: '🇺🇸', description: 'US South' },
+  { label: 'US West', value: 'us-west', emoji: '🇺🇸', description: 'US West' }
 ];
 
 let dataCache = null;
@@ -415,16 +431,16 @@ function formatDuration(ms) {
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
   const parts = [];
-  if (days) parts.push(`**${days}** يوم`);
-  if (hours) parts.push(`**${hours}** ساعة`);
-  if (minutes) parts.push(`**${minutes}** دقيقة`);
-  if (seconds && parts.length < 3) parts.push(`**${seconds}** ثانية`);
-  return parts.join(' و ');
+  if (days) parts.push(`**${days}**d`);
+  if (hours) parts.push(`**${hours}**h`);
+  if (minutes) parts.push(`**${minutes}**m`);
+  if (seconds && parts.length < 3) parts.push(`**${seconds}** s`);
+  return parts.join(' , ');
 }
 
 function formatTopVoiceDuration(ms) {
   const safeMs = Math.max(0, Number(ms) || 0);
-  if (!safeMs) return '**0** دقيقة';
+  if (!safeMs) return '**0**m';
 
   const totalMinutes = Math.floor(safeMs / 60000);
   const totalHours = Math.floor(totalMinutes / 60);
@@ -433,11 +449,11 @@ function formatTopVoiceDuration(ms) {
   const seconds = Math.floor((safeMs % 60000) / 1000);
   const parts = [];
 
-  if (hours > 0) parts.push(`**${hours}** ساعة`);
-  if (minutes > 0) parts.push(`**${minutes}** دقيقة`);
-  if (!parts.length) parts.push(seconds > 0 ? `**${seconds}** ثانية` : '**0** دقيقة');
+  if (hours > 0) parts.push(`**${hours}**h`);
+  if (minutes > 0) parts.push(`**${minutes}**m`);
+  if (!parts.length) parts.push(seconds > 0 ? `**${seconds}**s` : '**0**m');
 
-  return parts.slice(0, 2).join(' و ');
+  return parts.slice(0, 2).join(' , ');
 }
 
 function getGuildUserProfiles(guildId) {
@@ -500,7 +516,7 @@ function buildTopVoiceRoomsDescription(guild, limit = 10) {
       `**Room :** ${getRoomLabel(guild, userId, profile)}`,
       `**Voice :** ${formatTopVoiceDuration(totalVoiceMs)}`,
       ''
-    ].join('\n')).join('\n')
+    ].join('\n\n')).join('\n\n')
   };
 }
 
@@ -1180,7 +1196,6 @@ function createSettingsEmbed(guild, actorId) {
     .setTitle('**Temp Voice Settings**')
     .setDescription([
       '**إعدادات نظام الرومات الصوتية المؤقتة.**',
-      '**لوحة واحدة تتحدث بعد كل تعديل.**',
       '',
       `**Category:** ${category ? `<#${category.id}>` : '**غير محددة**'}`,
       `**Creator Room:** ${creator ? `<#${creator.id}>` : '**سيتم إنشاؤه عند اختيار الكاتوقري**'}`,
@@ -1195,7 +1210,7 @@ function createSettingsEmbed(guild, actorId) {
       `**Room Lifetime:** ${formatDuration(config.maxRoomAgeMs)}`,
       `**Delete After Owner Leaves:** ${formatDuration(config.deleteAfterLeaveMs)}`,
       '',
-      '**الأزرار المفعلة في لوحة التحكم العامة:**',
+      '**الأزرار المفعلة في لوحة التحكم العامة :**',
       settingStateText(config)
     ].join('\n'))
     .setFooter({ text: `Temp Settings • ${actorId}` })
@@ -1203,25 +1218,31 @@ function createSettingsEmbed(guild, actorId) {
 }
 
 function buildSettingsRows(userId) {
+  const makeSettingsButton = key => new ButtonBuilder()
+    .setCustomId(`temp_settings_${key}:${userId}`)
+    .setLabel(TEMP_SETTINGS_META[key].label)
+    .setEmoji(TEMP_SETTINGS_META[key].emoji)
+    .setStyle(getTempButtonStyle());
+
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`temp_settings_category:${userId}`).setLabel('Category').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_name:${userId}`).setLabel('Creator Name').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_control:${userId}`).setLabel('Control Room').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_log:${userId}`).setLabel('Log Room').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_music:${userId}`).setLabel('Music Room').setStyle(getTempButtonStyle())
+      makeSettingsButton('category'),
+      makeSettingsButton('name'),
+      makeSettingsButton('control'),
+      makeSettingsButton('log'),
+      makeSettingsButton('music')
     ),
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`temp_settings_card_color:${userId}`).setLabel('Card Color').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_autoclean:${userId}`).setLabel('Auto Clean').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_lifetime:${userId}`).setLabel('Lifetime').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_leave:${userId}`).setLabel('Leave Delete').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_top:${userId}`).setLabel('Top').setStyle(getTempButtonStyle())
+      makeSettingsButton('card_color'),
+      makeSettingsButton('autoclean'),
+      makeSettingsButton('lifetime'),
+      makeSettingsButton('leave'),
+      makeSettingsButton('top')
     ),
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`temp_settings_controls:${userId}`).setLabel('Controls').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_refresh:${userId}`).setLabel('Refresh').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_close:${userId}`).setLabel('Close').setStyle(getTempButtonStyle())
+      makeSettingsButton('controls'),
+      makeSettingsButton('refresh'),
+      makeSettingsButton('close')
     )
   ];
 }
@@ -1500,7 +1521,7 @@ async function buildGeneralControlCard(guild) {
   ctx.shadowColor = 'rgba(0,0,0,0.26)';
   ctx.shadowBlur = 12;
   ctx.font = `bold 72px ${LATIN_FONT_FAMILY}`;
-  ctx.fillText('Temp Voice Control', width / 2, 168);
+  ctx.fillText('Temp Voice Controller ', width / 2, 168);
   ctx.shadowBlur = 0;
 
   const layoutRows = [
@@ -1627,6 +1648,7 @@ function buildGeneralControlRows(guildId) {
   const createButton = key => new ButtonBuilder()
     .setCustomId(`temp_room_${key}`)
     .setLabel(CONTROL_META[key].label)
+    .setEmoji(CONTROL_META[key].emoji)
     .setStyle(getTempButtonStyle(key));
 
   const rowDefinitions = [
@@ -1655,7 +1677,7 @@ function buildGeneralControlRows(guildId) {
 }
 
 function createGeneralControlMessageContent() {
-  return '**Temp Voice Control**';
+  return '**Temp Voice**';
 }
 
 async function ensureGuildControlPanel(guild) {
@@ -2490,8 +2512,8 @@ async function handleSettingsButton(interaction) {
     await interaction.reply({
       content: '**اختر مصدر لون صورة الكنترول: لون صورة السيرفر أو لون مخصص من اختيارك.**',
       components: [new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`temp_settings_card_color_avatar:${userId}`).setLabel('Avatar Color').setStyle(getTempButtonStyle()),
-        new ButtonBuilder().setCustomId(`temp_settings_card_color_custom:${userId}`).setLabel('Other Color').setStyle(getTempButtonStyle())
+        new ButtonBuilder().setCustomId(`temp_settings_card_color_avatar:${userId}`).setLabel('Avatar Color').setEmoji('🖼️').setStyle(getTempButtonStyle()),
+        new ButtonBuilder().setCustomId(`temp_settings_card_color_custom:${userId}`).setLabel('Other Color').setEmoji('🎨').setStyle(getTempButtonStyle())
       )],
       ephemeral: true
     }).catch(() => {});
@@ -2611,6 +2633,7 @@ async function handleSettingsButton(interaction) {
               label: CONTROL_META[key].label,
               description: CONTROL_META[key].description.slice(0, 90),
               value: key,
+              emoji: CONTROL_META[key].emoji,
               default: config.enabledControls[key] !== false
             })))
             .setMinValues(0)
