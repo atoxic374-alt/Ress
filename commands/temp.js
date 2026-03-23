@@ -21,6 +21,7 @@ const colorManager = require('../utils/colorManager.js');
 const name = 'temp';
 const aliases = ['tempvoice', 'تمب'];
 const DATA_PATH = path.join(__dirname, '..', 'data', 'tempVoiceSystem.json');
+const TOP_ASSETS_DIR = path.join(__dirname, '..', 'data', 'temp-top-assets');
 const DEFAULT_CREATOR_NAME = 'Create temp room ...';
 const DEFAULT_DELETE_AFTER_LEAVE_MS = 5 * 60 * 1000;
 const DEFAULT_AUTO_CLEAN_MS = 10 * 60 * 1000;
@@ -29,6 +30,9 @@ const SESSION_TTL_MS = 12 * 60 * 1000;
 const HEARTBEAT_MS = 45000;
 const INVITE_TTL_MS = 60 * 60 * 1000;
 const TOP_REFRESH_MS = 5 * 60 * 1000;
+const MAX_TOP_SEPARATOR_BYTES = 8 * 1024 * 1024;
+const TOP_SEPARATOR_FETCH_TIMEOUT_MS = 15000;
+const KICK_REJOIN_BLOCK_MS = 30 * 1000;
 const DATA_VERSION = 3;
 
 const SETTING_CONTROL_KEYS = [
@@ -115,8 +119,12 @@ const sessions = new Map();
 const roomLifecycleJobs = new Map();
 const operationLocks = new Map();
 const guildAccentCache = new Map();
+const topSeparatorCache = new Map();
+const runtimeTempVoiceMuteState = new Map();
+let runtimeBotOwners = [];
 
 function ensureDataFile() {
+  fs.mkdirSync(TOP_ASSETS_DIR, { recursive: true });
   if (fs.existsSync(DATA_PATH)) return;
   fs.writeFileSync(DATA_PATH, JSON.stringify({ version: DATA_VERSION, guilds: {}, users: {}, rooms: {} }, null, 2));
 }
@@ -141,6 +149,7 @@ function migrateDataStructure(raw) {
     if (!('topChannelId' in guildConfig)) guildConfig.topChannelId = null;
     if (!('topMessageId' in guildConfig)) guildConfig.topMessageId = null;
     if (!Number.isFinite(guildConfig.topLastUpdatedAt)) guildConfig.topLastUpdatedAt = 0;
+    if (!('topSeparatorImage' in guildConfig) || !guildConfig.topSeparatorImage || typeof guildConfig.topSeparatorImage !== 'object') guildConfig.topSeparatorImage = null;
   }
 
   for (const profile of Object.values(migrated.users)) {
@@ -174,6 +183,7 @@ function migrateDataStructure(raw) {
     for (const roomRecord of Object.values(guildRooms)) {
       if (!roomRecord || typeof roomRecord !== 'object') continue;
       if (!roomRecord.memberSessionStarts || typeof roomRecord.memberSessionStarts !== 'object') roomRecord.memberSessionStarts = {};
+      ensureRoomModerationState(roomRecord);
       if (!('ownerDisplayName' in roomRecord)) roomRecord.ownerDisplayName = null;
     }
   }
@@ -245,6 +255,7 @@ function getGuildConfig(guildId) {
       topChannelId: null,
       topMessageId: null,
       topLastUpdatedAt: 0,
+      topSeparatorImage: null,
       autoCleanEnabled: false,
       autoCleanIntervalMs: DEFAULT_AUTO_CLEAN_MS,
       maxRoomAgeMs: 0,
@@ -269,6 +280,10 @@ function getGuildConfig(guildId) {
   }
   if (!Number.isFinite(data.guilds[guildId].topLastUpdatedAt)) {
     data.guilds[guildId].topLastUpdatedAt = 0;
+    scheduleSave();
+  }
+  if (!('topSeparatorImage' in data.guilds[guildId]) || (data.guilds[guildId].topSeparatorImage && typeof data.guilds[guildId].topSeparatorImage !== 'object')) {
+    data.guilds[guildId].topSeparatorImage = null;
     scheduleSave();
   }
 
@@ -360,11 +375,13 @@ function getRoomStore(guildId) {
 function getRoomRecord(guildId, ownerId) {
   const record = getRoomStore(guildId)[ownerId] || null;
   if (record && (!record.memberSessionStarts || typeof record.memberSessionStarts !== 'object')) record.memberSessionStarts = {};
+  if (record) ensureRoomModerationState(record);
   return record;
 }
 
 function setRoomRecord(guildId, ownerId, value) {
   if (value && (!value.memberSessionStarts || typeof value.memberSessionStarts !== 'object')) value.memberSessionStarts = {};
+  if (value) ensureRoomModerationState(value);
   getRoomStore(guildId)[ownerId] = value;
   scheduleSave();
 }
@@ -374,23 +391,229 @@ function deleteRoomRecord(guildId, ownerId) {
   scheduleSave();
 }
 
-function getSession(userId) {
-  const existing = sessions.get(userId);
+function getSessionScopeKey(scopeOrUserId, userId = null) {
+  return userId ? `${scopeOrUserId}:${userId}` : String(scopeOrUserId);
+}
+
+function pruneRuntimeCaches() {
+  const now = Date.now();
+
+  for (const [key, session] of sessions.entries()) {
+    if (!session || (now - (session.createdAt || 0)) > SESSION_TTL_MS) sessions.delete(key);
+  }
+
+  for (const [guildId, asset] of topSeparatorCache.entries()) {
+    if (!asset?.filePath || !fs.existsSync(asset.filePath)) topSeparatorCache.delete(guildId);
+  }
+
+  if (guildAccentCache.size > 250) guildAccentCache.clear();
+}
+
+function getSession(scopeOrUserId, userId = null) {
+  const sessionKey = getSessionScopeKey(scopeOrUserId, userId);
+  const existing = sessions.get(sessionKey);
   if (existing && Date.now() - existing.createdAt < SESSION_TTL_MS) return existing;
   const session = {
     createdAt: Date.now(),
     settingsMessageId: null,
     settingsChannelId: null,
     tempControls: null,
-    lastResolvedOwnerId: null
+    lastResolvedOwnerId: null,
+    pendingTopSeparatorUpload: null
   };
-  sessions.set(userId, session);
+  sessions.set(sessionKey, session);
   return session;
 }
 
 function sanitizeRoomName(value, fallback = 'Temp Room') {
   const cleaned = String(value || '').replace(/\s+/g, ' ').trim().slice(0, 96);
   return cleaned || fallback;
+}
+
+function topSeparatorAttachmentName(guildId, extension = 'png') {
+  return `temp-top-separator-${guildId}.${String(extension || 'png').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png'}`;
+}
+
+function inferImageExtension(contentType = '', sourceUrl = '') {
+  const normalizedType = String(contentType || '').toLowerCase().split(';')[0].trim();
+  const typeMap = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+    'image/bmp': 'bmp',
+    'image/tiff': 'tiff',
+    'image/x-icon': 'ico',
+    'image/vnd.microsoft.icon': 'ico',
+    'image/avif': 'avif',
+    'image/heic': 'heic',
+    'image/heif': 'heif'
+  };
+  if (typeMap[normalizedType]) return typeMap[normalizedType];
+
+  try {
+    const pathname = new URL(sourceUrl).pathname.toLowerCase();
+    const match = pathname.match(/\.([a-z0-9]{2,5})$/i);
+    if (match) return match[1].toLowerCase();
+  } catch (_) {}
+
+  return 'png';
+}
+
+function extractImageUrlFromText(content) {
+  const matches = String(content || '').match(/https?:\/\/\S+/gi) || [];
+  for (const candidate of matches) {
+    const cleaned = candidate.replace(/[)>.,]+$/g, '');
+    try {
+      const parsed = new URL(cleaned);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.toString();
+    } catch (_) {}
+  }
+  return null;
+}
+
+async function downloadImageBuffer(sourceUrl) {
+  let parsed;
+  try {
+    parsed = new URL(sourceUrl);
+  } catch (_) {
+    return { error: '❌ الرابط غير صالح.' };
+  }
+
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    return { error: '❌ مسموح فقط بروابط http أو https المباشرة.' };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TOP_SEPARATOR_FETCH_TIMEOUT_MS);
+  const response = await fetch(parsed.toString(), { redirect: 'follow', signal: controller.signal }).catch(error => ({ error }));
+  clearTimeout(timeout);
+  if (!response || response.error || !response.ok) return { error: '❌ تعذر تحميل الصورة من المصدر المحدد.' };
+
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType && !contentType.toLowerCase().startsWith('image/')) {
+    return { error: '❌ الرابط لا يشير إلى صورة مباشرة.' };
+  }
+
+  const contentLength = Number(response.headers.get('content-length')) || 0;
+  if (contentLength > MAX_TOP_SEPARATOR_BYTES) {
+    return { error: `❌ حجم الصورة أكبر من الحد المسموح (${Math.floor(MAX_TOP_SEPARATOR_BYTES / (1024 * 1024))}MB).` };
+  }
+
+  const arrayBuffer = await response.arrayBuffer().catch(() => null);
+  if (!arrayBuffer) return { error: '❌ تعذر قراءة الصورة بعد تحميلها.' };
+
+  const buffer = Buffer.from(arrayBuffer);
+  if (buffer.length > MAX_TOP_SEPARATOR_BYTES) {
+    return { error: `❌ حجم الصورة بعد التحميل أكبر من الحد المسموح (${Math.floor(MAX_TOP_SEPARATOR_BYTES / (1024 * 1024))}MB).` };
+  }
+
+  return { buffer, contentType };
+}
+
+async function resolveTopSeparatorImageFromMessage(message) {
+  const attachment = message.attachments.find(item => String(item.contentType || '').toLowerCase().startsWith('image/'))
+    || message.attachments.find(item => /\.(png|jpe?g|webp|gif|bmp|tiff?|ico|avif|heic|heif)(\?.*)?$/i.test(item.url || ''));
+
+  if (attachment) {
+    const downloaded = await downloadImageBuffer(attachment.url);
+    if (!downloaded || downloaded.error) return { error: downloaded?.error || '❌ تعذر تحميل الصورة المرفقة. حاول مجددًا.' };
+    return {
+      buffer: downloaded.buffer,
+      contentType: downloaded.contentType || attachment.contentType || '',
+      sourceUrl: attachment.url
+    };
+  }
+
+  const imageUrl = extractImageUrlFromText(message.content);
+  if (!imageUrl) return { error: '❌ أرسل صورة كمرفق أو رابط مباشر لصورة صالحة.' };
+  const downloaded = await downloadImageBuffer(imageUrl);
+  if (!downloaded || downloaded.error) return { error: downloaded?.error || '❌ تعذر تحميل الصورة من الرابط المرسل. تأكد أن الرابط مباشر وقابل للوصول.' };
+  return {
+    buffer: downloaded.buffer,
+    contentType: downloaded.contentType || '',
+    sourceUrl: imageUrl
+  };
+}
+
+async function saveTopSeparatorAsset(guildId, source) {
+  const extension = inferImageExtension(source.contentType, source.sourceUrl);
+  const attachmentName = topSeparatorAttachmentName(guildId, extension);
+  const filePath = path.join(TOP_ASSETS_DIR, attachmentName);
+
+  await loadImage(source.buffer).catch(() => {
+    throw new Error('invalid-image');
+  });
+
+  fs.mkdirSync(TOP_ASSETS_DIR, { recursive: true });
+
+  for (const existing of fs.readdirSync(TOP_ASSETS_DIR)) {
+    if (existing.startsWith(`temp-top-separator-${guildId}.`) && existing !== attachmentName) {
+      fs.unlinkSync(path.join(TOP_ASSETS_DIR, existing));
+    }
+  }
+
+  fs.writeFileSync(filePath, source.buffer);
+  if (!fs.existsSync(filePath) || fs.statSync(filePath).size <= 0) throw new Error('save-failed');
+
+  topSeparatorCache.set(guildId, { filePath, attachmentName, buffer: source.buffer });
+  return { filePath, attachmentName };
+}
+
+function getTopSeparatorAssetMeta(config) {
+  if (!config.topSeparatorImage?.fileName) return null;
+  const filePath = path.join(TOP_ASSETS_DIR, config.topSeparatorImage.fileName);
+  return {
+    filePath,
+    attachmentName: config.topSeparatorImage.fileName
+  };
+}
+
+function loadTopSeparatorAsset(config, guildId) {
+  const meta = getTopSeparatorAssetMeta(config);
+  if (!meta || !fs.existsSync(meta.filePath)) return null;
+  const cached = topSeparatorCache.get(guildId);
+  if (cached && cached.filePath === meta.filePath && cached.buffer?.length) return cached;
+  const buffer = fs.readFileSync(meta.filePath);
+  const asset = { ...meta, buffer };
+  topSeparatorCache.set(guildId, asset);
+  return asset;
+}
+
+function removeTopSeparatorAsset(config, guildId) {
+  const meta = getTopSeparatorAssetMeta(config);
+  if (meta?.filePath && fs.existsSync(meta.filePath)) fs.unlinkSync(meta.filePath);
+  topSeparatorCache.delete(guildId);
+  config.topSeparatorImage = null;
+  scheduleSave();
+}
+
+function canUseAdminButton(member, roomRecord) {
+  return Boolean(
+    member && roomRecord && (
+      member.id === roomRecord.ownerId ||
+      member.id === member.guild.ownerId ||
+      runtimeBotOwners.includes(member.id)
+    )
+  );
+}
+
+function setRecentKick(roomRecord, userId, expiresAt = Date.now() + KICK_REJOIN_BLOCK_MS) {
+  if (!roomRecord.recentKicks || typeof roomRecord.recentKicks !== 'object') roomRecord.recentKicks = {};
+  roomRecord.recentKicks[userId] = expiresAt;
+}
+
+function clearExpiredRecentKicks(roomRecord, now = Date.now()) {
+  if (!roomRecord?.recentKicks || typeof roomRecord.recentKicks !== 'object') return false;
+  let changed = false;
+  for (const [userId, expiresAt] of Object.entries(roomRecord.recentKicks)) {
+    if (!expiresAt || expiresAt <= now) {
+      delete roomRecord.recentKicks[userId];
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 function parseFlexibleDuration(input) {
@@ -514,7 +737,7 @@ function buildTopVoiceRoomsDescription(guild, limit = 10) {
       `**#${index + 1}**`,
       `**Owner :** <@${userId}>`,
       `**Room :** ${getRoomLabel(guild, userId, profile)}`,
-      `**Voice :** ${formatTopVoiceDuration(totalVoiceMs)}`,
+      `**Room Activity :** ${formatTopVoiceDuration(totalVoiceMs)}`,
       ''
     ].join('\n\n')).join('\n\n')
   };
@@ -596,6 +819,64 @@ function removeMuteScopeFromProfile(profile, userId, scope) {
   }
 }
 
+function ensureRoomModerationState(roomRecord) {
+  if (!roomRecord || typeof roomRecord !== 'object') return;
+  if (!roomRecord.recentKicks || typeof roomRecord.recentKicks !== 'object') roomRecord.recentKicks = {};
+  if (!roomRecord.bulkMuteAllStates || typeof roomRecord.bulkMuteAllStates !== 'object') roomRecord.bulkMuteAllStates = {};
+  if (!roomRecord.bulkMuteAllAffected || typeof roomRecord.bulkMuteAllAffected !== 'object') roomRecord.bulkMuteAllAffected = {};
+  for (const scope of ['voice', 'text', 'all']) {
+    if (!Object.prototype.hasOwnProperty.call(roomRecord.bulkMuteAllStates, scope)) roomRecord.bulkMuteAllStates[scope] = null;
+    if (!Array.isArray(roomRecord.bulkMuteAllAffected[scope])) roomRecord.bulkMuteAllAffected[scope] = [];
+  }
+}
+
+function getActiveBulkMuteAllState(roomRecord, scope, now = Date.now()) {
+  ensureRoomModerationState(roomRecord);
+  const state = roomRecord?.bulkMuteAllStates?.[scope] || null;
+  if (!state) return null;
+  if (state.expiresAt && state.expiresAt <= now) {
+    roomRecord.bulkMuteAllStates[scope] = null;
+    roomRecord.bulkMuteAllAffected[scope] = [];
+    return null;
+  }
+  return state;
+}
+
+function addBulkMuteAllAffectedUser(roomRecord, scope, userId) {
+  ensureRoomModerationState(roomRecord);
+  if (!roomRecord.bulkMuteAllAffected[scope].includes(userId)) roomRecord.bulkMuteAllAffected[scope].push(userId);
+}
+
+function clearBulkMuteAllScope(roomRecord, scope) {
+  ensureRoomModerationState(roomRecord);
+  roomRecord.bulkMuteAllStates[scope] = null;
+  roomRecord.bulkMuteAllAffected[scope] = [];
+}
+
+function clearExpiredBulkMuteAllStates(roomRecord, now = Date.now()) {
+  ensureRoomModerationState(roomRecord);
+  let changed = false;
+  for (const scope of ['voice', 'text', 'all']) {
+    const state = roomRecord.bulkMuteAllStates[scope];
+    if (state?.expiresAt && state.expiresAt <= now) {
+      clearBulkMuteAllScope(roomRecord, scope);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function shouldBulkMuteMember(member, ownerId, profile, applyToManagers, actorId) {
+  if (!member || member.user?.bot) return false;
+  if (member.id === ownerId) return false;
+  if (isTempPunishmentImmune(member.id, member.guild)) return false;
+  if (profile.managers.includes(actorId) && actorId !== ownerId) {
+    return !profile.managers.includes(member.id);
+  }
+  if (!applyToManagers && profile.managers.includes(member.id)) return false;
+  return true;
+}
+
 function removeBanFromProfile(profile, userId) {
   profile.bannedUsers = profile.bannedUsers.filter(id => id !== userId);
   if (profile.bannedEntries) delete profile.bannedEntries[userId];
@@ -620,28 +901,55 @@ function getBanSummary(profile, userId) {
   };
 }
 
-function isProtectedModerationTarget(member, ownerId, profile) {
+function isTempPunishmentImmune(targetId, guild) {
+  return Boolean(targetId && guild && (targetId === guild.ownerId || runtimeBotOwners.includes(targetId)));
+}
+
+function isProtectedModerationTarget(member, ownerId, profile, actorId = null) {
   if (!member) return false;
   return Boolean(
     member.id === ownerId ||
     member.user?.bot ||
-    member.permissions?.has?.(PermissionsBitField.Flags.Administrator) ||
-    profile.managers.includes(member.id)
+    isTempPunishmentImmune(member.id, member.guild) ||
+    (profile.managers.includes(member.id) && actorId !== ownerId)
   );
 }
 
 function validateModerationTarget({ member, user, ownerId, profile, actionType, actorId }) {
   const targetId = member?.id || user?.id || null;
+  const guild = member?.guild || null;
   if (!targetId) return { ok: false, message: '❌ تعذر تحديد العضو المطلوب.' };
   if (targetId === ownerId) return { ok: false, message: '❌ لا يمكن استهداف مالك الروم من هذا المسار.' };
   if (member?.user?.bot || user?.bot) return { ok: false, message: `❌ لا يمكن ${actionType} بوت من هذا المسار.` };
-  if (member?.permissions?.has?.(PermissionsBitField.Flags.Administrator)) {
-    return { ok: false, message: `❌ لا يمكن ${actionType} إداري السيرفر من هذا المسار.` };
+  if (isTempPunishmentImmune(targetId, member?.guild || guild)) {
+    return { ok: false, message: `❌ لا يمكن ${actionType} مالك السيرفر أو أحد أونرات البوت من هذا المسار.` };
   }
   if (profile.managers.includes(targetId) && actorId !== ownerId) {
     return { ok: false, message: `❌ لا يمكن ${actionType} مسؤول الروم إلا بواسطة المالك مباشرة.` };
   }
   return { ok: true };
+}
+
+function hasRoomScopedMute(profile, userId, scope = 'all') {
+  if (scope === 'voice') return (profile.voiceMutedUsers || []).includes(userId);
+  if (scope === 'text') return (profile.textMutedUsers || []).includes(userId);
+  return (profile.voiceMutedUsers || []).includes(userId) || (profile.textMutedUsers || []).includes(userId);
+}
+
+function getTempVoiceMuteStateKey(guildId, userId) {
+  return `${guildId}:${userId}`;
+}
+
+function rememberTempVoiceMuteState(guildId, userId, roomId) {
+  runtimeTempVoiceMuteState.set(getTempVoiceMuteStateKey(guildId, userId), roomId);
+}
+
+function forgetTempVoiceMuteState(guildId, userId) {
+  runtimeTempVoiceMuteState.delete(getTempVoiceMuteStateKey(guildId, userId));
+}
+
+function didTempRoomMuteMember(guildId, userId) {
+  return runtimeTempVoiceMuteState.has(getTempVoiceMuteStateKey(guildId, userId));
 }
 
 async function disconnectMemberFromVoice(member, reason) {
@@ -660,6 +968,39 @@ async function moveMemberToRoom(member, roomChannel) {
   await member.voice.setChannel(roomChannel).catch(() => null);
   const refreshed = await guild.members.fetch(memberId).catch(() => member);
   return refreshed?.voice?.channelId === roomChannel.id;
+}
+
+async function syncDiscordVoiceMute(member, roomChannel, shouldMute, reason = 'Temp room voice mute sync') {
+  if (!member?.voice || !roomChannel) return false;
+  const inRoom = member.voice.channelId === roomChannel.id;
+  const trackedByTemp = didTempRoomMuteMember(member.guild.id, member.id);
+
+  if (shouldMute) {
+    if (!inRoom) return false;
+    rememberTempVoiceMuteState(member.guild.id, member.id, roomChannel.id);
+    if (member.voice.serverMute) return false;
+    return member.voice.setMute(true, reason).then(() => true).catch(() => false);
+  }
+
+  if (!trackedByTemp) return false;
+  forgetTempVoiceMuteState(member.guild.id, member.id);
+  if (!member.voice.serverMute) return false;
+  return member.voice.setMute(false, reason).then(() => true).catch(() => false);
+}
+
+async function enforcePrivilegedMuteBypass(guild, ownerId, profile, roomChannel, member) {
+  if (!member || !roomChannel || member.voice?.channelId !== roomChannel.id) return false;
+  if (isTempPunishmentImmune(member.id, guild) || !member.permissions?.has?.(PermissionsBitField.Flags.Administrator)) return false;
+  if (!hasRoomScopedMute(profile, member.id, 'voice') && !hasRoomScopedMute(profile, member.id, 'all')) {
+    return syncDiscordVoiceMute(member, roomChannel, false, 'Temp room voice mute removed');
+  }
+
+  const changed = await syncDiscordVoiceMute(member, roomChannel, true, 'Temp room voice mute enforced');
+  if (changed) {
+    const user = await guild.client.users.fetch(member.id).catch(() => null);
+    await notifyUser(user, { content: `تم تطبيق ميوت صوتي عليك داخل روم <#${roomChannel.id}> من ديسكورد نفسه حتى انتهاء الميوت الخاص بهذا الروم.` });
+  }
+  return changed;
 }
 
 function isRoomAccessRestricted(profile) {
@@ -690,9 +1031,9 @@ function getRoomMemberPriority(member, ownerId, profile) {
   return 4;
 }
 
-function getModeratableRoomMembers(roomChannel, ownerId, profile) {
+function getModeratableRoomMembers(roomChannel, ownerId, profile, actorId = null) {
   return roomChannel.members
-    .filter(member => !isProtectedModerationTarget(member, ownerId, profile))
+    .filter(member => !isProtectedModerationTarget(member, ownerId, profile, actorId))
     .sort((a, b) => getRoomMemberPriority(a, ownerId, profile) - getRoomMemberPriority(b, ownerId, profile));
 }
 
@@ -951,16 +1292,42 @@ ${ownerName}` : '**غير متوفر**', inline: true },
 function createTopVoiceEmbed(guild) {
   const iconUrl = guild.iconURL({ extension: 'png', size: 256 }) || undefined;
   const topData = buildTopVoiceRoomsDescription(guild);
+  const config = getGuildConfig(guild.id);
+  const separatorAsset = loadTopSeparatorAsset(config, guild.id);
+  const embed = colorManager.createEmbed()
+    .setTitle('**Temp Voice Top Rooms**')
+    .setAuthor({ name: `${guild.name} • Temp Voice Room Activity`, iconURL: iconUrl })
+    .setDescription(topData.description)
+    .setThumbnail(iconUrl)
+    .setFooter({ text: `Live update • أول 10 مراكز • ${guild.name}` })
+    .setTimestamp(new Date());
+
+  if (separatorAsset) embed.setImage(`attachment://${separatorAsset.attachmentName}`);
+
   return {
-    embed: colorManager.createEmbed()
-      .setTitle('**Temp Voice Top**')
-      .setAuthor({ name: `${guild.name} • Temp Voice Top`, iconURL: iconUrl })
-      .setDescription(topData.description)
-      .setThumbnail(iconUrl)
-      .setFooter({ text: `Live update • أول 10 مراكز • ${guild.name}` })
-      .setTimestamp(new Date()),
+    embed,
+    separatorAsset,
     topData
   };
+}
+
+function getTopBoardChannelPermissionError(channel, guildMember) {
+  if (!channel?.isTextBased?.()) return '❌ روم التوب يجب أن يكون رومًا نصيًا صالحًا.';
+  if (!guildMember?.permissionsIn) return '❌ تعذر التحقق من صلاحيات البوت داخل روم التوب.';
+
+  const permissions = channel.permissionsFor(guildMember);
+  if (!permissions) return '❌ تعذر قراءة صلاحيات البوت داخل روم التوب.';
+
+  const required = [
+    PermissionsBitField.Flags.ViewChannel,
+    PermissionsBitField.Flags.SendMessages,
+    PermissionsBitField.Flags.EmbedLinks,
+    PermissionsBitField.Flags.AttachFiles
+  ];
+  const missing = permissions.missing(required);
+  if (!missing.length) return null;
+
+  return `❌ البوت لا يملك الصلاحيات المطلوبة في روم التوب: ${missing.join(', ')}.`;
 }
 
 async function refreshTopVoiceMessage(guild, preferredChannel = null) {
@@ -969,31 +1336,29 @@ async function refreshTopVoiceMessage(guild, preferredChannel = null) {
   const previousMessageId = config.topMessageId;
   const targetChannel = preferredChannel
     || (config.topChannelId ? guild.channels.cache.get(config.topChannelId) || await guild.channels.fetch(config.topChannelId).catch(() => null) : null);
-  if (!targetChannel?.isTextBased?.()) return null;
+  if (!targetChannel?.isTextBased?.()) return { error: '❌ روم التوب المحدد غير صالح أو غير نصي.' };
 
-  const { embed } = createTopVoiceEmbed(guild);
-  let message = null;
-  if (config.topMessageId) {
-    message = await targetChannel.messages.fetch(config.topMessageId).catch(() => null);
-  }
+  const permissionError = getTopBoardChannelPermissionError(targetChannel, guild.members.me);
+  if (permissionError) return { error: permissionError };
 
-  if (message) {
-    await message.edit({ embeds: [embed], components: [] }).catch(() => null);
-  } else {
-    if (preferredChannel && previousChannelId && previousMessageId && previousChannelId !== preferredChannel.id) {
-      const previousChannel = guild.channels.cache.get(previousChannelId) || await guild.channels.fetch(previousChannelId).catch(() => null);
-      const previousMessage = previousChannel?.isTextBased?.() ? await previousChannel.messages.fetch(previousMessageId).catch(() => null) : null;
-      if (previousMessage) await previousMessage.delete().catch(() => null);
-    }
-    message = await targetChannel.send({ embeds: [embed], components: [] }).catch(() => null);
-    if (!message) return null;
-    config.topMessageId = message.id;
-  }
+  const { embed, separatorAsset } = createTopVoiceEmbed(guild);
+  const files = separatorAsset
+    ? [new AttachmentBuilder(separatorAsset.buffer, { name: separatorAsset.attachmentName })]
+    : [];
+  const message = await targetChannel.send({ embeds: [embed], files, components: [] }).catch(() => null);
+  if (!message) return { error: '❌ تعذر إرسال رسالة التوب في الروم المحدد.' };
 
+  const previousChannel = previousChannelId ? guild.channels.cache.get(previousChannelId) || await guild.channels.fetch(previousChannelId).catch(() => null) : null;
+  const previousMessage = previousChannel?.isTextBased?.() && previousMessageId
+    ? await previousChannel.messages.fetch(previousMessageId).catch(() => null)
+    : null;
+  if (previousMessage && previousMessage.id !== message.id) await previousMessage.delete().catch(error => console.error('[temp] Failed to delete previous top message:', error));
+
+  config.topMessageId = message.id;
   config.topChannelId = targetChannel.id;
   config.topLastUpdatedAt = Date.now();
   scheduleSave();
-  return message;
+  return { message };
 }
 
 function registerRoomPresenceStart(roomRecord, memberId, at = Date.now()) {
@@ -1157,13 +1522,7 @@ function isGuildAdmin(member, BOT_OWNERS = []) {
 }
 
 function canManageAdminPanel(member, roomRecord) {
-  return Boolean(
-    member && roomRecord && (
-      member.id === roomRecord.ownerId ||
-      member.id === member.guild.ownerId ||
-      member.permissions.has(PermissionsBitField.Flags.Administrator)
-    )
-  );
+  return canUseAdminButton(member, roomRecord);
 }
 
 function canManageRoom(member, roomRecord, profile) {
@@ -1185,26 +1544,22 @@ function settingStateText(config) {
 
 function createSettingsEmbed(guild, actorId) {
   const config = getGuildConfig(guild.id);
-  const category = config.categoryId ? guild.channels.cache.get(config.categoryId) : null;
-  const creator = config.creatorChannelId ? guild.channels.cache.get(config.creatorChannelId) : null;
-  const controlRoom = config.controlChannelId ? guild.channels.cache.get(config.controlChannelId) : null;
-  const logRoom = config.logChannelId ? guild.channels.cache.get(config.logChannelId) : null;
-  const musicRoom = config.musicChannelId ? guild.channels.cache.get(config.musicChannelId) : null;
-  const topRoom = config.topChannelId ? guild.channels.cache.get(config.topChannelId) : null;
+  const formatChannelReference = channelId => channelId ? `<#${channelId}>` : '**غير محدد**';
 
   return colorManager.createEmbed()
     .setTitle('**Temp Voice Settings**')
     .setDescription([
       '**إعدادات نظام الرومات الصوتية المؤقتة.**',
       '',
-      `**Category:** ${category ? `<#${category.id}>` : '**غير محددة**'}`,
-      `**Creator Room:** ${creator ? `<#${creator.id}>` : '**سيتم إنشاؤه عند اختيار الكاتوقري**'}`,
+      `**Category:** ${config.categoryId ? `<#${config.categoryId}>` : '**غير محددة**'}`,
+      `**Creator Room:** ${config.creatorChannelId ? `<#${config.creatorChannelId}>` : '**سيتم إنشاؤه عند اختيار الكاتوقري**'}`,
       `**Creator Name:** **${sanitizeRoomName(config.creatorChannelName, DEFAULT_CREATOR_NAME)}**`,
-      `**Control Room:** ${controlRoom ? `<#${controlRoom.id}>` : '**غير محدد**'}`,
+      `**Control Room:** ${formatChannelReference(config.controlChannelId)}`,
       `**General Control Message:** ${config.controlMessageId ? `**جاهزة**` : '**غير منشأة**'}`,
-      `**Log Room:** ${logRoom ? `<#${logRoom.id}>` : '**غير محدد**'}`,
-      `**Music Bot Room:** ${musicRoom ? `<#${musicRoom.id}>` : '**غير محدد**'}`,
-      `**Top Board:** ${topRoom ? `<#${topRoom.id}>` : '**غير محدد**'}`,
+      `**Log Room:** ${formatChannelReference(config.logChannelId)}`,
+      `**Music Bot Room:** ${formatChannelReference(config.musicChannelId)}`,
+      `**Top Board:** ${formatChannelReference(config.topChannelId)}`,
+      `**Top Divider Image:** ${config.topSeparatorImage?.fileName ? '**محفوظة**' : '**غير مرفوعة**'}`,
       `**Controller Card Color:** ${getControlCardColorSummary(config)}`,
       `**Auto Clean:** ${boolText(config.autoCleanEnabled)} — ${formatDuration(config.autoCleanIntervalMs)}`,
       `**Room Lifetime:** ${formatDuration(config.maxRoomAgeMs)}`,
@@ -1218,11 +1573,15 @@ function createSettingsEmbed(guild, actorId) {
 }
 
 function buildSettingsRows(userId) {
-  const makeSettingsButton = key => new ButtonBuilder()
-    .setCustomId(`temp_settings_${key}:${userId}`)
-    .setLabel(TEMP_SETTINGS_META[key].label)
-    .setEmoji(TEMP_SETTINGS_META[key].emoji)
-    .setStyle(getTempButtonStyle());
+  const makeSettingsButton = key => {
+    const button = new ButtonBuilder()
+      .setCustomId(`temp_settings_${key}:${userId}`)
+      .setLabel(TEMP_SETTINGS_META[key].label)
+      .setStyle(getTempButtonStyle());
+
+    if (TEMP_SETTINGS_META[key].emoji) button.setEmoji(TEMP_SETTINGS_META[key].emoji);
+    return button;
+  };
 
   return [
     new ActionRowBuilder().addComponents(
@@ -1248,7 +1607,7 @@ function buildSettingsRows(userId) {
 }
 
 async function updateSettingsPanelMessage(guild, userId) {
-  const session = getSession(userId);
+  const session = getSession(guild.id, userId);
   if (!session.settingsChannelId || !session.settingsMessageId) return;
   const channel = guild.channels.cache.get(session.settingsChannelId) || await guild.channels.fetch(session.settingsChannelId).catch(() => null);
   if (!channel || !channel.isTextBased()) return;
@@ -1520,8 +1879,10 @@ async function buildGeneralControlCard(guild) {
   ctx.fillStyle = '#ffffff';
   ctx.shadowColor = 'rgba(0,0,0,0.26)';
   ctx.shadowBlur = 12;
-  ctx.font = `bold 72px ${LATIN_FONT_FAMILY}`;
-  ctx.fillText('Temp Voice Controller ', width / 2, 168);
+  const cardTitle = `${guild?.name || 'Servername'} Voice Controller`;
+  const cardTitleSize = fitTextSize(ctx, cardTitle, width - 220, 72, 42, LATIN_FONT_FAMILY);
+  ctx.font = `bold ${cardTitleSize}px ${LATIN_FONT_FAMILY}`;
+  ctx.fillText(cardTitle, width / 2, 168);
   ctx.shadowBlur = 0;
 
   const layoutRows = [
@@ -1827,7 +2188,11 @@ async function enforceRoomOccupancyRules(roomChannel, ownerId, profile = null) {
     }
     if (overLimitMembers.some(target => target.id === member.id)) {
       await member.voice.disconnect('Temp room limit reached').catch(() => member.voice.setChannel(null).catch(() => null));
+      continue;
     }
+
+    const shouldMuteVoice = hasRoomScopedMute(effectiveProfile, member.id, 'voice') || hasRoomScopedMute(effectiveProfile, member.id, 'all');
+    await syncDiscordVoiceMute(member, roomChannel, shouldMuteVoice, shouldMuteVoice ? 'Temp room voice mute enforced' : 'Temp room voice mute removed');
   }
 }
 
@@ -1984,9 +2349,10 @@ async function deleteTempRoom(guild, ownerId, reason = 'Temp room cleanup') {
   });
 }
 
-async function resolveManagedRoom(interaction, encodedOwnerId = null, { silent = false } = {}) {
+async function resolveManagedRoom(interaction, encodedOwnerId = null, { silent = false, allowAdminOverride = false } = {}) {
   const guild = interaction.guild;
   const member = interaction.member;
+  const hasAdminOverride = allowAdminOverride && (runtimeBotOwners.includes(member?.id) || member?.id === member?.guild?.ownerId);
 
   let ownerId = encodedOwnerId;
   let roomRecord = ownerId ? getRoomRecord(guild.id, ownerId) : null;
@@ -2003,7 +2369,7 @@ async function resolveManagedRoom(interaction, encodedOwnerId = null, { silent =
     for (const [candidateOwnerId, candidateRecord] of Object.entries(getRoomStore(guild.id))) {
       if (candidateRecord.channelId !== member.voice.channelId) continue;
       const profile = getUserProfile(guild.id, candidateOwnerId);
-      if (canManageRoom(member, candidateRecord, profile)) {
+      if (canManageRoom(member, candidateRecord, profile) || (hasAdminOverride && canUseAdminButton(member, candidateRecord))) {
         ownerId = candidateOwnerId;
         roomRecord = candidateRecord;
         break;
@@ -2014,7 +2380,7 @@ async function resolveManagedRoom(interaction, encodedOwnerId = null, { silent =
   if (!roomRecord) {
     for (const [candidateOwnerId, candidateRecord] of Object.entries(getRoomStore(guild.id))) {
       const profile = getUserProfile(guild.id, candidateOwnerId);
-      if (canManageRoom(member, candidateRecord, profile)) {
+      if (canManageRoom(member, candidateRecord, profile) || (hasAdminOverride && canUseAdminButton(member, candidateRecord))) {
         ownerId = candidateOwnerId;
         roomRecord = candidateRecord;
         break;
@@ -2030,7 +2396,7 @@ async function resolveManagedRoom(interaction, encodedOwnerId = null, { silent =
   }
 
   const profile = getUserProfile(guild.id, ownerId);
-  if (!canManageRoom(member, roomRecord, profile)) {
+  if (!canManageRoom(member, roomRecord, profile) && !(hasAdminOverride && canUseAdminButton(member, roomRecord))) {
     if (!silent) {
       await replyEphemeral(interaction, '❌ لا تملك صلاحية التحكم بهذا الروم.');
     }
@@ -2046,7 +2412,7 @@ async function resolveManagedRoom(interaction, encodedOwnerId = null, { silent =
     return null;
   }
 
-  getSession(member.id).lastResolvedOwnerId = ownerId;
+  getSession(member.guild.id, member.id).lastResolvedOwnerId = ownerId;
   return { ownerId, roomRecord, profile, roomChannel };
 }
 
@@ -2211,8 +2577,14 @@ async function processRotatingRoomName(guild, ownerId, profile, roomChannel) {
 
 async function heartbeat() {
   if (!runtimeClient) return;
+  pruneRuntimeCaches();
   const data = loadData();
-  for (const guildId of Object.keys(data.rooms)) {
+  const trackedGuildIds = new Set([
+    ...Object.keys(data.rooms || {}),
+    ...Object.keys(data.guilds || {})
+  ]);
+
+  for (const guildId of trackedGuildIds) {
     const guild = runtimeClient.guilds.cache.get(guildId) || await runtimeClient.guilds.fetch(guildId).catch(() => null);
     if (!guild) continue;
     const config = getGuildConfig(guildId);
@@ -2223,6 +2595,7 @@ async function heartbeat() {
         deleteRoomRecord(guildId, ownerId);
         continue;
       }
+      if (clearExpiredRecentKicks(roomRecord, Date.now()) || clearExpiredBulkMuteAllStates(roomRecord, Date.now())) setRoomRecord(guildId, ownerId, roomRecord);
       reconcileRoomPresenceSessions(guildId, ownerId, roomRecord, channel, Date.now());
       setRoomRecord(guildId, ownerId, roomRecord);
 
@@ -2252,7 +2625,7 @@ async function heartbeat() {
       await processRotatingRoomName(guild, ownerId, getUserProfile(guildId, ownerId), channel);
       await applyRoomState(channel, ownerId);
 
-      if (config.autoCleanEnabled && config.autoCleanIntervalMs > 0 && channel.isTextBased()) {
+      if (config.autoCleanEnabled && config.autoCleanIntervalMs > 0 && typeof channel.messages?.fetch === 'function') {
         const lastClean = roomRecord.lastAutoCleanAt || 0;
         if (Date.now() - lastClean >= config.autoCleanIntervalMs) {
           roomRecord.lastAutoCleanAt = Date.now();
@@ -2265,10 +2638,14 @@ async function heartbeat() {
       }
     }
 
-    await ensureCreatorChannel(guild).catch(() => null);
-    if (config.controlChannelId) await ensureGuildControlPanel(guild).catch(() => null);
+    await ensureCreatorChannel(guild).catch(error => console.error('[temp] ensureCreatorChannel failed:', error));
+    if (config.controlChannelId) await ensureGuildControlPanel(guild).catch(error => console.error('[temp] ensureGuildControlPanel failed:', error));
     if (config.topChannelId && (!config.topLastUpdatedAt || (Date.now() - config.topLastUpdatedAt) >= TOP_REFRESH_MS)) {
-      await refreshTopVoiceMessage(guild).catch(() => null);
+      const topRefreshResult = await refreshTopVoiceMessage(guild).catch(error => {
+        console.error('[temp] refreshTopVoiceMessage failed:', error);
+        return null;
+      });
+      if (topRefreshResult?.error) console.error('[temp] refreshTopVoiceMessage:', topRefreshResult.error);
     }
   }
 }
@@ -2327,11 +2704,32 @@ async function handleVoiceStateUpdate(oldState, newState) {
 
     const joinedTemp = newState.channelId === roomRecord.channelId && oldState.channelId !== roomRecord.channelId;
     const leftTemp = oldState.channelId === roomRecord.channelId && newState.channelId !== roomRecord.channelId;
+    const isInTemp = newState.channelId === roomRecord.channelId;
     const ownerProfile = getUserProfile(guild.id, ownerId);
+    if (clearExpiredRecentKicks(roomRecord, Date.now()) || clearExpiredBulkMuteAllStates(roomRecord, Date.now())) setRoomRecord(guild.id, ownerId, roomRecord);
     if (joinedTemp && ownerProfile.bannedUsers.includes(newState.member.id)) {
       const user = await guild.client.users.fetch(newState.member.id).catch(() => null);
       await notifyUser(user, { content: `أنت محظور من روم <#${channel.id}> ولا يمكنك الدخول إليه.` });
       await newState.member.voice.disconnect('Banned from temp room').catch(() => newState.member.voice.setChannel(null).catch(() => null));
+      continue;
+    }
+    if (joinedTemp && roomRecord.recentKicks?.[newState.member.id] && roomRecord.recentKicks[newState.member.id] > Date.now()) {
+      const user = await guild.client.users.fetch(newState.member.id).catch(() => null);
+      await notifyUser(user, { content: `تم طردك مؤقتاً من روم <#${channel.id}>. حاول الدخول مرة أخرى بعد ${Math.max(1, Math.ceil((roomRecord.recentKicks[newState.member.id] - Date.now()) / 1000))} ثانية.` });
+      await newState.member.voice.disconnect('Recently kicked from temp room').catch(() => newState.member.voice.setChannel(null).catch(() => null));
+      continue;
+    }
+    for (const scope of ['voice', 'text', 'all']) {
+      const bulkMuteState = getActiveBulkMuteAllState(roomRecord, scope, Date.now());
+      if (!joinedTemp || !bulkMuteState) continue;
+      if (!shouldBulkMuteMember(newState.member, ownerId, ownerProfile, bulkMuteState.applyToManagers, bulkMuteState.by)) continue;
+      applyMuteScopeToProfile(ownerProfile, newState.member.id, scope, bulkMuteState.expiresAt || null, bulkMuteState.by);
+      addBulkMuteAllAffectedUser(roomRecord, scope, newState.member.id);
+      scheduleSave();
+      setRoomRecord(guild.id, ownerId, roomRecord);
+      await applyRoomState(channel, ownerId);
+    }
+    if (joinedTemp && await enforcePrivilegedMuteBypass(guild, ownerId, ownerProfile, channel, newState.member)) {
       continue;
     }
     if (
@@ -2341,6 +2739,10 @@ async function handleVoiceStateUpdate(oldState, newState) {
     ) {
       await newState.member.voice.disconnect('Unauthorized temp room entry').catch(() => newState.member.voice.setChannel(null).catch(() => null));
       continue;
+    }
+    if (isInTemp) {
+      const shouldMuteVoice = hasRoomScopedMute(ownerProfile, newState.member.id, 'voice') || hasRoomScopedMute(ownerProfile, newState.member.id, 'all');
+      await syncDiscordVoiceMute(newState.member, channel, shouldMuteVoice, shouldMuteVoice ? 'Temp room voice mute re-applied' : 'Temp room voice mute removed');
     }
     const joinedInvite = joinedTemp ? getActiveInvite(ownerProfile, newState.member.id) : null;
     if (joinedInvite && !joinedInvite.joinedAt) {
@@ -2353,6 +2755,9 @@ async function handleVoiceStateUpdate(oldState, newState) {
     }
     if (leftTemp) {
       const leavingId = oldState.member?.id;
+      if (oldState.member) {
+        await syncDiscordVoiceMute(oldState.member, channel, false, 'Temp room voice mute removed after leaving room');
+      }
       flushRoomPresenceForMember(guild.id, ownerId, roomRecord, leavingId, Date.now());
       setRoomRecord(guild.id, ownerId, roomRecord);
       const activeInvite = getActiveInvite(ownerProfile, leavingId);
@@ -2387,6 +2792,7 @@ async function handleVoiceStateUpdate(oldState, newState) {
 }
 
 async function execute(message, args, { BOT_OWNERS = [] }) {
+  runtimeBotOwners = Array.isArray(BOT_OWNERS) ? [...BOT_OWNERS] : [];
   if (!isGuildAdmin(message.member, BOT_OWNERS)) {
     await message.react('❌').catch(() => {});
     return;
@@ -2402,7 +2808,7 @@ async function execute(message, args, { BOT_OWNERS = [] }) {
     components: buildSettingsRows(message.author.id)
   });
 
-  const session = getSession(message.author.id);
+  const session = getSession(message.guild.id, message.author.id);
   session.settingsChannelId = sent.channel.id;
   session.settingsMessageId = sent.id;
   await updateSettingsPanelMessage(message.guild, message.author.id);
@@ -2497,14 +2903,13 @@ async function handleSettingsButton(interaction) {
   }
 
   if (action === 'temp_settings_top') {
-    const hadTopMessage = Boolean(config.topMessageId);
-    const topMessage = await refreshTopVoiceMessage(interaction.guild, interaction.channel);
-    if (!topMessage) {
-      await replyEphemeral(interaction, '❌ تعذر إرسال أو تحديث رسالة التوب في هذه القناة.');
-      return true;
-    }
-    await replyEphemeral(interaction, `✅ تم ${hadTopMessage ? 'تحديث' : 'إرسال'} لوحة التوب في ${interaction.channel}. وسيتم تحديثها تلقائياً كل 5 دقائق.`);
-    await updateSettingsPanelMessage(interaction.guild, userId);
+    const session = getSession(interaction.guild.id, userId);
+    session.pendingTopSeparatorUpload = {
+      guildId: interaction.guild.id,
+      channelId: interaction.channelId,
+      requestedAt: Date.now()
+    };
+    await replyEphemeral(interaction, '🖼️ أرسل الآن صورة الخط الفاصل كمرفق أو كرابط مباشر داخل هذه القناة. يمكنك أيضًا إرسال `remove` أو `حذف` لإزالة الصورة الحالية. بعد حفظ الصورة بنجاح سأرسل لك اختيار روم التوب.');
     return true;
   }
 
@@ -2618,7 +3023,7 @@ async function handleSettingsButton(interaction) {
   }
 
   if (action === 'temp_settings_controls') {
-    const session = getSession(userId);
+    const session = getSession(interaction.guild.id, userId);
     const config = getGuildConfig(interaction.guild.id);
     session.tempControls = { ...config.enabledControls };
 
@@ -2651,7 +3056,7 @@ async function handleSettingsButton(interaction) {
   }
 
   if (['temp_settings_controls_save', 'temp_settings_controls_reset', 'temp_settings_controls_cancel'].includes(action)) {
-    const session = getSession(userId);
+    const session = getSession(interaction.guild.id, userId);
     if (action === 'temp_settings_controls_reset') {
       session.tempControls = defaultEnabledControls();
       await interaction.update({ content: '✅ تمت إعادة تفعيل كل الأزرار. اضغط Save للحفظ.', components: interaction.message.components }).catch(() => {});
@@ -2762,8 +3167,30 @@ async function handleSettingsSelect(interaction) {
     return true;
   }
 
+  if (action === 'temp_settings_top_select') {
+    const selectedChannel = interaction.guild.channels.cache.get(interaction.values[0]) || await interaction.guild.channels.fetch(interaction.values[0]).catch(() => null);
+    const topResult = await refreshTopVoiceMessage(interaction.guild, selectedChannel);
+    if (!topResult?.message) {
+      await interaction.update({ content: topResult?.error || '❌ تم حفظ صورة الخط ولكن تعذر إرسال رسالة التوب في الروم المحدد.', components: [] }).catch(error => console.error('[temp] Failed to update top settings select failure message:', error));
+      return true;
+    }
+
+    await interaction.update({ content: `✅ تم حفظ صورة الخط وإرسال لوحة التوب الجديدة في <#${interaction.values[0]}>.`, components: [] }).catch(error => console.error('[temp] Failed to update top settings select success message:', error));
+    await updateSettingsPanelMessage(interaction.guild, userId);
+    await sendTempLog(interaction.guild, {
+      title: '🏆 **تحديث لوحة التوب**',
+      description: '**تم حفظ صورة الخط الفاصل وتحديد روم لوحة التوب وإعادة إرسال الرسالة.**',
+      fields: [
+        { name: '**المنفذ**', value: `<@${interaction.user.id}>`, inline: true },
+        { name: '**روم التوب**', value: `<#${interaction.values[0]}>`, inline: true },
+        { name: '**الصورة**', value: '**تم حفظها بنجاح**', inline: true }
+      ]
+    });
+    return true;
+  }
+
   if (action === 'temp_settings_controls_select') {
-    const session = getSession(userId);
+    const session = getSession(interaction.guild.id, userId);
     session.tempControls = Object.fromEntries(SETTING_CONTROL_KEYS.map(key => [key, interaction.values.includes(key)]));
     await interaction.update({ content: `✅ تم تحديث المعاينة. العناصر المختارة: **${interaction.values.length}**`, components: interaction.message.components }).catch(() => {});
     return true;
@@ -2891,7 +3318,9 @@ async function handleSettingsModal(interaction) {
 }
 
 async function performGeneralAction(interaction, action, resolverResult = null) {
-  const access = resolverResult || await resolveManagedRoom(interaction);
+  const access = resolverResult || await resolveManagedRoom(interaction, null, {
+    allowAdminOverride: ['temp_room_admin', 'temp_room_transfer'].includes(action)
+  });
   if (!access) return true;
   const { ownerId, roomRecord, profile, roomChannel } = access;
   const guild = interaction.guild;
@@ -3112,8 +3541,25 @@ async function performGeneralAction(interaction, action, resolverResult = null) 
       await editEphemeral(interaction, 'ℹ️ لم يتم العثور على بوت أغاني داخل روم الميوزك المحدد.');
       return true;
     }
-    await musicBot.voice.setChannel(roomChannel).catch(() => null);
-    await editEphemeral(interaction, `✅ تمت محاولة سحب بوت الأغاني ${musicBot.user.username} إلى الروم.`);
+    const moved = await musicBot.voice.setChannel(roomChannel).then(() => true).catch(() => false);
+    if (!moved) {
+      await editEphemeral(interaction, `❌ تعذر سحب بوت الأغاني ${musicBot.user.username} إلى الروم حالياً.`);
+      return true;
+    }
+
+    let nicknameRenamed = true;
+    const targetNickname = sanitizeRoomName(roomChannel.name, musicBot.displayName || musicBot.user.username).slice(0, 32);
+    if (musicBot.manageable && musicBot.nickname !== targetNickname) {
+      nicknameRenamed = await musicBot.setNickname(targetNickname, 'Sync music bot nickname with temp room name').then(() => true).catch(() => false);
+    } else if (!musicBot.manageable) {
+      nicknameRenamed = false;
+    }
+
+    if (!nicknameRenamed && typeof roomChannel.send === 'function') {
+      await roomChannel.send(`❌ فشل تغيير اسم بوت الميوزك **${musicBot.user.username}** ليطابق اسم الروم **${roomChannel.name}**.`).catch(() => {});
+    }
+
+    await editEphemeral(interaction, `✅ تم سحب بوت الأغاني ${musicBot.user.username} إلى الروم.${nicknameRenamed ? ' وتمت مزامنة الاسم بنجاح.' : ' لكن فشل تغيير الاسم إلى اسم الروم.'}`);
     await logTempRoomState(guild, {
       title: '🎵 **سحب بوت أغاني**',
       description: '**تم تنفيذ محاولة سحب بوت أغاني إلى الروم المؤقت.**',
@@ -3123,12 +3569,17 @@ async function performGeneralAction(interaction, action, resolverResult = null) 
       roomName: roomChannel.name,
       roomRecord,
       extra: `**البوت:** **${musicBot.user.username}**
-**روم المصدر:** <#${sourceChannel.id}>`
+**روم المصدر:** <#${sourceChannel.id}>
+**مزامنة الاسم:** ${nicknameRenamed ? '**نجحت**' : '**فشلت**'}`
     });
     return true;
   }
 
   if (action === 'temp_room_admin') {
+    if (!canUseAdminButton(interaction.member, roomRecord)) {
+      await editEphemeral(interaction, '❌ زر Admin متاح فقط لمالك الروم أو مالك السيرفر أو أونرات البوت.');
+      return true;
+    }
     const managersText = profile.managers.length ? profile.managers.map(id => `• ${getDisplayNameFromGuild(guild, id)} (<@${id}>)`).join('\n') : '**لا يوجد مسؤولون**';
     const recentManagerLog = (profile.managerHistory || []).slice(0, 4).map(entry => `• ${entry.action === 'add' ? 'إضافة' : 'إزالة'}: ${getDisplayNameFromGuild(guild, entry.userId)} — <@${entry.by}>`).join('\n') || '**لا توجد عمليات حديثة**';
     const allowedAdminActions = canManageAdminPanel(interaction.member, roomRecord);
@@ -3150,7 +3601,7 @@ ${recentManagerLog}`)],
 
   if (action === 'temp_room_transfer') {
     if (!canManageAdminPanel(interaction.member, roomRecord)) {
-      await editEphemeral(interaction, '❌ فقط مالك الروم أو إداري السيرفر يقدر ينقل الملكية.');
+      await editEphemeral(interaction, '❌ فقط مالك الروم أو مالك السيرفر أو أونرات البوت يقدر ينقل الملكية.');
       return true;
     }
     await editEphemeral(interaction, 'اختر العضو الذي تريد نقل ملكية الروم إليه.', {
@@ -3180,12 +3631,12 @@ async function handleRoomButton(interaction) {
     const { ownerId: resolvedOwnerId, profile, roomChannel } = access;
 
     if (action === 'temp_room_action_scope_mute_member') {
-      const roomMembers = getModeratableRoomMembers(roomChannel, resolvedOwnerId, profile);
+      const roomMembers = getModeratableRoomMembers(roomChannel, resolvedOwnerId, profile, interaction.user.id);
       if (!roomMembers.size) {
         await replyEphemeral(interaction, 'ℹ️ لا يوجد أعضاء داخل الروم لاختيارهم حالياً.');
         return true;
       }
-      const session = getSession(interaction.user.id);
+      const session = getSession(interaction.guild.id, interaction.user.id);
       session.pendingModerationScope = { ownerId: resolvedOwnerId, action: 'mute_member', scope };
       await replyEphemeral(interaction, `اختر العضو الذي تريد إعطاءه ميوت ${getScopeLabel(scope)}.`, {
         components: [new ActionRowBuilder().addComponents(
@@ -3205,7 +3656,7 @@ async function handleRoomButton(interaction) {
         await replyEphemeral(interaction, `ℹ️ لا يوجد أعضاء لديهم ميوت ${getScopeLabel(scope)} حالياً.`);
         return true;
       }
-      const session = getSession(interaction.user.id);
+      const session = getSession(interaction.guild.id, interaction.user.id);
       session.pendingModerationScope = { ownerId: resolvedOwnerId, action: 'unmute_member', scope };
       await replyEphemeral(interaction, `اختر العضو الذي تريد إزالة ميوت ${getScopeLabel(scope)} عنه.`, {
         components: [new ActionRowBuilder().addComponents(
@@ -3220,12 +3671,14 @@ async function handleRoomButton(interaction) {
     }
 
     if (action === 'temp_room_action_scope_mute_all') {
-      const targets = [...getModeratableRoomMembers(roomChannel, resolvedOwnerId, profile).values()].map(member => member.id);
+      const targets = [...getModeratableRoomMembers(roomChannel, resolvedOwnerId, profile, interaction.user.id).values()]
+        .filter(member => shouldBulkMuteMember(member, resolvedOwnerId, profile, false, interaction.user.id))
+        .map(member => member.id);
       if (!targets.length) {
         await replyEphemeral(interaction, 'ℹ️ لا يوجد أعضاء حالياً داخل الروم لتطبيق الميوت عليهم.');
         return true;
       }
-      const session = getSession(interaction.user.id);
+      const session = getSession(interaction.guild.id, interaction.user.id);
       session.pendingMuteAll = { ownerId: resolvedOwnerId, scope, targetIds: targets };
       const penaltyLines = buildPenaltyStatusLines(interaction.guild, profile, targets, scope);
       if (penaltyLines.length) {
@@ -3241,27 +3694,77 @@ async function handleRoomButton(interaction) {
     }
 
     if (action === 'temp_room_action_scope_unmute_all') {
-      const targets = listMutedTargets(profile, scope);
+      clearExpiredRecentKicks(roomRecord, Date.now());
+      const currentMemberIds = new Set([...(roomChannel.members?.keys?.() || [])].filter(memberId => !roomChannel.members.get(memberId)?.user?.bot));
+      const targets = (roomRecord.bulkMuteAllAffected?.[scope] || []).filter(userId => currentMemberIds.has(userId));
       if (!targets.length) {
-        await replyEphemeral(interaction, `ℹ️ لا يوجد ميوت ${getScopeLabel(scope)} مفعل حالياً.`);
+        await replyEphemeral(interaction, `ℹ️ لا يوجد أعضاء داخل الروم لديهم ميوت ${getScopeLabel(scope)} ناتج عن Mute All حالياً.`);
         return true;
       }
       for (const userId of targets) {
         removeMuteScopeFromProfile(profile, userId, scope);
       }
+      clearBulkMuteAllScope(roomRecord, scope);
       profile.moderationHistory = pushLimitedHistory(profile.moderationHistory, { action: `unmute_all_${scope}`, userId: 'all', by: interaction.user.id, at: Date.now() });
-      scheduleSave();
+      setRoomRecord(interaction.guild.id, resolvedOwnerId, roomRecord);
       await applyRoomState(roomChannel, resolvedOwnerId);
-      await replyEphemeral(interaction, `✅ تم فك الميوت ${getScopeLabel(scope)} عن الجميع.`);
+      await replyEphemeral(interaction, `✅ تم فك الميوت ${getScopeLabel(scope)} عن جميع الموجودين حالياً في الروم.`);
       return true;
     }
+  }
+
+  if (action === 'temp_room_action_apply_mute_all' || action === 'temp_room_action_apply_mute_all_skip_managers') {
+    const scope = args[1];
+    const access = await resolveManagedRoom(interaction, ownerId);
+    if (!access) return true;
+    const { ownerId: resolvedOwnerId, profile, roomChannel, roomRecord } = access;
+    const session = getSession(interaction.guild.id, interaction.user.id);
+    const pending = session.pendingMuteAllDecision;
+    if (!pending || pending.ownerId !== resolvedOwnerId || pending.scope !== scope) {
+      await replyEphemeral(interaction, '❌ انتهت جلسة تأكيد ميوت الكل. أعد المحاولة من جديد.');
+      return true;
+    }
+
+    const applyToManagers = action === 'temp_room_action_apply_mute_all';
+    const currentTargets = [...getModeratableRoomMembers(roomChannel, resolvedOwnerId, profile, interaction.user.id).values()]
+      .filter(member => shouldBulkMuteMember(member, resolvedOwnerId, profile, applyToManagers, interaction.user.id));
+    if (!currentTargets.length) {
+      session.pendingMuteAllDecision = null;
+      await replyEphemeral(interaction, 'ℹ️ لا يوجد أعضاء مطابقون داخل الروم حالياً لتطبيق ميوت الكل.');
+      return true;
+    }
+
+    ensureRoomModerationState(roomRecord);
+    roomRecord.bulkMuteAllStates[scope] = {
+      by: interaction.user.id,
+      expiresAt: pending.expiresAt,
+      applyToManagers,
+      startedAt: Date.now()
+    };
+    roomRecord.bulkMuteAllAffected[scope] = [];
+
+    for (const member of currentTargets) {
+      applyMuteScopeToProfile(profile, member.id, scope, pending.expiresAt, interaction.user.id);
+      addBulkMuteAllAffectedUser(roomRecord, scope, member.id);
+      profile.moderationHistory = pushLimitedHistory(profile.moderationHistory, { action: `mute_all_${scope}`, userId: member.id, by: interaction.user.id, at: Date.now(), expiresAt: pending.expiresAt });
+      await enforcePrivilegedMuteBypass(interaction.guild, resolvedOwnerId, profile, roomChannel, member);
+    }
+
+    session.pendingMuteAllDecision = null;
+    setRoomRecord(interaction.guild.id, resolvedOwnerId, roomRecord);
+    await applyRoomState(roomChannel, resolvedOwnerId);
+    await interaction.update({
+      content: `✅ تم إعطاء ميوت ${getScopeLabel(scope)} لكل الموجودين حالياً في الروم${applyToManagers ? ' بما فيهم المسؤولون' : ' مع استثناء المسؤولين'}، وسيُطبق أيضًا على أي عضو جديد يدخل هذا الروم أثناء استمرار العقوبة.`,
+      components: []
+    }).catch(() => {});
+    return true;
   }
 
   if (action === 'temp_room_action_renew_mute') {
     const scope = args[1];
     const access = await resolveManagedRoom(interaction, ownerId);
     if (!access) return true;
-    const session = getSession(interaction.user.id);
+    const session = getSession(interaction.guild.id, interaction.user.id);
     if (!session.pendingModerationTarget || session.pendingModerationTarget.ownerId !== access.ownerId || session.pendingModerationTarget.scope !== scope) {
       await replyEphemeral(interaction, '❌ انتهت جلسة تجديد العقوبة. اختر العضو من جديد.');
       return true;
@@ -3274,7 +3777,7 @@ async function handleRoomButton(interaction) {
     const scope = args[1];
     const access = await resolveManagedRoom(interaction, ownerId);
     if (!access) return true;
-    const session = getSession(interaction.user.id);
+    const session = getSession(interaction.guild.id, interaction.user.id);
     if (!session.pendingMuteAll || session.pendingMuteAll.ownerId !== access.ownerId || session.pendingMuteAll.scope !== scope) {
       await replyEphemeral(interaction, '❌ انتهت جلسة تجديد العقوبة الجماعية. حاول من جديد.');
       return true;
@@ -3286,7 +3789,7 @@ async function handleRoomButton(interaction) {
   if (action === 'temp_room_action_renew_ban') {
     const access = await resolveManagedRoom(interaction, ownerId);
     if (!access) return true;
-    const session = getSession(interaction.user.id);
+    const session = getSession(interaction.guild.id, interaction.user.id);
     if (!session.pendingBanTarget || session.pendingBanTarget.ownerId !== access.ownerId) {
       await replyEphemeral(interaction, '❌ انتهت جلسة تجديد الحظر. اختر العضو من جديد.');
       return true;
@@ -3298,14 +3801,15 @@ async function handleRoomButton(interaction) {
   if (action === 'temp_room_action_kick_all') {
     const access = await resolveManagedRoom(interaction, ownerId);
     if (!access) return true;
-    const { ownerId: resolvedOwnerId, profile, roomChannel } = access;
-    const targets = [...getModeratableRoomMembers(roomChannel, resolvedOwnerId, profile).values()].map(member => member.id);
+    const { ownerId: resolvedOwnerId, profile, roomChannel, roomRecord } = access;
+    const targets = [...getModeratableRoomMembers(roomChannel, resolvedOwnerId, profile, interaction.user.id).values()].map(member => member.id);
     const kickedIds = [];
     for (const targetId of targets) {
       const member = await interaction.guild.members.fetch(targetId).catch(() => null);
       if (!member || member.voice.channelId !== roomChannel.id) continue;
       const moved = await disconnectMemberFromVoice(member, 'Kicked from temp room');
       if (!moved) continue;
+      setRecentKick(roomRecord, targetId);
       profile.moderationHistory = pushLimitedHistory(profile.moderationHistory, { action: 'kick', userId: targetId, by: interaction.user.id, at: Date.now() });
       kickedIds.push(targetId);
     }
@@ -3313,16 +3817,16 @@ async function handleRoomButton(interaction) {
       await replyEphemeral(interaction, '❌ تعذر طرد أي عضو فعلياً من الروم.');
       return true;
     }
-    scheduleSave();
-    await replyEphemeral(interaction, `✅ تم طرد ${kickedIds.length} عضو من الروم.`);
+    setRoomRecord(interaction.guild.id, resolvedOwnerId, roomRecord);
+    await replyEphemeral(interaction, `✅ تم طرد ${kickedIds.length} عضو من الروم ومنع رجوعهم لمدة ${Math.ceil(KICK_REJOIN_BLOCK_MS / 1000)} ثانية.`);
     return true;
   }
 
   if (action === 'temp_room_admin_add' || action === 'temp_room_admin_remove') {
-    const access = await resolveManagedRoom(interaction, ownerId);
+    const access = await resolveManagedRoom(interaction, ownerId, { allowAdminOverride: true });
     if (!access) return true;
     if (!canManageAdminPanel(interaction.member, access.roomRecord)) {
-      await replyEphemeral(interaction, '❌ فقط مالك الروم أو إداري السيرفر يمكنه تعديل قائمة المسؤولين.');
+      await replyEphemeral(interaction, '❌ فقط مالك الروم أو مالك السيرفر أو أونرات البوت يمكنه تعديل قائمة المسؤولين.');
       return true;
     }
     await replyEphemeral(interaction, `اختر العضو ${action === 'temp_room_admin_add' ? 'لإضافته' : 'لإزالته'} من قائمة المسؤولين.`, {
@@ -3337,7 +3841,9 @@ async function handleRoomButton(interaction) {
     return true;
   }
 
-  return performGeneralAction(interaction, action, ownerId ? await resolveManagedRoom(interaction, ownerId) : null);
+  return performGeneralAction(interaction, action, ownerId ? await resolveManagedRoom(interaction, ownerId, {
+    allowAdminOverride: ['temp_room_admin', 'temp_room_transfer'].includes(action)
+  }) : null);
 }
 
 async function handleRoomSelect(interaction) {
@@ -3345,7 +3851,7 @@ async function handleRoomSelect(interaction) {
   const ownerId = args[0] || null;
   const access = action === 'temp_room_actions'
     ? await resolveManagedRoom(interaction)
-    : await resolveManagedRoom(interaction, ownerId);
+    : await resolveManagedRoom(interaction, ownerId, { allowAdminOverride: ['temp_room_admin_add_select', 'temp_room_admin_remove_select', 'temp_room_transfer_select'].includes(action) });
   if (!access) return true;
   const { ownerId: resolvedOwnerId, profile, roomRecord, roomChannel } = access;
 
@@ -3369,7 +3875,7 @@ async function handleRoomSelect(interaction) {
   }
 
   if (action === 'temp_room_allow_select') {
-    const session = getSession(interaction.user.id);
+    const session = getSession(interaction.guild.id, interaction.user.id);
     session.pendingAllowSelection = { ownerId: resolvedOwnerId, userIds: interaction.values };
     const modal = new ModalBuilder().setCustomId(`temp_room_allow_duration_modal:${resolvedOwnerId}`).setTitle('Allow Access');
     modal.addComponents(new ActionRowBuilder().addComponents(
@@ -3522,7 +4028,7 @@ async function handleRoomSelect(interaction) {
       return true;
     }
     if (selectedAction === 'kick') {
-      const roomMembers = getModeratableRoomMembers(roomChannel, resolvedOwnerId, profile);
+      const roomMembers = getModeratableRoomMembers(roomChannel, resolvedOwnerId, profile, interaction.user.id);
       if (!roomMembers.size) {
         await replyEphemeral(interaction, 'ℹ️ لا يوجد أعضاء داخل الروم لطردهم حالياً.');
         return true;
@@ -3579,7 +4085,7 @@ async function handleRoomSelect(interaction) {
   }
 
   if (action === 'temp_room_action_pick_mute_member') {
-    const session = getSession(interaction.user.id);
+    const session = getSession(interaction.guild.id, interaction.user.id);
     if (!session.pendingModerationScope || session.pendingModerationScope.ownerId !== resolvedOwnerId || session.pendingModerationScope.action !== 'mute_member') {
       await replyEphemeral(interaction, '❌ انتهت جلسة اختيار الميوت. حاول من جديد.');
       return true;
@@ -3610,7 +4116,7 @@ async function handleRoomSelect(interaction) {
   }
 
   if (action === 'temp_room_action_pick_unmute_member') {
-    const session = getSession(interaction.user.id);
+    const session = getSession(interaction.guild.id, interaction.user.id);
     if (!session.pendingModerationScope || session.pendingModerationScope.ownerId !== resolvedOwnerId || session.pendingModerationScope.action !== 'unmute_member') {
       await replyEphemeral(interaction, '❌ انتهت جلسة اختيار فك الميوت. حاول من جديد.');
       return true;
@@ -3640,6 +4146,7 @@ async function handleRoomSelect(interaction) {
       if (!validation.ok) continue;
       const moved = await disconnectMemberFromVoice(member, 'Kicked from temp room');
       if (!moved) continue;
+      setRecentKick(roomRecord, targetId);
       profile.moderationHistory = pushLimitedHistory(profile.moderationHistory, { action: 'kick', userId: targetId, by: interaction.user.id, at: Date.now() });
       kickedIds.push(targetId);
     }
@@ -3647,8 +4154,8 @@ async function handleRoomSelect(interaction) {
       await replyEphemeral(interaction, '❌ لا يوجد أعضاء مطابقون داخل الروم حالياً للطرد.');
       return true;
     }
-    scheduleSave();
-    await replyEphemeral(interaction, `✅ تم طرد ${kickedIds.map(id => `<@${id}>`).join('، ')} من الروم.`);
+    setRoomRecord(interaction.guild.id, resolvedOwnerId, roomRecord);
+    await replyEphemeral(interaction, `✅ تم طرد ${kickedIds.map(id => `<@${id}>`).join('، ')} من الروم ومنع رجوعهم لمدة ${Math.ceil(KICK_REJOIN_BLOCK_MS / 1000)} ثانية.`);
     return true;
   }
 
@@ -3662,7 +4169,7 @@ async function handleRoomSelect(interaction) {
       return true;
     }
     const summary = getBanSummary(profile, targetId);
-    const session = getSession(interaction.user.id);
+    const session = getSession(interaction.guild.id, interaction.user.id);
     session.pendingBanTarget = { ownerId: resolvedOwnerId, targetId };
     if (summary.active) {
       await replyEphemeral(interaction, `**الحظر الحالي على <@${targetId}>:** ${summary.remaining}\n\nاضغط **تجديد الحظر** إذا كنت تريد تمديده أو استبدال مدته.`, {
@@ -3696,7 +4203,7 @@ async function handleRoomSelect(interaction) {
 
   if (['temp_room_admin_add_select', 'temp_room_admin_remove_select', 'temp_room_transfer_select'].includes(action)) {
     if (!canManageAdminPanel(interaction.member, roomRecord)) {
-      await replyEphemeral(interaction, '❌ غير مسموح.');
+      await replyEphemeral(interaction, '❌ غير مسموح. هذا الإجراء متاح فقط لمالك الروم أو مالك السيرفر أو أونرات البوت.');
       return true;
     }
 
@@ -3770,7 +4277,7 @@ async function handleRoomSelect(interaction) {
 
     const adding = action === 'temp_room_admin_add_select';
     if (adding) {
-      const session = getSession(interaction.user.id);
+      const session = getSession(interaction.guild.id, interaction.user.id);
       session.pendingAdminSelection = { ownerId: resolvedOwnerId, userIds: interaction.values };
       const modal = new ModalBuilder().setCustomId(`temp_room_admin_add_duration_modal:${resolvedOwnerId}`).setTitle('Room Admin Access');
       modal.addComponents(new ActionRowBuilder().addComponents(
@@ -3904,12 +4411,12 @@ async function handleInviteButton(interaction) {
 async function handleRoomModal(interaction) {
   const { action, args } = parseCustomId(interaction.customId);
   const ownerId = args[0] || null;
-  const access = await resolveManagedRoom(interaction, ownerId);
+  const access = await resolveManagedRoom(interaction, ownerId, { allowAdminOverride: action === 'temp_room_admin_add_duration_modal' });
   if (!access) return true;
   const { profile, roomChannel } = access;
 
   if (action === 'temp_room_allow_duration_modal') {
-    const session = getSession(interaction.user.id);
+    const session = getSession(interaction.guild.id, interaction.user.id);
     const pending = session.pendingAllowSelection;
     if (!pending || pending.ownerId !== ownerId || !pending.userIds?.length) {
       await replyEphemeral(interaction, '❌ انتهت جلسة اختيار أعضاء السماح. حاول من جديد.');
@@ -3955,7 +4462,7 @@ async function handleRoomModal(interaction) {
   }
 
   if (action === 'temp_room_action_ban_modal') {
-    const session = getSession(interaction.user.id);
+    const session = getSession(interaction.guild.id, interaction.user.id);
     const pending = session.pendingBanTarget;
     if (!pending || pending.ownerId !== ownerId || !pending.targetId) {
       await replyEphemeral(interaction, '❌ انتهت جلسة الحظر. حاول من جديد.');
@@ -3991,7 +4498,7 @@ async function handleRoomModal(interaction) {
   }
 
   if (action === 'temp_room_admin_add_duration_modal') {
-    const session = getSession(interaction.user.id);
+    const session = getSession(interaction.guild.id, interaction.user.id);
     const pending = session.pendingAdminSelection;
     if (!pending || pending.ownerId !== ownerId || !pending.userIds?.length) {
       await replyEphemeral(interaction, '❌ انتهت جلسة اختيار المسؤولين. حاول من جديد.');
@@ -4030,7 +4537,7 @@ async function handleRoomModal(interaction) {
   }
 
   if (action === 'temp_room_action_mute_member_modal') {
-    const session = getSession(interaction.user.id);
+    const session = getSession(interaction.guild.id, interaction.user.id);
     const pending = session.pendingModerationTarget;
     if (!pending || pending.ownerId !== ownerId || pending.action !== 'mute_member') {
       await replyEphemeral(interaction, '❌ انتهت جلسة الميوت. حاول من جديد.');
@@ -4048,12 +4555,14 @@ async function handleRoomModal(interaction) {
     session.pendingModerationScope = null;
     scheduleSave();
     await applyRoomState(roomChannel, ownerId);
+    const targetMember = await interaction.guild.members.fetch(pending.targetId).catch(() => null);
+    await enforcePrivilegedMuteBypass(interaction.guild, ownerId, profile, roomChannel, targetMember);
     await replyEphemeral(interaction, `✅ تم إعطاء ميوت ${getScopeLabel(pending.scope)} لـ <@${pending.targetId}>.`);
     return true;
   }
 
   if (action === 'temp_room_action_mute_all_modal') {
-    const session = getSession(interaction.user.id);
+    const session = getSession(interaction.guild.id, interaction.user.id);
     const pending = session.pendingMuteAll;
     if (!pending || pending.ownerId !== ownerId) {
       await replyEphemeral(interaction, '❌ انتهت جلسة ميوت الكل. حاول من جديد.');
@@ -4065,14 +4574,48 @@ async function handleRoomModal(interaction) {
       return true;
     }
     const expiresAt = duration > 0 ? Date.now() + duration : null;
-    for (const userId of pending.targetIds) {
-      applyMuteScopeToProfile(profile, userId, pending.scope, expiresAt, interaction.user.id);
-      profile.moderationHistory = pushLimitedHistory(profile.moderationHistory, { action: `mute_all_${pending.scope}`, userId, by: interaction.user.id, at: Date.now(), expiresAt });
+    const currentTargets = [...getModeratableRoomMembers(roomChannel, ownerId, profile, interaction.user.id).values()]
+      .filter(member => shouldBulkMuteMember(member, ownerId, profile, false, interaction.user.id));
+    if (!currentTargets.length) {
+      session.pendingMuteAll = null;
+      await replyEphemeral(interaction, 'ℹ️ لا يوجد أعضاء مطابقون داخل الروم حالياً لتطبيق ميوت الكل.');
+      return true;
     }
+
+    if (profile.managers.includes(interaction.user.id) && interaction.user.id !== ownerId) {
+      ensureRoomModerationState(access.roomRecord);
+      access.roomRecord.bulkMuteAllStates[pending.scope] = {
+        by: interaction.user.id,
+        expiresAt,
+        applyToManagers: false,
+        startedAt: Date.now()
+      };
+      access.roomRecord.bulkMuteAllAffected[pending.scope] = [];
+      for (const member of currentTargets) {
+        applyMuteScopeToProfile(profile, member.id, pending.scope, expiresAt, interaction.user.id);
+        addBulkMuteAllAffectedUser(access.roomRecord, pending.scope, member.id);
+        profile.moderationHistory = pushLimitedHistory(profile.moderationHistory, { action: `mute_all_${pending.scope}`, userId: member.id, by: interaction.user.id, at: Date.now(), expiresAt });
+        await enforcePrivilegedMuteBypass(interaction.guild, ownerId, profile, roomChannel, member);
+      }
+      session.pendingMuteAll = null;
+      setRoomRecord(interaction.guild.id, ownerId, access.roomRecord);
+      await applyRoomState(roomChannel, ownerId);
+      await replyEphemeral(interaction, `✅ تم إعطاء ميوت ${getScopeLabel(pending.scope)} لكل الموجودين حالياً في الروم مع استثناء المالك وباقي المسؤولين، وسيُطبق أيضًا على الداخلين الجدد أثناء استمرار العقوبة.`);
+      return true;
+    }
+
+    session.pendingMuteAllDecision = {
+      ownerId,
+      scope: pending.scope,
+      expiresAt
+    };
     session.pendingMuteAll = null;
-    scheduleSave();
-    await applyRoomState(roomChannel, ownerId);
-    await replyEphemeral(interaction, `✅ تم إعطاء ميوت ${getScopeLabel(pending.scope)} لكل الموجودين حالياً في الروم.`);
+    await replyEphemeral(interaction, 'اختر هل تريد تطبيق Mute All على المسؤولين أيضًا أم لا.', {
+      components: [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`temp_room_action_apply_mute_all:${ownerId}:${pending.scope}`).setLabel('تطبيق على المسؤولين').setStyle(getTempButtonStyle()),
+        new ButtonBuilder().setCustomId(`temp_room_action_apply_mute_all_skip_managers:${ownerId}:${pending.scope}`).setLabel('استثناء المسؤولين').setStyle(getTempButtonStyle())
+      )]
+    });
     return true;
   }
 
@@ -4155,6 +4698,102 @@ async function handleRoomModal(interaction) {
   return true;
 }
 
+async function handlePendingTopSeparatorMessage(message) {
+  if (!message.guild || message.author.bot) return;
+
+  const session = sessions.get(getSessionScopeKey(message.guild.id, message.author.id));
+  if (!session?.pendingTopSeparatorUpload) return;
+
+  const pending = session.pendingTopSeparatorUpload;
+  if (pending.guildId !== message.guild.id || pending.channelId !== message.channel.id) return;
+  if ((Date.now() - pending.requestedAt) > SESSION_TTL_MS) {
+    session.pendingTopSeparatorUpload = null;
+    return;
+  }
+
+  if (!isGuildAdmin(message.member)) {
+    session.pendingTopSeparatorUpload = null;
+    await message.reply({ content: '❌ لم تعد تملك صلاحية إدارة إعدادات Temp.' }).catch(error => console.error('[temp] Failed to reply to unauthorized top separator message:', error));
+    return;
+  }
+
+  const normalizedContent = String(message.content || '').trim().toLowerCase();
+  if (['remove', 'reset', 'default', 'حذف', 'ازالة', 'إزالة'].includes(normalizedContent)) {
+    const config = getGuildConfig(message.guild.id);
+    removeTopSeparatorAsset(config, message.guild.id);
+    session.pendingTopSeparatorUpload = null;
+    await message.reply({
+      content: '✅ تم حذف صورة الخط الفاصل الحالية. الآن اختر روم التوب لإرسال الرسالة بدون صورة فاصلة.',
+      components: [new ActionRowBuilder().addComponents(
+        new ChannelSelectMenuBuilder()
+          .setCustomId(`temp_settings_top_select:${message.author.id}`)
+          .setPlaceholder('اختر روم التوب')
+          .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+          .setMinValues(1)
+          .setMaxValues(1)
+      )]
+    }).catch(error => console.error('[temp] Failed to send top separator removal confirmation:', error));
+    return;
+  }
+
+  const resolved = await resolveTopSeparatorImageFromMessage(message);
+  if (resolved?.error) {
+    await message.reply({ content: resolved.error }).catch(error => console.error('[temp] Failed to reply with top separator validation error:', error));
+    return;
+  }
+
+  let savedAsset;
+  try {
+    savedAsset = await saveTopSeparatorAsset(message.guild.id, resolved);
+  } catch (error) {
+    const failureText = error?.message === 'invalid-image'
+      ? '❌ الملف المرسل ليس صورة صالحة أو غير مدعوم من معالج الصور.'
+      : '❌ تعذر حفظ صورة الخط الفاصل. حاول مجددًا بصورة أو رابط آخر.';
+    await message.reply({ content: failureText }).catch(replyError => console.error('[temp] Failed to reply with top separator save error:', replyError));
+    return;
+  }
+
+  const config = getGuildConfig(message.guild.id);
+  config.topSeparatorImage = {
+    fileName: savedAsset.attachmentName,
+    updatedAt: Date.now()
+  };
+  scheduleSave();
+
+  session.pendingTopSeparatorUpload = null;
+
+  await message.delete().catch(() => {});
+  await message.channel.send({
+    content: `<@${message.author.id}> ✅ تم حفظ صورة الخط الفاصل بنجاح. الآن اختر روم التوب الذي تريد إرسال الرسالة داخله.`,
+    components: [new ActionRowBuilder().addComponents(
+      new ChannelSelectMenuBuilder()
+        .setCustomId(`temp_settings_top_select:${message.author.id}`)
+        .setPlaceholder('اختر روم التوب')
+        .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+        .setMinValues(1)
+        .setMaxValues(1)
+    )]
+  }).catch(error => console.error('[temp] Failed to reply after saving top separator image:', error));
+}
+
+async function handleTempRoomModerationMessage(message) {
+  if (!message.guild || message.author.bot) return;
+
+  for (const [ownerId, roomRecord] of Object.entries(getRoomStore(message.guild.id))) {
+    if (roomRecord.channelId !== message.channel.id) continue;
+    const member = message.member || await message.guild.members.fetch(message.author.id).catch(() => null);
+    if (!member || isTempPunishmentImmune(member.id, message.guild) || !member.permissions?.has?.(PermissionsBitField.Flags.Administrator)) return;
+
+    const profile = getUserProfile(message.guild.id, ownerId);
+    if (!hasRoomScopedMute(profile, member.id, 'text') && !hasRoomScopedMute(profile, member.id, 'all')) return;
+
+    await message.delete().catch(() => {});
+    const user = await message.guild.client.users.fetch(member.id).catch(() => null);
+    await notifyUser(user, { content: `تم حذف رسالتك داخل روم <#${message.channel.id}> لأن لديك ميوت كتابي فعال خاص بهذا الروم.` });
+    return;
+  }
+}
+
 function registerInteractionHandler(client) {
   if (registered) return;
   registered = true;
@@ -4183,6 +4822,8 @@ function registerInteractionHandler(client) {
 
 
   client.on('voiceStateUpdate', handleVoiceStateUpdate);
+  client.on('messageCreate', handlePendingTopSeparatorMessage);
+  client.on('messageCreate', handleTempRoomModerationMessage);
 
   if (!heartbeatHandle) {
     heartbeatHandle = setInterval(() => {
