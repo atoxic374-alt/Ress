@@ -60,7 +60,8 @@ const DATA_FILES = {
     serverMapConfig: path.join(dataDir, 'serverMapConfig.json'),
     voiceSessions: path.join(dataDir, 'voiceSessions.json'),
 wordTriggers: path.join(dataDir, 'wordTriggers.json'),
-    roleGrantHistory: path.join(dataDir, 'roleGrantHistory.json')
+    roleGrantHistory: path.join(dataDir, 'roleGrantHistory.json'),
+    responsibilityLeaveTracker: path.join(dataDir, 'responsibilityLeaveTracker.json')
     
 };
 
@@ -188,6 +189,75 @@ function writeJSONFile(filePath, data) {
         console.error(`خطأ في كتابة ${filePath}:`, error);
         return false;
     }
+}
+
+const RESPONSIBILITY_LEAVE_LIMIT_MS = 24 * 60 * 60 * 1000;
+
+function getResponsibilityLeaveTracker() {
+    const tracker = readJSONFile(DATA_FILES.responsibilityLeaveTracker, { guilds: {} });
+    if (!tracker.guilds || typeof tracker.guilds !== 'object') tracker.guilds = {};
+    return tracker;
+}
+
+function saveResponsibilityLeaveTracker(tracker) {
+    writeJSONFile(DATA_FILES.responsibilityLeaveTracker, tracker || { guilds: {} });
+}
+
+async function updateResponsibilitiesEmbedForGuild(guildId) {
+    try {
+        const respCommand = client.commands?.get('resp');
+        if (respCommand && typeof respCommand.updateEmbedMessage === 'function') {
+            await respCommand.updateEmbedMessage(client, guildId);
+        }
+    } catch (error) {
+        console.error('❌ خطأ في تحديث ايمبد المسؤوليات:', error?.message || error);
+    }
+}
+
+async function removeInactiveResponsiblesForGuild(guild, now = Date.now()) {
+    if (!guild) return false;
+    const guildId = guild.id;
+    const tracker = getResponsibilityLeaveTracker();
+    if (!tracker.guilds[guildId]) tracker.guilds[guildId] = { leftAtByUser: {}, removedByUser: {} };
+    const guildTracker = tracker.guilds[guildId];
+    guildTracker.leftAtByUser = guildTracker.leftAtByUser || {};
+    guildTracker.removedByUser = guildTracker.removedByUser || {};
+
+    const responsibilities = readJSONFile(DATA_FILES.responsibilities, {});
+    let changed = false;
+
+    for (const [userId, leftAtRaw] of Object.entries(guildTracker.leftAtByUser)) {
+        const leftAt = Number(leftAtRaw || 0);
+        if (!leftAt || (now - leftAt) < RESPONSIBILITY_LEAVE_LIMIT_MS) continue;
+
+        const removedFrom = [];
+        for (const [respName, respData] of Object.entries(responsibilities)) {
+            if (!Array.isArray(respData?.responsibles) || !respData.responsibles.includes(userId)) continue;
+            respData.responsibles = respData.responsibles.filter((id) => String(id) !== String(userId));
+            removedFrom.push(respName);
+            changed = true;
+        }
+
+        if (removedFrom.length > 0) {
+            guildTracker.removedByUser[userId] = {
+                leftAt,
+                removedAt: now,
+                responsibilities: removedFrom
+            };
+            console.log(`🧹 تمت إزالة ${userId} من المسؤوليات بعد 24h خارج السيرفر (${guildId})`);
+        }
+        delete guildTracker.leftAtByUser[userId];
+    }
+
+    if (changed) {
+        writeJSONFile(DATA_FILES.responsibilities, responsibilities);
+        global.responsibilities = responsibilities;
+        await updateResponsibilitiesEmbedForGuild(guildId);
+        client.emit('responsibilityUpdate');
+    }
+
+    saveResponsibilityLeaveTracker(tracker);
+    return changed;
 }
 
 // تحميل البيانات مباشرة من قاعدة البيانات والملفات
@@ -1486,6 +1556,19 @@ client.once(Events.ClientReady, async () => {
   setInterval(async () => {
     await ensureRespMessageFreshness(client, '30m-check');
   }, 30 * 60 * 1000);
+
+  // إزالة المسؤوليات تلقائياً بعد 24 ساعة خارج السيرفر
+  setInterval(async () => {
+    for (const guild of client.guilds.cache.values()) {
+      await removeInactiveResponsiblesForGuild(guild);
+    }
+  }, 60 * 60 * 1000);
+
+  setTimeout(async () => {
+    for (const guild of client.guilds.cache.values()) {
+      await removeInactiveResponsiblesForGuild(guild);
+    }
+  }, 15 * 1000);
 
   // حفظ البيانات فقط عند الحاجة - كل 5 دقائق أو عند وجود تغييرات
   setInterval(() => {
@@ -3170,6 +3253,13 @@ client.on('guildMemberRemove', async (member) => {
     try {
         console.log(`📤 عضو غادر السيرفر: ${member.displayName} (${member.id})`);
 
+        const tracker = getResponsibilityLeaveTracker();
+        if (!tracker.guilds[member.guild.id]) tracker.guilds[member.guild.id] = { leftAtByUser: {}, removedByUser: {} };
+        tracker.guilds[member.guild.id].leftAtByUser = tracker.guilds[member.guild.id].leftAtByUser || {};
+        tracker.guilds[member.guild.id].leftAtByUser[member.id] = Date.now();
+        saveResponsibilityLeaveTracker(tracker);
+        await removeInactiveResponsiblesForGuild(member.guild);
+
         // Handle down system member leave
         const downManager = require('./utils/downManager');
         await downManager.handleMemberLeave(member);
@@ -3209,6 +3299,27 @@ client.on('guildMemberRemove', async (member) => {
 client.on('guildMemberAdd', async (member) => {
     try {
         console.log(`📥 عضو انضم للسيرفر: ${member.displayName} (${member.id})`);
+
+        const tracker = getResponsibilityLeaveTracker();
+        const guildTracker = tracker.guilds?.[member.guild.id];
+        const removalInfo = guildTracker?.removedByUser?.[member.id] || null;
+        if (guildTracker?.leftAtByUser?.[member.id]) {
+            delete guildTracker.leftAtByUser[member.id];
+        }
+        if (removalInfo) {
+            delete guildTracker.removedByUser[member.id];
+            saveResponsibilityLeaveTracker(tracker);
+            const removedList = Array.isArray(removalInfo.responsibilities) && removalInfo.responsibilities.length
+                ? removalInfo.responsibilities.join('، ')
+                : 'غير محدد';
+            const notifyEmbed = colorManager.createEmbed()
+                .setTitle('تنبيه المسؤوليات')
+                .setDescription(`تمت إزالتك من المسؤوليات تلقائياً بسبب بقائك خارج السيرفر أكثر من 24 ساعة.\n\n**المسؤوليات المتأثرة:** ${removedList}`);
+            await member.send({ embeds: [notifyEmbed] }).catch(() => {});
+            await updateResponsibilitiesEmbedForGuild(member.guild.id);
+        } else {
+            saveResponsibilityLeaveTracker(tracker);
+        }
 
         // Handle down system member join
         const downManager = require('./utils/downManager');
