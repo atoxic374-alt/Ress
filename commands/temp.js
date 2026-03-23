@@ -1218,11 +1218,15 @@ function createSettingsEmbed(guild, actorId) {
 }
 
 function buildSettingsRows(userId) {
-  const makeSettingsButton = key => new ButtonBuilder()
-    .setCustomId(`temp_settings_${key}:${userId}`)
-    .setLabel(TEMP_SETTINGS_META[key].label)
-    .setEmoji(TEMP_SETTINGS_META[key].emoji)
-    .setStyle(getTempButtonStyle());
+  const makeSettingsButton = key => {
+    const button = new ButtonBuilder()
+      .setCustomId(`temp_settings_${key}:${userId}`)
+      .setLabel(TEMP_SETTINGS_META[key].label)
+      .setStyle(getTempButtonStyle());
+
+    if (TEMP_SETTINGS_META[key].emoji) button.setEmoji(TEMP_SETTINGS_META[key].emoji);
+    return button;
+  };
 
   return [
     new ActionRowBuilder().addComponents(
@@ -1520,8 +1524,10 @@ async function buildGeneralControlCard(guild) {
   ctx.fillStyle = '#ffffff';
   ctx.shadowColor = 'rgba(0,0,0,0.26)';
   ctx.shadowBlur = 12;
-  ctx.font = `bold 72px ${LATIN_FONT_FAMILY}`;
-  ctx.fillText('Temp Voice Controller ', width / 2, 168);
+  const cardTitle = `${guild?.name || 'Servername'} Voice Controller`;
+  const cardTitleSize = fitTextSize(ctx, cardTitle, width - 220, 72, 42, LATIN_FONT_FAMILY);
+  ctx.font = `bold ${cardTitleSize}px ${LATIN_FONT_FAMILY}`;
+  ctx.fillText(cardTitle, width / 2, 168);
   ctx.shadowBlur = 0;
 
   const layoutRows = [
