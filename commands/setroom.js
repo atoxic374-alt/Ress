@@ -37,7 +37,8 @@ function getColorConfigHash(guildConfig) {
         colorRoleIds: guildConfig.colorRoleIds || [],
         colorsTitle: guildConfig.colorsTitle || '',
         imageUrl: guildConfig.imageUrl || '',
-        localImagePath: guildConfig.localImagePath || ''
+        localImagePath: guildConfig.localImagePath || '',
+        layoutSettings: { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) }
     });
     let hash = 0;
     for (let i = 0; i < data.length; i++) {
@@ -909,9 +910,9 @@ async function createColorsImage(guild, guildConfig) {
         // إعدادات المعاينة/التخصيص
         const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
         const scaleFactor = canvasWidth / 1024;
-        const boxSize = Math.max(30, Math.round(60 * scaleFactor * layout.boxScale));
-        const gap = Math.max(4, Math.round(12 * scaleFactor * layout.boxGap));
-        const cornerRadius = Math.max(6, Math.round(10 * scaleFactor));
+        const boxSize = Math.max(18, 60 * scaleFactor * layout.boxScale);
+        const gap = Math.max(2, 12 * scaleFactor * layout.boxGap);
+        const cornerRadius = Math.max(4, 10 * scaleFactor);
 
         const colorsPerRow = 10; // عدد الألوان في كل صف
         const totalColors = guildConfig.colorRoleIds.length;
@@ -931,8 +932,8 @@ async function createColorsImage(guild, guildConfig) {
         const baseStartY = rows > 1 
             ? (canvasHeight - totalBoxesHeight) / 2
             : (canvasHeight * 0.6) - (totalBoxesHeight / 2);
-        const startX = baseStartX + layout.boxOffsetX;
-        const startY = baseStartY + layout.boxOffsetY;
+        const startX = baseStartX + (layout.boxOffsetX * scaleFactor);
+        const startY = baseStartY + (layout.boxOffsetY * scaleFactor);
         
         // الحصول على النص المخصص من الإعدادات
         const colorsTitle = guildConfig.colorsTitle !== undefined ? guildConfig.colorsTitle : 'Colors list :';
@@ -940,8 +941,8 @@ async function createColorsImage(guild, guildConfig) {
         // رسم النص فقط إذا لم يكن فارغاً
         if (layout.showText && colorsTitle && colorsTitle.length > 0) {
             const titleFontSize = Math.max(16, Math.round(26 * scaleFactor * layout.textScale));
-            const textOffsetX = Math.max(0, Math.round(150 * scaleFactor) + layout.textOffsetX);
-            const textOffsetY = Math.round(33 * scaleFactor) + layout.textOffsetY;
+            const textOffsetX = Math.max(0, (150 * scaleFactor) + (layout.textOffsetX * scaleFactor));
+            const textOffsetY = (33 * scaleFactor) + (layout.textOffsetY * scaleFactor);
             
             ctx.fillStyle = '#ffffff';
             ctx.font = `bold ${titleFontSize}px Arial`;
@@ -1909,6 +1910,71 @@ function getDefaultLayoutSettings() {
     };
 }
 
+
+const SETROOM_PREVIEW_PRESETS = {
+    very_small: { label: 'صغير جدًا', boxScale: 0.7, textScale: 0.75, boxGap: 0.85 },
+    small: { label: 'صغير', boxScale: 0.85, textScale: 0.9, boxGap: 0.95 },
+    large: { label: 'كبير', boxScale: 1.15, textScale: 1.1, boxGap: 1.05 },
+    very_large: { label: 'كبير جدًا', boxScale: 1.35, textScale: 1.25, boxGap: 1.15 }
+};
+
+async function getSetroomDynamicLayoutSettings(guild, guildConfig = {}) {
+    const defaultLayout = getDefaultLayoutSettings();
+    const totalColors = guildConfig.colorRoleIds?.length || 0;
+    const rows = Math.max(1, Math.ceil(totalColors / 10));
+
+    let imageWidth = 1024;
+    let imageHeight = 1024;
+
+    try {
+        let backgroundImage = null;
+
+        if (guildConfig.localImagePath && fs.existsSync(guildConfig.localImagePath)) {
+            backgroundImage = await loadImage(guildConfig.localImagePath);
+        } else if (guildConfig.imageUrl) {
+            const response = await fetch(guildConfig.imageUrl);
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            const arrayBuffer = await response.arrayBuffer();
+            backgroundImage = await loadImage(Buffer.from(arrayBuffer));
+        }
+
+        if (backgroundImage) {
+            imageWidth = backgroundImage.width || imageWidth;
+            imageHeight = backgroundImage.height || imageHeight;
+        }
+    } catch (error) {
+        console.error('⚠️ تعذر حساب المقاس الديناميكي، سيتم استخدام الوضع الافتراضي:', error.message);
+    }
+
+    const scaleFactor = imageWidth / 1024;
+    const widthTarget = imageWidth * 0.72;
+    const heightTarget = imageHeight * (rows > 1 ? 0.22 : 0.12);
+    const widthBase = scaleFactor * ((60 * 10) + (12 * 9));
+    const heightBase = scaleFactor * ((60 * rows) + (12 * Math.max(0, rows - 1)));
+
+    const widthScale = widthBase > 0 ? widthTarget / widthBase : 1;
+    const heightScale = heightBase > 0 ? heightTarget / heightBase : 1;
+    const dynamicScale = Math.min(1.25, Math.max(0.65, Math.min(widthScale, heightScale)));
+
+    return {
+        ...defaultLayout,
+        boxScale: Number(dynamicScale.toFixed(2)),
+        boxGap: Number(Math.min(1.15, Math.max(0.75, dynamicScale * 0.95)).toFixed(2)),
+        textScale: Number(Math.min(1.15, Math.max(0.8, dynamicScale * 0.9)).toFixed(2))
+    };
+}
+
+function applySetroomPreviewPreset(layout, presetKey) {
+    const preset = SETROOM_PREVIEW_PRESETS[presetKey];
+    if (!preset) return layout;
+    return {
+        ...layout,
+        boxScale: preset.boxScale,
+        textScale: preset.textScale,
+        boxGap: preset.boxGap
+    };
+}
+
 function ensureGuildRoomConfig(config, guildId) {
     if (!config[guildId]) config[guildId] = {};
     if (!config[guildId].layoutSettings) {
@@ -1970,7 +2036,21 @@ function createSetroomMainRows() {
     ];
 }
 
-function createSetroomPreviewRows() {
+function createSetroomPreviewRows(guildConfig = {}) {
+    const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
+    const presetOptions = [
+        {
+            label: 'ديناميكي',
+            value: 'dynamic',
+            description: 'يضبط المقاسات والمسافات تلقائيًا حسب أبعاد الصورة'
+        },
+        ...Object.entries(SETROOM_PREVIEW_PRESETS).map(([value, preset]) => ({
+            label: preset.label,
+            value,
+            description: `مربعات ${preset.boxScale}x • نص ${preset.textScale}x`
+        }))
+    ];
+
     return [
         new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('setroom_preview_box_left').setLabel('مربعات ←').setStyle(ButtonStyle.Secondary),
@@ -1997,6 +2077,12 @@ function createSetroomPreviewRows() {
             new ButtonBuilder().setCustomId('setroom_preview_save').setLabel('حفظ').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId('setroom_preview_publish').setLabel('تعيين').setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId('setroom_preview_back').setLabel('رجوع').setStyle(ButtonStyle.Secondary)
+        ),
+        new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder()
+                .setCustomId('setroom_preview_preset')
+                .setPlaceholder(`حجم جاهز — الحالي: مربعات ${layout.boxScale.toFixed(2)} / نص ${layout.textScale.toFixed(2)}`)
+                .addOptions(presetOptions)
         )
     ];
 }
@@ -2018,7 +2104,7 @@ function canReviewRoomRequest(member, guildConfig, action, userId, botOwners = [
 
 async function buildSetroomPanelPayload(guild, guildConfig, actor, extra = {}) {
     const embed = getSetroomSummaryEmbed(guild, guildConfig, actor);
-    const components = extra.preview ? createSetroomPreviewRows() : createSetroomMainRows();
+    const components = extra.preview ? createSetroomPreviewRows(guildConfig) : createSetroomMainRows();
     const payload = { embeds: [embed], components };
 
     if (extra.preview) {
@@ -2091,6 +2177,19 @@ function registerHandlers(client) {
 
             const config = loadRoomConfig();
             const guildConfig = getGuildConfigWithDefaults(config, interaction.guild.id);
+
+            if (interaction.isStringSelectMenu()) {
+                if (interaction.customId === 'setroom_preview_preset') {
+                    const selectedPreset = interaction.values[0];
+                    const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
+                    guildConfig.layoutSettings = selectedPreset === 'dynamic'
+                        ? await getSetroomDynamicLayoutSettings(interaction.guild, guildConfig)
+                        : applySetroomPreviewPreset(layout, selectedPreset);
+                    saveRoomConfig(config);
+                    await refreshSetroomPanelMessage(interaction, guildConfig, { preview: true });
+                    return;
+                }
+            }
 
             if (interaction.isButton()) {
                 const customId = interaction.customId;
@@ -2187,6 +2286,7 @@ function registerHandlers(client) {
                     return;
                 }
 
+
                 if (customId === 'setroom_preview_save') {
                     saveRoomConfig(config);
                     await interaction.reply({ content: '✅ تم حفظ إعدادات المعاينة.', flags: 64 });
@@ -2202,18 +2302,18 @@ function registerHandlers(client) {
                 if (customId.startsWith('setroom_preview_')) {
                     const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
                     switch (customId) {
-                        case 'setroom_preview_box_left': layout.boxOffsetX -= 15; break;
-                        case 'setroom_preview_box_right': layout.boxOffsetX += 15; break;
-                        case 'setroom_preview_box_up': layout.boxOffsetY -= 15; break;
-                        case 'setroom_preview_box_down': layout.boxOffsetY += 15; break;
-                        case 'setroom_preview_box_scale_less': layout.boxScale = Math.max(0.5, Number((layout.boxScale - 0.1).toFixed(2))); break;
-                        case 'setroom_preview_box_scale_more': layout.boxScale = Math.min(2, Number((layout.boxScale + 0.1).toFixed(2))); break;
-                        case 'setroom_preview_gap_less': layout.boxGap = Math.max(0.5, Number((layout.boxGap - 0.1).toFixed(2))); break;
-                        case 'setroom_preview_gap_more': layout.boxGap = Math.min(2, Number((layout.boxGap + 0.1).toFixed(2))); break;
-                        case 'setroom_preview_text_size_less': layout.textScale = Math.max(0.5, Number((layout.textScale - 0.1).toFixed(2))); break;
-                        case 'setroom_preview_text_size_more': layout.textScale = Math.min(2, Number((layout.textScale + 0.1).toFixed(2))); break;
-                        case 'setroom_preview_text_left': layout.textOffsetX += 15; break;
-                        case 'setroom_preview_text_right': layout.textOffsetX -= 15; break;
+                        case 'setroom_preview_box_left': layout.boxOffsetX -= 10; break;
+                        case 'setroom_preview_box_right': layout.boxOffsetX += 10; break;
+                        case 'setroom_preview_box_up': layout.boxOffsetY -= 10; break;
+                        case 'setroom_preview_box_down': layout.boxOffsetY += 10; break;
+                        case 'setroom_preview_box_scale_less': layout.boxScale = Math.max(0.3, Number((layout.boxScale - 0.02).toFixed(2))); break;
+                        case 'setroom_preview_box_scale_more': layout.boxScale = Math.min(3, Number((layout.boxScale + 0.02).toFixed(2))); break;
+                        case 'setroom_preview_gap_less': layout.boxGap = Math.max(0.2, Number((layout.boxGap - 0.02).toFixed(2))); break;
+                        case 'setroom_preview_gap_more': layout.boxGap = Math.min(3, Number((layout.boxGap + 0.02).toFixed(2))); break;
+                        case 'setroom_preview_text_size_less': layout.textScale = Math.max(0.3, Number((layout.textScale - 0.02).toFixed(2))); break;
+                        case 'setroom_preview_text_size_more': layout.textScale = Math.min(3, Number((layout.textScale + 0.02).toFixed(2))); break;
+                        case 'setroom_preview_text_left': layout.textOffsetX += 10; break;
+                        case 'setroom_preview_text_right': layout.textOffsetX -= 10; break;
                         case 'setroom_preview_text_up': layout.textOffsetY += 10; break;
                         case 'setroom_preview_text_down': layout.textOffsetY -= 10; break;
                         case 'setroom_preview_text_toggle': layout.showText = !layout.showText; break;
