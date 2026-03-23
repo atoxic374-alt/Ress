@@ -39,7 +39,7 @@ const recentTicketCommandMessages = new Set();
 const TICKET_SEARCH_SESSION_TTL_MS = 30 * 60 * 1000;
 const PING_COOLDOWN_RETENTION_MS = 60 * 60 * 1000;
 const CLOSE_DELETE_DELAY_MS = 3 * 1000;
-const PING_COOLDOWN_MS = 3 * 1000;
+const PING_COOLDOWN_MS = 5 * 60 * 1000;
 
 function logSilentError(scope, error) {
   const msg = error?.message || error;
@@ -92,6 +92,15 @@ function prunePingCooldowns(now = Date.now()) {
       pingCooldowns.delete(key);
     }
   }
+}
+
+function formatCooldownText(ms) {
+  const totalSeconds = Math.max(1, Math.ceil(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes > 0 && seconds > 0) return `${minutes} دقيقة و ${seconds} ثانية`;
+  if (minutes > 0) return `${minutes} دقيقة`;
+  return `${seconds} ثانية`;
 }
 
 function makeTicketEmbed(title, description, options = {}) {
@@ -5819,8 +5828,8 @@ function registerHandlers(client) {
           const now = Date.now();
           const cooldownMs = PING_COOLDOWN_MS;
           if (now - last < cooldownMs) {
-            const left = Math.ceil((cooldownMs - (now - last)) / 1000);
-            await interaction.reply(buildTicketMessagePayload('كولداون', `**انتظر ${left} ثانية قبل استخدام الاستدعاء مرة أخرى.**`, { ephemeral: true }));
+            const leftText = formatCooldownText(cooldownMs - (now - last));
+            await interaction.reply(buildTicketMessagePayload('كولداون', `**انتظر ${leftText} قبل استخدام الاستدعاء مرة أخرى.**`, { ephemeral: true }));
             return;
           }
 
