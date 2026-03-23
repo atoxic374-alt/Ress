@@ -28,7 +28,7 @@ const CONTROL_CARD_SIGNATURE = 'By Ahmed';
 const SESSION_TTL_MS = 12 * 60 * 1000;
 const HEARTBEAT_MS = 45000;
 const INVITE_TTL_MS = 60 * 60 * 1000;
-const TOP_REFRESH_MS = 3 * 60 * 1000;
+const TOP_REFRESH_MS = 5 * 60 * 1000;
 const DATA_VERSION = 3;
 
 const SETTING_CONTROL_KEYS = [
@@ -422,9 +422,22 @@ function formatDuration(ms) {
   return parts.join(' و ');
 }
 
-function formatVoiceHours(ms) {
-  const hours = Math.max(0, Number(ms) || 0) / 3600000;
-  return `**${hours.toFixed(hours >= 100 ? 0 : hours >= 10 ? 1 : 2)}** ساعة`;
+function formatTopVoiceDuration(ms) {
+  const safeMs = Math.max(0, Number(ms) || 0);
+  if (!safeMs) return '**0** دقيقة';
+
+  const totalMinutes = Math.floor(safeMs / 60000);
+  const totalHours = Math.floor(totalMinutes / 60);
+  const hours = totalHours;
+  const minutes = totalMinutes % 60;
+  const seconds = Math.floor((safeMs % 60000) / 1000);
+  const parts = [];
+
+  if (hours > 0) parts.push(`**${hours}** ساعة`);
+  if (minutes > 0) parts.push(`**${minutes}** دقيقة`);
+  if (!parts.length) parts.push(seconds > 0 ? `**${seconds}** ثانية` : '**0** دقيقة');
+
+  return parts.slice(0, 2).join(' و ');
 }
 
 function getGuildUserProfiles(guildId) {
@@ -442,27 +455,53 @@ function getRoomLabel(guild, userId, profile) {
   return `**${sanitizeRoomName(fallbackName, 'Unknown Room')}**`;
 }
 
+function getLiveRoomVoiceMs(roomRecord, now = Date.now()) {
+  if (!roomRecord?.memberSessionStarts || typeof roomRecord.memberSessionStarts !== 'object') return 0;
+  return Object.values(roomRecord.memberSessionStarts).reduce((total, startedAt) => {
+    const started = Number(startedAt) || 0;
+    if (!started || started >= now) return total;
+    return total + (now - started);
+  }, 0);
+}
+
+function getTempTopEntries(guild) {
+  const now = Date.now();
+  return getGuildUserProfiles(guild.id)
+    .map(({ userId, profile }) => {
+      const roomRecord = getRoomRecord(guild.id, userId);
+      const totalVoiceMs = Math.max(0, Number(profile.totalVoiceMs) || 0) + getLiveRoomVoiceMs(roomRecord, now);
+      return { userId, profile, totalVoiceMs };
+    })
+    .filter(entry => entry.totalVoiceMs > 0)
+    .sort((a, b) => b.totalVoiceMs - a.totalVoiceMs);
+}
+
 function buildTopVoiceRoomsDescription(guild, limit = 10) {
-  const entries = getGuildUserProfiles(guild.id)
-    .filter(({ profile }) => Number(profile.totalVoiceMs) > 0)
-    .sort((a, b) => (b.profile.totalVoiceMs || 0) - (a.profile.totalVoiceMs || 0))
-    .slice(0, limit);
+  const entries = getTempTopEntries(guild);
 
   if (!entries.length) {
-    return [
-      '**لا يوجد أي وقت صوتي مسجل للرومات المؤقتة حتى الآن.**',
-      '',
-      '**سيظهر التوب تلقائياً بعد تجميع الساعات داخل الرومات المؤقتة.**'
-    ].join('\n');
+    return {
+      totalEntries: 0,
+      description: [
+        '**لا يوجد أي وقت صوتي مسجل للرومات المؤقتة حتى الآن.**',
+        '',
+        '**سيظهر التوب تلقائياً بعد تجميع الوقت داخل الرومات المؤقتة.**'
+      ].join('\n')
+    };
   }
 
-  return entries.map(({ userId, profile }, index) => [
-    `**#${index + 1}**`,
-    `**Owner :** <@${userId}>`,
-    `**Room :** ${getRoomLabel(guild, userId, profile)}`,
-    `**Voice :** ${formatVoiceHours(profile.totalVoiceMs)}`,
-    ''
-  ].join('\n')).join('\n');
+  const currentEntries = entries.slice(0, limit);
+
+  return {
+    totalEntries: entries.length,
+    description: currentEntries.map(({ userId, profile, totalVoiceMs }, index) => [
+      `**#${index + 1}**`,
+      `**Owner :** <@${userId}>`,
+      `**Room :** ${getRoomLabel(guild, userId, profile)}`,
+      `**Voice :** ${formatTopVoiceDuration(totalVoiceMs)}`,
+      ''
+    ].join('\n')).join('\n')
+  };
 }
 
 function boolText(value) {
@@ -895,13 +934,17 @@ ${ownerName}` : '**غير متوفر**', inline: true },
 
 function createTopVoiceEmbed(guild) {
   const iconUrl = guild.iconURL({ extension: 'png', size: 256 }) || undefined;
-  return colorManager.createEmbed()
-    .setTitle('**Temp Voice Top**')
-    .setAuthor({ name: `${guild.name} • Temp Voice Top`, iconURL: iconUrl })
-    .setDescription(buildTopVoiceRoomsDescription(guild))
-    .setThumbnail(iconUrl)
-    .setFooter({ text: `Updated every ${Math.round(TOP_REFRESH_MS / 60000)} minutes • ${guild.name}` })
-    .setTimestamp(new Date());
+  const topData = buildTopVoiceRoomsDescription(guild);
+  return {
+    embed: colorManager.createEmbed()
+      .setTitle('**Temp Voice Top**')
+      .setAuthor({ name: `${guild.name} • Temp Voice Top`, iconURL: iconUrl })
+      .setDescription(topData.description)
+      .setThumbnail(iconUrl)
+      .setFooter({ text: `Live update • أول 10 مراكز • ${guild.name}` })
+      .setTimestamp(new Date()),
+    topData
+  };
 }
 
 async function refreshTopVoiceMessage(guild, preferredChannel = null) {
@@ -912,7 +955,7 @@ async function refreshTopVoiceMessage(guild, preferredChannel = null) {
     || (config.topChannelId ? guild.channels.cache.get(config.topChannelId) || await guild.channels.fetch(config.topChannelId).catch(() => null) : null);
   if (!targetChannel?.isTextBased?.()) return null;
 
-  const embed = createTopVoiceEmbed(guild);
+  const { embed } = createTopVoiceEmbed(guild);
   let message = null;
   if (config.topMessageId) {
     message = await targetChannel.messages.fetch(config.topMessageId).catch(() => null);
@@ -926,7 +969,7 @@ async function refreshTopVoiceMessage(guild, preferredChannel = null) {
       const previousMessage = previousChannel?.isTextBased?.() ? await previousChannel.messages.fetch(previousMessageId).catch(() => null) : null;
       if (previousMessage) await previousMessage.delete().catch(() => null);
     }
-    message = await targetChannel.send({ embeds: [embed] }).catch(() => null);
+    message = await targetChannel.send({ embeds: [embed], components: [] }).catch(() => null);
     if (!message) return null;
     config.topMessageId = message.id;
   }
@@ -1857,9 +1900,10 @@ async function scheduleRoomLifecycleJob(guildId, ownerId) {
   const roomRecord = getRoomRecord(guildId, ownerId);
   if (!roomRecord) return;
   const config = getGuildConfig(guildId);
+  const channel = roomRecord.channelId ? guild.channels.cache.get(roomRecord.channelId) || await guild.channels.fetch(roomRecord.channelId).catch(() => null) : null;
   const deadlines = [];
   if (config.maxRoomAgeMs > 0) deadlines.push(roomRecord.createdAt + config.maxRoomAgeMs);
-  if (roomRecord.ownerLeftAt) deadlines.push(roomRecord.ownerLeftAt + config.deleteAfterLeaveMs);
+  if (roomRecord.ownerLeftAt && (!channel || getRoomOccupancyCount(channel) === 0)) deadlines.push(roomRecord.ownerLeftAt + config.deleteAfterLeaveMs);
   if (!deadlines.length) return;
   const nextDeadline = Math.min(...deadlines.filter(Boolean));
   const delay = Math.max(1000, nextDeadline - Date.now());
@@ -1881,7 +1925,7 @@ async function scheduleRoomLifecycleJob(guildId, ownerId) {
       await updateGeneralPanelStatus(liveGuild);
       return;
     }
-    if (currentRecord.ownerLeftAt && Date.now() - currentRecord.ownerLeftAt >= liveConfig.deleteAfterLeaveMs) {
+    if (currentRecord.ownerLeftAt && Date.now() - currentRecord.ownerLeftAt >= liveConfig.deleteAfterLeaveMs && getRoomOccupancyCount(channel) === 0) {
       await deleteTempRoom(liveGuild, ownerId, 'Owner left timeout reached');
       await updateGeneralPanelStatus(liveGuild);
       return;
@@ -2174,7 +2218,7 @@ async function heartbeat() {
         continue;
       }
 
-      if (!ownerPresent && roomRecord.ownerLeftAt && Date.now() - roomRecord.ownerLeftAt >= config.deleteAfterLeaveMs) {
+      if (!ownerPresent && roomRecord.ownerLeftAt && Date.now() - roomRecord.ownerLeftAt >= config.deleteAfterLeaveMs && getRoomOccupancyCount(channel) === 0) {
         await deleteTempRoom(guild, ownerId, 'Owner left timeout reached');
         continue;
       }
@@ -2437,7 +2481,7 @@ async function handleSettingsButton(interaction) {
       await replyEphemeral(interaction, '❌ تعذر إرسال أو تحديث رسالة التوب في هذه القناة.');
       return true;
     }
-    await replyEphemeral(interaction, `✅ تم ${hadTopMessage ? 'تحديث' : 'إرسال'} لوحة التوب في ${interaction.channel}. وسيتم تحديثها كل 3 دقائق.`);
+    await replyEphemeral(interaction, `✅ تم ${hadTopMessage ? 'تحديث' : 'إرسال'} لوحة التوب في ${interaction.channel}. وسيتم تحديثها تلقائياً كل 5 دقائق.`);
     await updateSettingsPanelMessage(interaction.guild, userId);
     return true;
   }
@@ -3100,6 +3144,7 @@ ${recentManagerLog}`)],
 
   return true;
 }
+
 
 async function handleRoomButton(interaction) {
   const { action, args } = parseCustomId(interaction.customId);
@@ -4112,6 +4157,7 @@ function registerInteractionHandler(client) {
     if (interaction.isButton()) return handleInviteButton(interaction);
     return false;
   }, { name: 'temp-invite', priority: 80, types: ['button'] });
+
 
   client.on('voiceStateUpdate', handleVoiceStateUpdate);
 
