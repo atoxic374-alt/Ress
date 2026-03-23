@@ -1190,9 +1190,18 @@ function getRoomDisplayBaseName(profile, member) {
   return sanitizeRoomName(profile.roomNameTemplate || member?.displayName || member?.user?.username, `${member?.displayName || member?.user?.username || 'Temp'} room`);
 }
 
-function getRoomOccupancyCount(roomChannel) {
+function getRoomOccupancyCount(roomChannel, { includeOwner = true, ownerId = null } = {}) {
   if (!roomChannel?.members) return 0;
-  return roomChannel.members.filter(member => !member.user.bot).size;
+  return roomChannel.members.filter(member => {
+    if (member.user.bot) return false;
+    if (!includeOwner && ownerId && member.id === ownerId) return false;
+    return true;
+  }).size;
+}
+
+
+function shouldStartOwnerLeaveCountdown(roomChannel, ownerId) {
+  return getRoomOccupancyCount(roomChannel, { includeOwner: false, ownerId }) === 0;
 }
 
 async function deleteTrackedDmMessage(user, record) {
@@ -2273,6 +2282,14 @@ function getRoomJobKey(guildId, ownerId) {
   return `${guildId}:${ownerId}`;
 }
 
+function findTempRoomOwnerIdsByChannelIds(guildId, channelIds = []) {
+  const wanted = new Set((channelIds || []).filter(Boolean));
+  if (!wanted.size) return [];
+  return Object.entries(getRoomStore(guildId))
+    .filter(([, roomRecord]) => roomRecord && wanted.has(roomRecord.channelId))
+    .map(([ownerId]) => ownerId);
+}
+
 function clearRoomLifecycleJob(guildId, ownerId) {
   const key = getRoomJobKey(guildId, ownerId);
   const existing = roomLifecycleJobs.get(key);
@@ -2290,7 +2307,7 @@ async function scheduleRoomLifecycleJob(guildId, ownerId) {
   const channel = roomRecord.channelId ? guild.channels.cache.get(roomRecord.channelId) || await guild.channels.fetch(roomRecord.channelId).catch(() => null) : null;
   const deadlines = [];
   if (config.maxRoomAgeMs > 0) deadlines.push(roomRecord.createdAt + config.maxRoomAgeMs);
-  if (roomRecord.ownerLeftAt && (!channel || getRoomOccupancyCount(channel) === 0)) deadlines.push(roomRecord.ownerLeftAt + config.deleteAfterLeaveMs);
+  if (roomRecord.ownerLeftAt && (!channel || shouldStartOwnerLeaveCountdown(channel, ownerId))) deadlines.push(roomRecord.ownerLeftAt + config.deleteAfterLeaveMs);
   if (!deadlines.length) return;
   const nextDeadline = Math.min(...deadlines.filter(Boolean));
   const delay = Math.max(1000, nextDeadline - Date.now());
@@ -2312,7 +2329,7 @@ async function scheduleRoomLifecycleJob(guildId, ownerId) {
       await updateGeneralPanelStatus(liveGuild);
       return;
     }
-    if (currentRecord.ownerLeftAt && Date.now() - currentRecord.ownerLeftAt >= liveConfig.deleteAfterLeaveMs && getRoomOccupancyCount(channel) === 0) {
+    if (currentRecord.ownerLeftAt && Date.now() - currentRecord.ownerLeftAt >= liveConfig.deleteAfterLeaveMs && shouldStartOwnerLeaveCountdown(channel, ownerId)) {
       await deleteTempRoom(liveGuild, ownerId, 'Owner left timeout reached');
       await updateGeneralPanelStatus(liveGuild);
       return;
@@ -2600,30 +2617,41 @@ async function heartbeat() {
       setRoomRecord(guildId, ownerId, roomRecord);
 
       const ownerPresent = channel.members.has(ownerId);
+      const shouldCountDown = !ownerPresent && shouldStartOwnerLeaveCountdown(channel, ownerId);
+      let roomStateChanged = false;
+
       if (ownerPresent && roomRecord.ownerLeftAt) {
         roomRecord.ownerLeftAt = null;
-        setRoomRecord(guildId, ownerId, roomRecord);
-      } else if (!ownerPresent && !roomRecord.ownerLeftAt) {
+        roomStateChanged = true;
+      } else if (shouldCountDown && !roomRecord.ownerLeftAt) {
         roomRecord.ownerLeftAt = Date.now();
-        setRoomRecord(guildId, ownerId, roomRecord);
+        roomStateChanged = true;
+      } else if (!shouldCountDown && roomRecord.ownerLeftAt) {
+        roomRecord.ownerLeftAt = null;
+        roomStateChanged = true;
       }
+
+      if (roomStateChanged) setRoomRecord(guildId, ownerId, roomRecord);
 
       if (config.maxRoomAgeMs > 0 && Date.now() - roomRecord.createdAt >= config.maxRoomAgeMs) {
         await deleteTempRoom(guild, ownerId, 'Temp room lifetime reached');
         continue;
       }
 
-      if (!ownerPresent && roomRecord.ownerLeftAt && Date.now() - roomRecord.ownerLeftAt >= config.deleteAfterLeaveMs && getRoomOccupancyCount(channel) === 0) {
+      if (!ownerPresent && roomRecord.ownerLeftAt && Date.now() - roomRecord.ownerLeftAt >= config.deleteAfterLeaveMs && shouldStartOwnerLeaveCountdown(channel, ownerId)) {
         await deleteTempRoom(guild, ownerId, 'Owner left timeout reached');
         continue;
       }
 
-      await cleanupExpiredAccess(guild, ownerId, getUserProfile(guildId, ownerId), channel);
-      await cleanupExpiredMutes(guild, ownerId, getUserProfile(guildId, ownerId), channel);
-      await cleanupExpiredBans(guild, ownerId, getUserProfile(guildId, ownerId), channel);
-      await cleanupExpiredInvites(guild, ownerId, getUserProfile(guildId, ownerId), channel);
-      await processRotatingRoomName(guild, ownerId, getUserProfile(guildId, ownerId), channel);
-      await applyRoomState(channel, ownerId);
+      const liveProfile = getUserProfile(guildId, ownerId);
+      const accessChanged = await cleanupExpiredAccess(guild, ownerId, liveProfile, channel);
+      const muteChanged = await cleanupExpiredMutes(guild, ownerId, liveProfile, channel);
+      const banChanged = await cleanupExpiredBans(guild, ownerId, liveProfile, channel);
+      const inviteChanged = await cleanupExpiredInvites(guild, ownerId, liveProfile, channel);
+      const roomNameChanged = await processRotatingRoomName(guild, ownerId, liveProfile, channel);
+      if (roomStateChanged || accessChanged || muteChanged || banChanged || inviteChanged || roomNameChanged) {
+        await applyRoomState(channel, ownerId);
+      }
 
       if (config.autoCleanEnabled && config.autoCleanIntervalMs > 0 && typeof channel.messages?.fetch === 'function') {
         const lastClean = roomRecord.lastAutoCleanAt || 0;
@@ -2659,36 +2687,50 @@ async function handleVoiceStateUpdate(oldState, newState) {
     await createOrMoveToTempRoom(newState.member);
   }
 
-  for (const [ownerId, roomRecord] of Object.entries(getRoomStore(guild.id))) {
-    if (oldState.channelId !== roomRecord.channelId && newState.channelId !== roomRecord.channelId) continue;
+  const affectedOwnerIds = findTempRoomOwnerIdsByChannelIds(guild.id, [oldState.channelId, newState.channelId]);
+  if (!affectedOwnerIds.length) return;
+
+  for (const ownerId of affectedOwnerIds) {
+    const roomRecord = getRoomRecord(guild.id, ownerId);
+    if (!roomRecord) continue;
     const channel = guild.channels.cache.get(roomRecord.channelId) || await guild.channels.fetch(roomRecord.channelId).catch(() => null);
     if (!channel) {
       deleteRoomRecord(guild.id, ownerId);
       continue;
     }
+    const joinedTemp = newState.channelId === roomRecord.channelId && oldState.channelId !== roomRecord.channelId;
+    const leftTemp = oldState.channelId === roomRecord.channelId && newState.channelId !== roomRecord.channelId;
+    const isInTemp = newState.channelId === roomRecord.channelId;
     const ownerPresent = channel.members.has(ownerId);
+    const shouldCountDown = !ownerPresent && shouldStartOwnerLeaveCountdown(channel, ownerId);
     const previousOwnerLeftAt = roomRecord.ownerLeftAt;
     if (ownerPresent) {
       roomRecord.ownerLeftAt = null;
-    } else if (!roomRecord.ownerLeftAt) {
+    } else if (shouldCountDown && !roomRecord.ownerLeftAt) {
       roomRecord.ownerLeftAt = Date.now();
+    } else if (!shouldCountDown && roomRecord.ownerLeftAt) {
+      roomRecord.ownerLeftAt = null;
     }
     roomRecord.ownerDisplayName = guild.members.cache.get(ownerId)?.displayName || roomRecord.ownerDisplayName;
     setRoomRecord(guild.id, ownerId, roomRecord);
     await scheduleRoomLifecycleJob(guild.id, ownerId);
-    await applyRoomState(channel, ownerId);
+    if (joinedTemp || leftTemp || previousOwnerLeftAt !== roomRecord.ownerLeftAt) {
+      await applyRoomState(channel, ownerId);
+    }
 
     if (!previousOwnerLeftAt && roomRecord.ownerLeftAt) {
       await logTempRoomState(guild, {
         title: '🚶 **خروج مالك الروم**',
-        description: '**خرج مالك الروم المؤقت من رومه وبدأ عداد الحذف التلقائي.**',
+        description: shouldCountDown ? '**خرج مالك الروم المؤقت من رومه وبدأ عداد الحذف التلقائي لأن الروم أصبح بلا أعضاء حقيقيين.**' : '**خرج مالك الروم المؤقت من رومه لكن الروم بقي فعالاً لوجود أعضاء حقيقيين داخله.**',
         ownerId,
         roomId: channel.id,
         roomName: channel.name,
         roomRecord,
         ownerLeftAt: roomRecord.ownerLeftAt,
-        extra: `**مهلة الحذف الحالية:** ${formatDuration(config.deleteAfterLeaveMs)}
-**عدد الأعضاء المتبقين:** **${channel.members.size}**`
+        extra: `**حالة العداد:** ${shouldCountDown ? '**يعمل الآن**' : '**متوقف حتى يخرج آخر عضو غير بوت**'}
+**مهلة الحذف الحالية:** ${formatDuration(config.deleteAfterLeaveMs)}
+**عدد الأعضاء المتبقين (يشمل البوتات):** **${channel.members.size}**
+**عدد الأعضاء الحقيقيين بدون المالك:** **${getRoomOccupancyCount(channel, { includeOwner: false, ownerId })}**`
       });
     } else if (previousOwnerLeftAt && ownerPresent) {
       await logTempRoomState(guild, {
@@ -2702,9 +2744,6 @@ async function handleVoiceStateUpdate(oldState, newState) {
       });
     }
 
-    const joinedTemp = newState.channelId === roomRecord.channelId && oldState.channelId !== roomRecord.channelId;
-    const leftTemp = oldState.channelId === roomRecord.channelId && newState.channelId !== roomRecord.channelId;
-    const isInTemp = newState.channelId === roomRecord.channelId;
     const ownerProfile = getUserProfile(guild.id, ownerId);
     if (clearExpiredRecentKicks(roomRecord, Date.now()) || clearExpiredBulkMuteAllStates(roomRecord, Date.now())) setRoomRecord(guild.id, ownerId, roomRecord);
     if (joinedTemp && ownerProfile.bannedUsers.includes(newState.member.id)) {
@@ -3628,7 +3667,7 @@ async function handleRoomButton(interaction) {
     const scope = args[1];
     const access = await resolveManagedRoom(interaction, ownerId);
     if (!access) return true;
-    const { ownerId: resolvedOwnerId, profile, roomChannel } = access;
+    const { ownerId: resolvedOwnerId, profile, roomChannel, roomRecord } = access;
 
     if (action === 'temp_room_action_scope_mute_member') {
       const roomMembers = getModeratableRoomMembers(roomChannel, resolvedOwnerId, profile, interaction.user.id);
