@@ -8,6 +8,8 @@ const { createCanvas, registerFont, loadImage } = require('canvas');
 const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 
 const name = 'setroom';
+const SETROOM_TEXT_MOVE_STEP = 20;
+const SETROOM_TEXT_SCALE_STEP = 0.05;
 
 // مسار ملف إعدادات الغرف
 const roomConfigPath = path.join(__dirname, '..', 'data', 'roomConfig.json');
@@ -36,6 +38,8 @@ function getColorConfigHash(guildConfig) {
     const data = JSON.stringify({
         colorRoleIds: guildConfig.colorRoleIds || [],
         colorsTitle: guildConfig.colorsTitle || '',
+        textColor: guildConfig.textColor || '#ffffff',
+        guildIconEnabled: guildConfig.guildIconEnabled || false,
         imageUrl: guildConfig.imageUrl || '',
         localImagePath: guildConfig.localImagePath || '',
         layoutSettings: { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) }
@@ -938,18 +942,50 @@ async function createColorsImage(guild, guildConfig) {
         // الحصول على النص المخصص من الإعدادات
         const colorsTitle = guildConfig.colorsTitle !== undefined ? guildConfig.colorsTitle : 'Colors list :';
         
+        const titleFontSize = Math.max(16, Math.round(26 * scaleFactor * layout.textScale));
+        const textOffsetX = (150 * scaleFactor) + (layout.textOffsetX * scaleFactor);
+        const textOffsetY = (33 * scaleFactor) + (layout.textOffsetY * scaleFactor);
+        const textColor = normalizeHexColor(guildConfig.textColor, '#ffffff');
+        const titleX = startX - textOffsetX;
+        const titleY = startY - textOffsetY;
+
+        if (guildConfig.guildIconEnabled && guild.iconURL()) {
+            try {
+                const guildIconSize = Math.max(28, 64 * scaleFactor * layout.guildScale);
+                const guildIconX = titleX - guildIconSize - (20 * scaleFactor);
+                const guildIconY = titleY - (guildIconSize * 0.65);
+                const guildIconBuffer = await fetch(guild.iconURL({ extension: 'png', size: 256 })).then(res => {
+                    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+                    return res.arrayBuffer();
+                });
+                const guildIconImage = await loadImage(Buffer.from(guildIconBuffer));
+                const ringRadius = (guildIconSize / 2) + Math.max(4, 4 * scaleFactor);
+
+                ctx.save();
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.beginPath();
+                ctx.arc(guildIconX + (guildIconSize / 2), guildIconY + (guildIconSize / 2), ringRadius, 0, Math.PI * 2);
+                ctx.fillStyle = '#FFFFFF';
+                ctx.shadowColor = 'rgba(0, 0, 0, 0.25)';
+                ctx.shadowBlur = Math.max(4, 8 * scaleFactor);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+                ctx.drawImage(guildIconImage, guildIconX, guildIconY, guildIconSize, guildIconSize);
+                ctx.restore();
+            } catch (guildIconError) {
+                console.error('⚠️ تعذر تحميل أيقونة السيرفر للمعاينة:', guildIconError.message);
+            }
+        }
+
         // رسم النص فقط إذا لم يكن فارغاً
         if (layout.showText && colorsTitle && colorsTitle.length > 0) {
-            const titleFontSize = Math.max(16, Math.round(26 * scaleFactor * layout.textScale));
-            const textOffsetX = Math.max(0, (150 * scaleFactor) + (layout.textOffsetX * scaleFactor));
-            const textOffsetY = (33 * scaleFactor) + (layout.textOffsetY * scaleFactor);
-            
-            ctx.fillStyle = '#ffffff';
+            ctx.fillStyle = textColor;
             ctx.font = `bold ${titleFontSize}px Arial`;
             ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
             ctx.shadowBlur = Math.max(6, Math.round(10 * scaleFactor));
             ctx.textAlign = 'left';
-            ctx.fillText(colorsTitle, startX - textOffsetX, startY - textOffsetY);
+            ctx.fillText(colorsTitle, titleX, titleY);
             ctx.shadowBlur = 0;
         }
         
@@ -1003,6 +1039,24 @@ async function createColorsImage(guild, guildConfig) {
         console.error('خطأ في إنشاء صورة الألوان:', error);
         return null;
     }
+}
+
+function normalizeHexColor(input, fallback = '#ffffff') {
+    if (!input) return fallback;
+    const value = input.trim();
+    const shortHexMatch = /^#?([0-9a-fA-F]{3})$/;
+    const fullHexMatch = /^#?([0-9a-fA-F]{6})$/;
+
+    if (shortHexMatch.test(value)) {
+        const shortHex = value.replace('#', '').toUpperCase();
+        return `#${shortHex.split('').map(char => char + char).join('')}`;
+    }
+
+    if (fullHexMatch.test(value)) {
+        return `#${value.replace('#', '').toUpperCase()}`;
+    }
+
+    return fallback;
 }
 
 // دالة للحصول على لون نص متباين
@@ -1906,6 +1960,7 @@ function getDefaultLayoutSettings() {
         textOffsetX: 0,
         textOffsetY: 0,
         textScale: 1,
+        guildScale: 1,
         showText: true
     };
 }
@@ -1947,20 +2002,20 @@ async function getSetroomDynamicLayoutSettings(guild, guildConfig = {}) {
     }
 
     const scaleFactor = imageWidth / 1024;
-    const widthTarget = imageWidth * 0.72;
-    const heightTarget = imageHeight * (rows > 1 ? 0.22 : 0.12);
+    const widthTarget = imageWidth * 0.82;
+    const heightTarget = imageHeight * (rows > 1 ? 0.3 : 0.18);
     const widthBase = scaleFactor * ((60 * 10) + (12 * 9));
     const heightBase = scaleFactor * ((60 * rows) + (12 * Math.max(0, rows - 1)));
 
     const widthScale = widthBase > 0 ? widthTarget / widthBase : 1;
     const heightScale = heightBase > 0 ? heightTarget / heightBase : 1;
-    const dynamicScale = Math.min(1.25, Math.max(0.65, Math.min(widthScale, heightScale)));
+    const dynamicScale = Math.min(1.6, Math.max(0.85, Math.min(widthScale, heightScale)));
 
     return {
         ...defaultLayout,
         boxScale: Number(dynamicScale.toFixed(2)),
-        boxGap: Number(Math.min(1.15, Math.max(0.75, dynamicScale * 0.95)).toFixed(2)),
-        textScale: Number(Math.min(1.15, Math.max(0.8, dynamicScale * 0.9)).toFixed(2))
+        boxGap: Number(Math.min(1.25, Math.max(0.85, dynamicScale * 0.92)).toFixed(2)),
+        textScale: Number(Math.min(1.3, Math.max(0.9, dynamicScale * 0.95)).toFixed(2))
     };
 }
 
@@ -2004,7 +2059,8 @@ function getSetroomSummaryEmbed(guild, guildConfig = {}, actor = null) {
             { name: 'عدد رولات الألوان', value: `${guildConfig.colorRoleIds?.length || 0}`, inline: true },
             { name: 'رولات القبول', value: acceptRoles, inline: false },
             { name: 'رولات الرفض', value: rejectRoles, inline: false },
-            { name: 'نص الألوان', value: guildConfig.colorsTitle === '' ? 'مخفي' : (guildConfig.colorsTitle || 'Colors list :'), inline: false },
+            { name: 'نص الألوان', value: guildConfig.colorsTitle === '' ? 'مخفي' : `${guildConfig.colorsTitle || 'Colors list :'}
+اللون: ${normalizeHexColor(guildConfig.textColor, '#ffffff')}`, inline: false },
             { name: 'تخصيص النصوص', value: `Room Menu: ${texts.roomMenuPlaceholder}\nColor Menu: ${texts.colorMenuPlaceholder}\nRoom Msg Prefix: ${texts.roomContentPrefix}`, inline: false },
             { name: 'المعاينة الحالية', value: `مربعات: X ${layout.boxOffsetX}, Y ${layout.boxOffsetY}, Scale ${layout.boxScale.toFixed(2)}, Gap ${layout.boxGap.toFixed(2)}\nالنص: X ${layout.textOffsetX}, Y ${layout.textOffsetY}, Scale ${layout.textScale.toFixed(2)}, ${layout.showText ? 'ظاهر' : 'مخفي'}`, inline: false }
         )
@@ -2222,7 +2278,11 @@ function registerHandlers(client) {
 
                 if (customId === 'setroom_panel_text') {
                     const modal = new ModalBuilder().setCustomId('setroom_modal_text').setTitle('تحديث نص الألوان');
-                    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('colors_title').setLabel('نص الألوان').setStyle(TextInputStyle.Short).setRequired(false).setValue(guildConfig.colorsTitle || '')));
+                    modal.addComponents(
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('colors_title').setLabel('نص الألوان').setStyle(TextInputStyle.Short).setRequired(false).setValue(guildConfig.colorsTitle || '')),
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('text_color').setLabel('لون النص HEX').setStyle(TextInputStyle.Short).setRequired(false).setValue(normalizeHexColor(guildConfig.textColor, '#ffffff')).setPlaceholder('#FFFFFF')),
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('guild_toggle').setLabel('Guild').setStyle(TextInputStyle.Short).setRequired(false).setValue(guildConfig.guildIconEnabled ? 'on' : 'off').setPlaceholder('on / off'))
+                    );
                     await interaction.showModal(modal);
                     return;
                 }
@@ -2310,12 +2370,18 @@ function registerHandlers(client) {
                         case 'setroom_preview_box_scale_more': layout.boxScale = Math.min(3, Number((layout.boxScale + 0.02).toFixed(2))); break;
                         case 'setroom_preview_gap_less': layout.boxGap = Math.max(0.2, Number((layout.boxGap - 0.02).toFixed(2))); break;
                         case 'setroom_preview_gap_more': layout.boxGap = Math.min(3, Number((layout.boxGap + 0.02).toFixed(2))); break;
-                        case 'setroom_preview_text_size_less': layout.textScale = Math.max(0.3, Number((layout.textScale - 0.02).toFixed(2))); break;
-                        case 'setroom_preview_text_size_more': layout.textScale = Math.min(3, Number((layout.textScale + 0.02).toFixed(2))); break;
-                        case 'setroom_preview_text_left': layout.textOffsetX += 10; break;
-                        case 'setroom_preview_text_right': layout.textOffsetX -= 10; break;
-                        case 'setroom_preview_text_up': layout.textOffsetY += 10; break;
-                        case 'setroom_preview_text_down': layout.textOffsetY -= 10; break;
+                        case 'setroom_preview_text_size_less':
+                            layout.textScale = Math.max(0.3, Number((layout.textScale - SETROOM_TEXT_SCALE_STEP).toFixed(2)));
+                            layout.guildScale = Math.max(0.3, Number((layout.guildScale - SETROOM_TEXT_SCALE_STEP).toFixed(2)));
+                            break;
+                        case 'setroom_preview_text_size_more':
+                            layout.textScale = Math.min(3, Number((layout.textScale + SETROOM_TEXT_SCALE_STEP).toFixed(2)));
+                            layout.guildScale = Math.min(3, Number((layout.guildScale + SETROOM_TEXT_SCALE_STEP).toFixed(2)));
+                            break;
+                        case 'setroom_preview_text_left': layout.textOffsetX += SETROOM_TEXT_MOVE_STEP; break;
+                        case 'setroom_preview_text_right': layout.textOffsetX -= SETROOM_TEXT_MOVE_STEP; break;
+                        case 'setroom_preview_text_up': layout.textOffsetY += SETROOM_TEXT_MOVE_STEP; break;
+                        case 'setroom_preview_text_down': layout.textOffsetY -= SETROOM_TEXT_MOVE_STEP; break;
                         case 'setroom_preview_text_toggle': layout.showText = !layout.showText; break;
                     }
                     guildConfig.layoutSettings = layout;
@@ -2354,8 +2420,23 @@ function registerHandlers(client) {
                 }
                 if (interaction.customId === 'setroom_modal_text') {
                     guildConfig.colorsTitle = interaction.fields.getTextInputValue('colors_title').trim();
+                    const requestedTextColor = interaction.fields.getTextInputValue('text_color').trim();
+                    const guildToggleValue = interaction.fields.getTextInputValue('guild_toggle').trim().toLowerCase();
+                    const normalizedTextColor = normalizeHexColor(requestedTextColor || guildConfig.textColor || '#ffffff', null);
+                    if (!normalizedTextColor) {
+                        await interaction.reply({ content: '❌ لون النص غير صحيح. استخدم صيغة HEX مثل #FFFFFF', flags: 64 });
+                        return;
+                    }
+                    if (guildToggleValue && !['on', 'off'].includes(guildToggleValue)) {
+                        await interaction.reply({ content: '❌ حقل Guild يقبل فقط on أو off.', flags: 64 });
+                        return;
+                    }
+                    const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
+                    guildConfig.layoutSettings = layout;
+                    guildConfig.textColor = normalizedTextColor;
+                    if (guildToggleValue) guildConfig.guildIconEnabled = guildToggleValue === 'on';
                     saveRoomConfig(config);
-                    await interaction.reply({ content: '✅ تم تحديث نص الألوان.', flags: 64 });
+                    await interaction.reply({ content: `✅ تم تحديث نص الألوان ولونه إلى ${normalizedTextColor} مع إعدادات Guild.`, flags: 64 });
                     return;
                 }
                 if (interaction.customId === 'setroom_modal_setup_texts') {
