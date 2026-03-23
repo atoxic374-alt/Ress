@@ -1,4 +1,4 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, PermissionFlagsBits, ChannelType, StringSelectMenuBuilder, AttachmentBuilder } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, PermissionFlagsBits, ChannelType, StringSelectMenuBuilder, AttachmentBuilder, ChannelSelectMenuBuilder, RoleSelectMenuBuilder } = require('discord.js');
 const colorManager = require('../utils/colorManager.js');
 const { logEvent } = require('../utils/logs_system.js');
 const fs = require('fs');
@@ -493,6 +493,7 @@ let setupEmbedMessages = loadSetupEmbedMessages();
 // دالة مساعدة لإرسال رسالة Setup حسب إعدادات الإيمبد
 async function sendSetupMessage(channel, guild, guildConfig) {
     const embedEnabled = guildConfig.embedEnabled !== false; // افتراضياً مفعّل
+    const texts = getSetroomTexts(guildConfig);
     
     // إنشاء صورة الألوان المدمجة
     const mergedImagePath = await createColorsImage(guild, guildConfig);
@@ -505,10 +506,10 @@ async function sendSetupMessage(channel, guild, guildConfig) {
     if (embedEnabled) {
         // إرسال مع Embed (مع النص/الكونتنت)
         const finalEmbed = colorManager.createEmbed()
-            .setTitle('**Rooms & Colors**')
-            .setDescription('**اختر لونك او نوع الروم التي تريد طلبها :**' + colorDescription)
+            .setTitle(texts.setupTitle)
+            .setDescription((texts.setupDescription || '') + colorDescription)
             .setImage('attachment://colors_merged.png')
-            .setFooter({ text: 'System' });
+            .setFooter({ text: texts.setupFooter || 'System' });
         
         messageOptions = { 
             embeds: [finalEmbed], 
@@ -518,6 +519,7 @@ async function sendSetupMessage(channel, guild, guildConfig) {
     } else {
         // إرسال بدون Embed (صورة فقط بدون أي نص)
         messageOptions = { 
+            content: texts.setupDescription || '',
             components: menus,
             files: []
         };
@@ -716,25 +718,57 @@ function saveSetupEmbedMessages(embedMap) {
     }
 }
 
+function getDefaultSetroomTexts() {
+    return {
+        setupTitle: '**Rooms & Colors**',
+        setupDescription: '**اختر لونك او نوع الروم التي تريد طلبها :**',
+        setupFooter: 'System',
+        roomMenuPlaceholder: 'Choose Your Room',
+        colorMenuPlaceholder: 'Choose Your Color',
+        condolenceLabel: 'Doaa',
+        condolenceDescription: 'طلب روم دعاء',
+        birthdayLabel: 'Birthday',
+        birthdayDescription: 'طلب روم ميلاد',
+        panelTitle: '**SetRoom Control Panel**',
+        panelDescription: 'لوحة إعدادات الرومات المحدثة — التعديل يتم مباشرة من الأزرار بدون subcommands.',
+        roomContentPrefix: '@here',
+        roomToLabel: 'لـ',
+        roomByLabel: 'بواسطة',
+        requestAcceptLabel: 'Accept',
+        requestRejectLabel: 'Reject'
+    };
+}
+
+function getSetroomTexts(guildConfig = {}) {
+    return { ...getDefaultSetroomTexts(), ...(guildConfig.texts || {}) };
+}
+
+function getGuildConfigWithDefaults(config, guildId) {
+    const guildConfig = ensureGuildRoomConfig(config, guildId);
+    if (!guildConfig.texts) guildConfig.texts = getDefaultSetroomTexts();
+    else guildConfig.texts = { ...getDefaultSetroomTexts(), ...guildConfig.texts };
+    return guildConfig;
+}
+
 // دالة لإنشاء منيوهات Setup (منيو الدعاء/الميلاد + منيو الألوان)
 function createSetupMenus(guild, guildConfig) {
     const menus = [];
+    const texts = getSetroomTexts(guildConfig);
 
-    // منيو الدعاء والميلاد (المنيو الأول - موجود دائماً)
     const roomMenu = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
             .setCustomId('room_type_menu')
-            .setPlaceholder('Choose Your Room')
+            .setPlaceholder(texts.roomMenuPlaceholder || 'Choose Your Room')
             .addOptions([
                 {
-                    label: 'Doaa',
-                    description: 'طلب روم دعاء',
+                    label: texts.condolenceLabel || 'Doaa',
+                    description: texts.condolenceDescription || 'طلب روم دعاء',
                     emoji: '<:emoji_83:1442589607639126046>',
                     value: 'condolence',
                 },
                 {
-                    label: 'Birthday ',
-                    description: 'طلب روم ميلاد',
+                    label: texts.birthdayLabel || 'Birthday',
+                    description: texts.birthdayDescription || 'طلب روم ميلاد',
                     emoji: '<:emoji_84:1442589686987227328>',
                     value: 'birthday',
                 }
@@ -772,7 +806,7 @@ emoji: '<:emoji_51:1442585157516398722>',
             const colorMenu = new ActionRowBuilder().addComponents(
                 new StringSelectMenuBuilder()
                     .setCustomId('color_selection_menu')
-                    .setPlaceholder('Choose Your Color')
+                    .setPlaceholder(texts.colorMenuPlaceholder || 'Choose Your Color')
                     .addOptions(colorOptions)
             );
             menus.push(colorMenu);
@@ -872,13 +906,12 @@ async function createColorsImage(guild, guildConfig) {
         const canvasWidth = backgroundImage.width;
         const canvasHeight = backgroundImage.height;
 
-        // إعدادات مربعات الألوان - متناسبة مع حجم الصورة
-        // نحسب الحجم بناءً على عرض الصورة لضمان التناسب
-        const scaleFactor = canvasWidth / 1024; // نسبة التناسب (1024 كمرجع)
-        const boxSize = Math.max(40, Math.round(60 * scaleFactor)); // حجم كل مربع
-        const gap = Math.max(8, Math.round(12 * scaleFactor)); // المسافة بين المربعات
-        const padding = Math.max(20, Math.round(30 * scaleFactor)); // المسافة من الحواف
-        const cornerRadius = Math.max(6, Math.round(10 * scaleFactor)); // انحناء زوايا المربعات
+        // إعدادات المعاينة/التخصيص
+        const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
+        const scaleFactor = canvasWidth / 1024;
+        const boxSize = Math.max(30, Math.round(60 * scaleFactor * layout.boxScale));
+        const gap = Math.max(4, Math.round(12 * scaleFactor * layout.boxGap));
+        const cornerRadius = Math.max(6, Math.round(10 * scaleFactor));
 
         const colorsPerRow = 10; // عدد الألوان في كل صف
         const totalColors = guildConfig.colorRoleIds.length;
@@ -892,23 +925,23 @@ async function createColorsImage(guild, guildConfig) {
 
         // حساب عرض المربعات للتمركز أفقياً
         const totalBoxesWidth = (boxSize * colorsPerRow) + (gap * (colorsPerRow - 1));
-        const startX = (canvasWidth - totalBoxesWidth) / 2;
+        const baseStartX = (canvasWidth - totalBoxesWidth) / 2;
 
-        // حساب ارتفاع المربعات لتحديد موقع البداية عمودياً (مع حساب الصفوف)
         const totalBoxesHeight = (boxSize * rows) + (gap * (rows - 1));
-        // تحسين التمركز الرأسي - نضع المربعات في النصف السفلي من الصورة
-        const startY = rows > 1 
-            ? (canvasHeight - totalBoxesHeight) / 2 // تمركز في المنتصف للصفوف المتعددة
-            : (canvasHeight * 0.6) - (totalBoxesHeight / 2); // صف واحد - في النصف السفلي
+        const baseStartY = rows > 1 
+            ? (canvasHeight - totalBoxesHeight) / 2
+            : (canvasHeight * 0.6) - (totalBoxesHeight / 2);
+        const startX = baseStartX + layout.boxOffsetX;
+        const startY = baseStartY + layout.boxOffsetY;
         
         // الحصول على النص المخصص من الإعدادات
         const colorsTitle = guildConfig.colorsTitle !== undefined ? guildConfig.colorsTitle : 'Colors list :';
         
         // رسم النص فقط إذا لم يكن فارغاً
-        if (colorsTitle && colorsTitle.length > 0) {
-            const titleFontSize = Math.max(18, Math.round(26 * scaleFactor));
-            const textOffsetX = Math.max(100, Math.round(150 * scaleFactor));
-            const textOffsetY = Math.max(22, Math.round(33 * scaleFactor));
+        if (layout.showText && colorsTitle && colorsTitle.length > 0) {
+            const titleFontSize = Math.max(16, Math.round(26 * scaleFactor * layout.textScale));
+            const textOffsetX = Math.max(0, Math.round(150 * scaleFactor) + layout.textOffsetX);
+            const textOffsetY = Math.round(33 * scaleFactor) + layout.textOffsetY;
             
             ctx.fillStyle = '#ffffff';
             ctx.font = `bold ${titleFontSize}px Arial`;
@@ -1251,7 +1284,8 @@ async function handleEmojiMessage(message, client) {
     }
 
     const config = loadRoomConfig();
-    const guildConfig = config[requestData.guildId];
+    const guildConfig = getGuildConfigWithDefaults(config, requestData.guildId);
+    const texts = getSetroomTexts(guildConfig);
 
     // إنشاء الطلب
     const request = {
@@ -1299,12 +1333,12 @@ async function handleEmojiMessage(message, client) {
     const buttons = new ActionRowBuilder().addComponents([
         new ButtonBuilder()
             .setCustomId(`room_accept_${request.id}`)
-            .setLabel('Accept')
+            .setLabel(texts.requestAcceptLabel || 'Accept')
             .setStyle(ButtonStyle.Secondary)
             .setEmoji('<:emoji_41:1430334120839479449>'),
         new ButtonBuilder()
             .setCustomId(`room_reject_${request.id}`)
-            .setLabel('Rejec')
+            .setLabel(texts.requestRejectLabel || 'Reject')
             .setStyle(ButtonStyle.Secondary)
             .setEmoji('<:emoji_39:1430334088924893275>')
     ]);
@@ -1367,8 +1401,10 @@ async function handleRoomRequestAction(interaction, client) {
 
     console.log(`🔍 محاولة ${action} للطلب: ${requestId}`);
 
-    // التحقق من الصلاحيات
-    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+    const config = loadRoomConfig();
+    const guildConfig = ensureGuildRoomConfig(config, interaction.guild.id);
+
+    if (!canReviewRoomRequest(interaction.member, guildConfig, action, interaction.user.id, [])) {
         await interaction.reply({ content: '❌ **ليس لديك صلاحية لهذا الإجراء**', flags: 64 });
         return;
     }
@@ -1513,31 +1549,23 @@ async function createRoom(request, client, guildConfig) {
 
         console.log(`✅ تم إنشاء القناة: ${channel.name} (${channel.id})`);
 
-        // إرسال الرسالة
-        const roomEmbed = colorManager.createEmbed()
-            .setTitle(`${request.roomTypeEn === 'condolence' ? 'دعاء' : 'hbd'} : **Room**`)
-            .setDescription(`# ${request.message}`)
-            .addFields([
-                { name: 'لـ', value: request.forWho, inline: true },
-                { name: 'بطلب من', value: `<@${request.userId}>`, inline: true }
-            ])
-            .setTimestamp();
+        const roomContent = ['@here', request.message, `لـ : ${request.forWho}`, `بواسطة : <@${request.userId}>`].filter(Boolean).join('\n\n');
+        const sentMessage = await channel.send({ content: roomContent });
+        console.log(`✅ تم إرسال رسالة عادية في الروم`);
 
-        // إضافة الصورة إذا كانت موجودة
         if (request.imageUrl) {
-            roomEmbed.setImage(request.imageUrl);
+            await channel.send({ content: request.imageUrl }).catch((error) => {
+                console.error('فشل في إرسال رابط الصورة داخل الروم:', error.message);
+            });
         }
 
-        const sentMessage = await channel.send({ content: '@here', embeds: [roomEmbed] });
-        console.log(`✅ تم إرسال رسالة الإمبد في الروم`);
-
-        // حفظ معلومات الرسالة للحماية من الحذف
         roomEmbedMessages.set(channel.id, {
             messageId: sentMessage.id,
             channelId: channel.id,
-            embed: roomEmbed,
+            content: roomContent,
             emojis: request.emojis || [],
-            request: request
+            request: request,
+            imageUrl: request.imageUrl || null
         });
 
         // إضافة الريآكتات من الطلب
@@ -1868,41 +1896,391 @@ async function handleColorSelection(interaction, client) {
     }
 }
 
+function getDefaultLayoutSettings() {
+    return {
+        boxOffsetX: 0,
+        boxOffsetY: 0,
+        boxScale: 1,
+        boxGap: 1,
+        textOffsetX: 0,
+        textOffsetY: 0,
+        textScale: 1,
+        showText: true
+    };
+}
+
+function ensureGuildRoomConfig(config, guildId) {
+    if (!config[guildId]) config[guildId] = {};
+    if (!config[guildId].layoutSettings) {
+        config[guildId].layoutSettings = getDefaultLayoutSettings();
+    }
+    if (!Array.isArray(config[guildId].reviewAcceptRoleIds)) config[guildId].reviewAcceptRoleIds = [];
+    if (!Array.isArray(config[guildId].reviewRejectRoleIds)) config[guildId].reviewRejectRoleIds = [];
+    config[guildId].texts = { ...getDefaultSetroomTexts(), ...(config[guildId].texts || {}) };
+    return config[guildId];
+}
+
+function getSetroomSummaryEmbed(guild, guildConfig = {}, actor = null) {
+    const acceptRoles = guildConfig.reviewAcceptRoleIds?.length ? guildConfig.reviewAcceptRoleIds.map(id => `<@&${id}>`).join(', ') : 'Admins فقط';
+    const rejectRoles = guildConfig.reviewRejectRoleIds?.length ? guildConfig.reviewRejectRoleIds.map(id => `<@&${id}>`).join(', ') : 'Admins فقط';
+    const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
+    const texts = getSetroomTexts(guildConfig);
+
+    const embed = colorManager.createEmbed()
+        .setTitle(texts.panelTitle || '**SetRoom Control Panel**')
+        .setDescription(texts.panelDescription || 'لوحة إعدادات الرومات المحدثة — التعديل يتم مباشرة من الأزرار بدون subcommands.')
+        .addFields(
+            { name: 'روم الطلبات', value: guildConfig.requestsChannelId ? `<#${guildConfig.requestsChannelId}>` : 'غير محدد', inline: true },
+            { name: 'روم السيتب', value: guildConfig.embedChannelId ? `<#${guildConfig.embedChannelId}>` : 'غير محدد', inline: true },
+            { name: 'كاتقوري الرومات', value: guildConfig.roomsCategoryId ? `<#${guildConfig.roomsCategoryId}>` : 'بدون', inline: true },
+            { name: 'الصورة', value: guildConfig.imageUrl ? 'محددة' : 'غير محددة', inline: true },
+            { name: 'وضع الإيمبد', value: guildConfig.embedEnabled !== false ? 'مفعّل' : 'رسالة عادية', inline: true },
+            { name: 'عدد رولات الألوان', value: `${guildConfig.colorRoleIds?.length || 0}`, inline: true },
+            { name: 'رولات القبول', value: acceptRoles, inline: false },
+            { name: 'رولات الرفض', value: rejectRoles, inline: false },
+            { name: 'نص الألوان', value: guildConfig.colorsTitle === '' ? 'مخفي' : (guildConfig.colorsTitle || 'Colors list :'), inline: false },
+            { name: 'تخصيص النصوص', value: `Room Menu: ${texts.roomMenuPlaceholder}\nColor Menu: ${texts.colorMenuPlaceholder}\nRoom Msg Prefix: ${texts.roomContentPrefix}`, inline: false },
+            { name: 'المعاينة الحالية', value: `مربعات: X ${layout.boxOffsetX}, Y ${layout.boxOffsetY}, Scale ${layout.boxScale.toFixed(2)}, Gap ${layout.boxGap.toFixed(2)}\nالنص: X ${layout.textOffsetX}, Y ${layout.textOffsetY}, Scale ${layout.textScale.toFixed(2)}, ${layout.showText ? 'ظاهر' : 'مخفي'}`, inline: false }
+        )
+        .setFooter({ text: 'SetRoom System' });
+
+    if (actor) {
+        embed.setAuthor({ name: actor.tag || actor.username, iconURL: actor.displayAvatarURL?.() || null });
+    }
+
+    return embed;
+}
+
+function createSetroomMainRows() {
+    return [
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('setroom_panel_channels').setLabel('القنوات').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_panel_image').setLabel('الصورة').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_panel_text').setLabel('نص الألوان').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_panel_roles').setLabel('رولات القبول/الرفض').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_panel_preview').setLabel('معاينة').setStyle(ButtonStyle.Primary)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('setroom_panel_setup_texts').setLabel('نصوص السيتب').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_panel_room_output').setLabel('رسالة الروم').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_panel_toggle_embed').setLabel('تبديل الإيمبد').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_panel_refresh_colors').setLabel('تحديث الألوان').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_panel_publish').setLabel('تعيين').setStyle(ButtonStyle.Success)
+        )
+    ];
+}
+
+function createSetroomPreviewRows() {
+    return [
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('setroom_preview_box_left').setLabel('مربعات ←').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_box_right').setLabel('مربعات →').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_box_up').setLabel('مربعات ↑').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_box_down').setLabel('مربعات ↓').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_box_scale').setLabel('حجم المربعات').setStyle(ButtonStyle.Secondary)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('setroom_preview_gap_less').setLabel('Gap -').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_gap_more').setLabel('Gap +').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_text_size_less').setLabel('نص -').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_text_size_more').setLabel('نص +').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_show_image').setLabel('عرض المعاينة').setStyle(ButtonStyle.Primary)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('setroom_preview_text_left').setLabel('نص ←').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_text_right').setLabel('نص →').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_text_up').setLabel('نص ↑').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_text_down').setLabel('نص ↓').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_text_toggle').setLabel('إظهار/إزالة النص').setStyle(ButtonStyle.Danger)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('setroom_preview_save').setLabel('حفظ').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('setroom_preview_publish').setLabel('تعيين').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('setroom_preview_back').setLabel('رجوع').setStyle(ButtonStyle.Secondary)
+        )
+    ];
+}
+
+function memberHasAnyRole(member, roleIds = []) {
+    if (!member || !roleIds.length) return false;
+    return roleIds.some(roleId => member.roles.cache.has(roleId));
+}
+
+function canManageSetroom(member, userId, botOwners = []) {
+    return member?.permissions?.has(PermissionFlagsBits.Administrator) || botOwners.includes(userId);
+}
+
+function canReviewRoomRequest(member, guildConfig, action, userId, botOwners = []) {
+    if (canManageSetroom(member, userId, botOwners)) return true;
+    const roleIds = action === 'accept' ? (guildConfig.reviewAcceptRoleIds || []) : (guildConfig.reviewRejectRoleIds || []);
+    return memberHasAnyRole(member, roleIds);
+}
+
+async function refreshSetroomPanelMessage(interaction, guildConfig, extra = {}) {
+    const embed = getSetroomSummaryEmbed(interaction.guild, guildConfig, interaction.user);
+    const components = extra.preview ? createSetroomPreviewRows() : createSetroomMainRows();
+    if (interaction.deferred || interaction.replied) {
+        return interaction.editReply({ embeds: [embed], components, ...extra.payload });
+    }
+    if (interaction.isButton() || interaction.isAnySelectMenu?.()) {
+        return interaction.update({ embeds: [embed], components, ...extra.payload });
+    }
+    return interaction.reply({ embeds: [embed], components, flags: 64, ...extra.payload });
+}
+
+async function syncSetupMessageForGuild(guild, client) {
+    const config = loadRoomConfig();
+    const guildConfig = ensureGuildRoomConfig(config, guild.id);
+    saveRoomConfig(config);
+    if (!guildConfig.embedChannelId) return false;
+    return resendSetupEmbed(guild.id, client);
+}
+
 // تسجيل معالجات التفاعلات
 function registerHandlers(client) {
     client.on('interactionCreate', async (interaction) => {
-        if (!interaction.isStringSelectMenu() && !interaction.isModalSubmit() && !interaction.isButton()) return;
+        if (!interaction.isStringSelectMenu() && !interaction.isModalSubmit() && !interaction.isButton() && !interaction.isChannelSelectMenu() && !interaction.isRoleSelectMenu()) return;
 
         try {
-            // معالجة منيو طلبات الغرف
             if (interaction.isStringSelectMenu() && interaction.customId === 'room_type_menu') {
                 await handleRoomRequestMenu(interaction, client);
                 return;
             }
 
-            // معالجة منيو اختيار الألوان
             if (interaction.isStringSelectMenu() && interaction.customId === 'color_selection_menu') {
                 await handleColorSelection(interaction, client);
                 return;
             }
 
-            // معالجة مودالات طلبات الغرف
             if (interaction.isModalSubmit() && interaction.customId.startsWith('room_modal_')) {
                 await handleRoomModalSubmit(interaction, client);
                 return;
             }
 
-            // معالجة قبول/رفض طلبات الغرف
             if (interaction.isButton() && (interaction.customId.startsWith('room_accept_') || interaction.customId.startsWith('room_reject_'))) {
                 await handleRoomRequestAction(interaction, client);
                 return;
+            }
+
+            if (!interaction.customId.startsWith('setroom_')) return;
+
+            const { BOT_OWNERS = [] } = interaction.client || {};
+            if (!canManageSetroom(interaction.member, interaction.user.id, BOT_OWNERS)) {
+                await interaction.reply({ content: '❌ ليس لديك صلاحية تعديل إعدادات setroom.', flags: 64 });
+                return;
+            }
+
+            const config = loadRoomConfig();
+            const guildConfig = getGuildConfigWithDefaults(config, interaction.guild.id);
+
+            if (interaction.isButton()) {
+                const customId = interaction.customId;
+
+                if (customId === 'setroom_panel_channels') {
+                    const rows = [
+                        new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('setroom_select_requests_channel').setPlaceholder('اختر روم الطلبات').setChannelTypes(ChannelType.GuildText).setMaxValues(1)),
+                        new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('setroom_select_embed_channel').setPlaceholder('اختر روم السيتب').setChannelTypes(ChannelType.GuildText).setMaxValues(1)),
+                        new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('setroom_select_category').setPlaceholder('اختر كاتقوري الرومات').setChannelTypes(ChannelType.GuildCategory).setMaxValues(1))
+                    ];
+                    await interaction.reply({ content: 'حدّد القنوات من القوائم التالية.', components: rows, flags: 64 });
+                    return;
+                }
+
+                if (customId === 'setroom_panel_roles') {
+                    const rows = [
+                        new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId('setroom_select_accept_roles').setPlaceholder('رولات مسؤولة عن القبول').setMinValues(0).setMaxValues(10)),
+                        new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId('setroom_select_reject_roles').setPlaceholder('رولات مسؤولة عن الرفض').setMinValues(0).setMaxValues(10))
+                    ];
+                    await interaction.reply({ content: 'اختر الرولات المسؤولة عن القبول والرفض. تركها فارغة يعني Admins فقط.', components: rows, flags: 64 });
+                    return;
+                }
+
+                if (customId === 'setroom_panel_image') {
+                    const modal = new ModalBuilder().setCustomId('setroom_modal_image').setTitle('تحديث صورة setroom');
+                    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('image_url').setLabel('رابط الصورة').setStyle(TextInputStyle.Short).setRequired(true).setValue(guildConfig.imageUrl || '')));
+                    await interaction.showModal(modal);
+                    return;
+                }
+
+                if (customId === 'setroom_panel_text') {
+                    const modal = new ModalBuilder().setCustomId('setroom_modal_text').setTitle('تحديث نص الألوان');
+                    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('colors_title').setLabel('نص الألوان').setStyle(TextInputStyle.Short).setRequired(false).setValue(guildConfig.colorsTitle || '')));
+                    await interaction.showModal(modal);
+                    return;
+                }
+
+                if (customId === 'setroom_panel_setup_texts') {
+                    const texts = getSetroomTexts(guildConfig);
+                    const modal = new ModalBuilder().setCustomId('setroom_modal_setup_texts').setTitle('تخصيص نصوص السيتب');
+                    modal.addComponents(
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('setup_title').setLabel('عنوان السيتب').setStyle(TextInputStyle.Short).setRequired(false).setValue(texts.setupTitle || '')),
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('setup_description').setLabel('وصف السيتب').setStyle(TextInputStyle.Paragraph).setRequired(false).setValue(texts.setupDescription || '')),
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('room_placeholder').setLabel('Placeholder منيو الروم').setStyle(TextInputStyle.Short).setRequired(false).setValue(texts.roomMenuPlaceholder || '')),
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('color_placeholder').setLabel('Placeholder منيو الألوان').setStyle(TextInputStyle.Short).setRequired(false).setValue(texts.colorMenuPlaceholder || '')),
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('setup_footer').setLabel('فوتر السيتب').setStyle(TextInputStyle.Short).setRequired(false).setValue(texts.setupFooter || ''))
+                    );
+                    await interaction.showModal(modal);
+                    return;
+                }
+
+                if (customId === 'setroom_panel_room_output') {
+                    const texts = getSetroomTexts(guildConfig);
+                    const modal = new ModalBuilder().setCustomId('setroom_modal_room_output').setTitle('تخصيص رسالة الروم');
+                    modal.addComponents(
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('room_prefix').setLabel('مقدمة الرسالة').setStyle(TextInputStyle.Short).setRequired(false).setValue(texts.roomContentPrefix || '')),
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('room_to_label').setLabel('وسم لمن').setStyle(TextInputStyle.Short).setRequired(false).setValue(texts.roomToLabel || '')),
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('room_by_label').setLabel('وسم بواسطة').setStyle(TextInputStyle.Short).setRequired(false).setValue(texts.roomByLabel || '')),
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('accept_label').setLabel('نص زر القبول').setStyle(TextInputStyle.Short).setRequired(false).setValue(texts.requestAcceptLabel || '')),
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('reject_label').setLabel('نص زر الرفض').setStyle(TextInputStyle.Short).setRequired(false).setValue(texts.requestRejectLabel || ''))
+                    );
+                    await interaction.showModal(modal);
+                    return;
+                }
+
+                if (customId === 'setroom_panel_toggle_embed') {
+                    guildConfig.embedEnabled = guildConfig.embedEnabled === false;
+                    saveRoomConfig(config);
+                    await refreshSetroomPanelMessage(interaction, guildConfig);
+                    return;
+                }
+
+                if (customId === 'setroom_panel_refresh_colors') {
+                    saveRoomConfig(config);
+                    await updateSetupEmbed(interaction.guild.id, client);
+                    await refreshSetroomPanelMessage(interaction, guildConfig);
+                    return;
+                }
+
+                if (customId === 'setroom_panel_publish') {
+                    saveRoomConfig(config);
+                    await syncSetupMessageForGuild(interaction.guild, client).catch(() => false);
+                    await interaction.reply({ content: '✅ تم حفظ الإعدادات وتعيين/تحديث رسالة السيتب.', flags: 64 });
+                    return;
+                }
+
+                if (customId === 'setroom_panel_preview') {
+                    await refreshSetroomPanelMessage(interaction, guildConfig, { preview: true });
+                    return;
+                }
+
+                if (customId === 'setroom_preview_back') {
+                    await refreshSetroomPanelMessage(interaction, guildConfig);
+                    return;
+                }
+
+                if (customId === 'setroom_preview_save') {
+                    saveRoomConfig(config);
+                    await interaction.reply({ content: '✅ تم حفظ إعدادات المعاينة.', flags: 64 });
+                    return;
+                }
+
+                if (customId === 'setroom_preview_publish') {
+                    saveRoomConfig(config);
+                    await syncSetupMessageForGuild(interaction.guild, client).catch(() => false);
+                    await interaction.reply({ content: '✅ تم حفظ المعاينة وتعيينها على رسالة السيتب.', flags: 64 });
+                    return;
+                }
+
+                if (customId === 'setroom_preview_show_image') {
+                    const previewPath = await createColorsImage(interaction.guild, guildConfig);
+                    if (!previewPath || !fs.existsSync(previewPath)) {
+                        await interaction.reply({ content: '❌ تعذر إنشاء صورة المعاينة حالياً.', flags: 64 });
+                        return;
+                    }
+                    await interaction.reply({ content: '🖼️ هذه معاينة الإعدادات الحالية.', files: [new AttachmentBuilder(previewPath)], flags: 64 });
+                    return;
+                }
+
+                if (customId.startsWith('setroom_preview_')) {
+                    const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
+                    switch (customId) {
+                        case 'setroom_preview_box_left': layout.boxOffsetX -= 15; break;
+                        case 'setroom_preview_box_right': layout.boxOffsetX += 15; break;
+                        case 'setroom_preview_box_up': layout.boxOffsetY -= 15; break;
+                        case 'setroom_preview_box_down': layout.boxOffsetY += 15; break;
+                        case 'setroom_preview_box_scale': layout.boxScale = layout.boxScale >= 1.5 ? 0.8 : Number((layout.boxScale + 0.1).toFixed(2)); break;
+                        case 'setroom_preview_gap_less': layout.boxGap = Math.max(0.5, Number((layout.boxGap - 0.1).toFixed(2))); break;
+                        case 'setroom_preview_gap_more': layout.boxGap = Math.min(2, Number((layout.boxGap + 0.1).toFixed(2))); break;
+                        case 'setroom_preview_text_size_less': layout.textScale = Math.max(0.5, Number((layout.textScale - 0.1).toFixed(2))); break;
+                        case 'setroom_preview_text_size_more': layout.textScale = Math.min(2, Number((layout.textScale + 0.1).toFixed(2))); break;
+                        case 'setroom_preview_text_left': layout.textOffsetX += 15; break;
+                        case 'setroom_preview_text_right': layout.textOffsetX -= 15; break;
+                        case 'setroom_preview_text_up': layout.textOffsetY += 10; break;
+                        case 'setroom_preview_text_down': layout.textOffsetY -= 10; break;
+                        case 'setroom_preview_text_toggle': layout.showText = !layout.showText; break;
+                    }
+                    guildConfig.layoutSettings = layout;
+                    saveRoomConfig(config);
+                    await refreshSetroomPanelMessage(interaction, guildConfig, { preview: true });
+                    return;
+                }
+            }
+
+            if (interaction.isChannelSelectMenu()) {
+                if (interaction.customId === 'setroom_select_requests_channel') guildConfig.requestsChannelId = interaction.values[0] || null;
+                if (interaction.customId === 'setroom_select_embed_channel') guildConfig.embedChannelId = interaction.values[0] || null;
+                if (interaction.customId === 'setroom_select_category') guildConfig.roomsCategoryId = interaction.values[0] || null;
+                saveRoomConfig(config);
+                await interaction.reply({ content: '✅ تم حفظ القناة المطلوبة.', flags: 64 });
+                return;
+            }
+
+            if (interaction.isRoleSelectMenu()) {
+                if (interaction.customId === 'setroom_select_accept_roles') guildConfig.reviewAcceptRoleIds = interaction.values;
+                if (interaction.customId === 'setroom_select_reject_roles') guildConfig.reviewRejectRoleIds = interaction.values;
+                saveRoomConfig(config);
+                await interaction.reply({ content: '✅ تم حفظ الرولات المسؤولة.', flags: 64 });
+                return;
+            }
+
+            if (interaction.isModalSubmit()) {
+                if (interaction.customId === 'setroom_modal_image') {
+                    const imageUrl = interaction.fields.getTextInputValue('image_url').trim();
+                    guildConfig.imageUrl = imageUrl;
+                    const localPath = await saveImageLocally(imageUrl, interaction.guild.id);
+                    if (localPath) guildConfig.localImagePath = localPath;
+                    saveRoomConfig(config);
+                    await interaction.reply({ content: '✅ تم تحديث الصورة.', flags: 64 });
+                    return;
+                }
+                if (interaction.customId === 'setroom_modal_text') {
+                    guildConfig.colorsTitle = interaction.fields.getTextInputValue('colors_title').trim();
+                    saveRoomConfig(config);
+                    await interaction.reply({ content: '✅ تم تحديث نص الألوان.', flags: 64 });
+                    return;
+                }
+                if (interaction.customId === 'setroom_modal_setup_texts') {
+                    guildConfig.texts = {
+                        ...getSetroomTexts(guildConfig),
+                        setupTitle: interaction.fields.getTextInputValue('setup_title').trim(),
+                        setupDescription: interaction.fields.getTextInputValue('setup_description').trim(),
+                        roomMenuPlaceholder: interaction.fields.getTextInputValue('room_placeholder').trim(),
+                        colorMenuPlaceholder: interaction.fields.getTextInputValue('color_placeholder').trim(),
+                        setupFooter: interaction.fields.getTextInputValue('setup_footer').trim()
+                    };
+                    saveRoomConfig(config);
+                    await interaction.reply({ content: '✅ تم تحديث نصوص السيتب.', flags: 64 });
+                    return;
+                }
+                if (interaction.customId === 'setroom_modal_room_output') {
+                    guildConfig.texts = {
+                        ...getSetroomTexts(guildConfig),
+                        roomContentPrefix: interaction.fields.getTextInputValue('room_prefix').trim(),
+                        roomToLabel: interaction.fields.getTextInputValue('room_to_label').trim(),
+                        roomByLabel: interaction.fields.getTextInputValue('room_by_label').trim(),
+                        requestAcceptLabel: interaction.fields.getTextInputValue('accept_label').trim(),
+                        requestRejectLabel: interaction.fields.getTextInputValue('reject_label').trim()
+                    };
+                    saveRoomConfig(config);
+                    await interaction.reply({ content: '✅ تم تحديث نصوص رسالة الروم والأزرار.', flags: 64 });
+                    return;
+                }
             }
         } catch (error) {
             console.error('❌ خطأ في معالجة تفاعل setroom:', error);
         }
     });
 
-    // معالج رسائل الإيموجي
     client.on('messageCreate', async (message) => {
         await handleEmojiMessage(message, client);
         if (message.author.bot) return;
@@ -1913,7 +2291,6 @@ function registerHandlers(client) {
                 try {
                     await message.react(reaction);
                 } catch (error) {
-                    // محاولة استخدام آيدي الإيموجي إذا فشل
                     const emojiIdMatch = reaction.match(/<a?:\w+:(\d+)>/);
                     if (emojiIdMatch) {
                         try {
@@ -1927,57 +2304,33 @@ function registerHandlers(client) {
         }
     });
 
-    // معالج حذف الرسائل - لإعادة إرسال الإمبد فوراً
     client.on('messageDelete', async (message) => {
         try {
-            // التحقق من أن الرسالة في روم محمي
             if (roomEmbedMessages.has(message.channel.id)) {
                 const roomData = roomEmbedMessages.get(message.channel.id);
-
-                // التحقق من أن الرسالة المحذوفة هي رسالة الإمبد
                 if (message.id === roomData.messageId) {
-                    console.log(`⚠️ تم حذف رسالة الإمبد في ${message.channel.name} - إعادة الإرسال فوراً`);
+                    const channel = await client.channels.fetch(roomData.channelId).catch(() => null);
+                    if (!channel) return;
 
-                    try {
-                        const channel = await client.channels.fetch(roomData.channelId);
-                        if (!channel) return;
+                    const newMessage = await channel.send({ content: roomData.content });
+                    if (roomData.imageUrl) {
+                        await channel.send({ content: roomData.imageUrl }).catch(() => {});
+                    }
 
-                        const newMessage = await channel.send({ 
-                            content: '@here', 
-                            embeds: [roomData.embed] 
-                        });
+                    roomEmbedMessages.set(channel.id, { ...roomData, messageId: newMessage.id });
 
-                        console.log(`✅ تم إعادة إرسال رسالة الإمبد في ${channel.name}`);
-
-                        // تحديث معلومات الرسالة
-                        roomEmbedMessages.set(channel.id, {
-                            ...roomData,
-                            messageId: newMessage.id
-                        });
-
-                        // إعادة إضافة الريآكتات
-                        for (const reaction of roomData.emojis) {
-                            try {
-                                await newMessage.react(reaction);
-                            } catch (error) {
-                                const emojiIdMatch = reaction.match(/<a?:\w+:(\d+)>/);
-                                if (emojiIdMatch) {
-                                    try {
-                                        await newMessage.react(emojiIdMatch[1]);
-                                    } catch (err) {
-                                        console.error('فشل في إضافة الريآكت:', err.message);
-                                    }
-                                }
+                    for (const reaction of roomData.emojis) {
+                        try {
+                            await newMessage.react(reaction);
+                        } catch (error) {
+                            const emojiIdMatch = reaction.match(/<a?:\w+:(\d+)>/);
+                            if (emojiIdMatch) {
+                                try { await newMessage.react(emojiIdMatch[1]); } catch (err) {}
                             }
                         }
-                    } catch (error) {
-                        console.error('❌ فشل في إعادة إرسال الإمبد:', error);
                     }
                 }
             }
-
-            // تم إزالة التحقق اليدوي لرسائل سيتب روم - سيتم إعادة الإرسال تلقائياً كل 3 دقائق
-
         } catch (error) {
             console.error('❌ خطأ في معالج حذف الرسائل:', error);
         }
@@ -1987,420 +2340,17 @@ function registerHandlers(client) {
 }
 
 async function execute(message, args, { BOT_OWNERS, client }) {
-    // التحقق من الصلاحيات
-    if (!message.member.permissions.has(PermissionFlagsBits.Administrator) && 
-        !BOT_OWNERS.includes(message.author.id)) {
+    if (!canManageSetroom(message.member, message.author.id, BOT_OWNERS)) {
         await message.reply('❌ **هذا الأمر متاح للمسؤولين فقط**');
         return;
     }
 
-    const guildId = message.guild.id;
-    
-    // فحص sub-command
-    const subCommand = args[0]?.toLowerCase();
-    
-    // معالجة sub-command "category"
-    if (subCommand === 'ctg') {
-        const config = loadRoomConfig();
-        
-        if (!config[guildId]) {
-            config[guildId] = {};
-        }
-        
-        const categoryId = args[1];
-        
-        // إذا لم يتم تحديد ID، أظهر الحالة الحالية
-        if (!categoryId) {
-            const currentCategory = config[guildId].roomsCategoryId;
-            if (currentCategory) {
-                const category = message.guild.channels.cache.get(currentCategory);
-                const categoryName = category ? category.name : 'غير موجود';
-                await message.reply(`📁 **الكاتيقوري الحالي :** ${categoryName} (\`${currentCategory}\`)\n\n**للتغيير :** \`setroom ctg <ID>\`\n**للإزالة :** \`setroom ctg remove\``);
-            } else {
-                await message.reply('📁 **لم يتم تحديد كاتوقري للرومات**\n\n**للتحديد :** \`setroom ctg <ID>\`');
-            }
-            return;
-        }
-        
-        // إزالة الكاتيجوري
-        if (categoryId.toLowerCase() === 'remove' || categoryId.toLowerCase() === 'delete') {
-            delete config[guildId].roomsCategoryId;
-            saveRoomConfig(config);
-            await message.reply('✅ **تم إزالة الكاتيقوري - الرومات الجديدة ستنشأ بدون كاتيثوري**');
-            return;
-        }
-        
-        // التحقق من وجود الكاتيجوري
-        const category = message.guild.channels.cache.get(categoryId);
-        if (!category || category.type !== ChannelType.GuildCategory) {
-            await message.reply('❌ **الكاتوقري غير موجود أو ID غير صحيح**\n\n**طريقة الحصول على ID :**\n1. فعّل وضع الديفوليبر في Discord\n2. اضغط كليك يمين على الكاتيقوري\n3. اختر "Copy ID"');
-            return;
-        }
-        
-        // حفظ الكاتيجوري
-        config[guildId].roomsCategoryId = categoryId;
-        saveRoomConfig(config);
-        
-        await message.reply(`✅ **تم تحديد الكاتيجوري بنجاح**\n\n📁 ** الكاتيجوري :** ${category.name}\n🆔 **ID :** \`${categoryId}\`\n\n**الآن رومات الميلاد والدعاء ستنشأ في هذا الكاتيجوري**`);
-        return;
-    }
-    
-    // معالجة sub-command "embed"
-    if (subCommand === 'embed') {
-        const config = loadRoomConfig();
-        const guildConfig = config[guildId];
-        
-        if (!guildConfig) {
-            await message.reply('❌ **لم يتم إعداد نظام الرومات بعد. استخدم `/setroom` لإعداد النظام أولاً**');
-            return;
-        }
-        
-        // تبديل حالة الإيمبد
-        const currentState = guildConfig.embedEnabled !== false; // افتراضياً مفعّل
-        const newState = !currentState;
-        
-        config[guildId].embedEnabled = newState;
-        saveRoomConfig(config);
-        
-        // إرسال رسالة التأكيد
-        const statusEmoji = newState ? '✅' : '☑️';
-        const statusText = newState ? 'مفعّل' : 'ملغي';
-        const statusDesc = newState 
-            ? '**سيتم إرسال الصورة داخل Embed**' 
-            : '**سيتم إرسال الصورة عادية فقط (بدون Embed)**';
-        
-        const toggleEmbed = colorManager.createEmbed()
-            .setTitle(`${statusEmoji} **تم ${newState ? 'تفعيل' : 'إلغاء'} وضع Embed**`)
-            .setDescription(`${statusDesc}\n\nالحالة: **${statusText}**`)
-            .setFooter({ text: 'سيتم تطبيق التغيير في الإيمبد التالي' });
-        
-        const sentMsg = await message.reply({ embeds: [toggleEmbed] });
-        
-        // إضافة الرياكشن
-        await sentMsg.react(statusEmoji);
-        
-        // إعادة إرسال الإيمبد بالإعدادات الجديدة
-        if (guildConfig.embedChannelId) {
-            try {
-                await resendSetupEmbed(guildId, client);
-                await message.channel.send('✅ **تم تحديث الإيمبد بنجاح**');
-            } catch (error) {
-                console.error('خطأ في إعادة إرسال الإيمبد:', error);
-                await message.channel.send('⚠️ **تم حفظ الإعدادات، لكن فشل تحديث الإيمبد. سيتم تحديثه تلقائياً قريباً**');
-            }
-        }
-        
-        return;
-    }
-    
-    // معالجة sub-command "t" أو "text" لتغيير نص الألوان
-    if (subCommand === 't' || subCommand === 'text') {
-        const config = loadRoomConfig();
-        
-        if (!config[guildId]) {
-            config[guildId] = {};
-        }
-        
-        const newText = args.slice(1).join(' ');
-        
-        // إذا لم يتم تحديد نص، أظهر الحالة الحالية
-        if (!newText) {
-            const currentText = config[guildId].colorsTitle;
-            if (currentText === '') {
-                await message.reply('📝 **نص الألوان :** محذوف (لا يوجد نص)\n\n**للتغيير :** `setroom t <النص الجديد>`\n**للإزالة :** `setroom t remove`\n**للافتراضي :** `setroom t default`');
-            } else if (currentText) {
-                await message.reply(`📝 **نص الألوان الحالي :** ${currentText}\n\n**للتغيير :** \`setroom t <النص الجديد>\`\n**للإزالة :** \`setroom t remove\`\n**للافتراضي :** \`setroom t default\``);
-            } else {
-                await message.reply('📝 **نص الألوان :** Colors list : (الافتراضي)\n\n**للتغيير :** `setroom t <النص الجديد>`\n**للإزالة :** `setroom t remove`');
-            }
-            return;
-        }
-        
-        // إزالة النص
-        if (newText.toLowerCase() === 'remove' || newText.toLowerCase() === 'delete' || newText === 'حذف' || newText === 'ازالة') {
-            config[guildId].colorsTitle = '';
-            saveRoomConfig(config);
-            await message.reply('✅ **تم إزالة نص الألوان - لن يظهر أي نص فوق المربعات**');
-            
-            // إعادة إرسال الإيمبد
-            if (config[guildId].embedChannelId) {
-                try {
-                    await resendSetupEmbed(guildId, client);
-                } catch (error) {
-                    console.error('خطأ في إعادة إرسال الإيمبد:', error);
-                }
-            }
-            return;
-        }
-        
-        // إعادة للافتراضي
-        if (newText.toLowerCase() === 'default' || newText === 'افتراضي') {
-            delete config[guildId].colorsTitle;
-            saveRoomConfig(config);
-            await message.reply('✅ **تم إعادة نص الألوان للافتراضي :** Colors list :');
-            
-            // إعادة إرسال الإيمبد
-            if (config[guildId].embedChannelId) {
-                try {
-                    await resendSetupEmbed(guildId, client);
-                } catch (error) {
-                    console.error('خطأ في إعادة إرسال الإيمبد:', error);
-                }
-            }
-            return;
-        }
-        
-        // تحديد نص جديد
-        if (newText.length > 50) {
-            await message.reply('❌ **النص طويل جداً - الحد الأقصى 50 حرف**');
-            return;
-        }
-        
-        config[guildId].colorsTitle = newText;
-        saveRoomConfig(config);
-        
-        await message.reply(`✅ **تم تغيير نص الألوان إلى :** ${newText}`);
-        
-        // إعادة إرسال الإيمبد
-        if (config[guildId].embedChannelId) {
-            try {
-                await resendSetupEmbed(guildId, client);
-                await message.channel.send('✅ **تم تحديث الإيمبد بنجاح**');
-            } catch (error) {
-                console.error('خطأ في إعادة إرسال الإيمبد:', error);
-            }
-        }
-        
-        return;
-    }
+    const config = loadRoomConfig();
+    const guildConfig = getGuildConfigWithDefaults(config, message.guild.id);
+    saveRoomConfig(config);
 
-    // الخطوة 1: طلب روم الطلبات
-    const step1Embed = colorManager.createEmbed()
-        .setTitle('**إعداد نظام الرومات**')
-        .setDescription('**الخطوة 1/3: منشن روم الطلبات**\n\nقم بعمل منشن للروم الذي سيتم إرسال الطلبات فيه\n\n**📌 دليل صيغ الوقت المدعومة:**\n```\n⏰ فوري:\n• الآن / فوراً / دحين / الحين / توني\n\n⏱️ ثواني/دقائق:\n• بعد 30 ثانية / بعد ثانية\n• بعد دقيقة / بعد 5 دقائق / دقيقتين\n\n🕐 ساعات:\n• بعد ساعة / بعد ساعتين / بعد 3 ساعات\n• 12 صباحاً / 5 مساءً / الساعة 8\n\n📅 أيام:\n• غداً / غدا / بكره / بكرة / غدوة\n• بكره الساعة 10 / غداً 5 مساءً\n• بعد يوم / بعد 3 أيام\n\n⏳ أخرى:\n• شوي (بعد 10 دقائق)```')
-        .setFooter({ text: 'لديك 60 ثانية للرد' });
-
-    await message.channel.send({ embeds: [step1Embed] });
-
-    const filter = m => m.author.id === message.author.id;
-    const collector = message.channel.createMessageCollector({ filter, time: 60000, max: 1 });
-
-    collector.on('collect', async (msg1) => {
-        const requestsChannel = msg1.mentions.channels.first();
-        if (!requestsChannel) {
-            await message.channel.send('❌ **لم يتم العثور على الروم. حاول مرة أخرى**');
-            return;
-        }
-
-        // الخطوة 2: طلب روم الإيمبد
-        const step2Embed = colorManager.createEmbed()
-            .setTitle('**إعداد نظام الرومات**')
-            .setDescription('**الخطوة 2/3: منشن روم الإيمبد**\n\nقم بعمل منشن للروم الذي سيتم إرسال الإيمبد فيه')
-            .setFooter({ text: 'لديك 60 ثانية للرد' });
-
-        await message.channel.send({ embeds: [step2Embed] });
-
-        const collector2 = message.channel.createMessageCollector({ filter, time: 60000, max: 1 });
-
-        collector2.on('collect', async (msg2) => {
-            const embedChannel = msg2.mentions.channels.first();
-            if (!embedChannel) {
-                await message.channel.send('❌ **لم يتم العثور على الروم. حاول مرة أخرى**');
-                return;
-            }
-
-            // الخطوة 3: طلب الصورة
-            const step3Embed = colorManager.createEmbed()
-                .setTitle('**إعداد نظام الرومات**')
-                .setDescription('**الخطوة 3/3: أرسل الصورة**\n\nأرسل الصورة (إرفاق أو رابط)\n\n**ملاحظة:** سيتم إضافة جميع الرولات الملونة من السيرفر تلقائياً في منيو الألوان')
-                .setFooter({ text: 'لديك 120 ثانية للرد' });
-
-            await message.channel.send({ embeds: [step3Embed] });
-
-            const collector3 = message.channel.createMessageCollector({ filter, time: 120000, max: 1 });
-
-            collector3.on('collect', async (msg3) => {
-                let imageUrl = null;
-
-                // التحقق من المرفقات
-                if (msg3.attachments.size > 0) {
-                    const attachment = msg3.attachments.first();
-                    if (attachment.contentType && attachment.contentType.startsWith('image/')) {
-                        imageUrl = attachment.url;
-                    }
-                } 
-                // التحقق من الرابط
-                else if (msg3.content.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp)/i)) {
-                    imageUrl = msg3.content;
-                }
-
-                if (!imageUrl) {
-                    await message.channel.send('❌ **لم يتم العثور على صورة صحيحة. حاول مرة أخرى**');
-                    return;
-                }
-
-                // جلب جميع الأدوار التي أسماؤها أرقام صافية فقط من السيرفر
-                const allRoles = message.guild.roles.cache;
-                let colorRoleData = [];
-
-                // جمع الأدوار التي أسماؤها أرقام صافية فقط (مثل "1", "2", "3")
-                const usedNumbers = new Set();
-                const tempRoleData = [];
-                
-                allRoles.forEach(role => {
-                    // التحقق من أن الاسم بالكامل رقم فقط (لا يحتوي على أحرف أو مسافات)
-                    const trimmedName = role.name.trim();
-                    const isNumberOnly = /^\d+$/.test(trimmedName);
-
-                    if (isNumberOnly && !role.managed && role.id !== message.guild.id) {
-                        const roleNumber = parseInt(trimmedName);
-                        
-                        // تجاهل الرول إذا كان الرقم مستخدم بالفعل (رول مكرر)
-                        if (!usedNumbers.has(roleNumber)) {
-                            tempRoleData.push({
-                                id: role.id,
-                                number: roleNumber
-                            });
-                            usedNumbers.add(roleNumber);
-                        }
-                    }
-                });
-
-                // ترتيب الأرقام تصاعدياً
-                tempRoleData.sort((a, b) => a.number - b.number);
-
-                // فلترة الأرقام البعيدة (الحد الأقصى: 10 أرقام عن آخر رقم مقبول)
-                const MAX_GAP = 10;
-                if (tempRoleData.length > 0) {
-                    let lastAcceptedNumber = tempRoleData[0].number;
-                    colorRoleData.push(tempRoleData[0]);
-                    console.log(`✅ تم إضافة رول اللون: ${tempRoleData[0].number} (${tempRoleData[0].id})`);
-
-                    for (let i = 1; i < tempRoleData.length; i++) {
-                        const currentNumber = tempRoleData[i].number;
-                        const gap = currentNumber - lastAcceptedNumber;
-
-                        if (gap <= MAX_GAP) {
-                            colorRoleData.push(tempRoleData[i]);
-                            lastAcceptedNumber = currentNumber;
-                            console.log(`✅ تم إضافة رول اللون: ${currentNumber} (${tempRoleData[i].id})`);
-                        } else {
-                            console.warn(`⚠️ تم تجاهل رول بعيد: ${currentNumber} - الفرق ${gap} أرقام عن آخر رقم مقبول (${lastAcceptedNumber})`);
-                        }
-                    }
-                }
-
-                // إذا لم يكن هناك رولات ألوان، قم بإنشاء 7 ألوان عشوائية
-                if (colorRoleData.length === 0) {
-                    const loadingMsg = await message.channel.send('⏳ **لا توجد رولات ألوان... جاري إنشاء 7 ألوان تلقائياً...**');
-
-                    // ألوان عشوائية جميلة
-                    const randomColors = [
-                        '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4',
-                        '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F',
-                        '#A29BFE', '#FD79A8', '#FDCB6E', '#6C5CE7',
-                        '#00B894', '#E17055', '#74B9FF', '#A29BFE'
-                    ];
-
-                    // خلط الألوان عشوائياً
-                    const shuffledColors = randomColors.sort(() => Math.random() - 0.5);
-
-                    // إنشاء 7 رولات
-                    for (let i = 1; i <= 7; i++) {
-                        try {
-                            const color = shuffledColors[i - 1];
-                            const newRole = await message.guild.roles.create({
-                                name: i.toString(),
-                                color: color,
-                                reason: 'تم إنشاء رول لون تلقائياً بواسطة نظام setroom'
-                            });
-
-                            colorRoleData.push({
-                                id: newRole.id,
-                                number: i
-                            });
-
-                            console.log(`✅ تم إنشاء رول لون: ${i} - ${color}`);
-                        } catch (roleError) {
-                            console.error(`❌ فشل في إنشاء رول اللون ${i}:`, roleError);
-                        }
-                    }
-
-                    await loadingMsg.edit(`✅ **تم إنشاء ${colorRoleData.length} رول لون بنجاح!**`);
-
-                    // انتظار ثانيتين قبل المتابعة
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-                }
-
-                // ترتيب الأدوار حسب الرقم
-                colorRoleData.sort((a, b) => a.number - b.number);
-
-                const colorRoleIds = colorRoleData.map(r => r.id);
-
-                // حفظ الصورة محلياً
-                const savingMsg = await message.channel.send('⏳ **جاري حفظ الصورة...**');
-                const localImagePath = await saveImageLocally(imageUrl, guildId);
-                
-                if (!localImagePath) {
-                    await savingMsg.edit('❌ **فشل في حفظ الصورة محلياً. حاول مرة أخرى**');
-                    return;
-                }
-                
-                await savingMsg.delete().catch(() => {});
-
-                // حفظ الإعدادات
-                const config = loadRoomConfig();
-                config[guildId] = {
-                    requestsChannelId: requestsChannel.id,
-                    embedChannelId: embedChannel.id,
-                    imageUrl: imageUrl,
-                    localImagePath: localImagePath,
-                    colorRoleIds: colorRoleIds,
-                    setupBy: message.author.id,
-                    setupAt: Date.now()
-                };
-
-                if (saveRoomConfig(config)) {
-                        const setupMessage = await sendSetupMessage(embedChannel, message.guild, config[guildId]);
-                        console.log(`📤 تم إرسال setup embed للمرة الأولى - جاري التحقق...`);
-
-                        // حفظ رسالة السيتب للحماية من الحذف
-                        setupEmbedMessages.set(guildId, {
-                            messageId: setupMessage.id,
-                            channelId: embedChannel.id,
-                            imageUrl: imageUrl
-                        });
-
-                        saveSetupEmbedMessages(setupEmbedMessages);
-
-                        console.log(`✅ تم إرسال setup embed بنجاح - سيتم تحديثه تلقائياً كل 3 دقائق`);
-
-                        // رسالة نجاح
-                        const successEmbed = colorManager.createEmbed()
-                            .setTitle('✅ **تم الإعداد بنجاح**')
-                            .setDescription(`**تم إعداد نظام الرومات بنجاح مع نظام الفحص المتقدم!**\n\n روم الطلبات : ${requestsChannel}\nروم الإيمبد : ${embedChannel}\n عدد الرولات الملونة : ${colorRoleIds.length}`)
-                            .setTimestamp();
-
-                        await message.channel.send({ embeds: [successEmbed] });
-
-                        // تسجيل الحدث
-                        logEvent(client, message.guild, {
-                            type: 'SETUP_ACTIONS',
-                            title: 'إعداد نظام الغرف',
-                            description: `تم إعداد نظام طلبات الغرف`,
-                            user: message.author,
-                            fields: [
-                                { name: 'روم الطلبات', value: requestsChannel.name, inline: true },
-                                { name: 'روم الإيمبد', value: embedChannel.name, inline: true },
-                                { name: 'عدد الألوان', value: colorRoleIds.length.toString(), inline: true }
-                            ]
-                        });
-                    } else {
-                        await message.channel.send('❌ **فشل في حفظ الإعدادات**');
-                    }
-            });
-        });
-    });
+    const statusEmbed = getSetroomSummaryEmbed(message.guild, guildConfig, message.author);
+    await message.reply({ embeds: [statusEmbed], components: createSetroomMainRows() });
 }
 
 async function handleRoleUpdate(oldRole, newRole, client) {
