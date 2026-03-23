@@ -1977,14 +1977,14 @@ function createSetroomPreviewRows() {
             new ButtonBuilder().setCustomId('setroom_preview_box_right').setLabel('مربعات →').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('setroom_preview_box_up').setLabel('مربعات ↑').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('setroom_preview_box_down').setLabel('مربعات ↓').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('setroom_preview_box_scale').setLabel('حجم المربعات').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId('setroom_preview_box_scale_less').setLabel('مربعات -').setStyle(ButtonStyle.Secondary)
         ),
         new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('setroom_preview_box_scale_more').setLabel('مربعات +').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('setroom_preview_gap_less').setLabel('Gap -').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('setroom_preview_gap_more').setLabel('Gap +').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('setroom_preview_text_size_less').setLabel('نص -').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('setroom_preview_text_size_more').setLabel('نص +').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('setroom_preview_show_image').setLabel('عرض المعاينة').setStyle(ButtonStyle.Primary)
+            new ButtonBuilder().setCustomId('setroom_preview_text_size_more').setLabel('نص +').setStyle(ButtonStyle.Secondary)
         ),
         new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('setroom_preview_text_left').setLabel('نص ←').setStyle(ButtonStyle.Secondary),
@@ -2016,16 +2016,35 @@ function canReviewRoomRequest(member, guildConfig, action, userId, botOwners = [
     return memberHasAnyRole(member, roleIds);
 }
 
-async function refreshSetroomPanelMessage(interaction, guildConfig, extra = {}) {
-    const embed = getSetroomSummaryEmbed(interaction.guild, guildConfig, interaction.user);
+async function buildSetroomPanelPayload(guild, guildConfig, actor, extra = {}) {
+    const embed = getSetroomSummaryEmbed(guild, guildConfig, actor);
     const components = extra.preview ? createSetroomPreviewRows() : createSetroomMainRows();
+    const payload = { embeds: [embed], components };
+
+    if (extra.preview) {
+        const previewPath = await createColorsImage(guild, guildConfig);
+        if (previewPath && fs.existsSync(previewPath)) {
+            const attachment = new AttachmentBuilder(previewPath, { name: 'setroom_preview.png' });
+            embed.setImage('attachment://setroom_preview.png');
+            payload.files = [attachment];
+        } else {
+            embed.setImage(null);
+        }
+    }
+
+    if (extra.payload) Object.assign(payload, extra.payload);
+    return payload;
+}
+
+async function refreshSetroomPanelMessage(interaction, guildConfig, extra = {}) {
+    const payload = await buildSetroomPanelPayload(interaction.guild, guildConfig, interaction.user, extra);
     if (interaction.deferred || interaction.replied) {
-        return interaction.editReply({ embeds: [embed], components, ...extra.payload });
+        return interaction.editReply(payload);
     }
     if (interaction.isButton() || interaction.isAnySelectMenu?.()) {
-        return interaction.update({ embeds: [embed], components, ...extra.payload });
+        return interaction.update(payload);
     }
-    return interaction.reply({ embeds: [embed], components, flags: 64, ...extra.payload });
+    return interaction.reply({ ...payload, flags: 64 });
 }
 
 async function syncSetupMessageForGuild(guild, client) {
@@ -2180,17 +2199,6 @@ function registerHandlers(client) {
                     await interaction.reply({ content: '✅ تم حفظ المعاينة وتعيينها على رسالة السيتب.', flags: 64 });
                     return;
                 }
-
-                if (customId === 'setroom_preview_show_image') {
-                    const previewPath = await createColorsImage(interaction.guild, guildConfig);
-                    if (!previewPath || !fs.existsSync(previewPath)) {
-                        await interaction.reply({ content: '❌ تعذر إنشاء صورة المعاينة حالياً.', flags: 64 });
-                        return;
-                    }
-                    await interaction.reply({ content: '🖼️ هذه معاينة الإعدادات الحالية.', files: [new AttachmentBuilder(previewPath)], flags: 64 });
-                    return;
-                }
-
                 if (customId.startsWith('setroom_preview_')) {
                     const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
                     switch (customId) {
@@ -2198,7 +2206,8 @@ function registerHandlers(client) {
                         case 'setroom_preview_box_right': layout.boxOffsetX += 15; break;
                         case 'setroom_preview_box_up': layout.boxOffsetY -= 15; break;
                         case 'setroom_preview_box_down': layout.boxOffsetY += 15; break;
-                        case 'setroom_preview_box_scale': layout.boxScale = layout.boxScale >= 1.5 ? 0.8 : Number((layout.boxScale + 0.1).toFixed(2)); break;
+                        case 'setroom_preview_box_scale_less': layout.boxScale = Math.max(0.5, Number((layout.boxScale - 0.1).toFixed(2))); break;
+                        case 'setroom_preview_box_scale_more': layout.boxScale = Math.min(2, Number((layout.boxScale + 0.1).toFixed(2))); break;
                         case 'setroom_preview_gap_less': layout.boxGap = Math.max(0.5, Number((layout.boxGap - 0.1).toFixed(2))); break;
                         case 'setroom_preview_gap_more': layout.boxGap = Math.min(2, Number((layout.boxGap + 0.1).toFixed(2))); break;
                         case 'setroom_preview_text_size_less': layout.textScale = Math.max(0.5, Number((layout.textScale - 0.1).toFixed(2))); break;
