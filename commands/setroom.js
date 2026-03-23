@@ -10,6 +10,9 @@ const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch
 const name = 'setroom';
 const SETROOM_TEXT_MOVE_STEP = 20;
 const SETROOM_TEXT_SCALE_STEP = 0.05;
+const SETROOM_GAP_STEP = 0.15;
+const SETROOM_GAP_MIN = 0.2;
+const SETROOM_GAP_MAX = 6;
 
 // مسار ملف إعدادات الغرف
 const roomConfigPath = path.join(__dirname, '..', 'data', 'roomConfig.json');
@@ -915,7 +918,7 @@ async function createColorsImage(guild, guildConfig) {
         const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
         const scaleFactor = canvasWidth / 1024;
         const boxSize = Math.max(18, 60 * scaleFactor * layout.boxScale);
-        const gap = Math.max(2, 12 * scaleFactor * layout.boxGap);
+        const gap = Math.max(2, 20 * scaleFactor * layout.boxGap);
         const cornerRadius = Math.max(4, 10 * scaleFactor);
 
         const colorsPerRow = 10; // عدد الألوان في كل صف
@@ -2133,8 +2136,8 @@ function createSetroomPreviewRows(guildConfig = {}) {
         ),
         new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('setroom_preview_box_scale_more').setLabel('مربعات +').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('setroom_preview_gap_less').setLabel('Gap -').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('setroom_preview_gap_more').setLabel('Gap +').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_gap_less').setLabel('Gap - تقليل').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_gap_more').setLabel('Gap + زيادة').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('setroom_preview_text_size_less').setLabel('نص -').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('setroom_preview_text_size_more').setLabel('نص +').setStyle(ButtonStyle.Secondary)
         ),
@@ -2394,8 +2397,8 @@ function registerHandlers(client) {
                         case 'setroom_preview_box_down': layout.boxOffsetY += 10; break;
                         case 'setroom_preview_box_scale_less': layout.boxScale = Math.max(0.3, Number((layout.boxScale - 0.02).toFixed(2))); break;
                         case 'setroom_preview_box_scale_more': layout.boxScale = Math.min(3, Number((layout.boxScale + 0.02).toFixed(2))); break;
-                        case 'setroom_preview_gap_less': layout.boxGap = Math.max(0.2, Number((layout.boxGap - 0.02).toFixed(2))); break;
-                        case 'setroom_preview_gap_more': layout.boxGap = Math.min(3, Number((layout.boxGap + 0.02).toFixed(2))); break;
+                        case 'setroom_preview_gap_less': layout.boxGap = Math.max(SETROOM_GAP_MIN, Number((layout.boxGap - SETROOM_GAP_STEP).toFixed(2))); break;
+                        case 'setroom_preview_gap_more': layout.boxGap = Math.min(SETROOM_GAP_MAX, Number((layout.boxGap + SETROOM_GAP_STEP).toFixed(2))); break;
                         case 'setroom_preview_text_size_less':
                             layout.textScale = Math.max(0.3, Number((layout.textScale - SETROOM_TEXT_SCALE_STEP).toFixed(2)));
                             break;
