@@ -8,6 +8,8 @@ const { createCanvas, registerFont, loadImage } = require('canvas');
 const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 
 const name = 'setroom';
+const SETROOM_TEXT_MOVE_STEP = 20;
+const SETROOM_TEXT_SCALE_STEP = 0.05;
 
 // مسار ملف إعدادات الغرف
 const roomConfigPath = path.join(__dirname, '..', 'data', 'roomConfig.json');
@@ -36,8 +38,11 @@ function getColorConfigHash(guildConfig) {
     const data = JSON.stringify({
         colorRoleIds: guildConfig.colorRoleIds || [],
         colorsTitle: guildConfig.colorsTitle || '',
+        textColor: guildConfig.textColor || '#ffffff',
+        guildIconEnabled: guildConfig.guildIconEnabled || false,
         imageUrl: guildConfig.imageUrl || '',
-        localImagePath: guildConfig.localImagePath || ''
+        localImagePath: guildConfig.localImagePath || '',
+        layoutSettings: { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) }
     });
     let hash = 0;
     for (let i = 0; i < data.length; i++) {
@@ -909,9 +914,9 @@ async function createColorsImage(guild, guildConfig) {
         // إعدادات المعاينة/التخصيص
         const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
         const scaleFactor = canvasWidth / 1024;
-        const boxSize = Math.max(30, Math.round(60 * scaleFactor * layout.boxScale));
-        const gap = Math.max(4, Math.round(12 * scaleFactor * layout.boxGap));
-        const cornerRadius = Math.max(6, Math.round(10 * scaleFactor));
+        const boxSize = Math.max(18, 60 * scaleFactor * layout.boxScale);
+        const gap = Math.max(2, 12 * scaleFactor * layout.boxGap);
+        const cornerRadius = Math.max(4, 10 * scaleFactor);
 
         const colorsPerRow = 10; // عدد الألوان في كل صف
         const totalColors = guildConfig.colorRoleIds.length;
@@ -931,24 +936,56 @@ async function createColorsImage(guild, guildConfig) {
         const baseStartY = rows > 1 
             ? (canvasHeight - totalBoxesHeight) / 2
             : (canvasHeight * 0.6) - (totalBoxesHeight / 2);
-        const startX = baseStartX + layout.boxOffsetX;
-        const startY = baseStartY + layout.boxOffsetY;
+        const startX = baseStartX + (layout.boxOffsetX * scaleFactor);
+        const startY = baseStartY + (layout.boxOffsetY * scaleFactor);
         
         // الحصول على النص المخصص من الإعدادات
         const colorsTitle = guildConfig.colorsTitle !== undefined ? guildConfig.colorsTitle : 'Colors list :';
         
+        const titleFontSize = Math.max(16, Math.round(26 * scaleFactor * layout.textScale));
+        const textOffsetX = (150 * scaleFactor) + (layout.textOffsetX * scaleFactor);
+        const textOffsetY = (33 * scaleFactor) + (layout.textOffsetY * scaleFactor);
+        const textColor = normalizeHexColor(guildConfig.textColor, '#ffffff');
+        const titleX = startX - textOffsetX;
+        const titleY = startY - textOffsetY;
+
+        if (guildConfig.guildIconEnabled && guild.iconURL()) {
+            try {
+                const guildIconSize = Math.max(28, 64 * scaleFactor * layout.guildScale);
+                const guildIconX = titleX - guildIconSize - (20 * scaleFactor);
+                const guildIconY = titleY - (guildIconSize * 0.65);
+                const guildIconBuffer = await fetch(guild.iconURL({ extension: 'png', size: 256 })).then(res => {
+                    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+                    return res.arrayBuffer();
+                });
+                const guildIconImage = await loadImage(Buffer.from(guildIconBuffer));
+                const ringRadius = (guildIconSize / 2) + Math.max(4, 4 * scaleFactor);
+
+                ctx.save();
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.beginPath();
+                ctx.arc(guildIconX + (guildIconSize / 2), guildIconY + (guildIconSize / 2), ringRadius, 0, Math.PI * 2);
+                ctx.fillStyle = '#FFFFFF';
+                ctx.shadowColor = 'rgba(0, 0, 0, 0.25)';
+                ctx.shadowBlur = Math.max(4, 8 * scaleFactor);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+                ctx.drawImage(guildIconImage, guildIconX, guildIconY, guildIconSize, guildIconSize);
+                ctx.restore();
+            } catch (guildIconError) {
+                console.error('⚠️ تعذر تحميل أيقونة السيرفر للمعاينة:', guildIconError.message);
+            }
+        }
+
         // رسم النص فقط إذا لم يكن فارغاً
         if (layout.showText && colorsTitle && colorsTitle.length > 0) {
-            const titleFontSize = Math.max(16, Math.round(26 * scaleFactor * layout.textScale));
-            const textOffsetX = Math.max(0, Math.round(150 * scaleFactor) + layout.textOffsetX);
-            const textOffsetY = Math.round(33 * scaleFactor) + layout.textOffsetY;
-            
-            ctx.fillStyle = '#ffffff';
+            ctx.fillStyle = textColor;
             ctx.font = `bold ${titleFontSize}px Arial`;
             ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
             ctx.shadowBlur = Math.max(6, Math.round(10 * scaleFactor));
             ctx.textAlign = 'left';
-            ctx.fillText(colorsTitle, startX - textOffsetX, startY - textOffsetY);
+            ctx.fillText(colorsTitle, titleX, titleY);
             ctx.shadowBlur = 0;
         }
         
@@ -1002,6 +1039,24 @@ async function createColorsImage(guild, guildConfig) {
         console.error('خطأ في إنشاء صورة الألوان:', error);
         return null;
     }
+}
+
+function normalizeHexColor(input, fallback = '#ffffff') {
+    if (!input) return fallback;
+    const value = input.trim();
+    const shortHexMatch = /^#?([0-9a-fA-F]{3})$/;
+    const fullHexMatch = /^#?([0-9a-fA-F]{6})$/;
+
+    if (shortHexMatch.test(value)) {
+        const shortHex = value.replace('#', '').toUpperCase();
+        return `#${shortHex.split('').map(char => char + char).join('')}`;
+    }
+
+    if (fullHexMatch.test(value)) {
+        return `#${value.replace('#', '').toUpperCase()}`;
+    }
+
+    return fallback;
 }
 
 // دالة للحصول على لون نص متباين
@@ -1905,7 +1960,73 @@ function getDefaultLayoutSettings() {
         textOffsetX: 0,
         textOffsetY: 0,
         textScale: 1,
+        guildScale: 1,
         showText: true
+    };
+}
+
+
+const SETROOM_PREVIEW_PRESETS = {
+    very_small: { label: 'صغير جدًا', boxScale: 0.7, textScale: 0.75, boxGap: 0.85 },
+    small: { label: 'صغير', boxScale: 0.85, textScale: 0.9, boxGap: 0.95 },
+    large: { label: 'كبير', boxScale: 1.15, textScale: 1.1, boxGap: 1.05 },
+    very_large: { label: 'كبير جدًا', boxScale: 1.35, textScale: 1.25, boxGap: 1.15 }
+};
+
+async function getSetroomDynamicLayoutSettings(guild, guildConfig = {}) {
+    const defaultLayout = getDefaultLayoutSettings();
+    const totalColors = guildConfig.colorRoleIds?.length || 0;
+    const rows = Math.max(1, Math.ceil(totalColors / 10));
+
+    let imageWidth = 1024;
+    let imageHeight = 1024;
+
+    try {
+        let backgroundImage = null;
+
+        if (guildConfig.localImagePath && fs.existsSync(guildConfig.localImagePath)) {
+            backgroundImage = await loadImage(guildConfig.localImagePath);
+        } else if (guildConfig.imageUrl) {
+            const response = await fetch(guildConfig.imageUrl);
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            const arrayBuffer = await response.arrayBuffer();
+            backgroundImage = await loadImage(Buffer.from(arrayBuffer));
+        }
+
+        if (backgroundImage) {
+            imageWidth = backgroundImage.width || imageWidth;
+            imageHeight = backgroundImage.height || imageHeight;
+        }
+    } catch (error) {
+        console.error('⚠️ تعذر حساب المقاس الديناميكي، سيتم استخدام الوضع الافتراضي:', error.message);
+    }
+
+    const scaleFactor = imageWidth / 1024;
+    const widthTarget = imageWidth * 0.82;
+    const heightTarget = imageHeight * (rows > 1 ? 0.3 : 0.18);
+    const widthBase = scaleFactor * ((60 * 10) + (12 * 9));
+    const heightBase = scaleFactor * ((60 * rows) + (12 * Math.max(0, rows - 1)));
+
+    const widthScale = widthBase > 0 ? widthTarget / widthBase : 1;
+    const heightScale = heightBase > 0 ? heightTarget / heightBase : 1;
+    const dynamicScale = Math.min(1.6, Math.max(0.85, Math.min(widthScale, heightScale)));
+
+    return {
+        ...defaultLayout,
+        boxScale: Number(dynamicScale.toFixed(2)),
+        boxGap: Number(Math.min(1.25, Math.max(0.85, dynamicScale * 0.92)).toFixed(2)),
+        textScale: Number(Math.min(1.3, Math.max(0.9, dynamicScale * 0.95)).toFixed(2))
+    };
+}
+
+function applySetroomPreviewPreset(layout, presetKey) {
+    const preset = SETROOM_PREVIEW_PRESETS[presetKey];
+    if (!preset) return layout;
+    return {
+        ...layout,
+        boxScale: preset.boxScale,
+        textScale: preset.textScale,
+        boxGap: preset.boxGap
     };
 }
 
@@ -1938,7 +2059,8 @@ function getSetroomSummaryEmbed(guild, guildConfig = {}, actor = null) {
             { name: 'عدد رولات الألوان', value: `${guildConfig.colorRoleIds?.length || 0}`, inline: true },
             { name: 'رولات القبول', value: acceptRoles, inline: false },
             { name: 'رولات الرفض', value: rejectRoles, inline: false },
-            { name: 'نص الألوان', value: guildConfig.colorsTitle === '' ? 'مخفي' : (guildConfig.colorsTitle || 'Colors list :'), inline: false },
+            { name: 'نص الألوان', value: guildConfig.colorsTitle === '' ? 'مخفي' : `${guildConfig.colorsTitle || 'Colors list :'}
+اللون: ${normalizeHexColor(guildConfig.textColor, '#ffffff')}`, inline: false },
             { name: 'تخصيص النصوص', value: `Room Menu: ${texts.roomMenuPlaceholder}\nColor Menu: ${texts.colorMenuPlaceholder}\nRoom Msg Prefix: ${texts.roomContentPrefix}`, inline: false },
             { name: 'المعاينة الحالية', value: `مربعات: X ${layout.boxOffsetX}, Y ${layout.boxOffsetY}, Scale ${layout.boxScale.toFixed(2)}, Gap ${layout.boxGap.toFixed(2)}\nالنص: X ${layout.textOffsetX}, Y ${layout.textOffsetY}, Scale ${layout.textScale.toFixed(2)}, ${layout.showText ? 'ظاهر' : 'مخفي'}`, inline: false }
         )
@@ -1970,7 +2092,21 @@ function createSetroomMainRows() {
     ];
 }
 
-function createSetroomPreviewRows() {
+function createSetroomPreviewRows(guildConfig = {}) {
+    const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
+    const presetOptions = [
+        {
+            label: 'ديناميكي',
+            value: 'dynamic',
+            description: 'يضبط المقاسات والمسافات تلقائيًا حسب أبعاد الصورة'
+        },
+        ...Object.entries(SETROOM_PREVIEW_PRESETS).map(([value, preset]) => ({
+            label: preset.label,
+            value,
+            description: `مربعات ${preset.boxScale}x • نص ${preset.textScale}x`
+        }))
+    ];
+
     return [
         new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('setroom_preview_box_left').setLabel('مربعات ←').setStyle(ButtonStyle.Secondary),
@@ -1997,6 +2133,12 @@ function createSetroomPreviewRows() {
             new ButtonBuilder().setCustomId('setroom_preview_save').setLabel('حفظ').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId('setroom_preview_publish').setLabel('تعيين').setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId('setroom_preview_back').setLabel('رجوع').setStyle(ButtonStyle.Secondary)
+        ),
+        new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder()
+                .setCustomId('setroom_preview_preset')
+                .setPlaceholder(`حجم جاهز — الحالي: مربعات ${layout.boxScale.toFixed(2)} / نص ${layout.textScale.toFixed(2)}`)
+                .addOptions(presetOptions)
         )
     ];
 }
@@ -2018,7 +2160,7 @@ function canReviewRoomRequest(member, guildConfig, action, userId, botOwners = [
 
 async function buildSetroomPanelPayload(guild, guildConfig, actor, extra = {}) {
     const embed = getSetroomSummaryEmbed(guild, guildConfig, actor);
-    const components = extra.preview ? createSetroomPreviewRows() : createSetroomMainRows();
+    const components = extra.preview ? createSetroomPreviewRows(guildConfig) : createSetroomMainRows();
     const payload = { embeds: [embed], components };
 
     if (extra.preview) {
@@ -2092,6 +2234,19 @@ function registerHandlers(client) {
             const config = loadRoomConfig();
             const guildConfig = getGuildConfigWithDefaults(config, interaction.guild.id);
 
+            if (interaction.isStringSelectMenu()) {
+                if (interaction.customId === 'setroom_preview_preset') {
+                    const selectedPreset = interaction.values[0];
+                    const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
+                    guildConfig.layoutSettings = selectedPreset === 'dynamic'
+                        ? await getSetroomDynamicLayoutSettings(interaction.guild, guildConfig)
+                        : applySetroomPreviewPreset(layout, selectedPreset);
+                    saveRoomConfig(config);
+                    await refreshSetroomPanelMessage(interaction, guildConfig, { preview: true });
+                    return;
+                }
+            }
+
             if (interaction.isButton()) {
                 const customId = interaction.customId;
 
@@ -2123,7 +2278,11 @@ function registerHandlers(client) {
 
                 if (customId === 'setroom_panel_text') {
                     const modal = new ModalBuilder().setCustomId('setroom_modal_text').setTitle('تحديث نص الألوان');
-                    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('colors_title').setLabel('نص الألوان').setStyle(TextInputStyle.Short).setRequired(false).setValue(guildConfig.colorsTitle || '')));
+                    modal.addComponents(
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('colors_title').setLabel('نص الألوان').setStyle(TextInputStyle.Short).setRequired(false).setValue(guildConfig.colorsTitle || '')),
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('text_color').setLabel('لون النص HEX').setStyle(TextInputStyle.Short).setRequired(false).setValue(normalizeHexColor(guildConfig.textColor, '#ffffff')).setPlaceholder('#FFFFFF')),
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('guild_toggle').setLabel('Guild').setStyle(TextInputStyle.Short).setRequired(false).setValue(guildConfig.guildIconEnabled ? 'on' : 'off').setPlaceholder('on / off'))
+                    );
                     await interaction.showModal(modal);
                     return;
                 }
@@ -2187,6 +2346,7 @@ function registerHandlers(client) {
                     return;
                 }
 
+
                 if (customId === 'setroom_preview_save') {
                     saveRoomConfig(config);
                     await interaction.reply({ content: '✅ تم حفظ إعدادات المعاينة.', flags: 64 });
@@ -2202,20 +2362,26 @@ function registerHandlers(client) {
                 if (customId.startsWith('setroom_preview_')) {
                     const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
                     switch (customId) {
-                        case 'setroom_preview_box_left': layout.boxOffsetX -= 15; break;
-                        case 'setroom_preview_box_right': layout.boxOffsetX += 15; break;
-                        case 'setroom_preview_box_up': layout.boxOffsetY -= 15; break;
-                        case 'setroom_preview_box_down': layout.boxOffsetY += 15; break;
-                        case 'setroom_preview_box_scale_less': layout.boxScale = Math.max(0.5, Number((layout.boxScale - 0.1).toFixed(2))); break;
-                        case 'setroom_preview_box_scale_more': layout.boxScale = Math.min(2, Number((layout.boxScale + 0.1).toFixed(2))); break;
-                        case 'setroom_preview_gap_less': layout.boxGap = Math.max(0.5, Number((layout.boxGap - 0.1).toFixed(2))); break;
-                        case 'setroom_preview_gap_more': layout.boxGap = Math.min(2, Number((layout.boxGap + 0.1).toFixed(2))); break;
-                        case 'setroom_preview_text_size_less': layout.textScale = Math.max(0.5, Number((layout.textScale - 0.1).toFixed(2))); break;
-                        case 'setroom_preview_text_size_more': layout.textScale = Math.min(2, Number((layout.textScale + 0.1).toFixed(2))); break;
-                        case 'setroom_preview_text_left': layout.textOffsetX += 15; break;
-                        case 'setroom_preview_text_right': layout.textOffsetX -= 15; break;
-                        case 'setroom_preview_text_up': layout.textOffsetY += 10; break;
-                        case 'setroom_preview_text_down': layout.textOffsetY -= 10; break;
+                        case 'setroom_preview_box_left': layout.boxOffsetX -= 10; break;
+                        case 'setroom_preview_box_right': layout.boxOffsetX += 10; break;
+                        case 'setroom_preview_box_up': layout.boxOffsetY -= 10; break;
+                        case 'setroom_preview_box_down': layout.boxOffsetY += 10; break;
+                        case 'setroom_preview_box_scale_less': layout.boxScale = Math.max(0.3, Number((layout.boxScale - 0.02).toFixed(2))); break;
+                        case 'setroom_preview_box_scale_more': layout.boxScale = Math.min(3, Number((layout.boxScale + 0.02).toFixed(2))); break;
+                        case 'setroom_preview_gap_less': layout.boxGap = Math.max(0.2, Number((layout.boxGap - 0.02).toFixed(2))); break;
+                        case 'setroom_preview_gap_more': layout.boxGap = Math.min(3, Number((layout.boxGap + 0.02).toFixed(2))); break;
+                        case 'setroom_preview_text_size_less':
+                            layout.textScale = Math.max(0.3, Number((layout.textScale - SETROOM_TEXT_SCALE_STEP).toFixed(2)));
+                            layout.guildScale = Math.max(0.3, Number((layout.guildScale - SETROOM_TEXT_SCALE_STEP).toFixed(2)));
+                            break;
+                        case 'setroom_preview_text_size_more':
+                            layout.textScale = Math.min(3, Number((layout.textScale + SETROOM_TEXT_SCALE_STEP).toFixed(2)));
+                            layout.guildScale = Math.min(3, Number((layout.guildScale + SETROOM_TEXT_SCALE_STEP).toFixed(2)));
+                            break;
+                        case 'setroom_preview_text_left': layout.textOffsetX += SETROOM_TEXT_MOVE_STEP; break;
+                        case 'setroom_preview_text_right': layout.textOffsetX -= SETROOM_TEXT_MOVE_STEP; break;
+                        case 'setroom_preview_text_up': layout.textOffsetY += SETROOM_TEXT_MOVE_STEP; break;
+                        case 'setroom_preview_text_down': layout.textOffsetY -= SETROOM_TEXT_MOVE_STEP; break;
                         case 'setroom_preview_text_toggle': layout.showText = !layout.showText; break;
                     }
                     guildConfig.layoutSettings = layout;
@@ -2254,8 +2420,23 @@ function registerHandlers(client) {
                 }
                 if (interaction.customId === 'setroom_modal_text') {
                     guildConfig.colorsTitle = interaction.fields.getTextInputValue('colors_title').trim();
+                    const requestedTextColor = interaction.fields.getTextInputValue('text_color').trim();
+                    const guildToggleValue = interaction.fields.getTextInputValue('guild_toggle').trim().toLowerCase();
+                    const normalizedTextColor = normalizeHexColor(requestedTextColor || guildConfig.textColor || '#ffffff', null);
+                    if (!normalizedTextColor) {
+                        await interaction.reply({ content: '❌ لون النص غير صحيح. استخدم صيغة HEX مثل #FFFFFF', flags: 64 });
+                        return;
+                    }
+                    if (guildToggleValue && !['on', 'off'].includes(guildToggleValue)) {
+                        await interaction.reply({ content: '❌ حقل Guild يقبل فقط on أو off.', flags: 64 });
+                        return;
+                    }
+                    const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
+                    guildConfig.layoutSettings = layout;
+                    guildConfig.textColor = normalizedTextColor;
+                    if (guildToggleValue) guildConfig.guildIconEnabled = guildToggleValue === 'on';
                     saveRoomConfig(config);
-                    await interaction.reply({ content: '✅ تم تحديث نص الألوان.', flags: 64 });
+                    await interaction.reply({ content: `✅ تم تحديث نص الألوان ولونه إلى ${normalizedTextColor} مع إعدادات Guild.`, flags: 64 });
                     return;
                 }
                 if (interaction.customId === 'setroom_modal_setup_texts') {
