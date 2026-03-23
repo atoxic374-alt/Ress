@@ -89,15 +89,6 @@ async function ensureTicketStateTables() {
   return db;
 }
 
-function execTicketDb(dbManager, sql) {
-  return new Promise((resolve, reject) => {
-    dbManager.db.exec(sql, (error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-  });
-}
-
 function parseStoredJson(raw, fallback = {}) {
   if (!raw) return fallback;
   try {
@@ -152,19 +143,12 @@ function hydrateStateCache(key, filePath) {
 async function persistStateSnapshot(key, filePath, value) {
   const db = await ensureTicketStateTables();
   const now = Date.now();
-  await execTicketDb(db, 'BEGIN IMMEDIATE TRANSACTION');
-  try {
-    await db.run(
-      `INSERT INTO ticket_state (state_key, value, updated_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT(state_key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-      [key, JSON.stringify(value ?? {}), now]
-    );
-    await execTicketDb(db, 'COMMIT');
-  } catch (error) {
-    await execTicketDb(db, 'ROLLBACK').catch((error) => logSilentError('suppressed', error));
-    throw error;
-  }
+  await db.run(
+    `INSERT INTO ticket_state (state_key, value, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(state_key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    [key, JSON.stringify(value ?? {}), now]
+  );
 }
 
 function saveCachedState(key, filePath, value) {
