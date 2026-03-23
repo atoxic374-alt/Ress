@@ -219,6 +219,16 @@ function buildMentionChunks(roleIds = [], maxLen = 1800) {
   return chunks;
 }
 
+async function resolveExistingGuildMembers(guild, userIds = [], timeoutMs = 1500) {
+  const uniqueIds = [...new Set((userIds || []).map((id) => String(id || '').trim()).filter((id) => /^\d{16,20}$/.test(id)))];
+  if (!guild || uniqueIds.length === 0) return [];
+  const settled = await Promise.allSettled(uniqueIds.map((id) => resolveGuildMember(guild, id, timeoutMs)));
+  return settled
+    .map((item, idx) => ({ item, id: uniqueIds[idx] }))
+    .filter(({ item }) => item.status === 'fulfilled' && item.value)
+    .map(({ id }) => id);
+}
+
 function resolveButtonStyle(styleValue) {
   const safe = String(styleValue || 'primary').toLowerCase();
   if (safe === 'success') return ButtonStyle.Success;
@@ -2144,6 +2154,7 @@ async function createTicketChannel({
     memberId,
     reasonKey,
     claimedBy: claimedByOnCreate || null,
+    pointsReceiverId: claimedByOnCreate || null,
     status: 'open',
     extraMembers: [],
     logMessageId: null,
@@ -2397,6 +2408,7 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
   }
 
   ticket.claimedBy = interaction.user.id;
+  ticket.pointsReceiverId = interaction.user.id;
   touchTicketActivity(ticket);
   recordClaimPointIfNeeded(ticket, {
     guildId,
@@ -2550,6 +2562,7 @@ async function handleClaimFromRequest(interaction, reqId) {
   }
   const createdTicket = tickets[channel.id];
   createdTicket.claimedBy = interaction.user.id;
+  createdTicket.pointsReceiverId = interaction.user.id;
   touchTicketActivity(createdTicket);
   recordClaimPointIfNeeded(createdTicket, {
     guildId,
@@ -3573,6 +3586,9 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId, o
     return false;
   }
 
+  if (previousClaimer) {
+    ticket.pointsReceiverId = previousClaimer;
+  }
   ticket.claimedBy = null;
   ticket.reassignPendingAt = Date.now();
   ticket.reassignPreviousClaimer = previousClaimer || interaction.user.id;
@@ -3657,6 +3673,7 @@ async function handleReassignClaim(interaction, guildId, panelId, channelId) {
   }
 
   ticket.claimedBy = interaction.user.id;
+  ticket.pointsReceiverId = interaction.user.id;
   delete ticket.reassignPendingAt;
   touchTicketActivity(ticket);
   await ticketChannel.permissionOverwrites.edit(interaction.user.id, {
@@ -5089,6 +5106,9 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
 
   const previousClaimer = ticket.claimedBy;
   const previousTransferredUserIds = Array.isArray(ticket.transferredUserIds) ? ticket.transferredUserIds.map((id) => String(id || '').trim()) : [];
+  if (previousClaimer) {
+    ticket.pointsReceiverId = previousClaimer;
+  }
   ticket.claimedBy = null;
   ticket.transferredTo = respName;
 
@@ -5127,11 +5147,12 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   const responsibleUsers = (selected.responsibles || [])
     .map((id) => String(id || '').trim())
     .filter((id) => /^\d{16,20}$/.test(id));
-  const shouldGrantIndividualTransferUsers = targetRoles.length === 0;
+  const existingResponsibleUsers = await resolveExistingGuildMembers(interaction.guild, responsibleUsers, 1500);
+  const shouldGrantIndividualTransferUsers = true;
 
   await runConcurrentTasks(
-    [...new Set([...previousTransferredUserIds, ...responsibleUsers])].map((userId) => {
-      const shouldSee = shouldGrantIndividualTransferUsers && responsibleUsers.includes(userId);
+    [...new Set([...previousTransferredUserIds, ...existingResponsibleUsers])].map((userId) => {
+      const shouldSee = shouldGrantIndividualTransferUsers && existingResponsibleUsers.includes(userId);
       return interaction.channel.permissionOverwrites.edit(userId, {
         ViewChannel: shouldSee,
         SendMessages: shouldSee,
@@ -5143,23 +5164,23 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
 
   const mentions = [
     ...targetRoles.map((id) => `<@&${id}>`),
-    ...responsibleUsers.map((id) => `<@${id}>`)
+    ...existingResponsibleUsers.map((id) => `<@${id}>`)
   ];
 
-  const onlineResolved = await Promise.allSettled(responsibleUsers.map((uid) => resolveGuildMember(interaction.guild, uid, 1200)));
+  const onlineResolved = await Promise.allSettled(existingResponsibleUsers.map((uid) => resolveGuildMember(interaction.guild, uid, 1200)));
   const onlineResponsibleMentions = onlineResolved
-    .map((item, idx) => ({ item, uid: responsibleUsers[idx] }))
+    .map((item, idx) => ({ item, uid: existingResponsibleUsers[idx] }))
     .filter(({ item }) => item.status === 'fulfilled' && item.value?.presence?.status && item.value.presence.status !== 'offline')
     .map(({ uid }) => `<@${uid}>`);
 
   if (previousClaimer) {
     await interaction.channel.permissionOverwrites.edit(previousClaimer, { ViewChannel: false, SendMessages: false }).catch(() => {});
   }
-  ticket.transferredUserIds = shouldGrantIndividualTransferUsers ? [...responsibleUsers] : [];
+  ticket.transferredUserIds = [...existingResponsibleUsers];
   const dmEmbed = makeTicketEmbed('Ticket Change', `يوجد تكت تم تحويله لمسؤوليتكم في <#${actionChannelId}>`);
   if (!Array.isArray(ticket.transferDmNotifications)) ticket.transferDmNotifications = [];
   const dmResults = await Promise.allSettled(
-    responsibleUsers.map(async (uid) => {
+    existingResponsibleUsers.map(async (uid) => {
       const user = await interaction.client.users.fetch(uid).catch(() => null);
       if (!user) return null;
       const sentDm = await user.send({ embeds: [dmEmbed] }).catch(() => null);
@@ -5176,12 +5197,6 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
       ticket.transferDmNotifications.push(item.value);
     }
   }
-
-  const mentionChunks = buildMentionChunks(targetRoles);
-  await runConcurrentTasks(
-    mentionChunks.map((chunk) => interaction.channel.send({ content: chunk })),
-    'transfer.mentions.send'
-  );
 
   const renamed = `مسؤولين-${sanitizeName(respName)}`.slice(0, 90);
   const transferUiTasks = [interaction.channel.setName(renamed)];
@@ -5560,7 +5575,7 @@ function registerHandlers(client) {
               : id.startsWith('ticket_up1_') ? 1 : 2;
           const reasonName = config.reasons?.[ticket.reasonKey]?.name;
           const respName = ticket.transferredTo || reasonName || 'ticket';
-          const targetId = ticket.claimedBy;
+          const targetId = ticket.pointsReceiverId || ticket.claimedBy;
           if (!targetId) {
             await interaction.reply(buildTicketMessagePayload('Failed', '**لا يوجد مستلم مرتبط بهذا التكت للنقاط.**', { ephemeral: true }));
             return;
