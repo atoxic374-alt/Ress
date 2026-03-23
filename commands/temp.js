@@ -48,46 +48,62 @@ const LATIN_FONT_FAMILY = '"Segoe UI", "Arial", sans-serif';
 const ARABIC_FONT_FAMILY = '"Cairo", "Tajawal", "Noto Sans Arabic", "Segoe UI", "Arial", sans-serif';
 
 const CONTROL_META = {
-  open: { label: 'Open', description: 'فتح الروم والسماح بالدخول' },
-  lock: { label: 'Lock', description: 'قفل الروم ومنع الدخول العام' },
-  show: { label: 'Show', description: 'إظهار الروم للجميع' },
-  hide: { label: 'Hide', description: 'إخفاء الروم عن الجميع' },
-  invite: { label: 'Invite', description: 'إنشاء دعوة مباشرة للروم' },
-  rename: { label: 'Rename', description: 'تغيير اسم الروم' },
-  limit: { label: 'Limit', description: 'تعديل حد أعضاء الروم' },
-  region: { label: 'Region', description: 'تغيير ريجن الصوت' },
-  allow: { label: 'Allow', description: 'السماح لعضو بالدخول والرؤية' },
-  reject: { label: 'Reject', description: 'إزالة سماح أو حظر أو مسؤول' },
-  music: { label: 'Music', description: 'سحب بوت أغاني إلى الروم إن أمكن' },
-  admin: { label: 'Admin', description: 'إدارة مسؤولي الروم' },
-  transfer: { label: 'Transfer', description: 'نقل ملكية الروم' },
-  actions: { label: 'Actions', description: 'عقوبات وتحكم سريع بالأعضاء' }
+  open: { label: 'Open', emoji: '🔓', description: 'فتح الروم والسماح بالدخول' },
+  lock: { label: 'Lock', emoji: '🔒', description: 'قفل الروم ومنع الدخول العام' },
+  show: { label: 'Show', emoji: '👁️', description: 'إظهار الروم للجميع' },
+  hide: { label: 'Hide', emoji: '🙈', description: 'إخفاء الروم عن الجميع' },
+  invite: { label: 'Invite', emoji: '✉️', description: 'إنشاء دعوة مباشرة للروم' },
+  rename: { label: 'Rename', emoji: '✏️', description: 'تغيير اسم الروم' },
+  limit: { label: 'Limit', emoji: '👥', description: 'تعديل حد أعضاء الروم' },
+  region: { label: 'Region', emoji: '🌍', description: 'تغيير ريجن الصوت' },
+  allow: { label: 'Allow', emoji: '✅', description: 'السماح لعضو بالدخول والرؤية' },
+  reject: { label: 'Reject', emoji: '⛔', description: 'إزالة سماح أو حظر أو مسؤول' },
+  music: { label: 'Music', emoji: '🎵', description: 'سحب بوت أغاني إلى الروم إن أمكن' },
+  admin: { label: 'Admin', emoji: '🛡️', description: 'إدارة مسؤولي الروم' },
+  transfer: { label: 'Transfer', emoji: '🔄', description: 'نقل ملكية الروم' },
+  actions: { label: 'Actions', emoji: '⚡', description: 'عقوبات وتحكم سريع بالأعضاء' }
+};
+
+const TEMP_SETTINGS_META = {
+  category: { label: 'Category', emoji: '🗂️' },
+  name: { label: 'Creator Name', emoji: '🏷️' },
+  control: { label: 'Control Room', emoji: '🎛️' },
+  log: { label: 'Log Room', emoji: '📝' },
+  music: { label: 'Music Room', emoji: '🎶' },
+  card_color: { label: 'Card Color', emoji: '🎨' },
+  autoclean: { label: 'Auto Clean', emoji: '🧹' },
+  lifetime: { label: 'Lifetime', emoji: '⏳' },
+  leave: { label: 'Leave Delete', emoji: '🚪' },
+  top: { label: 'Top', emoji: '🏆' },
+  controls: { label: 'Controls', emoji: '🕹️' },
+  refresh: { label: 'Refresh', emoji: '🔄' },
+  close: { label: 'Close', emoji: '❌' }
 };
 
 const ACTION_OPTIONS = [
-  { label: 'Mute Member', value: 'mute_member', description: 'إعطاء ميوت صوتي أو كتابي أو الاثنين' },
-  { label: 'Unmute', value: 'unmute_member', description: 'إزالة الميوت عن عضو محدد' },
-  { label: 'Mute All', value: 'mute_all', description: 'إعطاء ميوت لكل الموجودين حالياً في الروم' },
-  { label: 'Unmute All', value: 'unmute_all', description: 'إزالة الميوت من كل الأعضاء' },
-  { label: 'Kick', value: 'kick', description: 'طرد العضو من الروم' },
-  { label: 'Ban', value: 'ban', description: 'حظر العضو من الروم' },
-  { label: 'Unban', value: 'unban', description: 'فك الحظر من الروم' }
+  { label: 'Mute Member', value: 'mute_member', emoji: '🔇', description: 'إعطاء ميوت صوتي أو كتابي أو الاثنين' },
+  { label: 'Unmute', value: 'unmute_member', emoji: '🔊', description: 'إزالة الميوت عن عضو محدد' },
+  { label: 'Mute All', value: 'mute_all', emoji: '📢', description: 'إعطاء ميوت لكل الموجودين حالياً في الروم' },
+  { label: 'Unmute All', value: 'unmute_all', emoji: '🔈', description: 'إزالة الميوت من كل الأعضاء' },
+  { label: 'Kick', value: 'kick', emoji: '👢', description: 'طرد العضو من الروم' },
+  { label: 'Ban', value: 'ban', emoji: '⛔', description: 'حظر العضو من الروم' },
+  { label: 'Unban', value: 'unban', emoji: '✅', description: 'فك الحظر من الروم' }
 ];
 
 const REGION_OPTIONS = [
-  { label: 'Auto', value: 'auto', description: 'أفضل ريجن تلقائياً' },
-  { label: 'Brazil', value: 'brazil', description: 'Brazil' },
-  { label: 'Hong Kong', value: 'hongkong', description: 'Hong Kong' },
-  { label: 'India', value: 'india', description: 'India' },
-  { label: 'Japan', value: 'japan', description: 'Japan' },
-  { label: 'Rotterdam', value: 'rotterdam', description: 'Rotterdam' },
-  { label: 'Singapore', value: 'singapore', description: 'Singapore' },
-  { label: 'South Africa', value: 'southafrica', description: 'South Africa' },
-  { label: 'Sydney', value: 'sydney', description: 'Sydney' },
-  { label: 'US Central', value: 'us-central', description: 'US Central' },
-  { label: 'US East', value: 'us-east', description: 'US East' },
-  { label: 'US South', value: 'us-south', description: 'US South' },
-  { label: 'US West', value: 'us-west', description: 'US West' }
+  { label: 'Auto', value: 'auto', emoji: '🌐', description: 'أفضل ريجن تلقائياً' },
+  { label: 'Brazil', value: 'brazil', emoji: '🇧🇷', description: 'Brazil' },
+  { label: 'Hong Kong', value: 'hongkong', emoji: '🇭🇰', description: 'Hong Kong' },
+  { label: 'India', value: 'india', emoji: '🇮🇳', description: 'India' },
+  { label: 'Japan', value: 'japan', emoji: '🇯🇵', description: 'Japan' },
+  { label: 'Rotterdam', value: 'rotterdam', emoji: '🇳🇱', description: 'Rotterdam' },
+  { label: 'Singapore', value: 'singapore', emoji: '🇸🇬', description: 'Singapore' },
+  { label: 'South Africa', value: 'southafrica', emoji: '🇿🇦', description: 'South Africa' },
+  { label: 'Sydney', value: 'sydney', emoji: '🇦🇺', description: 'Sydney' },
+  { label: 'US Central', value: 'us-central', emoji: '🇺🇸', description: 'US Central' },
+  { label: 'US East', value: 'us-east', emoji: '🇺🇸', description: 'US East' },
+  { label: 'US South', value: 'us-south', emoji: '🇺🇸', description: 'US South' },
+  { label: 'US West', value: 'us-west', emoji: '🇺🇸', description: 'US West' }
 ];
 
 let dataCache = null;
@@ -1203,25 +1219,31 @@ function createSettingsEmbed(guild, actorId) {
 }
 
 function buildSettingsRows(userId) {
+  const makeSettingsButton = key => new ButtonBuilder()
+    .setCustomId(`temp_settings_${key}:${userId}`)
+    .setLabel(TEMP_SETTINGS_META[key].label)
+    .setEmoji(TEMP_SETTINGS_META[key].emoji)
+    .setStyle(getTempButtonStyle());
+
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`temp_settings_category:${userId}`).setLabel('Category').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_name:${userId}`).setLabel('Creator Name').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_control:${userId}`).setLabel('Control Room').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_log:${userId}`).setLabel('Log Room').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_music:${userId}`).setLabel('Music Room').setStyle(getTempButtonStyle())
+      makeSettingsButton('category'),
+      makeSettingsButton('name'),
+      makeSettingsButton('control'),
+      makeSettingsButton('log'),
+      makeSettingsButton('music')
     ),
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`temp_settings_card_color:${userId}`).setLabel('Card Color').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_autoclean:${userId}`).setLabel('Auto Clean').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_lifetime:${userId}`).setLabel('Lifetime').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_leave:${userId}`).setLabel('Leave Delete').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_top:${userId}`).setLabel('Top').setStyle(getTempButtonStyle())
+      makeSettingsButton('card_color'),
+      makeSettingsButton('autoclean'),
+      makeSettingsButton('lifetime'),
+      makeSettingsButton('leave'),
+      makeSettingsButton('top')
     ),
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`temp_settings_controls:${userId}`).setLabel('Controls').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_refresh:${userId}`).setLabel('Refresh').setStyle(getTempButtonStyle()),
-      new ButtonBuilder().setCustomId(`temp_settings_close:${userId}`).setLabel('Close').setStyle(getTempButtonStyle())
+      makeSettingsButton('controls'),
+      makeSettingsButton('refresh'),
+      makeSettingsButton('close')
     )
   ];
 }
@@ -1627,6 +1649,7 @@ function buildGeneralControlRows(guildId) {
   const createButton = key => new ButtonBuilder()
     .setCustomId(`temp_room_${key}`)
     .setLabel(CONTROL_META[key].label)
+    .setEmoji(CONTROL_META[key].emoji)
     .setStyle(getTempButtonStyle(key));
 
   const rowDefinitions = [
@@ -2490,8 +2513,8 @@ async function handleSettingsButton(interaction) {
     await interaction.reply({
       content: '**اختر مصدر لون صورة الكنترول: لون صورة السيرفر أو لون مخصص من اختيارك.**',
       components: [new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`temp_settings_card_color_avatar:${userId}`).setLabel('Avatar Color').setStyle(getTempButtonStyle()),
-        new ButtonBuilder().setCustomId(`temp_settings_card_color_custom:${userId}`).setLabel('Other Color').setStyle(getTempButtonStyle())
+        new ButtonBuilder().setCustomId(`temp_settings_card_color_avatar:${userId}`).setLabel('Avatar Color').setEmoji('🖼️').setStyle(getTempButtonStyle()),
+        new ButtonBuilder().setCustomId(`temp_settings_card_color_custom:${userId}`).setLabel('Other Color').setEmoji('🎨').setStyle(getTempButtonStyle())
       )],
       ephemeral: true
     }).catch(() => {});
@@ -2611,6 +2634,7 @@ async function handleSettingsButton(interaction) {
               label: CONTROL_META[key].label,
               description: CONTROL_META[key].description.slice(0, 90),
               value: key,
+              emoji: CONTROL_META[key].emoji,
               default: config.enabledControls[key] !== false
             })))
             .setMinValues(0)
