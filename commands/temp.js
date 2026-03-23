@@ -663,7 +663,7 @@ function formatDuration(ms) {
 
 function formatTopVoiceDuration(ms) {
   const safeMs = Math.max(0, Number(ms) || 0);
-  if (!safeMs) return '**0**m';
+  if (!safeMs) return '**0m**';
 
   const totalMinutes = Math.floor(safeMs / 60000);
   const totalHours = Math.floor(totalMinutes / 60);
@@ -672,9 +672,9 @@ function formatTopVoiceDuration(ms) {
   const seconds = Math.floor((safeMs % 60000) / 1000);
   const parts = [];
 
-  if (hours > 0) parts.push(`**${hours}**h`);
-  if (minutes > 0) parts.push(`**${minutes}**m`);
-  if (!parts.length) parts.push(seconds > 0 ? `**${seconds}**s` : '**0**m');
+  if (hours > 0) parts.push(`**${hours}h**`);
+  if (minutes > 0) parts.push(`**${minutes}m**`);
+  if (!parts.length) parts.push(seconds > 0 ? `**${seconds}s**` : '**0m**');
 
   return parts.slice(0, 2).join(' , ');
 }
@@ -737,9 +737,9 @@ function buildTopVoiceRoomsDescription(guild, limit = 10) {
       `**#${index + 1}**`,
       `**Owner :** <@${userId}>`,
       `**Room :** ${getRoomLabel(guild, userId, profile)}`,
-      `**Room Activity :** ${formatTopVoiceDuration(totalVoiceMs)}`,
+      `**Room Voice :** ${formatTopVoiceDuration(totalVoiceMs)}`,
       ''
-    ].join('\n\n')).join('\n\n')
+    ].join('\n')).join('\n\n')
   };
 }
 
@@ -1295,11 +1295,11 @@ function createTopVoiceEmbed(guild) {
   const config = getGuildConfig(guild.id);
   const separatorAsset = loadTopSeparatorAsset(config, guild.id);
   const embed = colorManager.createEmbed()
-    .setTitle('**Temp Voice Top Rooms**')
-    .setAuthor({ name: `${guild.name} • Temp Voice Room Activity`, iconURL: iconUrl })
+    .setTitle('**Top**')
+    .setAuthor({ name: `${guild.name} • Temp Voice `, iconURL: iconUrl })
     .setDescription(topData.description)
     .setThumbnail(iconUrl)
-    .setFooter({ text: `Live update • أول 10 مراكز • ${guild.name}` })
+    .setFooter({ text: `By Ahmed. • ${guild.name}` })
     .setTimestamp(new Date());
 
   if (separatorAsset) embed.setImage(`attachment://${separatorAsset.attachmentName}`);
@@ -2909,15 +2909,15 @@ async function handleSettingsButton(interaction) {
       channelId: interaction.channelId,
       requestedAt: Date.now()
     };
-    await replyEphemeral(interaction, '🖼️ أرسل الآن صورة الخط الفاصل كمرفق أو كرابط مباشر داخل هذه القناة. يمكنك أيضًا إرسال `remove` أو `حذف` لإزالة الصورة الحالية. بعد حفظ الصورة بنجاح سأرسل لك اختيار روم التوب.');
+    await replyEphemeral(interaction, '🖼️ أرسل الآن صورة الخط الفاصل كمرفق أو كرابط مباشر داخل هذه الروم. يمكنك أيضًا إرسال `remove` أو `حذف` لإزالة الصورة الحالية..');
     return true;
   }
 
   if (action === 'temp_settings_card_color') {
     await interaction.reply({
-      content: '**اختر مصدر لون صورة الكنترول: لون صورة السيرفر أو لون مخصص من اختيارك.**',
+      content: '**اختر مصدر لون صورة الكنترول : لون صورة السيرفر أو لون مخصص من اختيارك.**',
       components: [new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`temp_settings_card_color_avatar:${userId}`).setLabel('Avatar Color').setEmoji('🖼️').setStyle(getTempButtonStyle()),
+        new ButtonBuilder().setCustomId(`temp_settings_card_color_avatar:${userId}`).setLabel('Guild Color').setEmoji('🖼️').setStyle(getTempButtonStyle()),
         new ButtonBuilder().setCustomId(`temp_settings_card_color_custom:${userId}`).setLabel('Other Color').setEmoji('🎨').setStyle(getTempButtonStyle())
       )],
       ephemeral: true
