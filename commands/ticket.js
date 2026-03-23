@@ -374,6 +374,23 @@ function recordManagerPoint(points, { guildId, panelId = 'default', channelId, a
   });
 }
 
+function recordClaimPointIfNeeded(ticket, { guildId, panelId = 'default', channelId, actorId, targetId = '' } = {}) {
+  if (!ticket || ticket.claimPointRecordedAt) return false;
+  const points = loadPoints();
+  const appended = recordManagerPoint(points, {
+    guildId,
+    panelId,
+    channelId,
+    actorId,
+    targetId,
+    at: Date.now()
+  });
+  if (!appended) return false;
+  savePoints(points);
+  ticket.claimPointRecordedAt = Date.now();
+  return true;
+}
+
 function getManagerPointCount(points, userId) {
   const targetId = String(userId || '').trim();
   const audit = Array.isArray(points?.__managerPointsAudit) ? points.__managerPointsAudit : [];
@@ -1489,6 +1506,23 @@ function countOpenMemberTickets(tickets, userId) {
   return Object.values(tickets).filter((t) => t.status === 'open' && t.memberId === userId).length;
 }
 
+async function countOpenMemberTicketsSafe(guild, tickets, userId) {
+  let changed = false;
+  for (const [channelId, ticket] of Object.entries(tickets || {})) {
+    if (!ticket || ticket.status !== 'open' || ticket.memberId !== userId) continue;
+    const cached = guild?.channels?.cache?.get(channelId);
+    if (cached) continue;
+    const fetched = guild ? await withTimeout(guild.channels.fetch(channelId).catch(() => null), 1200) : null;
+    if (!fetched) {
+      ticket.status = 'closed';
+      ticket.deletedChannel = true;
+      ticket.claimedBy = null;
+      changed = true;
+    }
+  }
+  return { count: countOpenMemberTickets(tickets, userId), changed };
+}
+
 function countPendingMemberRequests(pendingRequests, userId) {
   return Object.values(pendingRequests || {}).filter((req) => req?.userId === userId).length;
 }
@@ -1514,11 +1548,30 @@ async function countClaimedByAdminSafe(guild, tickets, adminId) {
   return { count: countClaimedByAdmin(tickets, adminId), changed };
 }
 
-function prunePendingRequests(pendingRequests) {
+function prunePendingRequests(pendingRequests, config = null) {
   let changed = false;
   for (const [reqId, req] of Object.entries(pendingRequests || {})) {
     const createdAt = Number(req?.createdAt || 0);
     if (!req || typeof req !== 'object' || !createdAt) {
+      delete pendingRequests[reqId];
+      changed = true;
+      continue;
+    }
+
+    const hasClaimRefs = Array.isArray(req?.claimMessageRefs) && req.claimMessageRefs.length > 0;
+    if (config?.autoCreateOnRequest) {
+      delete pendingRequests[reqId];
+      changed = true;
+      continue;
+    }
+
+    if (config?.claimFromDedicatedChannel && !config?.claimChannelId) {
+      delete pendingRequests[reqId];
+      changed = true;
+      continue;
+    }
+
+    if (!hasClaimRefs && !req?.claimedAt) {
       delete pendingRequests[reqId];
       changed = true;
     }
@@ -1570,6 +1623,52 @@ function removeClaimMessageRefFromGuildPanels(guildId, channelId, messageId) {
   }
 
   return changedPanels;
+}
+
+async function hasLiveClaimMessageReference(guild, req) {
+  const refs = Array.isArray(req?.claimMessageRefs) ? req.claimMessageRefs : [];
+  if (!guild || !refs.length) return false;
+
+  for (const ref of refs) {
+    const refChannelId = String(ref?.channelId || '').trim();
+    const refMessageId = String(ref?.messageId || '').trim();
+    if (!refChannelId || !refMessageId) continue;
+    const channel = guild.channels.cache.get(refChannelId)
+      || await withTimeout(guild.channels.fetch(refChannelId).catch(() => null), 1200);
+    if (!channel?.isTextBased?.()) continue;
+    const message = await withTimeout(channel.messages.fetch(refMessageId).catch(() => null), 1200);
+    if (message) return true;
+  }
+
+  return false;
+}
+
+async function cleanupPendingRequestsForOpenAttempt(guild, config, pendingRequests, userId, panelId = 'default') {
+  let changed = prunePendingRequests(pendingRequests, config);
+  const relevant = Object.entries(pendingRequests || {})
+    .filter(([, req]) => req?.userId === userId && req?.panelId === panelId && !req?.claimedAt);
+
+  for (const [reqId, req] of relevant) {
+    if (config?.autoCreateOnRequest) {
+      delete pendingRequests[reqId];
+      changed = true;
+      continue;
+    }
+
+    if (config?.claimFromDedicatedChannel && !config?.claimChannelId) {
+      delete pendingRequests[reqId];
+      changed = true;
+      continue;
+    }
+
+    const hasLiveMessage = await hasLiveClaimMessageReference(guild, req);
+    if (!hasLiveMessage) {
+      delete pendingRequests[reqId];
+      changed = true;
+    }
+  }
+
+  return changed;
 }
 
 function hasStaffAccess(member, config, reasonKey = null, ticket = null) {
@@ -2127,24 +2226,28 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
   try {
   const guild = interaction.guild;
   const { config, tickets, pendingRequests } = getPanelData(guildId, safePanelId);
-  const [isBlocked, duplicateRequest] = await Promise.all([
-    Promise.resolve(resolveTicketBlockForMember(guildId, interaction.member)),
-    Promise.resolve(Object.values(pendingRequests)
-      .find((req) => req.userId === interaction.user.id && req.panelId === safePanelId && !req.claimedAt))
-  ]);
+  const isBlocked = await Promise.resolve(resolveTicketBlockForMember(guildId, interaction.member));
 
   if (isBlocked) {
     await interaction.editReply(buildTicketMessagePayload('Ticket Blocked', '**عندك بلوك تكت لا يمكنك فتح تكت.**'));
     return;
   }
 
+  const pruned = await cleanupPendingRequestsForOpenAttempt(
+    guild,
+    config,
+    pendingRequests,
+    interaction.user.id,
+    safePanelId
+  );
+  if (pruned) setGuildData(guildId, config, tickets, pendingRequests, safePanelId);
+
+  const duplicateRequest = Object.values(pendingRequests)
+    .find((req) => req.userId === interaction.user.id && req.panelId === safePanelId && !req.claimedAt);
   if (duplicateRequest) {
     await interaction.editReply(buildTicketMessagePayload('Alert', '**لديك طلب استلام معلّق بالفعل، انتظر حتى تتم معالجته.**'));
     return;
   }
-
-  const pruned = prunePendingRequests(pendingRequests);
-  if (pruned) setGuildData(guildId, config, tickets, pendingRequests, safePanelId);
 
   if (!config.autoCreateOnRequest && !config.claimFromDedicatedChannel && !interaction.channelId) {
     await interaction.editReply(buildTicketMessagePayload('Eror', '**لا يمكن إنشاء طلب الاستلام بدون شات صالح.**'));
@@ -2156,10 +2259,12 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
     return;
   }
 
-  const [openCount, pendingCount] = await Promise.all([
-    Promise.resolve(countOpenMemberTickets(tickets, interaction.user.id)),
-    Promise.resolve(countPendingMemberRequests(pendingRequests, interaction.user.id))
-  ]);
+  const openState = await countOpenMemberTicketsSafe(guild, tickets, interaction.user.id);
+  if (openState.changed) {
+    setGuildData(guildId, config, tickets, pendingRequests, safePanelId);
+  }
+  const openCount = openState.count;
+  const pendingCount = countPendingMemberRequests(pendingRequests, interaction.user.id);
   if ((openCount + pendingCount) >= (config.memberOpenLimit || 1)) {
     await interaction.editReply(buildTicketMessagePayload('Alert', `**الحد : وصلت لاقصى تكت مفتوح (${config.memberOpenLimit}).**`));
     return;
@@ -2293,6 +2398,13 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
 
   ticket.claimedBy = interaction.user.id;
   touchTicketActivity(ticket);
+  recordClaimPointIfNeeded(ticket, {
+    guildId,
+    panelId: resolvedPanelId,
+    channelId: actionChannelId,
+    actorId: interaction.user.id,
+    targetId: ticket.memberId || ''
+  });
   setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
   await interaction.editReply(buildTicketMessagePayload('Claimed', '**تم استلام التكت بنجاح.**', { user: interaction.user }));
 
@@ -2373,7 +2485,7 @@ async function handleClaimFromRequest(interaction, reqId) {
   }
 
   let { panelId, config, tickets, pendingRequests, req } = requestContext;
-  const pruned = prunePendingRequests(pendingRequests);
+  const pruned = prunePendingRequests(pendingRequests, config);
   if (pruned) {
     setGuildData(guildId, config, tickets, pendingRequests, panelId);
     requestContext = findPendingRequestContext(guildId, reqId, panelId);
@@ -2439,6 +2551,13 @@ async function handleClaimFromRequest(interaction, reqId) {
   const createdTicket = tickets[channel.id];
   createdTicket.claimedBy = interaction.user.id;
   touchTicketActivity(createdTicket);
+  recordClaimPointIfNeeded(createdTicket, {
+    guildId,
+    panelId,
+    channelId: channel.id,
+    actorId: interaction.user.id,
+    targetId: createdTicket.memberId || ''
+  });
 
   delete pendingRequests[reqId];
   setGuildData(guildId, config, tickets, pendingRequests, panelId);
@@ -5230,6 +5349,9 @@ function startTicketAutoCloseWatcher(client) {
         const warningMs = Math.max(1, Number(config.autoCloseWarningMinutes || 10)) * 60 * 1000;
 
         let changed = false;
+        if (prunePendingRequests(pendingRequests, config)) {
+          changed = true;
+        }
         for (const [channelId, ticket] of Object.entries(tickets || {})) {
           if (!ticket || ticket.status !== 'open') continue;
           const dueAt = getTicketDueAt(ticket, config);
@@ -5317,9 +5439,9 @@ function registerHandlers(client) {
         if (id.startsWith('ticket_open_btn_')) {
           const parts = id.split('_');
           const guildId = parts[3];
-          const reasonParts = parts.slice(5);
-          const panelId = reasonParts.length > 1 ? reasonParts.slice(0, -1).join('_') : 'default';
-          const reasonKey = reasonParts.length ? reasonParts[reasonParts.length - 1] : parts[4];
+          const payloadParts = parts.slice(4);
+          const panelId = payloadParts.length > 1 ? payloadParts.slice(0, -1).join('_') : 'default';
+          const reasonKey = payloadParts.length ? payloadParts[payloadParts.length - 1] : parts[4];
           await handleOpenWithReasonModal(interaction, guildId, panelId, reasonKey, client);
           return;
         }

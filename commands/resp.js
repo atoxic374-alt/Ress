@@ -110,6 +110,21 @@ function normalizeImageUrl(url) {
     }
 }
 
+function applyEmojiSafely(button, emojiValue) {
+    const normalized = typeof emojiValue === 'string' ? emojiValue.trim() : emojiValue;
+
+    if (!normalized) return button;
+
+    try {
+        button.setEmoji(normalized);
+    } catch (error) {
+        console.log(`⚠️ تعذر تعيين الإيموجي ${emojiValue}: ${error.message}`);
+    }
+
+    return button;
+}
+
+
 async function createImageAttachment(url) {
     try {
         const normalizedUrl = normalizeImageUrl(url);
@@ -405,16 +420,20 @@ function createSuggestionComponents() {
     // زر الاقتراحات وطلب المسؤولية
     const buttonRow = new ActionRowBuilder()
         .addComponents(
-            new ButtonBuilder()
-                .setCustomId('suggestion_button')
-                .setLabel('أقتراح')
-                .setEmoji('<:emoji_72:1442588665913151619>')
-                .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-                .setCustomId('apply_resp_button')
-                .setLabel('طلب مسؤولية')
-                .setEmoji('<:emoji_19:1457493164826034186> ')
-                .setStyle(ButtonStyle.Secondary)
+            applyEmojiSafely(
+                new ButtonBuilder()
+                    .setCustomId('suggestion_button')
+                    .setLabel('أقتراح')
+                    .setStyle(ButtonStyle.Secondary),
+                '<:emoji_72:1442588665913151619>'
+            ),
+            applyEmojiSafely(
+                new ButtonBuilder()
+                    .setCustomId('apply_resp_button')
+                    .setLabel('طلب مسؤولية')
+                    .setStyle(ButtonStyle.Secondary),
+                '<:emoji_19:1457493164826034186>'
+            )
         );
     components.push(buttonRow);
     
@@ -993,16 +1012,20 @@ async function handleApplyRespModal(interaction, client) {
             .setTimestamp();
 
         const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setCustomId(`approve_apply_${interaction.user.id}_${respName}`)
-                .setLabel('accept?')
-                   .setEmoji("<:emoji_7:1465221394966253768>")
-                .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-                .setCustomId(`reject_apply_${interaction.user.id}_${respName}`)
-                .setLabel('reject?')
-                   .setEmoji("<:emoji_7:1465221361839505622>")
-                .setStyle(ButtonStyle.Secondary)
+            applyEmojiSafely(
+                new ButtonBuilder()
+                    .setCustomId(`approve_apply_${interaction.user.id}_${respName}`)
+                    .setLabel('accept?')
+                    .setStyle(ButtonStyle.Secondary),
+                '<:emoji_7:1465221394966253768>'
+            ),
+            applyEmojiSafely(
+                new ButtonBuilder()
+                    .setCustomId(`reject_apply_${interaction.user.id}_${respName}`)
+                    .setLabel('reject?')
+                    .setStyle(ButtonStyle.Secondary),
+                '<:emoji_7:1465221361839505622>'
+            )
         );
 
         await channel.send({ embeds: [applyEmbed], components: [row] });
