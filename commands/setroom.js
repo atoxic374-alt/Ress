@@ -738,7 +738,7 @@ function getDefaultSetroomTexts() {
         birthdayLabel: 'Birthday',
         birthdayDescription: 'طلب روم ميلاد',
         panelTitle: '**SetRoom Control Panel**',
-        panelDescription: 'لوحة إعدادات الرومات المحدثة — التعديل يتم مباشرة من الأزرار بدون subcommands.',
+        panelDescription: 'By Ahmed',
         roomContentPrefix: '@here',
         roomToLabel: 'لـ',
         roomByLabel: 'بواسطة',
@@ -2067,7 +2067,7 @@ function getSetroomSummaryEmbed(guild, guildConfig = {}, actor = null) {
 
     const embed = colorManager.createEmbed()
         .setTitle(texts.panelTitle || '**SetRoom Control Panel**')
-        .setDescription(texts.panelDescription || 'لوحة إعدادات الرومات المحدثة — التعديل يتم مباشرة من الأزرار بدون subcommands.')
+        .setDescription(texts.panelDescription || 'By Ahmed')
         .addFields(
             { name: 'روم الطلبات', value: guildConfig.requestsChannelId ? `<#${guildConfig.requestsChannelId}>` : 'غير محدد', inline: true },
             { name: 'روم السيتب', value: guildConfig.embedChannelId ? `<#${guildConfig.embedChannelId}>` : 'غير محدد', inline: true },
@@ -2079,9 +2079,9 @@ function getSetroomSummaryEmbed(guild, guildConfig = {}, actor = null) {
             { name: 'رولات الرفض', value: rejectRoles, inline: false },
             { name: 'نص الألوان', value: guildConfig.colorsTitle === '' ? 'مخفي' : `${guildConfig.colorsTitle || 'Colors list :'}
 اللون: ${normalizeHexColor(guildConfig.textColor, '#ffffff')}`, inline: false },
-            { name: 'أفاتار السيرفر', value: `الأفاتار: ${guildConfig.guildIconEnabled ? 'مفعّل' : 'مقفّل'}\nالإطار: ${layout.guildBorderEnabled === false ? 'مقفّل' : 'مفعّل'}`, inline: true },
+            { name: 'افتار السيرفر', value: `الافتار: ${guildConfig.guildIconEnabled ? 'مفعّل' : 'مقفّل'}\nالإطار: ${layout.guildBorderEnabled === false ? 'مقفّل' : 'مفعّل'}`, inline: true },
             { name: 'تخصيص النصوص', value: `Room Menu: ${texts.roomMenuPlaceholder}\nColor Menu: ${texts.colorMenuPlaceholder}\nRoom Msg Prefix: ${texts.roomContentPrefix}`, inline: false },
-            { name: 'المعاينة الحالية', value: `مربعات: X ${layout.boxOffsetX}, Y ${layout.boxOffsetY}, Scale ${layout.boxScale.toFixed(2)}, Gap ${layout.boxGap.toFixed(2)}\nالنص: X ${layout.textOffsetX}, Y ${layout.textOffsetY}, Scale ${layout.textScale.toFixed(2)}, ${layout.showText ? 'ظاهر' : 'مخفي'}\nالأفاتار: X ${layout.guildOffsetX}, Y ${layout.guildOffsetY}, Scale ${layout.guildScale.toFixed(2)}, إطار ${layout.guildBorderEnabled === false ? 'مقفّل' : 'مفعّل'}`, inline: false }
+            { name: 'المعاينة الحالية', value: `مربعات: X ${layout.boxOffsetX}, Y ${layout.boxOffsetY}, Scale ${layout.boxScale.toFixed(2)}, Gap ${layout.boxGap.toFixed(2)}\nالنص: X ${layout.textOffsetX}, Y ${layout.textOffsetY}, Scale ${layout.textScale.toFixed(2)}, ${layout.showText ? 'ظاهر' : 'مخفي'}\nالافتار: X ${layout.guildOffsetX}, Y ${layout.guildOffsetY}, Scale ${layout.guildScale.toFixed(2)}, إطار ${layout.guildBorderEnabled === false ? 'مقفّل' : 'مفعّل'}`, inline: false }
         )
         .setFooter({ text: 'SetRoom System' });
 
@@ -2113,19 +2113,6 @@ function createSetroomMainRows() {
 
 function createSetroomPreviewRows(guildConfig = {}) {
     const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
-    const presetOptions = [
-        {
-            label: 'ديناميكي',
-            value: 'dynamic',
-            description: 'يضبط المقاسات والمسافات تلقائيًا حسب أبعاد الصورة'
-        },
-        ...Object.entries(SETROOM_PREVIEW_PRESETS).map(([value, preset]) => ({
-            label: preset.label,
-            value,
-            description: `مربعات ${preset.boxScale}x • نص ${preset.textScale}x`
-        }))
-    ];
-
     return [
         new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('setroom_preview_box_left').setLabel('مربعات ←').setStyle(ButtonStyle.Secondary),
@@ -2149,23 +2136,17 @@ function createSetroomPreviewRows(guildConfig = {}) {
             new ButtonBuilder().setCustomId('setroom_preview_text_toggle').setLabel('إظهار/إخفاء النص').setStyle(ButtonStyle.Danger)
         ),
         new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('setroom_preview_guild_left').setLabel('أفاتار ←').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('setroom_preview_guild_right').setLabel('أفاتار →').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('setroom_preview_guild_up').setLabel('أفاتار ↑').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('setroom_preview_guild_down').setLabel('أفاتار ↓').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('setroom_preview_guild_scale_less').setLabel('أفاتار -').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId('setroom_preview_guild_left').setLabel('افتار ←').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_guild_right').setLabel('افتار →').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_guild_up').setLabel('افتار ↑').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_guild_down').setLabel('افتار ↓').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_guild_scale_less').setLabel('افتار -').setStyle(ButtonStyle.Secondary)
         ),
         new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('setroom_preview_guild_scale_more').setLabel('أفاتار +').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_preview_guild_scale_more').setLabel('افتار +').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('setroom_preview_save').setLabel('حفظ').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId('setroom_preview_publish').setLabel('تعيين').setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId('setroom_preview_back').setLabel('رجوع').setStyle(ButtonStyle.Secondary)
-        ),
-        new ActionRowBuilder().addComponents(
-            new StringSelectMenuBuilder()
-                .setCustomId('setroom_preview_preset')
-                .setPlaceholder(`حجم جاهز — الحالي: مربعات ${layout.boxScale.toFixed(2)} / نص ${layout.textScale.toFixed(2)}`)
-                .addOptions(presetOptions)
         )
     ];
 }
@@ -2261,19 +2242,6 @@ function registerHandlers(client) {
             const config = loadRoomConfig();
             const guildConfig = getGuildConfigWithDefaults(config, interaction.guild.id);
 
-            if (interaction.isStringSelectMenu()) {
-                if (interaction.customId === 'setroom_preview_preset') {
-                    const selectedPreset = interaction.values[0];
-                    const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
-                    guildConfig.layoutSettings = selectedPreset === 'dynamic'
-                        ? await getSetroomDynamicLayoutSettings(interaction.guild, guildConfig)
-                        : applySetroomPreviewPreset(layout, selectedPreset);
-                    saveRoomConfig(config);
-                    await refreshSetroomPanelMessage(interaction, guildConfig, { preview: true });
-                    return;
-                }
-            }
-
             if (interaction.isButton()) {
                 const customId = interaction.customId;
 
@@ -2309,8 +2277,8 @@ function registerHandlers(client) {
                     modal.addComponents(
                         new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('colors_title').setLabel('نص الألوان').setStyle(TextInputStyle.Short).setRequired(false).setValue(guildConfig.colorsTitle || '')),
                         new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('text_color').setLabel('لون النص HEX').setStyle(TextInputStyle.Short).setRequired(false).setValue(normalizeHexColor(guildConfig.textColor, '#ffffff')).setPlaceholder('#FFFFFF')),
-                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('guild_toggle').setLabel('تفعيل أفاتار السيرفر').setStyle(TextInputStyle.Short).setRequired(false).setValue(guildConfig.guildIconEnabled ? 'on' : 'off').setPlaceholder('on / off')),
-                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('guild_border_toggle').setLabel('إطار أفاتار السيرفر').setStyle(TextInputStyle.Short).setRequired(false).setValue(layout.guildBorderEnabled === false ? 'off' : 'on').setPlaceholder('on / off'))
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('guild_toggle').setLabel('تفعيل افتار السيرفر').setStyle(TextInputStyle.Short).setRequired(false).setValue(guildConfig.guildIconEnabled ? 'on' : 'off').setPlaceholder('on / off')),
+                        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('guild_border_toggle').setLabel('إطار افتار السيرفر').setStyle(TextInputStyle.Short).setRequired(false).setValue(layout.guildBorderEnabled === false ? 'off' : 'on').setPlaceholder('on / off'))
                     );
                     await interaction.showModal(modal);
                     return;
@@ -2462,11 +2430,11 @@ function registerHandlers(client) {
                         return;
                     }
                     if (guildToggleValue && !['on', 'off'].includes(guildToggleValue)) {
-                        await interaction.reply({ content: '❌ حقل تفعيل أفاتار السيرفر يقبل فقط on أو off.', flags: 64 });
+                        await interaction.reply({ content: '❌ حقل تفعيل افتار السيرفر يقبل فقط on أو off.', flags: 64 });
                         return;
                     }
                     if (guildBorderToggleValue && !['on', 'off'].includes(guildBorderToggleValue)) {
-                        await interaction.reply({ content: '❌ حقل إطار أفاتار السيرفر يقبل فقط on أو off.', flags: 64 });
+                        await interaction.reply({ content: '❌ حقل إطار افتار السيرفر يقبل فقط on أو off.', flags: 64 });
                         return;
                     }
                     const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
@@ -2475,7 +2443,7 @@ function registerHandlers(client) {
                     if (guildToggleValue) guildConfig.guildIconEnabled = guildToggleValue === 'on';
                     if (guildBorderToggleValue) guildConfig.layoutSettings.guildBorderEnabled = guildBorderToggleValue === 'on';
                     saveRoomConfig(config);
-                    await interaction.reply({ content: `✅ تم تحديث نص الألوان ولونه إلى ${normalizedTextColor} مع إعدادات أفاتار السيرفر.`, flags: 64 });
+                    await interaction.reply({ content: `✅ تم تحديث نص الألوان ولونه إلى ${normalizedTextColor} مع إعدادات افتار السيرفر.`, flags: 64 });
                     return;
                 }
                 if (interaction.customId === 'setroom_modal_setup_texts') {
