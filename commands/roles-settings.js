@@ -784,25 +784,15 @@ async function sendTopRolesPanel(guild, channel, guildConfig) {
 
   updateGuildConfig(guild.id, { topChannelId: channel.id, topMessageId: message.id, topEnabled: true });
 
+  await reorderSpecialRolesByTop(guild, getGuildConfig(guild.id)).catch(() => {});
   startTopSchedule(guild, channel, message.id);
   startPanelCleanup(guild, channel.id, message.id);
 }
 
-async function applyRoleCategoryPosition(role, guildConfig) {
-  if (!role || !guildConfig?.roleCategoryId) return;
-  const referenceRole = role.guild.roles.cache.get(guildConfig.roleCategoryId);
-  if (!referenceRole) return;
-  if (!referenceRole.editable) return;
-  const desiredPosition = Math.max(1, referenceRole.position - 1);
-  if (role.position === desiredPosition) return;
-  await role.setPosition(desiredPosition).catch(() => {});
-}
-
-async function buildTopRolesEmbed(guild, guildConfig) {
+async function getRankedSpecialRoles(guild, guildConfig) {
   const roles = getGuildRoles(guild.id);
-  const thumbnail = guild?.client?.user?.displayAvatarURL({ size: 128 });
-
   const ranked = [];
+
   for (const roleEntry of roles) {
     const role = guild.roles.cache.get(roleEntry.roleId);
     if (!role) continue;
@@ -820,6 +810,46 @@ async function buildTopRolesEmbed(guild, guildConfig) {
   }
 
   ranked.sort((a, b) => b.total - a.total);
+  return ranked;
+}
+
+async function reorderSpecialRolesByTop(guild, guildConfig) {
+  if (!guildConfig?.roleCategoryId) return;
+
+  const referenceRole = guild.roles.cache.get(guildConfig.roleCategoryId)
+    || await guild.roles.fetch(guildConfig.roleCategoryId).catch(() => null);
+  if (!referenceRole || !referenceRole.editable) return;
+
+  const ranked = await getRankedSpecialRoles(guild, guildConfig);
+  const rankedOrder = new Map(ranked.map((entry, index) => [entry.roleId, index]));
+
+  const rolesInScope = getGuildRoles(guild.id)
+    .map(entry => guild.roles.cache.get(entry.roleId))
+    .filter(role => role && role.editable && role.id !== referenceRole.id)
+    .sort((a, b) => {
+      const aRank = rankedOrder.has(a.id) ? rankedOrder.get(a.id) : Number.MAX_SAFE_INTEGER;
+      const bRank = rankedOrder.has(b.id) ? rankedOrder.get(b.id) : Number.MAX_SAFE_INTEGER;
+      if (aRank !== bRank) return aRank - bRank;
+      return b.position - a.position;
+    });
+
+  if (!rolesInScope.length) return;
+
+  let desiredPosition = Math.max(1, referenceRole.position - 1);
+  for (const role of rolesInScope) {
+    await role.setPosition(desiredPosition).catch(() => {});
+    if (desiredPosition > 1) desiredPosition -= 1;
+  }
+}
+
+async function applyRoleCategoryPosition(role, guildConfig) {
+  if (!role || !guildConfig?.roleCategoryId) return;
+  await reorderSpecialRolesByTop(role.guild, guildConfig).catch(() => {});
+}
+
+async function buildTopRolesEmbed(guild, guildConfig) {
+  const thumbnail = guild?.client?.user?.displayAvatarURL({ size: 128 });
+  const ranked = await getRankedSpecialRoles(guild, guildConfig);
 
   const embed = new EmbedBuilder()
     .setTitle('Top roles')
@@ -842,6 +872,7 @@ function startTopSchedule(guild, channel, messageId) {
   const interval = setInterval(async () => {
     const guildConfig = getGuildConfig(guild.id);
     if (!guildConfig.topEnabled) return;
+    await reorderSpecialRolesByTop(guild, guildConfig).catch(() => {});
     const payload = await buildPanelPayload('top', guild, guildConfig);
 
     const message = await channel.messages.fetch(messageId).catch(() => null);

@@ -743,6 +743,48 @@ function buildTopVoiceRoomsDescription(guild, limit = 10) {
   };
 }
 
+
+async function reorderTempCategoryByTop(guild) {
+  const config = getGuildConfig(guild.id);
+  if (!config?.categoryId) return;
+
+  const category = guild.channels.cache.get(config.categoryId)
+    || await guild.channels.fetch(config.categoryId).catch(() => null);
+  if (!category || category.type !== ChannelType.GuildCategory) return;
+
+  const creatorChannelId = config.creatorChannelId;
+  const rankedRoomIds = getTempTopEntries(guild)
+    .map(entry => getRoomRecord(guild.id, entry.userId)?.channelId)
+    .filter(Boolean);
+
+  const seen = new Set();
+  const orderedIds = [];
+  if (creatorChannelId) {
+    orderedIds.push(creatorChannelId);
+    seen.add(creatorChannelId);
+  }
+
+  for (const channelId of rankedRoomIds) {
+    if (seen.has(channelId)) continue;
+    orderedIds.push(channelId);
+    seen.add(channelId);
+  }
+
+  const fallbackIds = guild.channels.cache
+    .filter(channel => channel.parentId === category.id && channel.type === ChannelType.GuildVoice && !seen.has(channel.id))
+    .sort((a, b) => a.rawPosition - b.rawPosition)
+    .map(channel => channel.id);
+
+  orderedIds.push(...fallbackIds);
+
+  for (let index = 0; index < orderedIds.length; index += 1) {
+    const channel = guild.channels.cache.get(orderedIds[index])
+      || await guild.channels.fetch(orderedIds[index]).catch(() => null);
+    if (!channel || channel.parentId !== category.id) continue;
+    await channel.setPosition(index).catch(() => {});
+  }
+}
+
 function boolText(value) {
   return value ? '✅ **مفعّل**' : '❌ **متوقف**';
 }
@@ -1367,6 +1409,8 @@ async function refreshTopVoiceMessage(guild, preferredChannel = null) {
   config.topChannelId = targetChannel.id;
   config.topLastUpdatedAt = Date.now();
   scheduleSave();
+
+  await reorderTempCategoryByTop(guild).catch(() => null);
   return { message };
 }
 
@@ -2257,7 +2301,7 @@ async function createOrMoveToTempRoom(member) {
     applyRoomState(roomChannel, member.id),
     member.voice.setChannel(roomChannel).catch(() => null)
   ]);
-  await roomChannel.setPosition(1).catch(() => {});
+  await reorderTempCategoryByTop(guild);
   await scheduleRoomLifecycleJob(guild.id, member.id);
   await ensureGuildControlPanel(guild);
   await logTempRoomState(guild, {
