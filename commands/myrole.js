@@ -404,6 +404,7 @@ async function handleManageMembers({ channel, userId, role, roleEntry, interacti
       for (const id of selection.values) {
         const member = await role.guild.members.fetch(id).catch(() => null);
         if (!member) continue;
+        if (member.user?.bot) continue;
         if (maxMembers && role.members.size >= maxMembers) break;
         await member.roles.add(role, 'إضافة إلى رول خاص').catch(() => {});
         setMemberAssignment(roleEntry, member.id, userId, selection.user.bot);
