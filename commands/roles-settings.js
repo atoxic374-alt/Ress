@@ -20,7 +20,9 @@ const pendingBulkDeletes = new Map();
 const pendingRoleApprovals = new Set();
 const restoreSessions = new Map();
 const adminRolesPath = path.join(__dirname, '..', 'data', 'adminRoles.json');
+const roleGrantHistoryPath = path.join(__dirname, '..', 'data', 'roleGrantHistory.json');
 const REQUEST_REAPPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const PRIVATE_ROLE_TOP_MIN_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 const RESTORE_PAGE_SIZE = 25;
 
 function scheduleDelete(message, delay = 180000) {
@@ -739,6 +741,29 @@ async function sumActivity(userIds, resetDate) {
   return { voice: totalVoice, messages: totalMessages };
 }
 
+function readRoleGrantHistory() {
+  try {
+    if (!fs.existsSync(roleGrantHistoryPath)) return {};
+    const raw = fs.readFileSync(roleGrantHistoryPath, 'utf8');
+    if (!raw || !raw.trim()) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (error) {
+    console.error('❌ فشل قراءة roleGrantHistory أثناء حساب توب الرولات الخاصة:', error);
+    return {};
+  }
+}
+
+function resolveMemberRoleAssignedAt(roleEntry, guildId, memberId, grantHistory) {
+  const metaAssignedAt = Number(roleEntry?.memberMeta?.[memberId]?.assignedAt || 0);
+  if (Number.isFinite(metaAssignedAt) && metaAssignedAt > 0) return metaAssignedAt;
+
+  const historyAssignedAt = Number(grantHistory?.[guildId]?.[memberId]?.[roleEntry?.roleId] || 0);
+  if (Number.isFinite(historyAssignedAt) && historyAssignedAt > 0) return historyAssignedAt;
+
+  return null;
+}
+
 async function sendMemberPanel(guild, channel, guildConfig) {
   const permissions = channel.permissionsFor(guild.members.me);
   if (!permissions || !permissions.has(['ViewChannel', 'SendMessages'])) {
@@ -791,6 +816,7 @@ async function sendTopRolesPanel(guild, channel, guildConfig) {
 
 async function getRankedSpecialRoles(guild, guildConfig) {
   const roles = getGuildRoles(guild.id);
+  const grantHistory = readRoleGrantHistory();
   const ranked = [];
 
   for (const roleEntry of roles) {
@@ -798,7 +824,46 @@ async function getRankedSpecialRoles(guild, guildConfig) {
     if (!role) continue;
     const members = [...role.members.values()];
     const roleResetDate = getRoleResetDate(guildConfig, roleEntry.roleId);
-    const activity = await sumActivity(members.map(member => member.id), roleResetDate);
+    const now = Date.now();
+    const membersByStartDate = new Map();
+
+    for (const member of members) {
+      if (member.user?.bot) continue;
+
+      let assignedAt = resolveMemberRoleAssignedAt(roleEntry, guild.id, member.id, grantHistory);
+      if (!assignedAt) {
+        if (!roleEntry.memberMeta) roleEntry.memberMeta = {};
+        assignedAt = Date.now();
+        roleEntry.memberMeta[member.id] = {
+          assignedAt,
+          assignedBy: null,
+          assignedByIsBot: false
+        };
+        roleEntry.updatedAt = Date.now();
+        addRoleEntry(roleEntry.roleId, roleEntry);
+      }
+
+      const eligibleAt = assignedAt + PRIVATE_ROLE_TOP_MIN_AGE_MS;
+      if (now < eligibleAt) continue;
+
+      let effectiveDate = moment(eligibleAt).tz('Asia/Riyadh').format('YYYY-MM-DD');
+      if (roleResetDate && roleResetDate > effectiveDate) {
+        effectiveDate = roleResetDate;
+      }
+
+      if (!membersByStartDate.has(effectiveDate)) {
+        membersByStartDate.set(effectiveDate, []);
+      }
+      membersByStartDate.get(effectiveDate).push(member.id);
+    }
+
+    let activity = { voice: 0, messages: 0 };
+    for (const [startDate, memberIds] of membersByStartDate.entries()) {
+      const partial = await sumActivity(memberIds, startDate);
+      activity.voice += partial.voice;
+      activity.messages += partial.messages;
+    }
+
     ranked.push({
       roleId: roleEntry.roleId,
       name: role.name,
