@@ -309,12 +309,6 @@ async function handleManageMembers({ channel, userId, role, roleEntry, interacti
     const pageMembers = members.slice(currentPage * perPage, (currentPage + 1) * perPage);
     const list = pageMembers.map((member, index) => `#${index + 1 + currentPage * perPage} <@${member.id}>`).join('\n') || '**لا يوجد أعضاء حالياً.**';
 
-    const addMenu = new UserSelectMenuBuilder()
-      .setCustomId(`myrole_manage_add_${sessionId}`)
-      .setPlaceholder('إضافة أعضاء...')
-      .setMinValues(1)
-      .setMaxValues(25);
-
     const removeOptions = pageMembers.map(member => ({
       label: member.displayName.slice(0, 100),
       value: member.id
@@ -333,7 +327,12 @@ async function handleManageMembers({ channel, userId, role, roleEntry, interacti
     }
 
     const components = [
-      new ActionRowBuilder().addComponents(addMenu),
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`myrole_manage_add_prompt_${sessionId}`)
+          .setLabel('إضافة عضو')
+          .setStyle(ButtonStyle.Success)
+      ),
       new ActionRowBuilder().addComponents(removeMenu)
     ];
 
@@ -393,23 +392,60 @@ async function handleManageMembers({ channel, userId, role, roleEntry, interacti
     const removed = [];
 
     if (selection.isButton()) {
+      if (selection.customId === `myrole_manage_add_prompt_${sessionId}`) {
+        await selection.deferUpdate().catch(() => {});
+        const response = await promptForMessage(channel, userId, '**منشن العضو أو اكتب ID لإضافته للرول:**', interaction ? selection : null);
+        const targetId = response?.mentions?.users?.first()?.id || response?.content?.match(/\d{17,19}/)?.[0];
+
+        if (!targetId) {
+          statusText = '❌ لم يتم تحديد عضو صالح.';
+          await selection.editReply(buildPayload()).catch(() => {});
+          return;
+        }
+
+        const member = await role.guild.members.fetch(targetId).catch(() => null);
+        if (!member) {
+          statusText = '❌ لم يتم العثور على العضو في السيرفر.';
+          await selection.editReply(buildPayload()).catch(() => {});
+          return;
+        }
+
+        if (member.user?.bot) {
+          statusText = '❌ لا يمكن إضافة بوت إلى الرول الخاص.';
+          await selection.editReply(buildPayload()).catch(() => {});
+          return;
+        }
+
+        if (maxMembers && role.members.size >= maxMembers) {
+          statusText = '⚠️ تم الوصول لحد الرول.';
+          await selection.editReply(buildPayload()).catch(() => {});
+          return;
+        }
+
+        if (!member.roles.cache.has(role.id)) {
+          await member.roles.add(role, 'إضافة إلى رول خاص').catch(() => {});
+          setMemberAssignment(roleEntry, member.id, userId, selection.user.bot);
+          added.push(member.id);
+        }
+        if (added.length) {
+          roleEntry.updatedAt = Date.now();
+          addRoleEntry(role.id, roleEntry);
+          statusText = ` Add : ${added.length} | Removed : 0`;
+          await logRoleAction(role.guild, 'تم تحديث أعضاء رول خاص.', [
+            { name: 'الرول', value: `<@&${role.id}>`, inline: true },
+            { name: 'الأونر', value: `<@${roleEntry.ownerId}>`, inline: true },
+            { name: 'إضافة', value: `${added.length}`, inline: true },
+            { name: 'إزالة', value: '0', inline: true }
+          ]);
+        }
+        await selection.editReply(buildPayload()).catch(() => {});
+        await refreshPanelMessage(panelMessage, roleEntry, role);
+        return;
+      }
       if (selection.customId === `myrole_manage_prev_${sessionId}`) currentPage = Math.max(0, currentPage - 1);
       if (selection.customId === `myrole_manage_next_${sessionId}`) currentPage += 1;
       await selection.update(buildPayload()).catch(() => {});
       return;
-    }
-
-    if (selection.isUserSelectMenu() && selection.customId === `myrole_manage_add_${sessionId}`) {
-      await selection.deferUpdate().catch(() => {});
-      for (const id of selection.values) {
-        const member = await role.guild.members.fetch(id).catch(() => null);
-        if (!member) continue;
-        if (member.user?.bot) continue;
-        if (maxMembers && role.members.size >= maxMembers) break;
-        await member.roles.add(role, 'إضافة إلى رول خاص').catch(() => {});
-        setMemberAssignment(roleEntry, member.id, userId, selection.user.bot);
-        added.push(member.id);
-      }
     }
 
     if (selection.isStringSelectMenu() && selection.customId === `myrole_manage_remove_${sessionId}`) {
