@@ -164,6 +164,71 @@ function scheduleRoleGrantHistorySave() {
     }, 1500);
 
 }
+
+async function getRecentRoleUpdateExecutor(guild, targetUserId, roleId, actionType = 'add') {
+    if (!guild || !targetUserId || !roleId) return null;
+    try {
+        const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberRoleUpdate, limit: 8 }).catch(() => null);
+        if (!logs) return null;
+        const now = Date.now();
+        const changeKey = actionType === 'remove' ? '$remove' : '$add';
+        for (const entry of logs.entries.values()) {
+            if (!entry?.target || String(entry.target.id) !== String(targetUserId)) continue;
+            if ((now - (entry.createdTimestamp || 0)) > 15000) continue;
+            const hasRole = (entry.changes || []).some(change => (
+                change?.key === changeKey &&
+                Array.isArray(change.new) &&
+                change.new.some(item => String(item?.id) === String(roleId))
+            ));
+            if (!hasRole) continue;
+            return entry.executor || null;
+        }
+    } catch (error) {
+        console.error('❌ خطأ في قراءة Audit Logs لتغييرات الرولات الخاصة:', error?.message || error);
+    }
+    return null;
+}
+
+async function notifyPrivateRoleMemberChange({ member, role, roleEntry, executor, action = 'add' }) {
+    if (!member?.user || member.user.bot || !role || !roleEntry) return;
+    const actionText = action === 'remove' ? '**تم ازالتك من رول خاص**' : '**تم اضافتك لرول خاص**';
+    const ownerText = roleEntry.ownerId ? `<@${roleEntry.ownerId}>` : '**غير معروف**';
+    const byText = executor ? `<@${executor.id}>` : '**غير معروف**';
+    const unixTime = Math.floor(Date.now() / 1000);
+    const timeText = `**<t:${unixTime}:F> • <t:${unixTime}:R>**`;
+    const avatar = executor?.displayAvatarURL?.({ size: 256 }) || member.guild.members.me?.displayAvatarURL?.({ size: 256 }) || null;
+
+    const embed = new EmbedBuilder()
+        .setTitle('Private Role')
+        .setDescription(
+            `${actionText}\n` +
+            `**By :** ${byText}\n` +
+            `**ROLE OWNER :** ${ownerText}\n` +
+            `TIME : ${timeText}`
+        )
+        .setColor(colorManager.getColor ? colorManager.getColor() : (action === 'remove' ? '#e74c3c' : '#2ecc71'))
+        .setTimestamp();
+    if (avatar) {
+        embed.setThumbnail(avatar);
+    }
+
+    await member.send({ embeds: [embed] }).catch(() => {});
+}
+
+async function sweepBotsFromSpecialRoles(clientInstance) {
+    if (!clientInstance) return;
+    for (const guild of clientInstance.guilds.cache.values()) {
+        const entries = getGuildRoles(guild.id);
+        for (const roleEntry of entries) {
+            const role = guild.roles.cache.get(roleEntry.roleId) || await guild.roles.fetch(roleEntry.roleId).catch(() => null);
+            if (!role) continue;
+            for (const member of role.members.values()) {
+                if (!member.user?.bot) continue;
+                await member.roles.remove(role, 'منع وجود بوتات داخل الرولات الخاصة').catch(() => {});
+            }
+        }
+    }
+}
 // دالة لقراءة ملف JSON
 function readJSONFile(filePath, defaultValue = {}) {
     try {
@@ -1633,6 +1698,15 @@ client.once(Events.ClientReady, async () => {
     }
   }, RESTORE_SCHEDULES_DELAY_MS);
 
+  setTimeout(async () => {
+    try {
+      await sweepBotsFromSpecialRoles(client);
+      console.log('✅ تم تنفيذ تصفية بوتات الرولات الخاصة عند بدء التشغيل.');
+    } catch (error) {
+      console.error('❌ خطأ أثناء تصفية بوتات الرولات الخاصة عند البدء:', error);
+    }
+  }, RESTORE_SCHEDULES_DELAY_MS + 2500);
+
         // تحديث صلاحيات اللوق عند بدء البوت
         setTimeout(async () => {
             try {
@@ -2632,26 +2706,60 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
 
         }
         
-        // تحديث memberMeta للرولات الخاصة عند الإضافة/الإزالة اليدوية
-        for (const [roleId] of addedRoles) {
+        // تحديث memberMeta للرولات الخاصة + حماية منع إضافة بوت + إشعار العضو الخاص
+        const specialRoleChanges = [];
+
+        for (const [roleId, role] of addedRoles) {
             const roleEntry = getRoleEntry(roleId);
             if (!roleEntry || roleEntry.guildId !== newMember.guild.id) continue;
+
+            if (newMember.user?.bot) {
+                await newMember.roles.remove(role, 'حماية الرولات الخاصة: منع إضافة البوتات').catch(() => {});
+                continue;
+            }
+
             if (!roleEntry.memberMeta) roleEntry.memberMeta = {};
+            const previousMeta = roleEntry.memberMeta[userId] || {};
             roleEntry.memberMeta[userId] = {
-                assignedAt: Date.now(),
-                assignedBy: null,
-                assignedByIsBot: false
+                assignedAt: previousMeta.assignedAt || Date.now(),
+                assignedBy: previousMeta.assignedBy || null,
+                assignedByIsBot: Boolean(previousMeta.assignedByIsBot)
             };
             roleEntry.updatedAt = Date.now();
             addRoleEntry(roleId, roleEntry);
+            specialRoleChanges.push({ action: 'add', roleId, role, roleEntry, assignmentMeta: roleEntry.memberMeta[userId] });
         }
 
-        for (const [roleId] of removedRoles) {
+        for (const [roleId, role] of removedRoles) {
             const roleEntry = getRoleEntry(roleId);
-            if (!roleEntry || roleEntry.guildId !== newMember.guild.id || !roleEntry.memberMeta) continue;
-            delete roleEntry.memberMeta[userId];
+            if (!roleEntry || roleEntry.guildId !== newMember.guild.id) continue;
+            const removedMeta = roleEntry.memberMeta?.[userId] || null;
+            if (roleEntry.memberMeta) {
+                delete roleEntry.memberMeta[userId];
+            }
             roleEntry.updatedAt = Date.now();
             addRoleEntry(roleId, roleEntry);
+
+            if (!newMember.user?.bot) {
+                specialRoleChanges.push({ action: 'remove', roleId, role, roleEntry, assignmentMeta: removedMeta });
+            }
+        }
+
+        if (specialRoleChanges.length && !newMember.user?.bot) {
+            for (const change of specialRoleChanges) {
+                let executor = await getRecentRoleUpdateExecutor(newMember.guild, newMember.id, change.roleId, change.action);
+                const assignedById = change.assignmentMeta?.assignedBy || null;
+                if ((!executor || executor.bot) && assignedById && String(assignedById) !== String(executor?.id || '')) {
+                    executor = await newMember.client.users.fetch(assignedById).catch(() => executor);
+                }
+                await notifyPrivateRoleMemberChange({
+                    member: newMember,
+                    role: change.role,
+                    roleEntry: change.roleEntry,
+                    executor,
+                    action: change.action
+                });
+            }
         }
 
         // مزامنة نظام map open عند التعديل اليدوي للرولات
