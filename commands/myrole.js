@@ -401,26 +401,42 @@ async function handleManageMembers({ channel, userId, role, roleEntry, interacti
 
     if (selection.isUserSelectMenu() && selection.customId === `myrole_manage_add_${sessionId}`) {
       await selection.deferUpdate().catch(() => {});
+      let attemptedBotAction = false;
       for (const id of selection.values) {
         const member = await role.guild.members.fetch(id).catch(() => null);
         if (!member) continue;
+        if (member.user?.bot) {
+          attemptedBotAction = true;
+          continue;
+        }
         if (maxMembers && role.members.size >= maxMembers) break;
         await member.roles.add(role, 'إضافة إلى رول خاص').catch(() => {});
         setMemberAssignment(roleEntry, member.id, userId, selection.user.bot);
         added.push(member.id);
       }
+      if (attemptedBotAction) {
+        await respondEphemeral(selection, { content: '❌ لا يمكن إضافة او ازالة بوتات لرول خاص.' });
+      }
     }
 
     if (selection.isStringSelectMenu() && selection.customId === `myrole_manage_remove_${sessionId}`) {
       await selection.deferUpdate().catch(() => {});
+      let attemptedBotAction = false;
       if (!selection.values.includes('none')) {
         for (const id of selection.values) {
           const member = await role.guild.members.fetch(id).catch(() => null);
           if (!member) continue;
+          if (member.user?.bot) {
+            attemptedBotAction = true;
+            continue;
+          }
           await member.roles.remove(role, 'إزالة من رول خاص').catch(() => {});
           removeMemberAssignment(roleEntry, member.id);
           removed.push(member.id);
         }
+      }
+      if (attemptedBotAction) {
+        await respondEphemeral(selection, { content: '❌ لا يمكن إضافة او ازالة بوتات لرول خاص.' });
       }
     }
 
@@ -700,7 +716,7 @@ async function handleMembersList({ channel, role, interaction, roleEntry }) {
           : 'غير معروف';
         const since = meta?.assignedAt ? formatDurationShort(now - meta.assignedAt) : '**غير معروف**';
         const assignedBy = meta?.assignedBy
-          ? (meta.assignedByIsBot ? '**بوت**' : `<@${meta.assignedBy}>`)
+          ? `<@${meta.assignedBy}>`
           : '**غير معروف**';
         details.push(`**${member.displayName} (<@${member.id}>)\n• حصل على الرول بتاريخ : ${assignedAt}\n• منذ : ${since}\n• اللي اعطاه الرول : ${assignedBy}**`);
       }
