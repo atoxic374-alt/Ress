@@ -165,6 +165,33 @@ function scheduleRoleGrantHistorySave() {
 
 }
 
+function extractActorIdFromReason(reasonText, targetUserId = null) {
+    if (!reasonText || typeof reasonText !== 'string') return null;
+    const reason = reasonText.trim();
+    if (!reason) return null;
+
+    const keywordPatterns = [
+        /(?:\bby\b|بواسطة|من\s*قبل|المنفذ|executor|actor)\s*[:=\-]?\s*<?@?!?(\d{17,19})>?/i,
+        /(?:\bby\b|بواسطة|من\s*قبل|المنفذ|executor|actor)\s*[:=\-]?\s*(\d{17,19})/i
+    ];
+
+    for (const pattern of keywordPatterns) {
+        const match = reason.match(pattern);
+        if (match?.[1] && String(match[1]) !== String(targetUserId || '')) {
+            return match[1];
+        }
+    }
+
+    const mentionMatch = reason.match(/<@!?(\d{17,19})>/);
+    if (mentionMatch?.[1] && String(mentionMatch[1]) !== String(targetUserId || '')) {
+        return mentionMatch[1];
+    }
+
+    const ids = reason.match(/\d{17,19}/g) || [];
+    const fallback = ids.find(id => String(id) !== String(targetUserId || ''));
+    return fallback || null;
+}
+
 async function getRecentRoleUpdateExecutor(guild, targetUserId, roleId, actionType = 'add') {
     if (!guild || !targetUserId || !roleId) return null;
     try {
@@ -181,7 +208,11 @@ async function getRecentRoleUpdateExecutor(guild, targetUserId, roleId, actionTy
                 change.new.some(item => String(item?.id) === String(roleId))
             ));
             if (!hasRole) continue;
-            return entry.executor || null;
+            return {
+                executor: entry.executor || null,
+                reason: entry.reason || '',
+                entry
+            };
         }
     } catch (error) {
         console.error('❌ خطأ في قراءة Audit Logs لتغييرات الرولات الخاصة:', error?.message || error);
@@ -2718,16 +2749,36 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
                 continue;
             }
 
+            const auditInfo = await getRecentRoleUpdateExecutor(newMember.guild, newMember.id, roleId, 'add');
             if (!roleEntry.memberMeta) roleEntry.memberMeta = {};
             const previousMeta = roleEntry.memberMeta[userId] || {};
+            let assignedBy = previousMeta.assignedBy || null;
+            let assignedByIsBot = Boolean(previousMeta.assignedByIsBot);
+
+            if (!assignedBy) {
+                if (auditInfo?.executor && !auditInfo.executor.bot) {
+                    assignedBy = auditInfo.executor.id;
+                    assignedByIsBot = false;
+                } else {
+                    const actorIdFromReason = extractActorIdFromReason(auditInfo?.reason || '', newMember.id);
+                    if (actorIdFromReason) {
+                        assignedBy = actorIdFromReason;
+                        assignedByIsBot = false;
+                    } else if (auditInfo?.executor) {
+                        assignedBy = auditInfo.executor.id;
+                        assignedByIsBot = Boolean(auditInfo.executor.bot);
+                    }
+                }
+            }
+
             roleEntry.memberMeta[userId] = {
                 assignedAt: previousMeta.assignedAt || Date.now(),
-                assignedBy: previousMeta.assignedBy || null,
-                assignedByIsBot: Boolean(previousMeta.assignedByIsBot)
+                assignedBy,
+                assignedByIsBot
             };
             roleEntry.updatedAt = Date.now();
             addRoleEntry(roleId, roleEntry);
-            specialRoleChanges.push({ action: 'add', roleId, role, roleEntry, assignmentMeta: roleEntry.memberMeta[userId] });
+            specialRoleChanges.push({ action: 'add', roleId, role, roleEntry, assignmentMeta: roleEntry.memberMeta[userId], auditInfo });
         }
 
         for (const [roleId, role] of removedRoles) {
@@ -2747,8 +2798,12 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
 
         if (specialRoleChanges.length && !newMember.user?.bot) {
             for (const change of specialRoleChanges) {
-                let executor = await getRecentRoleUpdateExecutor(newMember.guild, newMember.id, change.roleId, change.action);
-                const assignedById = change.assignmentMeta?.assignedBy || null;
+                const auditInfo = change.auditInfo || await getRecentRoleUpdateExecutor(newMember.guild, newMember.id, change.roleId, change.action);
+                let executor = auditInfo?.executor || null;
+                let assignedById = change.assignmentMeta?.assignedBy || null;
+                if (!assignedById) {
+                    assignedById = extractActorIdFromReason(auditInfo?.reason || '', newMember.id);
+                }
                 if ((!executor || executor.bot) && assignedById && String(assignedById) !== String(executor?.id || '')) {
                     executor = await newMember.client.users.fetch(assignedById).catch(() => executor);
                 }

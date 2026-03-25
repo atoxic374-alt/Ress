@@ -716,7 +716,7 @@ async function handleMembersList({ channel, role, interaction, roleEntry }) {
           : 'غير معروف';
         const since = meta?.assignedAt ? formatDurationShort(now - meta.assignedAt) : '**غير معروف**';
         const assignedBy = meta?.assignedBy
-          ? (meta.assignedByIsBot ? '**بوت**' : `<@${meta.assignedBy}>`)
+          ? `<@${meta.assignedBy}>`
           : '**غير معروف**';
         details.push(`**${member.displayName} (<@${member.id}>)\n• حصل على الرول بتاريخ : ${assignedAt}\n• منذ : ${since}\n• اللي اعطاه الرول : ${assignedBy}**`);
       }
