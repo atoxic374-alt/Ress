@@ -1137,7 +1137,7 @@ async function retryOperation(operation, maxRetries = 5, baseDelay = 1000, opera
                 console.warn(`[${operationName}] Missing permissions, cannot retry.`);
                 throw error;
             }
-            if (error.httpStatus === 429) { // Discord Rate Limit
+            if (error.status === 429 || error.code === 429) { // Discord Rate Limit
                 const retryAfter = (error.headers && error.headers['retry-after']) ? parseInt(error.headers['retry-after']) * 1000 : baseDelay * (2 ** i) + Math.random() * 1000;
                 console.warn(`[${operationName}] Rate limited. Retrying in ${retryAfter}ms. Attempt ${i + 1}/${maxRetries}`);
                 await new Promise(resolve => setTimeout(resolve, retryAfter));
@@ -2480,22 +2480,23 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
 
 async function getBackupsForGuild(guildId) {
     try {
-        const backupFiles = fs.readdirSync(backupsDir).filter(file =>
+        const backupFiles = (await fs.promises.readdir(backupsDir)).filter(file =>
             file.startsWith(guildId) && file.endsWith('.json')
         );
 
-        const backupDataPromises = backupFiles.map(async file => {
+        const backups = [];
+        for (const file of backupFiles) {
             const backupData = await readJSON(path.join(backupsDir, file));
-            return {
+            if (!backupData || typeof backupData !== 'object') continue;
+            backups.push({
                 fileName: file,
-                name: backupData.name,
-                createdBy: backupData.createdBy,
-                createdAt: backupData.createdAt,
-                stats: backupData.stats,
-                guildName: backupData.guildName
-            };
-        });
-        const backups = await Promise.all(backupDataPromises);
+                name: backupData.name || file.replace('.json', ''),
+                createdBy: backupData.createdBy || null,
+                createdAt: backupData.createdAt || 0,
+                stats: backupData.stats || {},
+                guildName: backupData.guildName || 'Unknown Guild'
+            });
+        }
         return backups.sort((a, b) => b.createdAt - a.createdAt);
     } catch (error) {
         console.error('خطأ في قراءة النسخ:', error);
@@ -2505,23 +2506,24 @@ async function getBackupsForGuild(guildId) {
 
 async function getAllBackups() {
     try {
-        const backupFiles = fs.readdirSync(backupsDir).filter(file =>
+        const backupFiles = (await fs.promises.readdir(backupsDir)).filter(file =>
             file.endsWith(".json")
         );
 
-        const backupDataPromises = backupFiles.map(async file => {
+        const backups = [];
+        for (const file of backupFiles) {
             const backupData = await readJSON(path.join(backupsDir, file));
-            return {
+            if (!backupData || typeof backupData !== 'object') continue;
+            backups.push({
                 fileName: file,
-                name: backupData.name,
-                createdBy: backupData.createdBy,
-                createdAt: backupData.createdAt,
-                stats: backupData.stats,
-                guildName: backupData.guildName,
-                guildId: backupData.guildId
-            };
-        });
-        const backups = await Promise.all(backupDataPromises);
+                name: backupData.name || file.replace('.json', ''),
+                createdBy: backupData.createdBy || null,
+                createdAt: backupData.createdAt || 0,
+                stats: backupData.stats || {},
+                guildName: backupData.guildName || 'Unknown Guild',
+                guildId: backupData.guildId || null
+            });
+        }
         return backups.sort((a, b) => b.createdAt - a.createdAt);
     } catch (error) {
         console.error("خطأ في قراءة النسخ:", error);
@@ -2632,7 +2634,7 @@ async function handleProtectSetup(message, client) {
                     `✅ تم حفظ اختيارك الحالي، أكمل باقي الاختيارات.`
                 )],
                 components: [new ActionRowBuilder().addComponents(backupMenu), new ActionRowBuilder().addComponents(typeMenu)]
-            }).catch(err => console.error("Failed to restore bans:", err));
+            }).catch(err => console.error("Interaction edit error:", err?.message || err));
             return;
         }
 
@@ -3282,7 +3284,7 @@ async function handleBackupModalSubmit(interaction, client) {
             await interaction.reply({
                 content: '❌ حدث خطأ في إنشاء النسخة الاحتياطية',
                 ephemeral: true
-            }).catch(err => console.error("Failed to restore bans:", err));
+            }).catch(err => console.error("Interaction reply error:", err?.message || err));
         }
     }
 
