@@ -3386,7 +3386,7 @@ async function handleReassignAliasMessage(message) {
   return handleReassignRequest(fakeInteraction, message.guild.id, ctx.panelId, ctx.channelId, { silent: true });
 }
 
-function buildMemberPointsEmbed({ requester, targetUser, targetId, guildId, targetIsResponsible = false, note = null }) {
+function buildMemberPointsEmbed({ requester, targetUser, targetId, guildId, targetIsResponsible = false, note = null, thumbnailMode = 'user', guild = null }) {
   const points = loadPoints();
   const totalPoints = getUserTotalPoints(points, targetId);
   const topAwarder = getTopPointAwarder(points, targetId);
@@ -3397,6 +3397,10 @@ function buildMemberPointsEmbed({ requester, targetUser, targetId, guildId, targ
   for (const panel of Object.values(guildData?.panels || {})) {
     claimedTickets += Object.values(panel?.tickets || {}).filter((ticket) => ticket?.claimedBy === targetId).length;
   }
+
+  const guildIcon = guild?.iconURL?.({ forceStatic: false, size: 128 }) || null;
+  const userAvatar = targetUser?.displayAvatarURL?.({ forceStatic: false, size: 128 }) || null;
+  const thumbnail = thumbnailMode === 'server' ? (guildIcon || userAvatar) : (userAvatar || guildIcon);
 
   const embed = colorManager.createEmbed()
     .setTitle('Points')
@@ -3414,13 +3418,13 @@ function buildMemberPointsEmbed({ requester, targetUser, targetId, guildId, targ
         `**أكثر مسؤول عطاه نقاط :** ${topAwarder ? `<@${topAwarder.actorId}> (${topAwarder.total}p)` : 'N/A'}`,
         note ? `\n${note}` : null
       ].filter(Boolean).join('\n'))
-    .setThumbnail(targetUser?.displayAvatarURL?.({ forceStatic: false, size: 128 }) || null)
+    .setThumbnail(thumbnail)
     .setFooter({ text: `By : ${requester?.username || requester?.tag || 'System'}` });
 
   return embed;
 }
 
-async function handleMyTicketPointsMessage(message, targetInput = null) {
+async function handleMyTicketPointsMessage(message, targetInput = null, { thumbnailMode = 'user' } = {}) {
   const targetId = normalizeId(targetInput) || message.author.id;
   const targetUser = await message.client.users.fetch(targetId).catch(() => null);
   const targetMember = await resolveGuildMember(message.guild, targetId);
@@ -3436,7 +3440,9 @@ async function handleMyTicketPointsMessage(message, targetInput = null) {
     targetUser,
     targetId,
     guildId: message.guild.id,
-    targetIsResponsible
+    targetIsResponsible,
+    thumbnailMode,
+    guild: message.guild
   });
   return message.reply({ embeds: [embed] }).catch((error) => logSilentError('suppressed', error));
 }
@@ -3529,12 +3535,12 @@ async function handlePointsAdjustMessage(message, args, { BOT_OWNERS = [] } = {}
   );
 
   const sent = await message.reply({
-    embeds: [buildMemberPointsEmbed({ requester: message.author, targetUser, targetId, guildId: message.guild.id, targetIsResponsible, note: '**اختر العملية من الأزرار.**' })],
+    embeds: [buildMemberPointsEmbed({ requester: message.author, targetUser, targetId, guildId: message.guild.id, targetIsResponsible, note: '**اختر العملية من الأزرار.**', thumbnailMode: 'server', guild: message.guild })],
     components: [actionRow]
   }).catch(async (error) => {
     logSilentError('points.adjust.reply', error);
     return message.channel.send({
-      embeds: [buildMemberPointsEmbed({ requester: message.author, targetUser, targetId, guildId: message.guild.id, targetIsResponsible, note: '**اختر العملية من الأزرار.**' })],
+      embeds: [buildMemberPointsEmbed({ requester: message.author, targetUser, targetId, guildId: message.guild.id, targetIsResponsible, note: '**اختر العملية من الأزرار.**', thumbnailMode: 'server', guild: message.guild })],
       components: [actionRow]
     }).catch((fallbackError) => {
       logSilentError('points.adjust.channel-send', fallbackError);
@@ -3568,7 +3574,7 @@ async function handlePointsAdjustMessage(message, args, { BOT_OWNERS = [] } = {}
           .setStyle(mode === 'add' ? ButtonStyle.Success : ButtonStyle.Danger))
       );
       await interaction.update({
-        embeds: [buildMemberPointsEmbed({ requester: message.author, targetUser, targetId, guildId: message.guild.id, targetIsResponsible, note: `**تم اختيار :** ${mode === 'add' ? 'إضافة' : 'إزالة'}\n**اختر العدد من 1 إلى 5.**` })],
+        embeds: [buildMemberPointsEmbed({ requester: message.author, targetUser, targetId, guildId: message.guild.id, targetIsResponsible, note: `**تم اختيار :** ${mode === 'add' ? 'إضافة' : 'إزالة'}\n**اختر العدد من 1 إلى 5.**`, thumbnailMode: 'server', guild: message.guild })],
         components: [amountRow]
       }).catch((error) => logSilentError('suppressed', error));
       return;
@@ -3593,7 +3599,9 @@ async function handlePointsAdjustMessage(message, args, { BOT_OWNERS = [] } = {}
           targetId,
           guildId: message.guild.id,
           targetIsResponsible,
-          note: `**✅ تم ${actualDelta >= 0 ? 'إضافة' : 'إزالة'} ${Math.abs(actualDelta)} ${targetIsResponsible ? 'نقطة مسؤول' : 'نقطة'} للعضو :** <@${targetId}>`
+          note: `**✅ تم ${actualDelta >= 0 ? 'إضافة' : 'إزالة'} ${Math.abs(actualDelta)} ${targetIsResponsible ? 'نقطة مسؤول' : 'نقطة'} للعضو :** <@${targetId}>`,
+          thumbnailMode: 'server',
+          guild: message.guild
         })],
         components: []
       }).catch((error) => logSilentError('suppressed', error));
@@ -3645,7 +3653,9 @@ async function handlePointsAdjustActionInteraction(interaction, sessionId, mode)
       guildId: interaction.guild.id,
       targetIsResponsible: Boolean(session.targetIsResponsible),
       note: `**تم اختيار :** ${mode === 'add' ? 'إضافة' : 'إزالة'}
-**اختر العدد من 1 إلى 5.**`
+**اختر العدد من 1 إلى 5.**`,
+      thumbnailMode: 'server',
+      guild: interaction.guild
     })],
     components: [amountRow]
   }).catch((error) => logSilentError('suppressed', error));
@@ -3679,7 +3689,9 @@ async function handlePointsAdjustAmountInteraction(interaction, sessionId, mode,
       targetId: session.targetId,
       guildId: interaction.guild.id,
       targetIsResponsible: Boolean(session.targetIsResponsible),
-      note: `**✅ تم ${actualDelta >= 0 ? 'إضافة' : 'إزالة'} ${Math.abs(actualDelta)} ${session.targetIsResponsible ? 'نقطة مسؤول' : 'نقطة'} للعضو :** <@${session.targetId}>`
+      note: `**✅ تم ${actualDelta >= 0 ? 'إضافة' : 'إزالة'} ${Math.abs(actualDelta)} ${session.targetIsResponsible ? 'نقطة مسؤول' : 'نقطة'} للعضو :** <@${session.targetId}>`,
+      thumbnailMode: 'server',
+      guild: interaction.guild
     })],
     components: []
   }).catch((error) => logSilentError('suppressed', error));
@@ -4201,7 +4213,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
       await message.react('<:emoji_44:1430334506371645593>').catch((error) => logSilentError('suppressed', error));
       return;
     }
-    await handleMyTicketPointsMessage(message, targetArg);
+    await handleMyTicketPointsMessage(message, targetArg, { thumbnailMode: 'user' });
     return;
   }
   if (['tadd', 'اضافه', 'اضافة', 'إضافة'].some((alias) => invokedToken.endsWith(alias))) {
@@ -6068,16 +6080,14 @@ function registerHandlers(client) {
             source: 'ticket_button',
             at: now
           });
-          if (canUseGeneralPointsCommand(interaction.member, guildId, interaction.guild)) {
-            recordManagerPoint(points, {
-              guildId,
-              panelId: resolvedPanelId,
-              channelId,
-              actorId: interaction.user.id,
-              targetId: ticket.memberId || '',
-              at: now
-            });
-          }
+          recordManagerPoint(points, {
+            guildId,
+            panelId: resolvedPanelId,
+            channelId,
+            actorId: interaction.user.id,
+            targetId: ticket.memberId || '',
+            at: now
+          });
           ticket.pointAward = {
             actorId: interaction.user.id,
             delta: actualDelta,
