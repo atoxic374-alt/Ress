@@ -739,11 +739,29 @@ function appendTicketLogEntry(ticket, entry) {
     : buildLogEvent('note', String(entry || '').trim());
   if (!normalized.message) return;
   if (!Array.isArray(ticket.logEvents)) ticket.logEvents = [];
-  ticket.logEvents.push(normalized);
+
+  if (normalized.type === 'unauthorized_message' && normalized.actorId) {
+    const existingIndex = [...ticket.logEvents].reverse().findIndex((event) => (
+      event?.type === 'unauthorized_message'
+      && String(event?.actorId || '') === String(normalized.actorId || '')
+    ));
+    if (existingIndex !== -1) {
+      const absoluteIndex = ticket.logEvents.length - 1 - existingIndex;
+      const existing = ticket.logEvents[absoluteIndex] || {};
+      ticket.logEvents[absoluteIndex] = {
+        ...existing,
+        ...normalized,
+        id: existing.id || normalized.id
+      };
+    } else {
+      ticket.logEvents.push(normalized);
+    }
+  } else {
+    ticket.logEvents.push(normalized);
+  }
+
   if (ticket.logEvents.length > 40) ticket.logEvents = ticket.logEvents.slice(-40);
-  if (!Array.isArray(ticket.logHistory)) ticket.logHistory = [];
-  ticket.logHistory.push(formatTicketLogEvent(normalized));
-  if (ticket.logHistory.length > 12) ticket.logHistory = ticket.logHistory.slice(-12);
+  ticket.logHistory = ticket.logEvents.slice(-12).map((event) => formatTicketLogEvent(event));
 }
 
 function getTicketLogTimeline(ticket, channel = null, limit = 8) {
@@ -5519,7 +5537,7 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
 
 async function handleTransferResponsibility(interaction, guildId, panelId, channelId, value) {
   if (!interaction.deferred && !interaction.replied) {
-    await interaction.deferReply().catch((error) => logSilentError('suppressed', error));
+    await interaction.deferReply({ ephemeral: true }).catch((error) => logSilentError('suppressed', error));
   }
 
   if (!value || value === 'resp_none') {
@@ -5561,6 +5579,11 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     await interaction.editReply(buildTicketMessagePayload('Error', '**المسؤولية غير موجودة.**')).catch((error) => logSilentError('suppressed', error));
     return;
   }
+
+  const previousClaimer = ticket.claimedBy || null;
+  const previousTransferredUserIds = Array.isArray(ticket.transferredUserIds)
+    ? ticket.transferredUserIds.map((id) => String(id || '').trim()).filter((id) => /^\d{16,20}$/.test(id))
+    : [];
 
   // عند تحويل التذكرة، تصبح التذكرة غير مستلمة، لذا يجب مسح pointsReceiverId.
   // سيتم تعيين pointsReceiverId للمستلم الجديد عند استلام التذكرة لاحقاً.
@@ -5668,10 +5691,12 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   }
   await runConcurrentTasks(transferUiTasks, 'transfer.ui.update');
 
-  await interaction.editReply({
-    content: mentions.join(' ') || null,
+  await interaction.channel.send({
+    content: mentions.join(' ') || undefined,
     ...buildTicketMessagePayload('تحويل', `**تم تحويل التكت لمسؤولين : ${respName}**\n**المتصلون الآن :** ${onlineResponsibleMentions.join(' ') || 'N/A'}\n**الرولات :** ${targetRoles.map((id) => `<@&${id}>`).join(' ') || 'N/A'}`)
   }).catch((error) => logSilentError('suppressed', error));
+
+  await interaction.editReply(buildTicketMessagePayload('تحويل', '**تم التحويل بنجاح.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
 }
 
 async function showInputModal(interaction, customId, title, label, placeholder = '') {
