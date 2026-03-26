@@ -472,6 +472,38 @@ async function syncMusicBotNicknameForRoom(guild, roomChannel, reason = 'Sync te
   return { total: bots.length, renamed, failed };
 }
 
+async function moveRoomBotsToMusicSourceBeforeDelete(guild, roomChannel, reason = 'Return music bots to source room before temp room deletion') {
+  if (!guild || !roomChannel?.isVoiceBased?.()) {
+    return { attempted: 0, moved: 0, failed: 0, sourceChannel: null };
+  }
+
+  const config = getGuildConfig(guild.id);
+  if (!config?.musicChannelId) {
+    return { attempted: 0, moved: 0, failed: 0, sourceChannel: null };
+  }
+
+  const sourceChannel = guild.channels.cache.get(config.musicChannelId) || await guild.channels.fetch(config.musicChannelId).catch(() => null);
+  if (!sourceChannel?.isVoiceBased?.() || sourceChannel.id === roomChannel.id) {
+    return { attempted: 0, moved: 0, failed: 0, sourceChannel: null };
+  }
+
+  const botsInRoom = [...(roomChannel.members?.values?.() || [])]
+    .filter(member => member?.user?.bot && member.voice?.channelId === roomChannel.id);
+  if (!botsInRoom.length) {
+    return { attempted: 0, moved: 0, failed: 0, sourceChannel };
+  }
+
+  let moved = 0;
+  let failed = 0;
+  for (const botMember of botsInRoom) {
+    const movedNow = await botMember.voice?.setChannel?.(sourceChannel, reason).then(() => true).catch(() => false);
+    if (movedNow) moved += 1;
+    else failed += 1;
+  }
+
+  return { attempted: botsInRoom.length, moved, failed, sourceChannel };
+}
+
 function getSession(scopeOrUserId, userId = null) {
   const sessionKey = getSessionScopeKey(scopeOrUserId, userId);
   const existing = sessions.get(sessionKey);
@@ -2468,6 +2500,7 @@ async function deleteTempRoom(guild, ownerId, reason = 'Temp room cleanup') {
   if (!roomRecord) return false;
   const channel = roomRecord.channelId ? guild.channels.cache.get(roomRecord.channelId) || await guild.channels.fetch(roomRecord.channelId).catch(() => null) : null;
   if (channel) {
+    const botsReturnResult = await moveRoomBotsToMusicSourceBeforeDelete(guild, channel, reason);
     finalizeRoomPresenceSessions(guild.id, ownerId, roomRecord, channel, Date.now());
     await logTempRoomState(guild, {
       title: '🗑️ **حذف روم مؤقت**',
@@ -2477,7 +2510,9 @@ async function deleteTempRoom(guild, ownerId, reason = 'Temp room cleanup') {
       roomName: channel.name,
       roomRecord,
       reason,
-      extra: `**عدد الأعضاء وقت الحذف:** **${channel.members?.size || 0}**`
+      extra: `**عدد الأعضاء وقت الحذف:** **${channel.members?.size || 0}**
+**إرجاع بوتات الميوزك قبل الحذف:** **${botsReturnResult.moved}/${botsReturnResult.attempted}**
+**روم المصدر:** ${botsReturnResult.sourceChannel ? `<#${botsReturnResult.sourceChannel.id}>` : '**غير مضبوط**'}`
     });
     await channel.delete(reason).catch(() => {});
   }

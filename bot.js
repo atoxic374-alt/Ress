@@ -256,7 +256,7 @@ function writeJSONFile(filePath, data) {
     }
 }
 
-const RESPONSIBILITY_LEAVE_LIMIT_MS = 24 * 60 * 60 * 1000;
+const RESPONSIBILITY_LEAVE_LIMIT_MS = 6 * 60 * 60 * 1000;
 
 function getResponsibilityLeaveTracker() {
     const tracker = readJSONFile(DATA_FILES.responsibilityLeaveTracker, { guilds: {} });
@@ -309,7 +309,7 @@ async function removeInactiveResponsiblesForGuild(guild, now = Date.now()) {
                 removedAt: now,
                 responsibilities: removedFrom
             };
-            console.log(`🧹 تمت إزالة ${userId} من المسؤوليات بعد 24h خارج السيرفر (${guildId})`);
+            console.log(`🧹 تمت إزالة ${userId} من المسؤوليات بعد 6h خارج السيرفر (${guildId})`);
         }
         delete guildTracker.leftAtByUser[userId];
     }
@@ -1622,7 +1622,7 @@ client.once(Events.ClientReady, async () => {
     await ensureRespMessageFreshness(client, '30m-check');
   }, 30 * 60 * 1000);
 
-  // إزالة المسؤوليات تلقائياً بعد 24 ساعة خارج السيرفر
+  // إزالة المسؤوليات تلقائياً بعد 6 ساعات خارج السيرفر
   setInterval(async () => {
     for (const guild of client.guilds.cache.values()) {
       await removeInactiveResponsiblesForGuild(guild);
@@ -3416,7 +3416,7 @@ client.on('guildMemberAdd', async (member) => {
                 : 'غير محدد';
             const notifyEmbed = colorManager.createEmbed()
                 .setTitle('تنبيه المسؤوليات')
-                .setDescription(`تمت إزالتك من المسؤوليات تلقائياً بسبب بقائك خارج السيرفر أكثر من 24 ساعة.\n\n**المسؤوليات المتأثرة:** ${removedList}`);
+                .setDescription(`تمت إزالتك من المسؤوليات تلقائياً بسبب بقائك خارج السيرفر أكثر من 6 ساعات.\n\n**المسؤوليات المتأثرة:** ${removedList}`);
             await member.send({ embeds: [notifyEmbed] }).catch(() => {});
             await updateResponsibilitiesEmbedForGuild(member.guild.id);
         } else {
