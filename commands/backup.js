@@ -156,9 +156,53 @@ const protectionRuntime = {
     mutedAdminRoles: new Map(),
     bulkRestoreSessions: new Map(),
     bulkRestoreSessionTimeouts: new Map(),
+    allowedRoleAdminRestore: new Set(),
     protectionBootstrapped: false,
     botOwners: [] // سيتم تعبئتها عند التشغيل
 };
+
+function hasDangerousRolePermissions(role) {
+    if (!role) return false;
+    return role.permissions.has(PermissionFlagsBits.Administrator) ||
+        role.permissions.has(PermissionFlagsBits.ManageGuild) ||
+        role.permissions.has(PermissionFlagsBits.ManageRoles) ||
+        role.permissions.has(PermissionFlagsBits.BanMembers) ||
+        role.permissions.has(PermissionFlagsBits.KickMembers);
+}
+
+function isOwnerOrBotOwner(guild, userId) {
+    if (!guild || !userId) return false;
+    if (userId === guild.ownerId) return true;
+    return (protectionRuntime.botOwners || []).includes(userId);
+}
+
+function buildStatusLine(text) {
+    return `\n\n🕒 ${new Date().toISOString()}\n${text}`;
+}
+
+async function updateAlertMessages(client, sentAlerts = [], appendText = '', { disableButtons = false } = {}) {
+    if (!sentAlerts || sentAlerts.length === 0) return;
+
+    for (const alert of sentAlerts) {
+        try {
+            const channel = await client.channels.fetch(alert.channelId).catch(() => null);
+            const message = channel ? await channel.messages.fetch(alert.messageId).catch(() => null) : null;
+            if (!message) continue;
+
+            const nextContent = message.content.includes(appendText) ? message.content : (message.content + appendText);
+            let nextComponents = message.components;
+            if (disableButtons && message.components?.length) {
+                nextComponents = message.components.map(row => new ActionRowBuilder().addComponents(
+                    row.components.map(component => ButtonBuilder.from(component).setDisabled(true))
+                ));
+            }
+
+            await message.edit({ content: nextContent, components: nextComponents }).catch(() => null);
+        } catch (err) {
+            console.error("Failed to update alert message:", err);
+        }
+    }
+}
 
 function getCurrentRoleCount(guild) {
     return guild.roles.cache.filter(role => !role.managed && role.id !== guild.id).size;
@@ -461,7 +505,7 @@ function buildBulkRestoreComponents(guild, session) {
     return rows;
 }
 
-async function restoreAdminRolesWithFilters(guild, excludedRoleIds = new Set(), excludedUserIds = new Set()) {
+async function restoreAdminRolesWithFilters(guild, excludedRoleIds = new Set(), excludedUserIds = new Set(), restoredByUserId = null) {
     const entries = Array.from(protectionRuntime.removedAdminRoles.entries())
         .filter(([key]) => key.startsWith(`${guild.id}:`));
     const mutedEntries = Array.from(protectionRuntime.mutedAdminRoles.entries())
@@ -484,6 +528,7 @@ async function restoreAdminRolesWithFilters(guild, excludedRoleIds = new Set(), 
         if (!validRoleIds.length) continue;
 
         await member.roles.add(validRoleIds, `Owner requested admin-role restore (${payload.reason || 'protection'})`).catch(err => console.error(`Failed to add admin roles for user ${member.id} in guild ${guild.id}:`, err));
+        await updateAlertMessages(guild.client, payload.sentAlerts, buildStatusLine(`✅ **تمت الاستعادة عن طريق:** <@${restoredByUserId || guild.client.user.id}>\n**الحالة:** تم استعادة الرولات عبر الزر الجماعي.`), { disableButtons: true });
         protectionRuntime.removedAdminRoles.delete(entryKey);
         restoredRoles += validRoleIds.length;
         restoredMembers += 1;
@@ -493,8 +538,11 @@ async function restoreAdminRolesWithFilters(guild, excludedRoleIds = new Set(), 
     await executeParallel(mutedEntries, async ([entryKey, payload]) => {
         const role = guild.roles.cache.get(payload.roleId);
         if (!role || excludedRoleIds.has(payload.roleId)) return;
+        protectionRuntime.allowedRoleAdminRestore.add(`${guild.id}:${role.id}`);
         await role.setPermissions(BigInt(payload.oldPermissions), 'Owner requested global admin permission restore').catch(err => console.error(`Failed to restore global admin permissions for role ${role.id} in guild ${guild.id}:`, err));
+        protectionRuntime.allowedRoleAdminRestore.delete(`${guild.id}:${role.id}`);
         protectionRuntime.mutedAdminRoles.delete(entryKey);
+        await updateAlertMessages(guild.client, payload.sentAlerts, buildStatusLine(`✅ **الحالة:** تم استعادة صلاحية Administrator للرول عن طريق <@${restoredByUserId || guild.client.user.id}>.`), { disableButtons: true });
         restoredAdminRoleIds.push(payload.roleId);
         restoredRoles += 1;
     }, DEFAULT_CONCURRENCY);
@@ -543,8 +591,7 @@ async function handleRestoreAdminRoles(interaction) {
         return true;
     }
 
-    const isBotOwner = (protectionRuntime.botOwners || []).includes(interaction.user.id);
-    if (interaction.user.id !== guild.ownerId && !isBotOwner) {
+    if (!isOwnerOrBotOwner(guild, interaction.user.id)) {
         await interaction.reply({ content: '❌ This button is only for the server owner or bot owners.', ephemeral: true }).catch(err => console.error('Failed to reply to interaction (not owner):', err));
         return true;
     }
@@ -559,35 +606,26 @@ async function handleRestoreAdminRoles(interaction) {
 
     const member = await guild.members.fetch(targetId).catch(err => { console.error(`Failed to fetch target member ${targetId}:`, err); return null; });
     if (!member) {
+        await updateAlertMessages(interaction.client, payload.sentAlerts, buildStatusLine(`⚠️ **فشل الاستعادة:** العضو <@${targetId}> غير موجود في السيرفر (قد يكون مطرود/خارج السيرفر).`));
         await interaction.reply({ content: `⚠️ ${payload.actorName || targetId} غير موجود الآن داخل السيرفر.`, ephemeral: true }).catch(err => console.error('Failed to reply to interaction (member not found):', err));
         return true;
     }
 
-    const validRoleIds = (payload.roleIds || []).filter(roleId => guild.roles.cache.has(roleId));
+    const validRoleIds = (payload.roleIds || [])
+        .filter(roleId => guild.roles.cache.has(roleId))
+        .filter(roleId => {
+            const role = guild.roles.cache.get(roleId);
+            return role && hasDangerousRolePermissions(role);
+        });
     if (validRoleIds.length === 0) {
+        await updateAlertMessages(interaction.client, payload.sentAlerts, buildStatusLine('⚠️ **فشل الاستعادة:** الرولات المحفوظة لم تعد متاحة أو لم تعد خطيرة/إدارية.'));
         await interaction.reply({ content: '⚠️ Stored admin roles are no longer available.', ephemeral: true }).catch(err => console.error('Failed to reply to interaction (roles unavailable):', err));
         return true;
     }
 
     await member.roles.add(validRoleIds, `Owner/BotOwner requested admin-role restore (${payload.reason || 'protection'})`).catch(err => console.error(`Failed to add admin roles for user ${member.id} in guild ${guild.id}:`, err));
 
-    // تحديث جميع الرسائل المرسلة (للمالك وللملاك)
-    if (payload.sentAlerts && payload.sentAlerts.length > 0) {
-        for (const alert of payload.sentAlerts) {
-            try {
-                const channel = await interaction.client.channels.fetch(alert.channelId).catch(() => null);
-                const message = channel ? await channel.messages.fetch(alert.messageId).catch(() => null) : null;
-                if (message) {
-                    await message.edit({
-                        content: message.content + `\n\n✅ **تمت الاستعادة بواسطة:** <@${interaction.user.id}>\n**الحالة:** تم استعادة الرولات بنجاح.`,
-                        components: []
-                    }).catch(() => null);
-                }
-            } catch (err) {
-                console.error("Failed to update alert message:", err);
-            }
-        }
-    }
+    await updateAlertMessages(interaction.client, payload.sentAlerts, buildStatusLine(`✅ **تمت الاستعادة عن طريق:** <@${interaction.user.id}>\n**الحالة:** تم استعادة الرولات بنجاح.`), { disableButtons: true });
 
     protectionRuntime.removedAdminRoles.delete(entryKey);
     await interaction.reply({ content: `✅ Restored ${validRoleIds.length} admin role(s) for ${member.displayName}. تم تحديث الحالة عند الجميع.`, ephemeral: true }).catch(err => console.error('Failed to reply to interaction (restore success):', err));
@@ -598,15 +636,15 @@ async function handleBulkRestoreAdminRoles(interaction) {
     const customId = interaction.customId || '';
 
     if (interaction.isButton() && customId.startsWith('restore_admin_roles_bulk_')) {
-        const guildId = customId.replace('restore_admin_roles_bulk_', '');
+        const guildId = customId.replace('restore_admin_roles_bulk_', '').split(':')[0];
         const guild = interaction.client.guilds.cache.get(guildId) || await interaction.client.guilds.fetch(guildId).catch(err => { console.error(`Failed to fetch guild ${guildId} for interaction:`, err); return null; });
         if (!guild) {
             await interaction.reply({ content: '❌ Guild not found.', ephemeral: true }).catch(err => console.error('Failed to reply to interaction (guild not found):', err));
             return true;
         }
 
-        if (interaction.user.id !== guild.ownerId) {
-            await interaction.reply({ content: '❌ This button is only for the server owner.', ephemeral: true }).catch(err => console.error('Failed to reply to interaction (not owner):', err));
+        if (!isOwnerOrBotOwner(guild, interaction.user.id)) {
+            await interaction.reply({ content: '❌ This button is only for the server owner or bot owners.', ephemeral: true }).catch(err => console.error('Failed to reply to interaction (not owner):', err));
             return true;
         }
 
@@ -690,6 +728,8 @@ async function handleBulkRestoreAdminRoles(interaction) {
         }
 
         if (customId.startsWith('restore_bulk_cancel_')) {
+            const timeout = protectionRuntime.bulkRestoreSessionTimeouts.get(sessionId);
+            if (timeout) clearTimeout(timeout);
             protectionRuntime.bulkRestoreSessions.delete(sessionId);
             protectionRuntime.bulkRestoreSessionTimeouts.delete(sessionId);
          await interaction.update({ content: 'تم إلغاء العملية.', components: [] }).catch(err => console.error('Failed to update interaction (cancel bulk restore):', err));
@@ -702,8 +742,11 @@ async function handleBulkRestoreAdminRoles(interaction) {
             return true;
         }
 
-        const result = await restoreAdminRolesWithFilters(guild, session.excludedRoleIds, session.excludedUserIds);
+        const result = await restoreAdminRolesWithFilters(guild, session.excludedRoleIds, session.excludedUserIds, interaction.user.id);
+        const timeout = protectionRuntime.bulkRestoreSessionTimeouts.get(sessionId);
+        if (timeout) clearTimeout(timeout);
         protectionRuntime.bulkRestoreSessions.delete(sessionId);
+        protectionRuntime.bulkRestoreSessionTimeouts.delete(sessionId);
         await interaction.update({
             content: `✅ تمت الاستعادة لـ ${result.restoredMembers} عضو وبعدد ${result.restoredRoles} رول إداري بواسطة <@${interaction.user.id}>.`,
             components: []
@@ -945,29 +988,29 @@ function ensureProtectionEngine(client) {
 
         if (!hadAdmin && hasAdmin) {
             const actorId = await getRecentExecutorId(guild, 31); // Role Update
-            const isBotOwner = (protectionRuntime.botOwners || []).includes(actorId);
-            
-            // إذا تم تفعيل الحماية القصوى (mutedAdminRoles) أو إذا لم يكن الفاعل هو المالك/ملاك البوت
             const isGlobalLockdown = protectionRuntime.mutedAdminRoles.has(`${guild.id}:${newRole.id}`);
-            
-            if (isGlobalLockdown || (actorId !== guild.ownerId && !isBotOwner)) {
+            const allowByButton = protectionRuntime.allowedRoleAdminRestore.has(`${guild.id}:${newRole.id}`);
+
+            if ((isGlobalLockdown && !allowByButton) || (!isOwnerOrBotOwner(guild, actorId) && !allowByButton)) {
                 // إعادة الصلاحيات كما كانت
                 await newRole.setPermissions(oldRole.permissions, 'Protection: Unauthorized Administrator permission grant').catch(() => null);
                 
                 // إذا كان هناك بلاغ نشط لهذه الرول، نحدث الرسالة
                 const mutedPayload = protectionRuntime.mutedAdminRoles.get(`${guild.id}:${newRole.id}`);
                 if (mutedPayload && mutedPayload.sentAlerts) {
-                    for (const alert of mutedPayload.sentAlerts) {
-                        const channel = await guild.client.channels.fetch(alert.channelId).catch(() => null);
-                        const message = channel ? await channel.messages.fetch(alert.messageId).catch(() => null) : null;
-                        if (message && !message.content.includes('محاولة تفعيل Administrator')) {
-                            await message.edit({
-                                content: message.content + `\n\n⚠️ **تنبيه:** حاول <@${actorId}> تفعيل صلاحية Administrator يدوياً وتم منعه.`,
-                            }).catch(() => null);
-                        }
-                    }
+                    await updateAlertMessages(guild.client, mutedPayload.sentAlerts, buildStatusLine(`⚠️ **تنبيه:** حاول <@${actorId || 'unknown'}> تفعيل صلاحية Administrator يدوياً وتم منعه.`));
                 }
                 return; // لا نكمل لمعالجة الحادثة العادية لأننا أصلحنا الخطأ
+            }
+
+            if (isGlobalLockdown && allowByButton) {
+                const mutedPayload = protectionRuntime.mutedAdminRoles.get(`${guild.id}:${newRole.id}`);
+                if (mutedPayload) {
+                    await updateAlertMessages(guild.client, mutedPayload.sentAlerts, buildStatusLine(`✅ **تمت استعادة Administrator عبر الزر** بواسطة <@${actorId || guild.client.user.id}>.`), { disableButtons: true });
+                    protectionRuntime.mutedAdminRoles.delete(`${guild.id}:${newRole.id}`);
+                }
+                protectionRuntime.allowedRoleAdminRestore.delete(`${guild.id}:${newRole.id}`);
+                return;
             }
         }
 
@@ -1063,40 +1106,17 @@ function ensureProtectionEngine(client) {
 
         if (isRestoringRemoved || isAddingAdmin) {
             const actorId = await getRecentExecutorId(guild, 25); // Member Role Update
-            const isBotOwner = (protectionRuntime.botOwners || []).includes(actorId);
             
-            // إذا لم يكن الفاعل هو المالك أو أحد ملاك البوت، يتم سحب الرولات فوراً
-            if (actorId !== guild.ownerId && !isBotOwner) {
-                const rolesToRemove = addedRoles.filter(role => (payload.roleIds || []).includes(role.id) || role.permissions.has(PermissionFlagsBits.Administrator));
+            // إذا لم يكن الفاعل هو المالك أو أحد ملاك البوت، يتم سحب الرولات الخطيرة فوراً
+            if (!isOwnerOrBotOwner(guild, actorId)) {
+                const rolesToRemove = addedRoles.filter(role => (payload.roleIds || []).includes(role.id) || hasDangerousRolePermissions(role));
                 await newMember.roles.remove(rolesToRemove, 'Protection: Unauthorized role restoration for punished user').catch(() => null);
                 
-                // تحديث الرسائل لإبلاغ المالك بمحاولة الاستعادة اليدوية
-                if (payload.sentAlerts) {
-                    for (const alert of payload.sentAlerts) {
-                        const channel = await guild.client.channels.fetch(alert.channelId).catch(() => null);
-                        const message = channel ? await channel.messages.fetch(alert.messageId).catch(() => null) : null;
-                        if (message && !message.content.includes('محاولة استعادة يدوية')) {
-                            await message.edit({
-                                content: message.content + `\n\n⚠️ **تنبيه:** حاول <@${actorId}> استعادة الرولات يدوياً وتم منعه تلقائياً.`,
-                            }).catch(() => null);
-                        }
-                    }
-                }
+                await updateAlertMessages(guild.client, payload.sentAlerts, buildStatusLine(`⚠️ **تنبيه:** حاول <@${actorId || 'unknown'}> استعادة رولات حساسة يدوياً وتم منعه تلقائياً.`));
             } else {
-                // إذا كان الفاعل هو المالك أو أحد ملاك البوت، نعتبر المهمة تمت ونحذف السجل
+                // إذا كان الفاعل هو المالك أو أحد ملاك البوت، نغلق البلاغ حتى لو تمت يدوياً
                 protectionRuntime.removedAdminRoles.delete(key);
-                if (payload.sentAlerts) {
-                    for (const alert of payload.sentAlerts) {
-                        const channel = await guild.client.channels.fetch(alert.channelId).catch(() => null);
-                        const message = channel ? await channel.messages.fetch(alert.messageId).catch(() => null) : null;
-                        if (message) {
-                            await message.edit({
-                                content: message.content + `\n\n✅ **تمت الاستعادة يدوياً بواسطة:** <@${actorId}>\n**الحالة:** تم تحديث الرولات وإغلاق البلاغ.`,
-                                components: []
-                            }).catch(() => null);
-                        }
-                    }
-                }
+                await updateAlertMessages(guild.client, payload.sentAlerts, buildStatusLine(`✅ **تمت الاستعادة يدوياً بواسطة:** <@${actorId || 'unknown'}>\n**الحالة:** تم تحديث الرولات وإغلاق البلاغ.`), { disableButtons: true });
             }
         }
     });
@@ -1117,7 +1137,7 @@ async function retryOperation(operation, maxRetries = 5, baseDelay = 1000, opera
                 console.warn(`[${operationName}] Missing permissions, cannot retry.`);
                 throw error;
             }
-            if (error.httpStatus === 429) { // Discord Rate Limit
+            if (error.status === 429 || error.code === 429) { // Discord Rate Limit
                 const retryAfter = (error.headers && error.headers['retry-after']) ? parseInt(error.headers['retry-after']) * 1000 : baseDelay * (2 ** i) + Math.random() * 1000;
                 console.warn(`[${operationName}] Rate limited. Retrying in ${retryAfter}ms. Attempt ${i + 1}/${maxRetries}`);
                 await new Promise(resolve => setTimeout(resolve, retryAfter));
@@ -2460,22 +2480,23 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
 
 async function getBackupsForGuild(guildId) {
     try {
-        const backupFiles = fs.readdirSync(backupsDir).filter(file =>
+        const backupFiles = (await fs.promises.readdir(backupsDir)).filter(file =>
             file.startsWith(guildId) && file.endsWith('.json')
         );
 
-        const backupDataPromises = backupFiles.map(async file => {
+        const backups = [];
+        for (const file of backupFiles) {
             const backupData = await readJSON(path.join(backupsDir, file));
-            return {
+            if (!backupData || typeof backupData !== 'object') continue;
+            backups.push({
                 fileName: file,
-                name: backupData.name,
-                createdBy: backupData.createdBy,
-                createdAt: backupData.createdAt,
-                stats: backupData.stats,
-                guildName: backupData.guildName
-            };
-        });
-        const backups = await Promise.all(backupDataPromises);
+                name: backupData.name || file.replace('.json', ''),
+                createdBy: backupData.createdBy || null,
+                createdAt: backupData.createdAt || 0,
+                stats: backupData.stats || {},
+                guildName: backupData.guildName || 'Unknown Guild'
+            });
+        }
         return backups.sort((a, b) => b.createdAt - a.createdAt);
     } catch (error) {
         console.error('خطأ في قراءة النسخ:', error);
@@ -2485,23 +2506,24 @@ async function getBackupsForGuild(guildId) {
 
 async function getAllBackups() {
     try {
-        const backupFiles = fs.readdirSync(backupsDir).filter(file =>
+        const backupFiles = (await fs.promises.readdir(backupsDir)).filter(file =>
             file.endsWith(".json")
         );
 
-        const backupDataPromises = backupFiles.map(async file => {
+        const backups = [];
+        for (const file of backupFiles) {
             const backupData = await readJSON(path.join(backupsDir, file));
-            return {
+            if (!backupData || typeof backupData !== 'object') continue;
+            backups.push({
                 fileName: file,
-                name: backupData.name,
-                createdBy: backupData.createdBy,
-                createdAt: backupData.createdAt,
-                stats: backupData.stats,
-                guildName: backupData.guildName,
-                guildId: backupData.guildId
-            };
-        });
-        const backups = await Promise.all(backupDataPromises);
+                name: backupData.name || file.replace('.json', ''),
+                createdBy: backupData.createdBy || null,
+                createdAt: backupData.createdAt || 0,
+                stats: backupData.stats || {},
+                guildName: backupData.guildName || 'Unknown Guild',
+                guildId: backupData.guildId || null
+            });
+        }
         return backups.sort((a, b) => b.createdAt - a.createdAt);
     } catch (error) {
         console.error("خطأ في قراءة النسخ:", error);
@@ -2522,31 +2544,166 @@ function deleteBackup(backupFileName) {
 }
 
 
-async function handleProtectUsersSub(message, args) {
-    const sub = (args[1] || 'list').toLowerCase();
-    const cfg = getGuildProtectionConfig(message.guild.id) || { trustedUsers: [] };
+function getProtectionTypesSummary(cfg) {
+    if (!cfg?.protectionTypes) return 'غير محدد';
+    const labels = [];
+    if (cfg.protectionTypes.channelsCategories) labels.push('رومات/كاتقوري');
+    if (cfg.protectionTypes.rolesPermissions) labels.push('رولات/صلاحيات');
+    if (cfg.protectionTypes.kickBan) labels.push('طرد/باند');
+    if (cfg.protectionTypes.serverSettings) labels.push('إعدادات السيرفر');
+    return labels.length ? labels.join('، ') : 'غير محدد';
+}
 
-    if (sub === 'add') {
-        const user = message.mentions.users.first();
-        if (!user) return message.channel.send({ embeds: [colorManager.createEmbed().setDescription('❌ منشن الشخص')] });
-        cfg.trustedUsers = Array.from(new Set([...(cfg.trustedUsers || []), user.id]));
-        setGuildProtectionConfig(message.guild.id, cfg);
-        if (cfg.enabled) await refreshProtectionStateFast(message.guild, cfg);
-        return message.channel.send({ embeds: [colorManager.createEmbed().setDescription(`✅ تمت إضافة <@${user.id}> للموثوقين`)] });
-    }
+function buildProtectionUsersEmbed(guild, cfg) {
+    const trusted = cfg?.trustedUsers || [];
+    const trustedText = trusted.length
+        ? trusted.map((id, index) => `${index + 1}. <@${id}> (\`${id}\`)`).join('\n')
+        : 'لا يوجد موثوقين حالياً';
 
-    if (sub === 'remove') {
-        const user = message.mentions.users.first();
-        if (!user) return message.channel.send({ embeds: [colorManager.createEmbed().setDescription('❌ منشن الشخص')] });
-        cfg.trustedUsers = (cfg.trustedUsers || []).filter(id => id !== user.id);
-        setGuildProtectionConfig(message.guild.id, cfg);
-        if (cfg.enabled) await refreshProtectionStateFast(message.guild, cfg);
-        return message.channel.send({ embeds: [colorManager.createEmbed().setDescription(`✅ تمت إزالة <@${user.id}> من الموثوقين`)] });
-    }
+    return colorManager.createEmbed()
+        .setTitle('Backup Users / Protection')
+        .setDescription(
+            `**حالة الحماية:** ${cfg?.enabled ? '🟢 مفعلة' : '🔴 متوقفة'}\n` +
+            `**أنواع الحماية المفعلة:** ${getProtectionTypesSummary(cfg)}\n\n` +
+            `**الموثوقين:**\n${trustedText}`
+        );
+}
 
-    const trusted = cfg.trustedUsers || [];
-    const text = trusted.length ? trusted.map(id => `• <@${id}> (${id})`).join('\n') : 'لا يوجد موثوقين';
-    return message.channel.send({ embeds: [colorManager.createEmbed().setTitle('Trusted Users').setDescription(text)] });
+function buildProtectionUsersRows(authorId, cfg) {
+    return [
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`backup_users_add_${authorId}`).setLabel('إضافة موثوق').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(`backup_users_remove_${authorId}`).setLabel('إزالة موثوق').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId(`backup_users_refresh_${authorId}`).setLabel('تحديث').setStyle(ButtonStyle.Secondary)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`backup_protect_setup_quick_${authorId}`).setLabel('إعداد الحماية').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(`backup_protect_enable_quick_${authorId}`).setLabel('تفعيل الحماية').setStyle(ButtonStyle.Success).setDisabled(Boolean(cfg?.enabled)),
+            new ButtonBuilder().setCustomId(`backup_protect_disable_quick_${authorId}`).setLabel('إيقاف الحماية').setStyle(ButtonStyle.Secondary).setDisabled(!Boolean(cfg?.enabled))
+        )
+    ];
+}
+
+async function handleProtectUsersPanel(message) {
+    let cfg = await getGuildProtectionConfig(message.guild.id) || { enabled: false, trustedUsers: [], protectionTypes: {} };
+
+    const sent = await message.channel.send({
+        embeds: [buildProtectionUsersEmbed(message.guild, cfg)],
+        components: buildProtectionUsersRows(message.author.id, cfg)
+    });
+
+    const collector = sent.createMessageComponentCollector({
+        filter: i => i.user.id === message.author.id,
+        time: 15 * 60 * 1000
+    });
+
+    collector.on('collect', async (interaction) => {
+        const id = interaction.customId || '';
+        if (!interaction.isButton()) return;
+
+        if (id.startsWith('backup_users_refresh_')) {
+            cfg = await getGuildProtectionConfig(message.guild.id) || { enabled: false, trustedUsers: [], protectionTypes: {} };
+            await interaction.update({
+                embeds: [buildProtectionUsersEmbed(message.guild, cfg)],
+                components: buildProtectionUsersRows(message.author.id, cfg)
+            }).catch(err => console.error('Failed to update users panel (refresh):', err));
+            return;
+        }
+
+        if (id.startsWith('backup_users_add_') || id.startsWith('backup_users_remove_')) {
+            const isAdd = id.startsWith('backup_users_add_');
+            await interaction.reply({
+                content: isAdd ? 'منشن الشخص المراد إضافته كموثوق خلال 45 ثانية.' : 'منشن الشخص المراد إزالته من الموثوقين خلال 45 ثانية.',
+                ephemeral: true
+            }).catch(() => null);
+
+            const collected = await message.channel.awaitMessages({
+                filter: m => m.author.id === message.author.id && m.mentions.users.size > 0,
+                max: 1,
+                time: 45_000
+            }).catch(() => null);
+
+            const mentionMessage = collected?.first();
+            const user = mentionMessage?.mentions?.users?.first();
+            if (!user) {
+                await interaction.followUp({ content: '❌ لم يتم استقبال منشن صحيح.', ephemeral: true }).catch(() => null);
+                return;
+            }
+
+            cfg = await getGuildProtectionConfig(message.guild.id) || { enabled: false, trustedUsers: [], protectionTypes: {} };
+            const trustedUsers = new Set(cfg.trustedUsers || []);
+            if (isAdd) trustedUsers.add(user.id);
+            else trustedUsers.delete(user.id);
+            cfg.trustedUsers = Array.from(trustedUsers);
+            await setGuildProtectionConfig(message.guild.id, cfg);
+            if (cfg.enabled) await refreshProtectionStateFast(message.guild, cfg);
+
+            await interaction.followUp({
+                content: isAdd ? `✅ تمت إضافة <@${user.id}> للموثوقين.` : `✅ تمت إزالة <@${user.id}> من الموثوقين.`,
+                ephemeral: true
+            }).catch(() => null);
+
+            await sent.edit({
+                embeds: [buildProtectionUsersEmbed(message.guild, cfg)],
+                components: buildProtectionUsersRows(message.author.id, cfg)
+            }).catch(err => console.error('Failed to update users panel after add/remove:', err));
+            return;
+        }
+
+        if (id.startsWith('backup_protect_enable_quick_')) {
+            cfg = await getGuildProtectionConfig(message.guild.id) || { enabled: false, trustedUsers: [], protectionTypes: {} };
+            if (!cfg.backupFile || !cfg.protectionTypes || !Object.values(cfg.protectionTypes).some(Boolean)) {
+                await interaction.reply({
+                    content: '⚠️ لا يمكن التفعيل السريع لأن الإعدادات غير مكتملة. استخدم `backup protect` لاختيار النسخة وأنواع الحماية أولاً.',
+                    ephemeral: true
+                }).catch(() => null);
+                return;
+            }
+
+            cfg.enabled = true;
+            cfg.enabledBy = message.author.id;
+            cfg.enabledAt = Date.now();
+            await setGuildProtectionConfig(message.guild.id, cfg);
+            await refreshProtectionStateFast(message.guild, cfg);
+
+            await interaction.update({
+                embeds: [buildProtectionUsersEmbed(message.guild, cfg)],
+                components: buildProtectionUsersRows(message.author.id, cfg)
+            }).catch(err => console.error('Failed to update users panel (enable):', err));
+            return;
+        }
+
+        if (id.startsWith('backup_protect_setup_quick_')) {
+            await interaction.reply({ content: '✅ فتح إعداد الحماية...', ephemeral: true }).catch(() => null);
+            await handleProtectSetup(message, message.client);
+            return;
+        }
+
+        if (id.startsWith('backup_protect_disable_quick_')) {
+            cfg = await getGuildProtectionConfig(message.guild.id) || { enabled: false, trustedUsers: [], protectionTypes: {} };
+            cfg.enabled = false;
+            await setGuildProtectionConfig(message.guild.id, cfg);
+            const intervalId = protectionRuntime.snapshotIntervals.get(message.guild.id);
+            if (intervalId) {
+                clearInterval(intervalId);
+                protectionRuntime.snapshotIntervals.delete(message.guild.id);
+            }
+
+            await interaction.update({
+                embeds: [buildProtectionUsersEmbed(message.guild, cfg)],
+                components: buildProtectionUsersRows(message.author.id, cfg)
+            }).catch(err => console.error('Failed to update users panel (disable):', err));
+            return;
+        }
+    });
+
+    collector.on('end', async () => {
+        cfg = await getGuildProtectionConfig(message.guild.id) || { enabled: false, trustedUsers: [], protectionTypes: {} };
+        await sent.edit({
+            embeds: [buildProtectionUsersEmbed(message.guild, cfg)],
+            components: []
+        }).catch(() => null);
+    });
 }
 
 async function handleProtectSetup(message, client) {
@@ -2612,7 +2769,7 @@ async function handleProtectSetup(message, client) {
                     `✅ تم حفظ اختيارك الحالي، أكمل باقي الاختيارات.`
                 )],
                 components: [new ActionRowBuilder().addComponents(backupMenu), new ActionRowBuilder().addComponents(typeMenu)]
-            }).catch(err => console.error("Failed to restore bans:", err));
+            }).catch(err => console.error("Interaction edit error:", err?.message || err));
             return;
         }
 
@@ -2667,17 +2824,9 @@ module.exports = {
             return message.channel.send({ embeds: [errorEmbed] });
         }
 
-        const sub = (args[0] || '').toLowerCase();
-        if (sub === 'protect') {
-            return handleProtectSetup(message, client);
-        }
-        if (sub === 'users') {
-            return handleProtectUsersSub(message, args);
-        }
-
         const mainEmbed = colorManager.createEmbed()
             .setTitle('Backup System')
-            .setDescription('**اختر ماتريد**')
+            .setDescription('**كل شيء بأمر واحد**')
             .setThumbnail('https://cdn.discordapp.com/attachments/1436815242024714390/1436852524224348160/cloud-sync.png?ex=69111cb1&is=690fcb31&hm=92bf5525fbc9000c7628d22b886e75836a249599b3dad22fcbc78089fb956a1b&');
 
         const row = new ActionRowBuilder().addComponents(
@@ -2697,8 +2846,14 @@ module.exports = {
                 .setEmoji('<:emoji_8:1436850506008891632>')
                 .setStyle(ButtonStyle.Secondary)
         );
+        const row2 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('backup_protection_panel')
+                .setLabel('Protection Panel')
+                .setStyle(ButtonStyle.Primary)
+        );
 
-        const msg = await message.channel.send({ embeds: [mainEmbed], components: [row] });
+        const msg = await message.channel.send({ embeds: [mainEmbed], components: [row, row2] });
 
         const collector = msg.createMessageComponentCollector({
             filter: i => i.user.id === message.author.id,
@@ -2731,6 +2886,8 @@ module.exports = {
                 modal.addComponents(new ActionRowBuilder().addComponents(nameInput));
                 await interaction.showModal(modal);
 
+            } else if (interaction.customId === 'backup_protection_panel') {
+                await handleProtectUsersPanel(message);
             } else if (interaction.customId === 'backup_restore') {
                 const allBackups = (await getAllBackups()).filter(backup => backup.guildId === message.guild.id);
 
@@ -3262,7 +3419,7 @@ async function handleBackupModalSubmit(interaction, client) {
             await interaction.reply({
                 content: '❌ حدث خطأ في إنشاء النسخة الاحتياطية',
                 ephemeral: true
-            }).catch(err => console.error("Failed to restore bans:", err));
+            }).catch(err => console.error("Interaction reply error:", err?.message || err));
         }
     }
 
