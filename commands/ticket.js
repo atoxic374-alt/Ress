@@ -3714,6 +3714,7 @@ async function handleTopPointsMessage(message, page = 1) {
     }).join('\n\n')
     : '**لا توجد نقاط مسجلة حالياً.**';
   const embed = makeTicketEmbed('Top Ticket', description, { user: message.author })
+    .setThumbnail(message.guild?.iconURL?.({ forceStatic: false, size: 256 }) || null)
     .setFooter({ text: `Page ${currentPage}/${totalPages} • Your Points : ${getUserTotalPoints(points, message.author.id)}` });
 
   const row = new ActionRowBuilder().addComponents(
@@ -3758,6 +3759,7 @@ async function handleTopManagersMessage(message, page = 1) {
     ? pageEntries.map((entry, index) => `#${start + index + 1} - <@${entry.userId}> : ${entry.total}m`).join('\n\n')
     : '**لا توجد نقاط مسؤولين مسجلة حالياً.**';
   const embed = makeTicketEmbed('توب المسؤولين', description, { user: message.author })
+    .setThumbnail(message.guild?.iconURL?.({ forceStatic: false, size: 256 }) || null)
     .setFooter({ text: `Page ${currentPage}/${totalPages} • نقاطك كمسؤول : ${getManagerPointCount(points, message.author.id)}m` });
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`ticket_tm_prev_${message.author.id}_${currentPage}`).setLabel('السابق').setStyle(ButtonStyle.Secondary).setDisabled(currentPage <= 1),
