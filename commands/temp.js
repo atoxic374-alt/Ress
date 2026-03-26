@@ -30,6 +30,8 @@ const SESSION_TTL_MS = 12 * 60 * 1000;
 const HEARTBEAT_MS = 45000;
 const INVITE_TTL_MS = 60 * 60 * 1000;
 const TOP_REFRESH_MS = 5 * 60 * 1000;
+const CONTROL_CARD_CACHE_TTL_MS = 45 * 1000;
+const CONTROL_CARD_CACHE_MAX_SIZE = 80;
 const MAX_TOP_SEPARATOR_BYTES = 8 * 1024 * 1024;
 const TOP_SEPARATOR_FETCH_TIMEOUT_MS = 15000;
 const KICK_REJOIN_BLOCK_MS = 30 * 1000;
@@ -425,7 +427,49 @@ function pruneRuntimeCaches() {
     if (!asset?.filePath || !fs.existsSync(asset.filePath)) topSeparatorCache.delete(guildId);
   }
 
+  for (const [key, entry] of controlCardCache.entries()) {
+    if (!entry || (now - (entry.createdAt || 0)) > CONTROL_CARD_CACHE_TTL_MS) {
+      controlCardCache.delete(key);
+    }
+  }
+
+  if (controlCardCache.size > CONTROL_CARD_CACHE_MAX_SIZE) {
+    const staleKeys = [...controlCardCache.keys()].slice(0, controlCardCache.size - CONTROL_CARD_CACHE_MAX_SIZE);
+    staleKeys.forEach(key => controlCardCache.delete(key));
+  }
+
   if (guildAccentCache.size > 250) guildAccentCache.clear();
+}
+
+function runDetached(label, task) {
+  Promise.resolve()
+    .then(task)
+    .catch(error => console.error(`[temp] ${label}:`, error));
+}
+
+function invalidateControlCardCache(guildId) {
+  const prefix = `control_card_${guildId}_`;
+  for (const key of controlCardCache.keys()) {
+    if (String(key).startsWith(prefix)) controlCardCache.delete(key);
+  }
+}
+
+async function syncMusicBotNicknameForRoom(guild, roomChannel, reason = 'Sync temp room music bot nickname') {
+  if (!guild || !roomChannel?.isVoiceBased?.()) return { total: 0, renamed: 0, failed: 0 };
+  const bots = [...(roomChannel.members?.values?.() || [])].filter(member => member?.user?.bot);
+  if (!bots.length) return { total: 0, renamed: 0, failed: 0 };
+
+  let renamed = 0;
+  let failed = 0;
+  const targetNickname = sanitizeRoomName(roomChannel.name, 'Temp Room').slice(0, 32);
+  for (const botMember of bots) {
+    if (!botMember.manageable) continue;
+    if (botMember.nickname === targetNickname) continue;
+    const changed = await botMember.setNickname(targetNickname, reason).then(() => true).catch(() => false);
+    if (changed) renamed += 1;
+    else failed += 1;
+  }
+  return { total: bots.length, renamed, failed };
 }
 
 function getSession(scopeOrUserId, userId = null) {
@@ -1891,10 +1935,12 @@ function fitTextSize(ctx, text, maxWidth, startSize, minSize, fontFamily, weight
 
 async function buildGeneralControlCard(guild) {
   const config = getGuildConfig(guild.id);
-  const cacheKey = `control_card_${guild.id}_${config.controlCardColorMode}_${config.controlCardCustomColor}_${JSON.stringify(config.enabledControls)}`;
+  const liveRoomCount = Object.keys(getRoomStore(guild.id)).length;
+  const cacheKey = `control_card_${guild.id}_${config.controlCardColorMode}_${config.controlCardCustomColor}_${JSON.stringify(config.enabledControls)}_${guild.name}_${liveRoomCount}`;
 
-  if (controlCardCache.has(cacheKey)) {
-    return controlCardCache.get(cacheKey);
+  const cachedCard = controlCardCache.get(cacheKey);
+  if (cachedCard && (Date.now() - (cachedCard.createdAt || 0)) <= CONTROL_CARD_CACHE_TTL_MS) {
+    return cachedCard.attachment;
   }
 
   const width = 1600;
@@ -2031,7 +2077,7 @@ async function buildGeneralControlCard(guild) {
     });
   });
 
-  const roomCount = Object.keys(getRoomStore(guild.id)).length;
+  const roomCount = liveRoomCount;
   const footerLineY = panelY + panelHeight - 78;
   const footerPadding = 66;
   const footerBlockWidth = 420;
@@ -2078,7 +2124,7 @@ async function buildGeneralControlCard(guild) {
 
   ctx.shadowBlur = 0;
   const attachment = new AttachmentBuilder(canvas.toBuffer('image/png'), { name: `temp-general-control-${guild.id}.png` });
-  controlCardCache.set(cacheKey, attachment);
+  controlCardCache.set(cacheKey, { attachment, createdAt: Date.now() });
   return attachment;
 }
 
@@ -2184,6 +2230,9 @@ async function applyRoomState(roomChannel, ownerId) {
     PermissionsBitField.Flags.UseVAD,
     PermissionsBitField.Flags.UseEmbeddedActivities,
     PermissionsBitField.Flags.PrioritySpeaker,
+    PermissionsBitField.Flags.MoveMembers,
+    PermissionsBitField.Flags.MuteMembers,
+    PermissionsBitField.Flags.DeafenMembers,
     PermissionsBitField.Flags.SendMessages,
     PermissionsBitField.Flags.EmbedLinks,
     PermissionsBitField.Flags.AttachFiles,
@@ -2191,7 +2240,6 @@ async function applyRoomState(roomChannel, ownerId) {
     PermissionsBitField.Flags.UseExternalEmojis,
     PermissionsBitField.Flags.UseExternalStickers,
     PermissionsBitField.Flags.ManageMessages,
-    PermissionsBitField.Flags.ManageWebhooks,
     PermissionsBitField.Flags.BypassSlowmode,
     PermissionsBitField.Flags.ReadMessageHistory,
     PermissionsBitField.Flags.SendTTSMessages,
@@ -2199,6 +2247,7 @@ async function applyRoomState(roomChannel, ownerId) {
     PermissionsBitField.Flags.SendPolls,
     PermissionsBitField.Flags.UseApplicationCommands
   ]);
+  addOverwriteDenies(overwriteMap, ownerId, [PermissionsBitField.Flags.ManageWebhooks]);
 
   for (const userId of profile.allowedUsers) {
     addOverwriteAllows(overwriteMap, userId, [
@@ -2221,6 +2270,7 @@ async function applyRoomState(roomChannel, ownerId) {
       PermissionsBitField.Flags.MuteMembers,
       PermissionsBitField.Flags.DeafenMembers
     ]);
+    addOverwriteDenies(overwriteMap, userId, [PermissionsBitField.Flags.ManageWebhooks]);
   }
 
   for (const userId of profile.bannedUsers) {
@@ -2646,6 +2696,7 @@ async function processRotatingRoomName(guild, ownerId, profile, roomChannel) {
   if (roomChannel.name !== nextName) {
     const renamed = await roomChannel.setName(nextName).then(() => true).catch(() => false);
     if (!renamed) return false;
+    await syncMusicBotNicknameForRoom(guild, roomChannel, 'Sync music bot nickname after rotating temp room name');
   }
   profile.roomNameRotationIndex = nextIndex;
   profile.roomNameRotationNextAt = Date.now() + profile.roomNameRotationIntervalMs;
@@ -3041,19 +3092,22 @@ async function handleSettingsButton(interaction) {
   if (action === 'temp_settings_card_color_avatar') {
     config.controlCardColorMode = 'avatar';
     config.controlCardCustomColor = null;
+    invalidateControlCardCache(interaction.guild.id);
     scheduleSave();
     await interaction.update({ content: '✅ تم تفعيل لون صورة السيرفر لصورة الكنترول.', components: [] }).catch(() => {});
-    await Promise.all([
-      updateSettingsPanelMessage(interaction.guild, userId),
-      ensureGuildControlPanel(interaction.guild)
-    ]);
-    await sendTempLog(interaction.guild, {
-      title: '🎨 **تحديث لون صورة الكنترول**',
-      description: '**تم ضبط لون صورة الكنترول على لون صورة السيرفر.**',
-      fields: [
-        { name: '**المنفذ**', value: `<@${interaction.user.id}>`, inline: true },
-        { name: '**الوضع**', value: '**Avatar Color**', inline: true }
-      ]
+    runDetached('Failed async refresh after temp_settings_card_color_avatar', async () => {
+      await Promise.all([
+        updateSettingsPanelMessage(interaction.guild, userId),
+        ensureGuildControlPanel(interaction.guild)
+      ]);
+      await sendTempLog(interaction.guild, {
+        title: '🎨 **تحديث لون صورة الكنترول**',
+        description: '**تم ضبط لون صورة الكنترول على لون صورة السيرفر.**',
+        fields: [
+          { name: '**المنفذ**', value: `<@${interaction.user.id}>`, inline: true },
+          { name: '**الوضع**', value: '**Avatar Color**', inline: true }
+        ]
+      });
     });
     return true;
   }
@@ -3185,17 +3239,19 @@ async function handleSettingsButton(interaction) {
       scheduleSave();
       session.tempControls = null;
       await interaction.update({ content: '✅ تم حفظ الأزرار.', components: [] }).catch(() => {});
-      await Promise.all([
-        updateSettingsPanelMessage(interaction.guild, userId),
-        ensureGuildControlPanel(interaction.guild)
-      ]);
-      await sendTempLog(interaction.guild, {
-        title: '🎛️ **تحديث أزرار التحكم**',
-        description: '**تم حفظ قائمة الأزرار الظاهرة داخل لوحة التحكم العامة.**',
-        fields: [
-          { name: '**المنفذ**', value: `<@${interaction.user.id}>`, inline: true },
-          { name: '**عدد الأزرار المفعلة**', value: `**${Object.values(getGuildConfig(interaction.guild.id).enabledControls).filter(Boolean).length}**`, inline: true }
-        ]
+      runDetached('Failed async refresh after temp_settings_controls_save', async () => {
+        await Promise.all([
+          updateSettingsPanelMessage(interaction.guild, userId),
+          ensureGuildControlPanel(interaction.guild)
+        ]);
+        await sendTempLog(interaction.guild, {
+          title: '🎛️ **تحديث أزرار التحكم**',
+          description: '**تم حفظ قائمة الأزرار الظاهرة داخل لوحة التحكم العامة.**',
+          fields: [
+            { name: '**المنفذ**', value: `<@${interaction.user.id}>`, inline: true },
+            { name: '**عدد الأزرار المفعلة**', value: `**${Object.values(getGuildConfig(interaction.guild.id).enabledControls).filter(Boolean).length}**`, inline: true }
+          ]
+        });
       });
       return true;
     }
@@ -3233,17 +3289,19 @@ async function handleSettingsSelect(interaction) {
     config.controlMessageId = null;
     scheduleSave();
     await interaction.update({ content: `✅ تم تحديد روم التحكم إلى <#${interaction.values[0]}>.`, components: [] }).catch(() => {});
-    await Promise.all([
-      updateSettingsPanelMessage(interaction.guild, userId),
-      ensureGuildControlPanel(interaction.guild)
-    ]);
-    await sendTempLog(interaction.guild, {
-      title: '📌 **تحديث روم التحكم**',
-      description: '**تم تعيين روم التحكم العام للنظام.**',
-      fields: [
-        { name: '**المنفذ**', value: `<@${interaction.user.id}>`, inline: true },
-        { name: '**الروم الجديد**', value: `<#${interaction.values[0]}>`, inline: true }
-      ]
+    runDetached('Failed async refresh after temp_settings_control_select', async () => {
+      await Promise.all([
+        updateSettingsPanelMessage(interaction.guild, userId),
+        ensureGuildControlPanel(interaction.guild)
+      ]);
+      await sendTempLog(interaction.guild, {
+        title: '📌 **تحديث روم التحكم**',
+        description: '**تم تعيين روم التحكم العام للنظام.**',
+        fields: [
+          { name: '**المنفذ**', value: `<@${interaction.user.id}>`, inline: true },
+          { name: '**الروم الجديد**', value: `<#${interaction.values[0]}>`, inline: true }
+        ]
+      });
     });
     return true;
   }
@@ -3327,19 +3385,22 @@ async function handleSettingsModal(interaction) {
     }
     config.controlCardColorMode = 'custom';
     config.controlCardCustomColor = normalizedColor;
+    invalidateControlCardCache(interaction.guild.id);
     scheduleSave();
     await replyEphemeral(interaction, `✅ تم تحديث لون صورة الكنترول إلى ${normalizedColor}.`);
-    await Promise.all([
-      updateSettingsPanelMessage(interaction.guild, userId),
-      ensureGuildControlPanel(interaction.guild)
-    ]);
-    await sendTempLog(interaction.guild, {
-      title: '🎨 **تحديث لون صورة الكنترول**',
-      description: '**تم ضبط لون مخصص لصورة الكنترول.**',
-      fields: [
-        { name: '**المنفذ**', value: `<@${interaction.user.id}>`, inline: true },
-        { name: '**اللون**', value: `**${normalizedColor}**`, inline: true }
-      ]
+    runDetached('Failed async refresh after temp_settings_card_color_custom_modal', async () => {
+      await Promise.all([
+        updateSettingsPanelMessage(interaction.guild, userId),
+        ensureGuildControlPanel(interaction.guild)
+      ]);
+      await sendTempLog(interaction.guild, {
+        title: '🎨 **تحديث لون صورة الكنترول**',
+        description: '**تم ضبط لون مخصص لصورة الكنترول.**',
+        fields: [
+          { name: '**المنفذ**', value: `<@${interaction.user.id}>`, inline: true },
+          { name: '**اللون**', value: `**${normalizedColor}**`, inline: true }
+        ]
+      });
     });
     return true;
   }
@@ -3646,10 +3707,19 @@ async function performGeneralAction(interaction, action, resolverResult = null) 
       await editEphemeral(interaction, `ℹ️ يوجد بالفعل بوت داخل الروم: ${existingBot.user.username}.`);
       return true;
     }
-    const musicBot = sourceChannel.members.find(member =>
-      member.user.bot &&
-      /music|song|player|luna|hydra|probot/i.test(member.user.username)
-    );
+    const sourceBots = [...(sourceChannel.members?.values?.() || [])]
+      .filter(member => member?.user?.bot && member.voice?.channelId === sourceChannel.id);
+    const preferredMusicBots = sourceBots.filter(member => {
+      const signature = [
+        member.user.username,
+        member.user.globalName,
+        member.displayName,
+        member.nickname,
+        member.user.tag
+      ].filter(Boolean).join(' ');
+      return /music|song|player|luna|hydra|probot|vexera|chip|rythm|tunes|radio/i.test(signature);
+    });
+    const musicBot = preferredMusicBots[0] || sourceBots[0] || null;
     if (!musicBot) {
       await editEphemeral(interaction, 'ℹ️ لم يتم العثور على بوت أغاني داخل روم الميوزك المحدد.');
       return true;
@@ -3660,19 +3730,14 @@ async function performGeneralAction(interaction, action, resolverResult = null) 
       return true;
     }
 
-    let nicknameRenamed = true;
-    const targetNickname = sanitizeRoomName(roomChannel.name, musicBot.displayName || musicBot.user.username).slice(0, 32);
-    if (musicBot.manageable && musicBot.nickname !== targetNickname) {
-      nicknameRenamed = await musicBot.setNickname(targetNickname, 'Sync music bot nickname with temp room name').then(() => true).catch(() => false);
-    } else if (!musicBot.manageable) {
-      nicknameRenamed = false;
-    }
+    const nicknameSync = await syncMusicBotNicknameForRoom(guild, roomChannel, 'Sync music bot nickname with temp room name');
+    const nicknameSyncOk = nicknameSync.failed === 0;
 
-    if (!nicknameRenamed && typeof roomChannel.send === 'function') {
+    if (!nicknameSyncOk && typeof roomChannel.send === 'function') {
       await roomChannel.send(`❌ فشل تغيير اسم بوت الميوزك **${musicBot.user.username}** ليطابق اسم الروم **${roomChannel.name}**.`).catch(() => {});
     }
 
-    await editEphemeral(interaction, `✅ تم سحب بوت الأغاني ${musicBot.user.username} إلى الروم.${nicknameRenamed ? ' وتمت مزامنة الاسم بنجاح.' : ' لكن فشل تغيير الاسم إلى اسم الروم.'}`);
+    await editEphemeral(interaction, `✅ تم سحب بوت الأغاني ${musicBot.user.username} إلى الروم.${nicknameSyncOk ? ' وتمت مزامنة الاسم بنجاح.' : ' لكن فشل تغيير الاسم إلى اسم الروم.'}`);
     await logTempRoomState(guild, {
       title: '🎵 **سحب بوت أغاني**',
       description: '**تم تنفيذ محاولة سحب بوت أغاني إلى الروم المؤقت.**',
@@ -3683,7 +3748,7 @@ async function performGeneralAction(interaction, action, resolverResult = null) 
       roomRecord,
       extra: `**البوت:** **${musicBot.user.username}**
 **روم المصدر:** <#${sourceChannel.id}>
-**مزامنة الاسم:** ${nicknameRenamed ? '**نجحت**' : '**فشلت**'}`
+**مزامنة الاسم:** ${nicknameSyncOk ? '**نجحت**' : '**فشلت**'}`
     });
     return true;
   }
@@ -4755,6 +4820,7 @@ async function handleRoomModal(interaction) {
         await replyEphemeral(interaction, '❌ تم حفظ الإدخال لكن تعذر تغيير اسم الروم حالياً. حاول مرة أخرى بعد قليل.');
         return true;
       }
+      await syncMusicBotNicknameForRoom(interaction.guild, roomChannel, 'Sync music bot nickname after manual temp room rename');
     }
     profile.roomNameTemplate = names[0];
     profile.lastKnownRoomName = names[0];
@@ -4907,6 +4973,17 @@ async function handleTempRoomModerationMessage(message) {
   }
 }
 
+async function handleTempRoomChannelUpdate(oldChannel, newChannel) {
+  if (!newChannel?.guild || !newChannel?.isVoiceBased?.()) return;
+  if (!oldChannel || oldChannel.name === newChannel.name) return;
+
+  for (const roomRecord of Object.values(getRoomStore(newChannel.guild.id) || {})) {
+    if (roomRecord?.channelId !== newChannel.id) continue;
+    await syncMusicBotNicknameForRoom(newChannel.guild, newChannel, 'Sync music bot nickname after temp room channel update');
+    break;
+  }
+}
+
 function registerInteractionHandler(client) {
   if (registered) return;
   registered = true;
@@ -4937,6 +5014,7 @@ function registerInteractionHandler(client) {
   client.on('voiceStateUpdate', handleVoiceStateUpdate);
   client.on('messageCreate', handlePendingTopSeparatorMessage);
   client.on('messageCreate', handleTempRoomModerationMessage);
+  client.on('channelUpdate', handleTempRoomChannelUpdate);
 
   if (!heartbeatHandle) {
     heartbeatHandle = setInterval(() => {
