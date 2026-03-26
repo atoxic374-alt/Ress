@@ -2544,31 +2544,166 @@ function deleteBackup(backupFileName) {
 }
 
 
-async function handleProtectUsersSub(message, args) {
-    const sub = (args[1] || 'list').toLowerCase();
-    const cfg = getGuildProtectionConfig(message.guild.id) || { trustedUsers: [] };
+function getProtectionTypesSummary(cfg) {
+    if (!cfg?.protectionTypes) return 'غير محدد';
+    const labels = [];
+    if (cfg.protectionTypes.channelsCategories) labels.push('رومات/كاتقوري');
+    if (cfg.protectionTypes.rolesPermissions) labels.push('رولات/صلاحيات');
+    if (cfg.protectionTypes.kickBan) labels.push('طرد/باند');
+    if (cfg.protectionTypes.serverSettings) labels.push('إعدادات السيرفر');
+    return labels.length ? labels.join('، ') : 'غير محدد';
+}
 
-    if (sub === 'add') {
-        const user = message.mentions.users.first();
-        if (!user) return message.channel.send({ embeds: [colorManager.createEmbed().setDescription('❌ منشن الشخص')] });
-        cfg.trustedUsers = Array.from(new Set([...(cfg.trustedUsers || []), user.id]));
-        setGuildProtectionConfig(message.guild.id, cfg);
-        if (cfg.enabled) await refreshProtectionStateFast(message.guild, cfg);
-        return message.channel.send({ embeds: [colorManager.createEmbed().setDescription(`✅ تمت إضافة <@${user.id}> للموثوقين`)] });
-    }
+function buildProtectionUsersEmbed(guild, cfg) {
+    const trusted = cfg?.trustedUsers || [];
+    const trustedText = trusted.length
+        ? trusted.map((id, index) => `${index + 1}. <@${id}> (\`${id}\`)`).join('\n')
+        : 'لا يوجد موثوقين حالياً';
 
-    if (sub === 'remove') {
-        const user = message.mentions.users.first();
-        if (!user) return message.channel.send({ embeds: [colorManager.createEmbed().setDescription('❌ منشن الشخص')] });
-        cfg.trustedUsers = (cfg.trustedUsers || []).filter(id => id !== user.id);
-        setGuildProtectionConfig(message.guild.id, cfg);
-        if (cfg.enabled) await refreshProtectionStateFast(message.guild, cfg);
-        return message.channel.send({ embeds: [colorManager.createEmbed().setDescription(`✅ تمت إزالة <@${user.id}> من الموثوقين`)] });
-    }
+    return colorManager.createEmbed()
+        .setTitle('Backup Users / Protection')
+        .setDescription(
+            `**حالة الحماية:** ${cfg?.enabled ? '🟢 مفعلة' : '🔴 متوقفة'}\n` +
+            `**أنواع الحماية المفعلة:** ${getProtectionTypesSummary(cfg)}\n\n` +
+            `**الموثوقين:**\n${trustedText}`
+        );
+}
 
-    const trusted = cfg.trustedUsers || [];
-    const text = trusted.length ? trusted.map(id => `• <@${id}> (${id})`).join('\n') : 'لا يوجد موثوقين';
-    return message.channel.send({ embeds: [colorManager.createEmbed().setTitle('Trusted Users').setDescription(text)] });
+function buildProtectionUsersRows(authorId, cfg) {
+    return [
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`backup_users_add_${authorId}`).setLabel('إضافة موثوق').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(`backup_users_remove_${authorId}`).setLabel('إزالة موثوق').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId(`backup_users_refresh_${authorId}`).setLabel('تحديث').setStyle(ButtonStyle.Secondary)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`backup_protect_setup_quick_${authorId}`).setLabel('إعداد الحماية').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(`backup_protect_enable_quick_${authorId}`).setLabel('تفعيل الحماية').setStyle(ButtonStyle.Success).setDisabled(Boolean(cfg?.enabled)),
+            new ButtonBuilder().setCustomId(`backup_protect_disable_quick_${authorId}`).setLabel('إيقاف الحماية').setStyle(ButtonStyle.Secondary).setDisabled(!Boolean(cfg?.enabled))
+        )
+    ];
+}
+
+async function handleProtectUsersPanel(message) {
+    let cfg = await getGuildProtectionConfig(message.guild.id) || { enabled: false, trustedUsers: [], protectionTypes: {} };
+
+    const sent = await message.channel.send({
+        embeds: [buildProtectionUsersEmbed(message.guild, cfg)],
+        components: buildProtectionUsersRows(message.author.id, cfg)
+    });
+
+    const collector = sent.createMessageComponentCollector({
+        filter: i => i.user.id === message.author.id,
+        time: 15 * 60 * 1000
+    });
+
+    collector.on('collect', async (interaction) => {
+        const id = interaction.customId || '';
+        if (!interaction.isButton()) return;
+
+        if (id.startsWith('backup_users_refresh_')) {
+            cfg = await getGuildProtectionConfig(message.guild.id) || { enabled: false, trustedUsers: [], protectionTypes: {} };
+            await interaction.update({
+                embeds: [buildProtectionUsersEmbed(message.guild, cfg)],
+                components: buildProtectionUsersRows(message.author.id, cfg)
+            }).catch(err => console.error('Failed to update users panel (refresh):', err));
+            return;
+        }
+
+        if (id.startsWith('backup_users_add_') || id.startsWith('backup_users_remove_')) {
+            const isAdd = id.startsWith('backup_users_add_');
+            await interaction.reply({
+                content: isAdd ? 'منشن الشخص المراد إضافته كموثوق خلال 45 ثانية.' : 'منشن الشخص المراد إزالته من الموثوقين خلال 45 ثانية.',
+                ephemeral: true
+            }).catch(() => null);
+
+            const collected = await message.channel.awaitMessages({
+                filter: m => m.author.id === message.author.id && m.mentions.users.size > 0,
+                max: 1,
+                time: 45_000
+            }).catch(() => null);
+
+            const mentionMessage = collected?.first();
+            const user = mentionMessage?.mentions?.users?.first();
+            if (!user) {
+                await interaction.followUp({ content: '❌ لم يتم استقبال منشن صحيح.', ephemeral: true }).catch(() => null);
+                return;
+            }
+
+            cfg = await getGuildProtectionConfig(message.guild.id) || { enabled: false, trustedUsers: [], protectionTypes: {} };
+            const trustedUsers = new Set(cfg.trustedUsers || []);
+            if (isAdd) trustedUsers.add(user.id);
+            else trustedUsers.delete(user.id);
+            cfg.trustedUsers = Array.from(trustedUsers);
+            await setGuildProtectionConfig(message.guild.id, cfg);
+            if (cfg.enabled) await refreshProtectionStateFast(message.guild, cfg);
+
+            await interaction.followUp({
+                content: isAdd ? `✅ تمت إضافة <@${user.id}> للموثوقين.` : `✅ تمت إزالة <@${user.id}> من الموثوقين.`,
+                ephemeral: true
+            }).catch(() => null);
+
+            await sent.edit({
+                embeds: [buildProtectionUsersEmbed(message.guild, cfg)],
+                components: buildProtectionUsersRows(message.author.id, cfg)
+            }).catch(err => console.error('Failed to update users panel after add/remove:', err));
+            return;
+        }
+
+        if (id.startsWith('backup_protect_enable_quick_')) {
+            cfg = await getGuildProtectionConfig(message.guild.id) || { enabled: false, trustedUsers: [], protectionTypes: {} };
+            if (!cfg.backupFile || !cfg.protectionTypes || !Object.values(cfg.protectionTypes).some(Boolean)) {
+                await interaction.reply({
+                    content: '⚠️ لا يمكن التفعيل السريع لأن الإعدادات غير مكتملة. استخدم `backup protect` لاختيار النسخة وأنواع الحماية أولاً.',
+                    ephemeral: true
+                }).catch(() => null);
+                return;
+            }
+
+            cfg.enabled = true;
+            cfg.enabledBy = message.author.id;
+            cfg.enabledAt = Date.now();
+            await setGuildProtectionConfig(message.guild.id, cfg);
+            await refreshProtectionStateFast(message.guild, cfg);
+
+            await interaction.update({
+                embeds: [buildProtectionUsersEmbed(message.guild, cfg)],
+                components: buildProtectionUsersRows(message.author.id, cfg)
+            }).catch(err => console.error('Failed to update users panel (enable):', err));
+            return;
+        }
+
+        if (id.startsWith('backup_protect_setup_quick_')) {
+            await interaction.reply({ content: '✅ فتح إعداد الحماية...', ephemeral: true }).catch(() => null);
+            await handleProtectSetup(message, message.client);
+            return;
+        }
+
+        if (id.startsWith('backup_protect_disable_quick_')) {
+            cfg = await getGuildProtectionConfig(message.guild.id) || { enabled: false, trustedUsers: [], protectionTypes: {} };
+            cfg.enabled = false;
+            await setGuildProtectionConfig(message.guild.id, cfg);
+            const intervalId = protectionRuntime.snapshotIntervals.get(message.guild.id);
+            if (intervalId) {
+                clearInterval(intervalId);
+                protectionRuntime.snapshotIntervals.delete(message.guild.id);
+            }
+
+            await interaction.update({
+                embeds: [buildProtectionUsersEmbed(message.guild, cfg)],
+                components: buildProtectionUsersRows(message.author.id, cfg)
+            }).catch(err => console.error('Failed to update users panel (disable):', err));
+            return;
+        }
+    });
+
+    collector.on('end', async () => {
+        cfg = await getGuildProtectionConfig(message.guild.id) || { enabled: false, trustedUsers: [], protectionTypes: {} };
+        await sent.edit({
+            embeds: [buildProtectionUsersEmbed(message.guild, cfg)],
+            components: []
+        }).catch(() => null);
+    });
 }
 
 async function handleProtectSetup(message, client) {
@@ -2689,17 +2824,9 @@ module.exports = {
             return message.channel.send({ embeds: [errorEmbed] });
         }
 
-        const sub = (args[0] || '').toLowerCase();
-        if (sub === 'protect') {
-            return handleProtectSetup(message, client);
-        }
-        if (sub === 'users') {
-            return handleProtectUsersSub(message, args);
-        }
-
         const mainEmbed = colorManager.createEmbed()
             .setTitle('Backup System')
-            .setDescription('**اختر ماتريد**')
+            .setDescription('**كل شيء بأمر واحد**')
             .setThumbnail('https://cdn.discordapp.com/attachments/1436815242024714390/1436852524224348160/cloud-sync.png?ex=69111cb1&is=690fcb31&hm=92bf5525fbc9000c7628d22b886e75836a249599b3dad22fcbc78089fb956a1b&');
 
         const row = new ActionRowBuilder().addComponents(
@@ -2719,8 +2846,14 @@ module.exports = {
                 .setEmoji('<:emoji_8:1436850506008891632>')
                 .setStyle(ButtonStyle.Secondary)
         );
+        const row2 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('backup_protection_panel')
+                .setLabel('Protection Panel')
+                .setStyle(ButtonStyle.Primary)
+        );
 
-        const msg = await message.channel.send({ embeds: [mainEmbed], components: [row] });
+        const msg = await message.channel.send({ embeds: [mainEmbed], components: [row, row2] });
 
         const collector = msg.createMessageComponentCollector({
             filter: i => i.user.id === message.author.id,
@@ -2753,6 +2886,8 @@ module.exports = {
                 modal.addComponents(new ActionRowBuilder().addComponents(nameInput));
                 await interaction.showModal(modal);
 
+            } else if (interaction.customId === 'backup_protection_panel') {
+                await handleProtectUsersPanel(message);
             } else if (interaction.customId === 'backup_restore') {
                 const allBackups = (await getAllBackups()).filter(backup => backup.guildId === message.guild.id);
 
