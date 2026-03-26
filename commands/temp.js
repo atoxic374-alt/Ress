@@ -111,7 +111,6 @@ const REGION_OPTIONS = [
 ];
 
 let dataCache = null;
-let saveTimer = null;
 let runtimeClient = null;
 let heartbeatHandle = null;
 let registered = false;
@@ -120,8 +119,12 @@ const roomLifecycleJobs = new Map();
 const operationLocks = new Map();
 const guildAccentCache = new Map();
 const topSeparatorCache = new Map();
+const controlCardCache = new Map();
 const runtimeTempVoiceMuteState = new Map();
 let runtimeBotOwners = [];
+
+const saveQueues = new Map();
+const saveInitPromises = new Map();
 
 function ensureDataFile() {
   fs.mkdirSync(TOP_ASSETS_DIR, { recursive: true });
@@ -211,16 +214,32 @@ function writeFileAtomic(targetPath, content) {
   fs.renameSync(tmpPath, targetPath);
 }
 
+/**
+ * Queues a data save operation to ensure sequential processing and prevent race conditions.
+ * This is crucial for maintaining data integrity when multiple asynchronous operations
+ * might attempt to modify the same data concurrently.
+ * @returns {Promise<any>} A promise that resolves when the save task is completed.
+ */
 function scheduleSave() {
-  if (saveTimer) return;
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    try {
-      writeFileAtomic(DATA_PATH, JSON.stringify(loadData(), null, 2));
-    } catch (error) {
-      console.error('[temp] Failed to save data:', error);
-    }
-  }, 500);
+  const key = 'main-data-save'; // A single key for the main data file
+  const previous = saveQueues.get(key) || Promise.resolve();
+  const next = previous.catch((error) => logSilentError("temp.save.queue", error)).then(() => persistData());
+  saveQueues.set(key, next.finally(() => {
+    if (saveQueues.get(key) === next) saveQueues.delete(key);
+  }));
+  return next;
+}
+
+/**
+ * Persists the current dataCache to the DATA_PATH file using atomic write.
+ * This function is called by the save queue to ensure ordered writes.
+ */
+async function persistData() {
+  try {
+    await writeFileAtomic(DATA_PATH, JSON.stringify(dataCache, null, 2));
+  } catch (error) {
+    logSilentError("temp.save.persist", error);
+  }
 }
 
 async function runSerialized(key, fn) {
@@ -1871,6 +1890,13 @@ function fitTextSize(ctx, text, maxWidth, startSize, minSize, fontFamily, weight
 
 
 async function buildGeneralControlCard(guild) {
+  const config = getGuildConfig(guild.id);
+  const cacheKey = `control_card_${guild.id}_${config.controlCardColorMode}_${config.controlCardCustomColor}_${JSON.stringify(config.enabledControls)}`;
+
+  if (controlCardCache.has(cacheKey)) {
+    return controlCardCache.get(cacheKey);
+  }
+
   const width = 1600;
   const height = 1040;
   const canvas = createCanvas(width, height);
@@ -2051,7 +2077,9 @@ async function buildGeneralControlCard(guild) {
   ctx.fillText(CONTROL_CARD_SIGNATURE, width / 2, panelY + panelHeight - 30);
 
   ctx.shadowBlur = 0;
-  return new AttachmentBuilder(canvas.toBuffer('image/png'), { name: `temp-general-control-${guild.id}.png` });
+  const attachment = new AttachmentBuilder(canvas.toBuffer('image/png'), { name: `temp-general-control-${guild.id}.png` });
+  controlCardCache.set(cacheKey, attachment);
+  return attachment;
 }
 
 function buildGeneralControlRows(guildId) {
@@ -2745,6 +2773,15 @@ async function handleVoiceStateUpdate(oldState, newState) {
     const joinedTemp = newState.channelId === roomRecord.channelId && oldState.channelId !== roomRecord.channelId;
     const leftTemp = oldState.channelId === roomRecord.channelId && newState.channelId !== roomRecord.channelId;
     const isInTemp = newState.channelId === roomRecord.channelId;
+
+    const ownerProfile = getUserProfile(guild.id, ownerId);
+    // Strict ban check: if a banned user is in the temp room, disconnect them immediately.
+    if (isInTemp && ownerProfile.bannedUsers.includes(newState.member.id)) {
+      const user = await guild.client.users.fetch(newState.member.id).catch(() => null);
+      await notifyUser(user, { content: `أنت محظور من روم <#${channel.id}> ولا يمكنك الدخول إليه.` });
+      await newState.member.voice.disconnect("Banned from temp room").catch(() => newState.member.voice.setChannel(null).catch(() => null));
+      continue; // Skip further processing for this room as the user is banned
+    }
     const ownerPresent = channel.members.has(ownerId);
     const shouldCountDown = !ownerPresent && shouldStartOwnerLeaveCountdown(channel, ownerId);
     const previousOwnerLeftAt = roomRecord.ownerLeftAt;
@@ -2788,14 +2825,7 @@ async function handleVoiceStateUpdate(oldState, newState) {
       });
     }
 
-    const ownerProfile = getUserProfile(guild.id, ownerId);
     if (clearExpiredRecentKicks(roomRecord, Date.now()) || clearExpiredBulkMuteAllStates(roomRecord, Date.now())) setRoomRecord(guild.id, ownerId, roomRecord);
-    if (joinedTemp && ownerProfile.bannedUsers.includes(newState.member.id)) {
-      const user = await guild.client.users.fetch(newState.member.id).catch(() => null);
-      await notifyUser(user, { content: `أنت محظور من روم <#${channel.id}> ولا يمكنك الدخول إليه.` });
-      await newState.member.voice.disconnect('Banned from temp room').catch(() => newState.member.voice.setChannel(null).catch(() => null));
-      continue;
-    }
     if (joinedTemp && roomRecord.recentKicks?.[newState.member.id] && roomRecord.recentKicks[newState.member.id] > Date.now()) {
       const user = await guild.client.users.fetch(newState.member.id).catch(() => null);
       await notifyUser(user, { content: `تم طردك مؤقتاً من روم <#${channel.id}>. حاول الدخول مرة أخرى بعد ${Math.max(1, Math.ceil((roomRecord.recentKicks[newState.member.id] - Date.now()) / 1000))} ثانية.` });
