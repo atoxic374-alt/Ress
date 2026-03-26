@@ -2230,6 +2230,9 @@ async function applyRoomState(roomChannel, ownerId) {
     PermissionsBitField.Flags.UseVAD,
     PermissionsBitField.Flags.UseEmbeddedActivities,
     PermissionsBitField.Flags.PrioritySpeaker,
+    PermissionsBitField.Flags.MoveMembers,
+    PermissionsBitField.Flags.MuteMembers,
+    PermissionsBitField.Flags.DeafenMembers,
     PermissionsBitField.Flags.SendMessages,
     PermissionsBitField.Flags.EmbedLinks,
     PermissionsBitField.Flags.AttachFiles,
@@ -2237,7 +2240,6 @@ async function applyRoomState(roomChannel, ownerId) {
     PermissionsBitField.Flags.UseExternalEmojis,
     PermissionsBitField.Flags.UseExternalStickers,
     PermissionsBitField.Flags.ManageMessages,
-    PermissionsBitField.Flags.ManageWebhooks,
     PermissionsBitField.Flags.BypassSlowmode,
     PermissionsBitField.Flags.ReadMessageHistory,
     PermissionsBitField.Flags.SendTTSMessages,
@@ -2245,6 +2247,7 @@ async function applyRoomState(roomChannel, ownerId) {
     PermissionsBitField.Flags.SendPolls,
     PermissionsBitField.Flags.UseApplicationCommands
   ]);
+  addOverwriteDenies(overwriteMap, ownerId, [PermissionsBitField.Flags.ManageWebhooks]);
 
   for (const userId of profile.allowedUsers) {
     addOverwriteAllows(overwriteMap, userId, [
@@ -2267,6 +2270,7 @@ async function applyRoomState(roomChannel, ownerId) {
       PermissionsBitField.Flags.MuteMembers,
       PermissionsBitField.Flags.DeafenMembers
     ]);
+    addOverwriteDenies(overwriteMap, userId, [PermissionsBitField.Flags.ManageWebhooks]);
   }
 
   for (const userId of profile.bannedUsers) {
