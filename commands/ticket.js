@@ -49,16 +49,31 @@ const STATE_KEY_POINTS = 'ticket.points';
 const STATE_KEY_RESPONSIBILITIES = 'ticket.responsibilities';
 const stateWriteQueues = new Map();
 const stateInitPromises = new Map();
+const STATE_SNAPSHOT_QUEUE_KEY = '__ticket-state-snapshot__';
 const storeCache = {
   [STATE_KEY_STORE]: null,
   [STATE_KEY_POINTS]: null,
   [STATE_KEY_RESPONSIBILITIES]: null
 };
 
+/**
+ * Queues a state write operation to ensure sequential processing and prevent race conditions.
+ * This is crucial for maintaining data integrity when multiple asynchronous operations
+ * might attempt to modify the same state concurrently.
+ * @param {string} key - The key identifying the state being written (e.g., STATE_KEY_POINTS, session ID).
+ * @param {Function} task - An asynchronous function that performs the actual write operation.
+ * @returns {Promise<any>} A promise that resolves when the task is completed.
+ */
 function queueStateWrite(key, task) {
+  // Get the previous pending write operation for this key, or a resolved promise if none.
   const previous = stateWriteQueues.get(key) || Promise.resolve();
-  const next = previous.catch((error) => logSilentError('suppressed', error)).then(task);
+  // Chain the new task to the previous one, ensuring sequential execution.
+  // Any errors in previous tasks are silently logged but don't block subsequent tasks.
+  const next = previous.catch((error) => logSilentError("suppressed", error)).then(task);
+  // Store the new pending task.
   stateWriteQueues.set(key, next.finally(() => {
+    // Once the task completes (successfully or with error), remove it from the queue
+    // if it's still the latest task for this key.
     if (stateWriteQueues.get(key) === next) stateWriteQueues.delete(key);
   }));
   return next;
@@ -114,22 +129,35 @@ function replaceCachedState(key, nextValue = {}) {
   return storeCache[key];
 }
 
+/**
+ * Primes the state cache for a given key, prioritizing data from SQLite and migrating from JSON if necessary.
+ * This function ensures that the cache is populated with the most up-to-date persistent state.
+ * It also handles the initial migration of data from legacy JSON files to the SQLite database
+ * for improved performance and consistency.
+ * @param {string} key - The state key (e.g., STATE_KEY_POINTS).
+ * @param {string} filePath - The path to the legacy JSON file for initial migration.
+ * @returns {Promise<object>} A promise that resolves with the cached state object.
+ */
 function primeStateCache(key, filePath) {
   if (stateInitPromises.has(key)) return stateInitPromises.get(key);
   const pending = ensureTicketStateTables().then(async (db) => {
-    const row = await db.get('SELECT value FROM ticket_state WHERE state_key = ?', [key]).catch(() => null);
+    // Attempt to load from SQLite first for speed and consistency
+    const row = await db.get("SELECT value FROM ticket_state WHERE state_key = ?", [key]).catch(() => null);
     const parsedDbValue = parseStoredJson(row?.value, null);
-    if (parsedDbValue && typeof parsedDbValue === 'object') {
+    if (parsedDbValue && typeof parsedDbValue === "object") {
       replaceCachedState(key, parsedDbValue);
       return storeCache[key];
     }
 
-    const fileValue = await fs.promises.readFile(filePath, 'utf8')
+    // If not found in SQLite, try to load from the legacy JSON file (migration step)
+    const fileValue = await fs.promises.readFile(filePath, "utf8")
       .then((raw) => parseStoredJson(raw, {}))
       .catch(() => ({}));
     replaceCachedState(key, fileValue);
+    // If data was found in the JSON file, queue a write to persist it to SQLite
+    // This effectively migrates the data and ensures future loads are from SQLite.
     if (Object.keys(fileValue).length) {
-      await persistStateSnapshot(key, filePath, fileValue);
+      await queueStateWrite(STATE_SNAPSHOT_QUEUE_KEY, () => persistStateSnapshot(key, filePath, fileValue));
     }
     return storeCache[key];
   }).catch((error) => {
@@ -140,10 +168,21 @@ function primeStateCache(key, filePath) {
   return pending;
 }
 
+/**
+ * Ensures the in-memory cache for a given state key is hydrated. It prioritizes loading from SQLite.
+ * If the cache is not yet initialized or is an invalid type, it will be initialized.
+ * This function ensures that subsequent reads from the cache are as up-to-date as possible
+ * given the internal modification flow (via saveCachedState).
+ * @param {string} key - The state key (e.g., STATE_KEY_POINTS).
+ * @param {string} filePath - The fallback JSON file path.
+ * @returns {object} The cached state object.
+ */
 function hydrateStateCache(key, filePath) {
   if (!storeCache[key] || typeof storeCache[key] !== 'object') {
     storeCache[key] = {};
   }
+  // primeStateCache will attempt to load from SQLite first, then fallback to JSON.
+  // It also handles the initial migration of JSON data to SQLite.
   primeStateCache(key, filePath).catch((error) => logSilentError('suppressed', error));
   return storeCache[key];
 }
@@ -166,13 +205,29 @@ async function persistStateSnapshot(key, filePath, value) {
   }
 }
 
+/**
+ * Saves the given value to the in-memory cache and queues a write operation to persist it to SQLite.
+ * This ensures that the in-memory cache is immediately updated for consistency, and the disk write
+ * happens asynchronously to maintain performance.
+ * @param {string} key - The state key.
+ * @param {string} filePath - The JSON file path (used for initial migration if needed).
+ * @param {object} value - The state object to save.
+ */
 function saveCachedState(key, filePath, value) {
-  storeCache[key] = value;
-  queueStateWrite(key, () => persistStateSnapshot(key, filePath, value)).catch((error) => {
+  storeCache[key] = value; // Update in-memory cache immediately
+  queueStateWrite(STATE_SNAPSHOT_QUEUE_KEY, () => persistStateSnapshot(key, filePath, value)).catch((error) => {
     logSilentError(`ticket.state.save.${key}`, error);
   });
 }
 
+/**
+ * Saves a runtime session to the SQLite database, ensuring data persistence and synchronization.
+ * Uses a write queue to prevent race conditions and ensure atomic updates.
+ * @param {string} sessionType - The type of the session (e.g., 'ticket-setup').
+ * @param {string} sessionId - The unique ID of the session.
+ * @param {object} payload - The data payload of the session.
+ * @param {number|null} ttlMs - Time-to-live in milliseconds for the session, or null for no expiration.
+ */
 function saveRuntimeSession(sessionType, sessionId, payload, ttlMs = null) {
   const expiresAt = Number.isFinite(ttlMs) ? Date.now() + ttlMs : null;
   queueStateWrite(`${sessionType}:${sessionId}`, async () => {
@@ -189,10 +244,17 @@ function saveRuntimeSession(sessionType, sessionId, payload, ttlMs = null) {
   }).catch((error) => logSilentError(`ticket.session.save.${sessionType}`, error));
 }
 
+/**
+ * Loads a runtime session from the SQLite database.
+ * It also handles the expiration of sessions, deleting them if they are past their TTL.
+ * @param {string} sessionType - The type of the session.
+ * @param {string} sessionId - The unique ID of the session.
+ * @returns {Promise<object|null>} A promise that resolves with the session payload, or null if not found or expired.
+ */
 async function loadRuntimeSession(sessionType, sessionId) {
   const db = await ensureTicketStateTables();
   const row = await db.get(
-    'SELECT payload, expires_at FROM ticket_runtime_session WHERE session_type = ? AND session_id = ?',
+    "SELECT payload, expires_at FROM ticket_runtime_session WHERE session_type = ? AND session_id = ?",
     [sessionType, sessionId]
   ).catch(() => null);
   if (!row) return null;
@@ -451,6 +513,10 @@ function resolveButtonStyle(styleValue) {
   return ButtonStyle.Primary;
 }
 
+/**
+ * Loads the points data, ensuring the cache is up-to-date.
+ * @returns {object} The points data.
+ */
 function loadPoints() {
   return hydrateStateCache(STATE_KEY_POINTS, pointsPath);
 }
@@ -606,17 +672,8 @@ function recordManagerPoint(points, { guildId, panelId = 'default', channelId, a
 
 function recordClaimPointIfNeeded(ticket, { guildId, panelId = 'default', channelId, actorId, targetId = '' } = {}) {
   if (!ticket || ticket.claimPointRecordedAt) return false;
-  const points = loadPoints();
-  const appended = recordManagerPoint(points, {
-    guildId,
-    panelId,
-    channelId,
-    actorId,
-    targetId,
-    at: Date.now()
-  });
-  if (!appended) return false;
-  savePoints(points);
+  // Points are no longer awarded on claim as per user request.
+  // The claimPointRecordedAt flag is still set to prevent re-processing.
   ticket.claimPointRecordedAt = Date.now();
   return true;
 }
@@ -1221,14 +1278,26 @@ function buildPointRevertControls(guildId, panelId, channelId) {
   )];
 }
 
+/**
+ * Loads the main store configuration, ensuring the cache is up-to-date.
+ * @returns {object} The store configuration.
+ */
 function loadStore() {
   return hydrateStateCache(STATE_KEY_STORE, dataPath);
 }
 
+/**
+ * Saves the main store configuration, updating the cache and queuing a persistent write.
+ * @param {object} store - The store configuration to save.
+ */
 function saveStore(store) {
   saveCachedState(STATE_KEY_STORE, dataPath, store);
 }
 
+/**
+ * Loads the responsibilities configuration, ensuring the cache is up-to-date.
+ * @returns {object} The responsibilities configuration.
+ */
 function loadResponsibilities() {
   return hydrateStateCache(STATE_KEY_RESPONSIBILITIES, responsibilitiesPath);
 }
@@ -2252,8 +2321,8 @@ async function buildTicketControls(guildId, panelId, channelId, config, options 
   const row1Buttons = [];
   if (includeClaimButton) row1Buttons.push(new ButtonBuilder().setCustomId(`ticket_claim_${guildId}_${panelId}_${channelId}`).setLabel('Claim').setEmoji('<:emoji_3:1484364952780144710>').setStyle(ButtonStyle.Success));
   row1Buttons.push(
-    new ButtonBuilder().setCustomId(`ticket_close_${guildId}_${panelId}_${channelId}`).setLabel('Close').setEmoji('<:emoji_7:1484365118576918638>').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId(`ticket_reassign_${guildId}_${panelId}_${channelId}`).setLabel('Change').setEmoji('<:emoji_2:1484364894491902034>').setStyle(ButtonStyle.Success)
+    new ButtonBuilder().setCustomId(`ticket_close_${guildId}_${panelId}_${channelId}`).setLabel('Close').setEmoji('<:emoji_7:1484365118576918638>').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`ticket_reassign_${guildId}_${panelId}_${channelId}`).setLabel('Change').setEmoji('<:emoji_2:1484364894491902034>').setStyle(ButtonStyle.Secondary)
   );
   if (includeReassignButton) {
     row1Buttons.push(
@@ -2387,16 +2456,29 @@ async function createTicketChannel({
 
   const introText = renderTicketText(reasonSettings.beforeText, memberId);
   const openImage = resolveImageForSend(reasonSettings.openImage);
-  await channel.send({
+  const outroText = renderTicketText(reasonSettings.afterText, memberId);
+
+  const parallelCreationTasks = [];
+
+  // Send initial message with controls and intro text/image
+  parallelCreationTasks.push(channel.send({
     ...(introText ? { content: introText } : {}),
     ...(openImage ? { files: [openImage] } : {}),
     components: controls
-  }).catch((error) => logSilentError('suppressed', error));
+  }).catch((error) => logSilentError("create.sendIntroMessage", error)));
 
-  const outroText = renderTicketText(reasonSettings.afterText, memberId);
-  if (outroText) await channel.send({ content: outroText }).catch((error) => logSilentError('suppressed', error));
+  // Send outro text if it exists
+  if (outroText) {
+    parallelCreationTasks.push(channel.send({ content: outroText }).catch((error) => logSilentError("create.sendOutroMessage", error)));
+  }
 
-  if (config.ticketNameMode !== 'user') config.counter = (config.counter || 1) + 1;
+  // Update counter if not in user mode (this will be handled by setGuildData which queues writes)
+  if (config.ticketNameMode !== "user") {
+    config.counter = (config.counter || 1) + 1;
+  }
+
+  // Execute all parallel tasks
+  await Promise.allSettled(parallelCreationTasks);
 
   tickets[channel.id] = {
     channelId: channel.id,
@@ -2986,59 +3068,62 @@ async function closeTicketCore({
     closeSuffix = sanitizeName(parts[parts.length - 1] || String(config.counter || 1));
   }
   const closedChannelName = `closed-${closeSuffix || 'ticket'}`.slice(0, 90);
-  await Promise.allSettled([
-    channel.setName(closedChannelName),
-    config.closedCategoryId ? channel.setParent(config.closedCategoryId) : Promise.resolve()
-  ]);
 
-  const basePermissionTasks = [];
+  const parallelTasks = [];
+
+  // 1. Change channel name and parent category
+  parallelTasks.push(channel.setName(closedChannelName).catch((error) => logSilentError('close.setName', error)));
+  if (config.closedCategoryId) {
+    parallelTasks.push(channel.setParent(config.closedCategoryId).catch((error) => logSilentError('close.setParent', error)));
+  }
+
+  // 2. Update base permissions
   if (ticket.memberId) {
-    basePermissionTasks.push(
+    parallelTasks.push(
       channel.permissionOverwrites.edit(ticket.memberId, {
         ViewChannel: false,
         SendMessages: false
-      })
+      }).catch((error) => logSilentError('close.permissions.member', error))
     );
   }
-  basePermissionTasks.push(
+  parallelTasks.push(
     channel.permissionOverwrites.edit(channel.guild.roles.everyone.id, {
       ViewChannel: false,
       SendMessages: false,
       ReadMessageHistory: false
-    })
+    }).catch((error) => logSilentError('close.permissions.everyone', error))
   );
-  const basePermissionResults = await Promise.allSettled(basePermissionTasks);
-  if (basePermissionResults.some((item) => item.status === 'rejected')) {
-    logSilentError('close.permissions.base', `failed=${basePermissionResults.filter((item) => item.status === 'rejected').length}`);
-  }
 
-  const transferredResults = await Promise.allSettled((ticket.transferredUserIds || []).map((userId) => channel.permissionOverwrites.edit(userId, {
+  // 3. Update permissions for transferred users
+  (ticket.transferredUserIds || []).forEach((userId) => {
+    parallelTasks.push(channel.permissionOverwrites.edit(userId, {
       ViewChannel: false,
       SendMessages: false,
       ReadMessageHistory: true
-    })));
-  if (transferredResults.some((item) => item.status === 'rejected')) {
-    logSilentError('close.permissions.transferred-users', `failed=${transferredResults.filter((item) => item.status === 'rejected').length}`);
-  }
+    }).catch((error) => logSilentError('close.permissions.transferred-user', error)));
+  });
 
+  // 4. Update permissions for visible roles and users
   const { roleIds: visibleRoleIds, userIds: visibleUserIds } = getClosedTicketViewerTargets(config, ticket, channel.guild);
-  const visibleRoleResults = await Promise.allSettled(visibleRoleIds.map((roleId) => channel.permissionOverwrites.edit(roleId, {
+  visibleRoleIds.forEach((roleId) => {
+    parallelTasks.push(channel.permissionOverwrites.edit(roleId, {
       ViewChannel: true,
       SendMessages: true,
       ReadMessageHistory: true
-    })));
-  if (visibleRoleResults.some((item) => item.status === 'rejected')) {
-    logSilentError('close.permissions.visible-roles', `failed=${visibleRoleResults.filter((item) => item.status === 'rejected').length}`);
-  }
-  const visibleUserResults = await Promise.allSettled(visibleUserIds.map((userId) => channel.permissionOverwrites.edit(userId, {
+    }).catch((error) => logSilentError('close.permissions.visible-role', error)));
+  });
+  visibleUserIds.forEach((userId) => {
+    parallelTasks.push(channel.permissionOverwrites.edit(userId, {
       ViewChannel: true,
       SendMessages: true,
       ReadMessageHistory: true
-    })));
-  if (visibleUserResults.some((item) => item.status === 'rejected')) {
-    logSilentError('close.permissions.visible-users', `failed=${visibleUserResults.filter((item) => item.status === 'rejected').length}`);
-  }
+    }).catch((error) => logSilentError('close.permissions.visible-user', error)));
+  });
 
+  // Execute all channel-related modifications in parallel
+  await Promise.allSettled(parallelTasks);
+
+  // 5. Disable interaction message components if editable
   if (interaction?.message?.editable && interaction.message?.components?.length) {
     const disabledRows = interaction.message.components.map((row) => {
       const disabledComponents = row.components.map((component) => ButtonBuilder.from(component).setDisabled(true));
@@ -3047,7 +3132,9 @@ async function closeTicketCore({
     await interaction.message.edit({ components: disabledRows }).catch((error) => logSilentError('suppressed', error));
   }
 
-  await channel.send({
+  // 6. Send final closed ticket message and update guild data
+  const finalTasks = [];
+  finalTasks.push(channel.send({
     embeds: [makeTicketEmbed(
       'Closed Ticket',
       [
@@ -3058,18 +3145,21 @@ async function closeTicketCore({
       ].join('\n')
     )],
     components: buildPostCloseControls(guildId, panelId || 'default', channelId, ticket)
-  }).catch((error) => logSilentError('suppressed', error));
+  }).catch((error) => logSilentError('close.sendFinalMessage', error)));
 
-  setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
+  // setGuildData can be done in parallel as it updates the cache and queues a write
+  finalTasks.push(Promise.resolve(setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default')));
 
   if (interaction) {
     const donePayload = buildTicketMessagePayload(autoClose ? 'Ticket;' : 'Ticket;', autoClose ? '**Done Closed Auto ✅️**' : '**Done closed ✅️.**', { ephemeral: true });
     if (interaction.deferred || interaction.replied) {
-      await interaction.editReply(donePayload).catch((error) => logSilentError('suppressed', error));
+      finalTasks.push(interaction.editReply(donePayload).catch((error) => logSilentError('close.editReply.done', error)));
     } else {
-      await interaction.reply(donePayload).catch((error) => logSilentError('suppressed', error));
+      finalTasks.push(interaction.reply(donePayload).catch((error) => logSilentError('close.reply.done', error)));
     }
   }
+
+  await Promise.allSettled(finalTasks);
 
   return true;
 }
@@ -3492,9 +3582,9 @@ async function handlePointsAdjustMessage(message, args, { BOT_OWNERS = [] } = {}
         return;
       }
       const delta = mode === 'remove' ? -Math.abs(amount) : Math.abs(amount);
-      const actualDelta = targetIsResponsible
-        ? applyManagerPointsDelta({ targetId, delta })
-        : applyManualPointsDelta({ targetId, actorId: message.author.id, delta });
+          // As per user request, manager points are only awarded via internal ticket evaluation buttons.
+          // Manual point adjustments via command will now only affect general user points.
+          const actualDelta = applyManualPointsDelta({ targetId, actorId: message.author.id, delta });
       collector.stop('done');
       await interaction.update({
         embeds: [buildMemberPointsEmbed({
@@ -3919,9 +4009,9 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId, o
     return false;
   }
 
-  if (previousClaimer) {
-    ticket.pointsReceiverId = previousClaimer;
-  }
+  // عند إلغاء الاستلام، تصبح التذكرة غير مستلمة، لذا يجب مسح pointsReceiverId.
+  // سيتم تعيين pointsReceiverId للمستلم الجديد عند استلام التذكرة لاحقاً.
+  ticket.pointsReceiverId = null;
   ticket.claimedBy = null;
   ticket.reassignPendingAt = Date.now();
   ticket.reassignPreviousClaimer = previousClaimer || interaction.user.id;
@@ -5458,11 +5548,9 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     return;
   }
 
-  const previousClaimer = ticket.claimedBy;
-  const previousTransferredUserIds = Array.isArray(ticket.transferredUserIds) ? ticket.transferredUserIds.map((id) => String(id || '').trim()) : [];
-  if (previousClaimer) {
-    ticket.pointsReceiverId = previousClaimer;
-  }
+  // عند تحويل التذكرة، تصبح التذكرة غير مستلمة، لذا يجب مسح pointsReceiverId.
+  // سيتم تعيين pointsReceiverId للمستلم الجديد عند استلام التذكرة لاحقاً.
+  ticket.pointsReceiverId = null;
   ticket.claimedBy = null;
   ticket.transferredTo = respName;
 
