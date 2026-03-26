@@ -3406,7 +3406,7 @@ function buildMemberPointsEmbed({ requester, targetUser, targetId, guildId, targ
     .setTitle('Points')
     .setDescription(targetIsResponsible
       ? [
-        `**العضو :** <@${targetId}>`,
+        `**الإداري :** <@${targetId}>`,
         `**نقاطه كمسؤول :** ${managerPoints}m`,
         `**عدد التكتات الذي اقفلها :** ${managerClosedTickets}`,
         note ? `\n${note}` : null
@@ -3710,11 +3710,11 @@ async function handleTopPointsMessage(message, page = 1) {
     ? pageEntries.map((entry, index) => {
       const rank = start + index + 1;
       const topAwarder = getTopPointAwarder(points, entry.userId);
-      return `#${rank} - <@${entry.userId}> : ${entry.total}p\n**اكثر من عطاه نقاط المسؤول :** ${topAwarder ? `<@${topAwarder.actorId}>` : 'N/A'}`;
+      return `**#${rank} - <@${entry.userId}> : ${entry.total}p**`;
     }).join('\n\n')
     : '**لا توجد نقاط مسجلة حالياً.**';
   const embed = makeTicketEmbed('Top Ticket', description, { user: message.author })
-    .setThumbnail(message.guild?.iconURL?.({ forceStatic: false, size: 256 }) || null)
+    .setThumbnail(message.guild?.iconURL?.({ forceStatic: false, size: 128 }) || null)
     .setFooter({ text: `Page ${currentPage}/${totalPages} • Your Points : ${getUserTotalPoints(points, message.author.id)}` });
 
   const row = new ActionRowBuilder().addComponents(
@@ -3758,9 +3758,9 @@ async function handleTopManagersMessage(message, page = 1) {
   const description = pageEntries.length
     ? pageEntries.map((entry, index) => `#${start + index + 1} - <@${entry.userId}> : ${entry.total}m`).join('\n\n')
     : '**لا توجد نقاط مسؤولين مسجلة حالياً.**';
-  const embed = makeTicketEmbed('توب المسؤولين', description, { user: message.author })
-    .setThumbnail(message.guild?.iconURL?.({ forceStatic: false, size: 256 }) || null)
-    .setFooter({ text: `Page ${currentPage}/${totalPages} • نقاطك كمسؤول : ${getManagerPointCount(points, message.author.id)}m` });
+  const embed = makeTicketEmbed('Top manager', description, { user: message.author })
+    .setThumbnail(message.guild?.iconURL?.({ forceStatic: false, size: 128 }) || null)
+    .setFooter({ text: `Page ${currentPage}/${totalPages} • نقاطك كمسؤول : ${getManagerPointCount(points, message.author.id)}` });
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`ticket_tm_prev_${message.author.id}_${currentPage}`).setLabel('السابق').setStyle(ButtonStyle.Secondary).setDisabled(currentPage <= 1),
     new ButtonBuilder().setCustomId(`ticket_tm_next_${message.author.id}_${currentPage}`).setLabel('التالي').setStyle(ButtonStyle.Primary).setDisabled(currentPage >= totalPages)
