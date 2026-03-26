@@ -804,7 +804,7 @@ async function runProtectionRestore(guild, cfg, reason = 'auto') {
         // معالجة الطلبات المعلقة فوراً
         if (protectionRuntime.pendingRestores.has(guild.id)) {
             protectionRuntime.pendingRestores.delete(guild.id);
-            const freshCfg = getGuildProtectionConfig(guild.id);
+            const freshCfg = await getGuildProtectionConfig(guild.id);
             if (freshCfg?.enabled) {
                 setImmediate(() => runProtectionRestore(guild, freshCfg, `${reason}-pending`));
             }
@@ -842,7 +842,7 @@ async function createProtectionSnapshot(guild, cfg) {
     cfg.expectedChannels = (result.data?.stats?.channels || 0) + (result.data?.stats?.categories || 0);
     cfg.expectedRoles = result.data?.stats?.roles || 0;
     cfg.updatedAt = Date.now();
-    setGuildProtectionConfig(guild.id, cfg);
+    await setGuildProtectionConfig(guild.id, cfg);
 }
 
 async function hydrateProtectionCache(guild) {
@@ -859,7 +859,7 @@ function startSnapshotRefresh(guild) {
     }
 
     const intervalId = setInterval(async () => {
-        const liveCfg = getGuildProtectionConfig(guild.id);
+        const liveCfg = await getGuildProtectionConfig(guild.id);
         if (!liveCfg?.enabled) {
             clearInterval(intervalId);
             protectionRuntime.snapshotIntervals.delete(guild.id);
@@ -932,7 +932,7 @@ function ensureProtectionEngine(client) {
     client.on('channelDelete', async (channel) => {
         const guild = channel.guild;
         if (!guild) return;
-        const cfg = getGuildProtectionConfig(guild.id);
+        const cfg = await getGuildProtectionConfig(guild.id);
         if (!cfg?.enabled || !cfg.protectionTypes?.channelsCategories) return;
         const actor = await getRecentExecutorId(guild, 12);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
@@ -942,7 +942,7 @@ function ensureProtectionEngine(client) {
     client.on('channelCreate', async (channel) => {
         const guild = channel.guild;
         if (!guild) return;
-        const cfg = getGuildProtectionConfig(guild.id);
+        const cfg = await getGuildProtectionConfig(guild.id);
         if (!cfg?.enabled || !cfg.protectionTypes?.channelsCategories) return;
         const actor = await getRecentExecutorId(guild, 10);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
@@ -952,7 +952,7 @@ function ensureProtectionEngine(client) {
     client.on('channelUpdate', async (oldChannel, newChannel) => {
         const guild = newChannel.guild;
         if (!guild) return;
-        const cfg = getGuildProtectionConfig(guild.id);
+        const cfg = await getGuildProtectionConfig(guild.id);
         if (!cfg?.enabled || !cfg.protectionTypes?.channelsCategories) return;
         const actor = await getRecentExecutorId(guild, 11);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
@@ -961,7 +961,7 @@ function ensureProtectionEngine(client) {
 
     client.on('roleDelete', async (role) => {
         const guild = role.guild;
-        const cfg = getGuildProtectionConfig(guild.id);
+        const cfg = await getGuildProtectionConfig(guild.id);
         if (!cfg?.enabled || !cfg.protectionTypes?.rolesPermissions) return;
         const actor = await getRecentExecutorId(guild, 32);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
@@ -970,7 +970,7 @@ function ensureProtectionEngine(client) {
 
     client.on('roleCreate', async (role) => {
         const guild = role.guild;
-        const cfg = getGuildProtectionConfig(guild.id);
+        const cfg = await getGuildProtectionConfig(guild.id);
         if (!cfg?.enabled || !cfg.protectionTypes?.rolesPermissions) return;
         const actor = await getRecentExecutorId(guild, 30);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
@@ -979,7 +979,7 @@ function ensureProtectionEngine(client) {
 
     client.on('roleUpdate', async (oldRole, newRole) => {
         const guild = newRole.guild;
-        const cfg = getGuildProtectionConfig(guild.id);
+        const cfg = await getGuildProtectionConfig(guild.id);
         if (!cfg?.enabled) return;
 
         // حماية صلاحية Administrator
@@ -1022,7 +1022,7 @@ function ensureProtectionEngine(client) {
     });
 
     client.on('guildUpdate', async (oldGuild, newGuild) => {
-        const cfg = getGuildProtectionConfig(newGuild.id);
+        const cfg = await getGuildProtectionConfig(newGuild.id);
         if (!cfg?.enabled || !cfg.protectionTypes?.serverSettings) return;
         const actor = await getRecentExecutorId(newGuild, 1);
         if (await handleTrustedActorChange(newGuild, cfg, actor)) return;
@@ -1031,7 +1031,7 @@ function ensureProtectionEngine(client) {
 
     client.on('guildBanAdd', async (ban) => {
         const guild = ban.guild;
-        const cfg = getGuildProtectionConfig(guild.id);
+        const cfg = await getGuildProtectionConfig(guild.id);
         if (!cfg?.enabled || !cfg.protectionTypes?.kickBan) return;
         const actor = await getRecentExecutorId(guild, 22);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
@@ -1040,7 +1040,7 @@ function ensureProtectionEngine(client) {
 
     client.on('guildMemberRemove', async (member) => {
         const guild = member.guild;
-        const cfg = getGuildProtectionConfig(guild.id);
+        const cfg = await getGuildProtectionConfig(guild.id);
         if (!cfg?.enabled || !cfg.protectionTypes?.kickBan) return;
         const actor = await getRecentExecutorId(guild, 20);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
@@ -1049,7 +1049,7 @@ function ensureProtectionEngine(client) {
 
     client.on('emojiCreate', async (emoji) => {
         const guild = emoji.guild;
-        const cfg = getGuildProtectionConfig(guild.id);
+        const cfg = await getGuildProtectionConfig(guild.id);
         if (!cfg?.enabled || !cfg.protectionTypes?.serverSettings) return;
         const actor = await getRecentExecutorId(guild, 60);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
@@ -1058,7 +1058,7 @@ function ensureProtectionEngine(client) {
 
     client.on('emojiUpdate', async (oldEmoji, newEmoji) => {
         const guild = newEmoji.guild;
-        const cfg = getGuildProtectionConfig(guild.id);
+        const cfg = await getGuildProtectionConfig(guild.id);
         if (!cfg?.enabled || !cfg.protectionTypes?.serverSettings) return;
         const actor = await getRecentExecutorId(guild, 61);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
@@ -1067,7 +1067,7 @@ function ensureProtectionEngine(client) {
 
     client.on('emojiDelete', async (emoji) => {
         const guild = emoji.guild;
-        const cfg = getGuildProtectionConfig(guild.id);
+        const cfg = await getGuildProtectionConfig(guild.id);
         if (!cfg?.enabled || !cfg.protectionTypes?.serverSettings) return;
         const actor = await getRecentExecutorId(guild, 62);
         if (await handleTrustedActorChange(guild, cfg, actor)) return;
@@ -1077,7 +1077,7 @@ function ensureProtectionEngine(client) {
     client.on('guildMemberAdd', async (member) => {
         if (!member.user.bot) return;
         const guild = member.guild;
-        const cfg = getGuildProtectionConfig(guild.id);
+        const cfg = await getGuildProtectionConfig(guild.id);
         if (!cfg?.enabled) return;
         const trusted = cfg.trustedUsers || [];
         if (trusted.includes(member.user.id)) return;
@@ -1090,7 +1090,7 @@ function ensureProtectionEngine(client) {
 
     client.on('guildMemberUpdate', async (oldMember, newMember) => {
         const guild = newMember.guild;
-        const cfg = getGuildProtectionConfig(guild.id);
+        const cfg = await getGuildProtectionConfig(guild.id);
         if (!cfg?.enabled) return;
 
         const key = `${guild.id}:${newMember.id}`;
@@ -2048,7 +2048,7 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                         safeRetryCount,
                         safeRetryDelay,
                         `Edit channel ${chData.name}`
-                    ).catch(err => console.error(`Failed to edit role ${roleData.name}:`, err));
+                    ).catch(err => console.error(`Failed to edit channel ${chData.name}:`, err));
                     return;
                 }
 
@@ -2121,16 +2121,22 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                     if (chData.bitrate) opts.bitrate = chData.bitrate;
                     if (chData.userLimit) opts.userLimit = chData.userLimit;
 
-                   const newCh = await retryOperation(() => guild.channels.create(opts), safeRetryCount, 0, `Create channel ${chData.name}`);         usedChannelIds.add(newCh.id);
+                    const newCh = await retryOperation(() => guild.channels.create(opts), safeRetryCount, 0, `Create channel ${chData.name}`);
+                    usedChannelIds.add(newCh.id);
                     channelMap.set(chData.id, newCh.id);
                     stats.channelsCreated++;
                 } catch (err) {
-                    console.error(`Failed to delete extra role ${role.id}:`, err);
+                    console.error(`Failed to create standalone channel ${chData.name}:`, err);
                 }
             }, channelRestoreConcurrency) : Promise.resolve();
 
-            // 4) حذف الزوائد بالتوازي مع الاستعادة (بدون انتظار تسلسلي)
-            const deleteExtrasPromise = Promise.allSettled([
+            // 4) انتظر المطابقة/الإنشاء أولاً، ثم احذف الزوائد (Smart Diff حقيقي بدون تعارض مسارات)
+            await Promise.allSettled([
+                restoreChannelsInCategoriesPromise,
+                restoreStandaloneChannelsPromise
+            ]);
+
+            await Promise.allSettled([
                 shouldRestoreChannels
                     ? executeParallel(Array.from(guild.channels.cache.values()).filter(ch => ch.type !== ChannelType.GuildCategory), async (ch) => {
                         if (usedChannelIds.has(ch.id)) return;
@@ -2140,8 +2146,8 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                             await ch.delete("Smart diff restore - extra channel").catch(err => console.error(`Failed to delete extra channel ${ch.id}:`, err));
                             stats.channelsDeleted++;
                         } catch (err) {
-                        console.error(`Failed to create category ${catData.name}:`, err);
-                    }
+                            console.error(`Failed to delete extra channel ${ch.id}:`, err);
+                        }
                     }, DEFAULT_CONCURRENCY)
                     : Promise.resolve(),
                 shouldRestoreCategories
@@ -2153,16 +2159,10 @@ async function restoreBackup(backupFileName, guild, restoredBy, options, progres
                             await ch.delete("Smart diff restore - extra category").catch(err => console.error(`Failed to delete extra category ${ch.id}:`, err));
                             stats.categoriesDeleted++;
                         } catch (err) {
-                        console.error(`Failed to create category ${catData.name}:`, err);
-                    }
+                            console.error(`Failed to delete extra category ${ch.id}:`, err);
+                        }
                     }, DEFAULT_CONCURRENCY)
                     : Promise.resolve()
-            ]);
-
-            await Promise.allSettled([
-                restoreChannelsInCategoriesPromise,
-                restoreStandaloneChannelsPromise,
-                deleteExtrasPromise
             ]);
 
             // 5) ترتيب نهائي
@@ -2780,7 +2780,7 @@ async function handleProtectSetup(message, client) {
             fallbackBackupFile: null,
             enabledBy: message.author.id,
             enabledAt: Date.now(),
-            trustedUsers: getGuildProtectionConfig(message.guild.id)?.trustedUsers || [],
+            trustedUsers: (await getGuildProtectionConfig(message.guild.id))?.trustedUsers || [],
             protectionTypes: {
                 channelsCategories: state.types.includes('channelsCategories'),
                 rolesPermissions: state.types.includes('rolesPermissions'),
@@ -2791,7 +2791,7 @@ async function handleProtectSetup(message, client) {
             expectedRoles: getCurrentRoleCount(message.guild)
         };
 
-        setGuildProtectionConfig(message.guild.id, cfg);
+        await setGuildProtectionConfig(message.guild.id, cfg);
 
         await refreshProtectionStateFast(message.guild, cfg);
 

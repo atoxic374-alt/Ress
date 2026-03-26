@@ -494,7 +494,10 @@ async function execute(message, args, { client, scheduleSave, BOT_OWNERS }) {
             removeButton.setDisabled(true),
             listButton.setDisabled(true)
         );
-        sentMessage.edit({ components: [disabledRow] }).catch(console.error);
+        sentMessage.edit({ components: [disabledRow] }).catch((err) => {
+            if (err?.code === 10003 || err?.code === 10008 || err?.code === 'ChannelNotCached') return;
+            console.error('owners panel end edit failed:', err);
+        });
     });
 }
 
