@@ -2732,7 +2732,7 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
     return;
   }
 
-  if (!hasStrictClaimAccess(interaction.member, config, ticket?.reasonKey)) {
+  if (!hasStaffAccess(interaction.member, config, ticket?.reasonKey, ticket)) {
     await interaction.editReply(buildTicketMessagePayload('Alert', '**ليس لديك صلاحية الاستلام.**', { user: interaction.user }));
     return;
   }
@@ -2858,7 +2858,7 @@ async function handleClaimFromRequest(interaction, reqId) {
     ({ panelId, config, tickets, pendingRequests, req } = requestContext);
   }
 
-  if (!hasStrictClaimAccess(interaction.member, config, req?.reasonKey)) {
+  if (!hasStaffAccess(interaction.member, config, req?.reasonKey)) {
     await interaction.editReply(buildTicketMessagePayload('Alert', '**ليس لديك صلاحية الاستلام.**', { user: interaction.user }));
     return;
   }
@@ -4094,7 +4094,7 @@ async function handleReassignClaim(interaction, guildId, panelId, channelId) {
     await interaction.editReply(buildTicketMessagePayload('Error', '**لا توجد بيانات لهذا التكت.**'));
     return;
   }
-  if (!hasStrictClaimAccess(interaction.member, config, ticket?.reasonKey)) {
+  if (!hasStaffAccess(interaction.member, config, ticket?.reasonKey, ticket)) {
     await interaction.editReply(buildTicketMessagePayload('No perms', '**ليس لديك صلاحية الاستلام.**'));
     return;
   }
@@ -5694,10 +5694,10 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
 
   await interaction.channel.send({
     content: mentions.join(' ') || undefined,
-    ...buildTicketMessagePayload('تحويل', `**تم تحويل التكت لمسؤولين : ${respName}**\n**المتصلون الآن :** ${onlineResponsibleMentions.join(' ') || 'N/A'}\n**الرولات :** ${targetRoles.map((id) => `<@&${id}>`).join(' ') || 'N/A'}`)
+    ...buildTicketMessagePayload('Changed', `**تم تحويل التكت لمسؤولين : ${respName}**\n**المتصلون الآن :** ${onlineResponsibleMentions.join(' ') || 'N/A'}\n**الرولات :** ${targetRoles.map((id) => `<@&${id}>`).join(' ') || 'N/A'}`, { user: interaction.user })
   }).catch((error) => logSilentError('suppressed', error));
 
-  await interaction.editReply(buildTicketMessagePayload('تحويل', '**تم التحويل بنجاح.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+  await interaction.editReply(buildTicketMessagePayload('Changed', '**تم التحويل بنجاح.**', { ephemeral: true, user: interaction.user })).catch((error) => logSilentError('suppressed', error));
 }
 
 async function showInputModal(interaction, customId, title, label, placeholder = '') {
