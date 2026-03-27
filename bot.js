@@ -351,7 +351,7 @@ function writeJSONFile(filePath, data) {
     }
 }
 
-const RESPONSIBILITY_LEAVE_LIMIT_MS = 24 * 60 * 60 * 1000;
+const RESPONSIBILITY_LEAVE_LIMIT_MS = 6 * 60 * 60 * 1000;
 
 function getResponsibilityLeaveTracker() {
     const tracker = readJSONFile(DATA_FILES.responsibilityLeaveTracker, { guilds: {} });
@@ -374,6 +374,26 @@ async function updateResponsibilitiesEmbedForGuild(guildId) {
     }
 }
 
+function parseResponsibilityLeaveEntry(entry) {
+    if (!entry) return { leftAt: 0, responsibilities: [] };
+
+    if (typeof entry === 'number' || typeof entry === 'string') {
+        return {
+            leftAt: Number(entry) || 0,
+            responsibilities: []
+        };
+    }
+
+    if (typeof entry === 'object') {
+        return {
+            leftAt: Number(entry.leftAt) || 0,
+            responsibilities: Array.isArray(entry.responsibilities) ? entry.responsibilities : []
+        };
+    }
+
+    return { leftAt: 0, responsibilities: [] };
+}
+
 async function removeInactiveResponsiblesForGuild(guild, now = Date.now()) {
     if (!guild) return false;
     const guildId = guild.id;
@@ -383,20 +403,13 @@ async function removeInactiveResponsiblesForGuild(guild, now = Date.now()) {
     guildTracker.leftAtByUser = guildTracker.leftAtByUser || {};
     guildTracker.removedByUser = guildTracker.removedByUser || {};
 
-    const responsibilities = readJSONFile(DATA_FILES.responsibilities, {});
     let changed = false;
 
-    for (const [userId, leftAtRaw] of Object.entries(guildTracker.leftAtByUser)) {
-        const leftAt = Number(leftAtRaw || 0);
+    for (const [userId, leaveEntry] of Object.entries(guildTracker.leftAtByUser)) {
+        const { leftAt, responsibilities: trackedResponsibilities } = parseResponsibilityLeaveEntry(leaveEntry);
         if (!leftAt || (now - leftAt) < RESPONSIBILITY_LEAVE_LIMIT_MS) continue;
 
-        const removedFrom = [];
-        for (const [respName, respData] of Object.entries(responsibilities)) {
-            if (!Array.isArray(respData?.responsibles) || !respData.responsibles.includes(userId)) continue;
-            respData.responsibles = respData.responsibles.filter((id) => String(id) !== String(userId));
-            removedFrom.push(respName);
-            changed = true;
-        }
+        const removedFrom = Array.isArray(trackedResponsibilities) ? [...trackedResponsibilities] : [];
 
         if (removedFrom.length > 0) {
             guildTracker.removedByUser[userId] = {
@@ -404,16 +417,10 @@ async function removeInactiveResponsiblesForGuild(guild, now = Date.now()) {
                 removedAt: now,
                 responsibilities: removedFrom
             };
-            console.log(`🧹 تمت إزالة ${userId} من المسؤوليات بعد 24h خارج السيرفر (${guildId})`);
+            console.log(`🧹 تمت إزالة ${userId} من المسؤوليات بعد 6h خارج السيرفر (${guildId})`);
         }
         delete guildTracker.leftAtByUser[userId];
-    }
-
-    if (changed) {
-        writeJSONFile(DATA_FILES.responsibilities, responsibilities);
-        global.responsibilities = responsibilities;
-        await updateResponsibilitiesEmbedForGuild(guildId);
-        client.emit('responsibilityUpdate');
+        changed = true;
     }
 
     saveResponsibilityLeaveTracker(tracker);
@@ -1717,7 +1724,7 @@ client.once(Events.ClientReady, async () => {
     await ensureRespMessageFreshness(client, '30m-check');
   }, 30 * 60 * 1000);
 
-  // إزالة المسؤوليات تلقائياً بعد 24 ساعة خارج السيرفر
+  // إزالة المسؤوليات تلقائياً بعد 6 ساعات خارج السيرفر
   setInterval(async () => {
     for (const guild of client.guilds.cache.values()) {
       await removeInactiveResponsiblesForGuild(guild);
@@ -3483,7 +3490,29 @@ client.on('guildMemberRemove', async (member) => {
         const tracker = getResponsibilityLeaveTracker();
         if (!tracker.guilds[member.guild.id]) tracker.guilds[member.guild.id] = { leftAtByUser: {}, removedByUser: {} };
         tracker.guilds[member.guild.id].leftAtByUser = tracker.guilds[member.guild.id].leftAtByUser || {};
-        tracker.guilds[member.guild.id].leftAtByUser[member.id] = Date.now();
+        tracker.guilds[member.guild.id].removedByUser = tracker.guilds[member.guild.id].removedByUser || {};
+
+        const responsibilities = readJSONFile(DATA_FILES.responsibilities, {});
+        const removedFromResponsibilities = [];
+
+        for (const [respName, respData] of Object.entries(responsibilities)) {
+            if (!Array.isArray(respData?.responsibles) || !respData.responsibles.includes(member.id)) continue;
+            respData.responsibles = respData.responsibles.filter((id) => String(id) !== String(member.id));
+            removedFromResponsibilities.push(respName);
+        }
+
+        tracker.guilds[member.guild.id].leftAtByUser[member.id] = {
+            leftAt: Date.now(),
+            responsibilities: removedFromResponsibilities
+        };
+
+        if (removedFromResponsibilities.length > 0) {
+            writeJSONFile(DATA_FILES.responsibilities, responsibilities);
+            global.responsibilities = responsibilities;
+            await updateResponsibilitiesEmbedForGuild(member.guild.id);
+            client.emit('responsibilityUpdate');
+        }
+
         saveResponsibilityLeaveTracker(tracker);
         await removeInactiveResponsiblesForGuild(member.guild);
 
@@ -3529,11 +3558,34 @@ client.on('guildMemberAdd', async (member) => {
 
         const tracker = getResponsibilityLeaveTracker();
         const guildTracker = tracker.guilds?.[member.guild.id];
+        const leaveEntryRaw = guildTracker?.leftAtByUser?.[member.id];
+        const leaveEntry = parseResponsibilityLeaveEntry(leaveEntryRaw);
+        const leftRecently = leaveEntry.leftAt && (Date.now() - leaveEntry.leftAt) < RESPONSIBILITY_LEAVE_LIMIT_MS;
         const removalInfo = guildTracker?.removedByUser?.[member.id] || null;
-        if (guildTracker?.leftAtByUser?.[member.id]) {
+        if (leaveEntryRaw) {
             delete guildTracker.leftAtByUser[member.id];
         }
-        if (removalInfo) {
+        if (leftRecently && leaveEntry.responsibilities.length > 0) {
+            const responsibilities = readJSONFile(DATA_FILES.responsibilities, {});
+            let restoredAny = false;
+
+            for (const respName of leaveEntry.responsibilities) {
+                if (!responsibilities[respName]) continue;
+                if (!Array.isArray(responsibilities[respName].responsibles)) responsibilities[respName].responsibles = [];
+                if (!responsibilities[respName].responsibles.includes(member.id)) {
+                    responsibilities[respName].responsibles.push(member.id);
+                    restoredAny = true;
+                }
+            }
+
+            if (restoredAny) {
+                writeJSONFile(DATA_FILES.responsibilities, responsibilities);
+                global.responsibilities = responsibilities;
+                await updateResponsibilitiesEmbedForGuild(member.guild.id);
+                client.emit('responsibilityUpdate');
+            }
+            saveResponsibilityLeaveTracker(tracker);
+        } else if (removalInfo) {
             delete guildTracker.removedByUser[member.id];
             saveResponsibilityLeaveTracker(tracker);
             const removedList = Array.isArray(removalInfo.responsibilities) && removalInfo.responsibilities.length
@@ -3541,7 +3593,7 @@ client.on('guildMemberAdd', async (member) => {
                 : 'غير محدد';
             const notifyEmbed = colorManager.createEmbed()
                 .setTitle('تنبيه المسؤوليات')
-                .setDescription(`تمت إزالتك من المسؤوليات تلقائياً بسبب بقائك خارج السيرفر أكثر من 24 ساعة.\n\n**المسؤوليات المتأثرة:** ${removedList}`);
+                .setDescription(`تمت إزالتك من المسؤوليات تلقائياً بسبب بقائك خارج السيرفر أكثر من 6 ساعات.\n\n**المسؤوليات المتأثرة:** ${removedList}`);
             await member.send({ embeds: [notifyEmbed] }).catch(() => {});
             await updateResponsibilitiesEmbedForGuild(member.guild.id);
         } else {
