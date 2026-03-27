@@ -5585,10 +5585,11 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     ? ticket.transferredUserIds.map((id) => String(id || '').trim()).filter((id) => /^\d{16,20}$/.test(id))
     : [];
 
-  // عند تحويل التذكرة، تصبح التذكرة غير مستلمة، لذا يجب مسح pointsReceiverId.
-  // سيتم تعيين pointsReceiverId للمستلم الجديد عند استلام التذكرة لاحقاً.
-  ticket.pointsReceiverId = null;
-  ticket.claimedBy = null;
+  // بعد التحويل نبقي المستلم الحالي ومسار النقاط كما هو
+  // حتى يظهر اسم المستلم عند الإغلاق وتُحسب النقاط له.
+  if (!ticket.pointsReceiverId && previousClaimer) {
+    ticket.pointsReceiverId = previousClaimer;
+  }
   ticket.transferredTo = respName;
 
   const targetRoles = (selected.roles || [])
