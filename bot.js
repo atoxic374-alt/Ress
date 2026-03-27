@@ -439,6 +439,10 @@ async function sweepMissingResponsiblesOnStartup(guild) {
     const responsibilities = readJSONFile(DATA_FILES.responsibilities, {});
     let changed = false;
     const now = Date.now();
+    const totalResponsiblesBeforeSweep = Object.values(responsibilities).reduce((sum, respData) => {
+        if (!Array.isArray(respData?.responsibles)) return sum;
+        return sum + respData.responsibles.length;
+    }, 0);
     const checkMemberPresence = async (userId) => {
         const cachedMember = guild.members.cache.get(userId);
         if (cachedMember) return true;
@@ -454,6 +458,44 @@ async function sweepMissingResponsiblesOnStartup(guild) {
             return null;
         }
     };
+
+    // حماية من سيناريو "تصفير كل المسؤوليات":
+    // إذا الملف أصبح بدون مسؤولين، نحاول استرجاعهم من التراكر للأعضاء الموجودين فعلياً بالسيرفر.
+    if (totalResponsiblesBeforeSweep === 0) {
+        const candidates = new Map();
+
+        const addCandidate = (userId, payload) => {
+            if (!payload || !Array.isArray(payload.responsibilities) || payload.responsibilities.length === 0) return;
+            const current = candidates.get(userId) || new Set();
+            for (const respName of payload.responsibilities) current.add(respName);
+            candidates.set(userId, current);
+        };
+
+        for (const [userId, leaveEntryRaw] of Object.entries(guildTracker.leftAtByUser)) {
+            addCandidate(userId, parseResponsibilityLeaveEntry(leaveEntryRaw));
+        }
+        for (const [userId, removalInfo] of Object.entries(guildTracker.removedByUser)) {
+            addCandidate(userId, { responsibilities: Array.isArray(removalInfo?.responsibilities) ? removalInfo.responsibilities : [] });
+        }
+
+        for (const [userId, respNamesSet] of candidates.entries()) {
+            const isPresent = await checkMemberPresence(userId);
+            if (isPresent !== true) continue;
+
+            for (const respName of respNamesSet) {
+                if (!responsibilities[respName]) continue;
+                if (!Array.isArray(responsibilities[respName].responsibles)) responsibilities[respName].responsibles = [];
+                if (!responsibilities[respName].responsibles.includes(userId)) {
+                    responsibilities[respName].responsibles.push(userId);
+                    changed = true;
+                }
+            }
+        }
+
+        if (changed) {
+            console.log(`♻️ تم اكتشاف تصفير للمسؤوليات وتمت محاولة الاسترجاع من التراكر للسيرفر ${guild.id}.`);
+        }
+    }
 
     // إصلاح تلقائي: لو العضو موجود حالياً لكنه محفوظ كخارج السيرفر، رجّع مسؤولياته
     for (const [userId, leaveEntryRaw] of Object.entries(guildTracker.leftAtByUser)) {
