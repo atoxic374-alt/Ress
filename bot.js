@@ -439,6 +439,43 @@ async function sweepMissingResponsiblesOnStartup(guild) {
     const responsibilities = readJSONFile(DATA_FILES.responsibilities, {});
     let changed = false;
     const now = Date.now();
+    const checkMemberPresence = async (userId) => {
+        const cachedMember = guild.members.cache.get(userId);
+        if (cachedMember) return true;
+
+        try {
+            const fetchedMember = await guild.members.fetch(userId);
+            return Boolean(fetchedMember);
+        } catch (error) {
+            // 10007 = Unknown Member (أكيد خارج السيرفر)
+            if (error?.code === 10007) return false;
+            // أي خطأ آخر (صلاحيات/اتصال/ريت ليمت) لا نعتبره خروجاً حتى لا نحذف أعضاء فعليين
+            console.log(`⚠️ تعذر التحقق من العضو ${userId} أثناء فحص التشغيل: ${error?.message || error}`);
+            return null;
+        }
+    };
+
+    // إصلاح تلقائي: لو العضو موجود حالياً لكنه محفوظ كخارج السيرفر، رجّع مسؤولياته
+    for (const [userId, leaveEntryRaw] of Object.entries(guildTracker.leftAtByUser)) {
+        const leaveEntry = parseResponsibilityLeaveEntry(leaveEntryRaw);
+        if (!leaveEntry.responsibilities.length) continue;
+
+        const isPresent = await checkMemberPresence(userId);
+        if (isPresent !== true) continue;
+
+        for (const respName of leaveEntry.responsibilities) {
+            if (!responsibilities[respName]) continue;
+            if (!Array.isArray(responsibilities[respName].responsibles)) responsibilities[respName].responsibles = [];
+            if (!responsibilities[respName].responsibles.includes(userId)) {
+                responsibilities[respName].responsibles.push(userId);
+                changed = true;
+            }
+        }
+
+        delete guildTracker.leftAtByUser[userId];
+        delete guildTracker.removedByUser[userId];
+        changed = true;
+    }
 
     for (const [respName, respData] of Object.entries(responsibilities)) {
         if (!Array.isArray(respData?.responsibles) || respData.responsibles.length === 0) continue;
@@ -446,12 +483,8 @@ async function sweepMissingResponsiblesOnStartup(guild) {
         const filteredResponsibles = [];
 
         for (const userId of respData.responsibles) {
-            let member = guild.members.cache.get(userId) || null;
-            if (!member) {
-                member = await guild.members.fetch(userId).catch(() => null);
-            }
-
-            if (member) {
+            const isPresent = await checkMemberPresence(userId);
+            if (isPresent === true || isPresent === null) {
                 filteredResponsibles.push(userId);
                 continue;
             }
