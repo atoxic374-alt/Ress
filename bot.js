@@ -473,8 +473,7 @@ async function sweepMissingResponsiblesOnStartup(guild) {
     }
 
     if (changed) {
-        writeJSONFile(DATA_FILES.responsibilities, responsibilities);
-        global.responsibilities = responsibilities;
+        await persistResponsibilitiesState(responsibilities);
         saveResponsibilityLeaveTracker(tracker);
         await updateResponsibilitiesEmbedForGuild(guild.id);
         client.emit('responsibilityUpdate');
@@ -491,6 +490,23 @@ async function sweepMissingResponsiblesOnStartup(guild) {
 const { dbManager } = require('./utils/database.js');
 let points = readJSONFile(DATA_FILES.points, {});
 global.responsibilities = {};
+
+async function persistResponsibilitiesState(responsibilities, changedRespNames = []) {
+    writeJSONFile(DATA_FILES.responsibilities, responsibilities);
+    global.responsibilities = responsibilities;
+
+    if (!dbManager?.isInitialized || typeof dbManager.updateResponsibility !== 'function') return;
+
+    const targets = changedRespNames.length > 0
+        ? changedRespNames.filter((name) => responsibilities[name])
+        : Object.keys(responsibilities);
+
+    for (const respName of targets) {
+        await dbManager.updateResponsibility(respName, responsibilities[respName]).catch((error) => {
+            console.error(`❌ فشل تحديث المسؤولية ${respName} في قاعدة البيانات:`, error?.message || error);
+        });
+    }
+}
 
 // دالة لتهيئة المسؤوليات من قاعدة البيانات
 async function initializeResponsibilities() {
@@ -3574,8 +3590,7 @@ client.on('guildMemberRemove', async (member) => {
         };
 
         if (removedFromResponsibilities.length > 0) {
-            writeJSONFile(DATA_FILES.responsibilities, responsibilities);
-            global.responsibilities = responsibilities;
+            await persistResponsibilitiesState(responsibilities, removedFromResponsibilities);
             await updateResponsibilitiesEmbedForGuild(member.guild.id);
             client.emit('responsibilityUpdate');
         }
@@ -3646,8 +3661,7 @@ client.on('guildMemberAdd', async (member) => {
             }
 
             if (restoredAny) {
-                writeJSONFile(DATA_FILES.responsibilities, responsibilities);
-                global.responsibilities = responsibilities;
+                await persistResponsibilitiesState(responsibilities, leaveEntry.responsibilities);
                 await updateResponsibilitiesEmbedForGuild(member.guild.id);
                 client.emit('responsibilityUpdate');
             }
