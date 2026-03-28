@@ -871,7 +871,7 @@ async function handleApplyRespButton(interaction, client) {
                 const minutes = Math.floor(timeLeft / 60000);
                 const seconds = Math.floor((timeLeft % 60000) / 1000);
                 return await interaction.reply({
-                    content: `⏳ **يجب عليك الانتظار ${minutes}د و ${seconds}ث قبل تقديم طلب آخر أو اختيار مسؤولية أخرى.**`,
+                    content: `⏳ **يجب عليك الانتظار ${minutes}m , ${seconds}s , ث قبل تقديم طلب آخر أو اختيار مسؤولية أخرى.**`,
                     ephemeral: true
                 });
             }
@@ -881,7 +881,7 @@ async function handleApplyRespButton(interaction, client) {
         
         if (Object.keys(currentResps).length === 0) {
             return await interaction.reply({
-                content: 'لا توجد مسؤوليات متاحة للتقديم عليها حالياً',
+                content: '**لا توجد مسؤوليات متاحة للتقديم عليها حالياً**',
                 ephemeral: true
             });
         }
@@ -906,13 +906,13 @@ async function handleApplyRespButton(interaction, client) {
                     description: isAlreadyResponsible
                         ? 'أنت بالفعل مسؤول في هذه المسؤولية'
                         : isFull
-                            ? 'مكتملة: لا يمكن التقديم حالياً'
+                            ? 'مكتملة، لا يمكن التقديم حالياً'
                             : `عدد المسؤولين : ${data.responsibles ? data.responsibles.length : 0}`.substring(0, 100)
                 };
             });
 
             return {
-                content: `يرجى اختيار المسؤولية من القائمة أدناه:\n**صفحة ${page + 1}/${totalPages}**`,
+                content: `يرجى اختيار المسؤولية من القائمة أدناه :\n**صفحة ${page + 1}/${totalPages}**`,
                 components: [
                     new ActionRowBuilder().addComponents(
                         new StringSelectMenuBuilder()
@@ -990,7 +990,7 @@ async function handleApplyRespSelect(interaction, client) {
                 const minutes = Math.floor(timeLeft / 60000);
                 const seconds = Math.floor((timeLeft % 60000) / 1000);
                 return await interaction.reply({
-                    content: `⏳ **يجب عليك الانتظار ${minutes}د و ${seconds}ث قبل تقديم طلب آخر أو اختيار مسؤولية أخرى.**`,
+                    content: `⏳ **يجب عليك الانتظار ${minutes}m , ${seconds}s ث قبل تقديم طلب آخر أو اختيار مسؤولية أخرى.**`,
                     ephemeral: true
                 });
             }
@@ -1160,14 +1160,14 @@ async function handleApplyRespModal(interaction, client) {
             applyEmojiSafely(
                 new ButtonBuilder()
                     .setCustomId(`approve_apply_${interaction.user.id}_${respName}`)
-                    .setLabel('accept?')
+                    .setLabel('Accept?')
                     .setStyle(ButtonStyle.Secondary),
                 '<:emoji_7:1465221394966253768>'
             ),
             applyEmojiSafely(
                 new ButtonBuilder()
                     .setCustomId(`reject_apply_${interaction.user.id}_${respName}`)
-                    .setLabel('reject?')
+                    .setLabel('Reject?')
                     .setStyle(ButtonStyle.Secondary),
                 '<:emoji_7:1465221361839505622>'
             )
@@ -1420,7 +1420,7 @@ module.exports = {
             .setTitle('**Resp Control Panel**')
             .setThumbnail(message.guild.iconURL({ dynamic: true }))
             .setDescription([
-                '**كل إعدادات Resp من هذا الأمر فقط (بدون subcommands).**',
+                '* *Responsibilities Setup*',
                 '',
                 '**⚙️ Setup** — إعداد الرومات + نوع الرسالة',
                 `> **Suggestions :** ${suggestionsChannelText}`,
@@ -1447,16 +1447,16 @@ module.exports = {
             ].join('\n'));
 
         const panelRow1 = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`resp_panel_setup_${message.id}`).setLabel('Setup').setEmoji('⚙️').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId(`resp_panel_chat_${message.id}`).setLabel('Apply Room').setEmoji('💬').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId(`resp_panel_img_${message.id}`).setLabel('Image').setEmoji('🖼️').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(`resp_panel_setup_${message.id}`).setLabel('Setup').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`resp_panel_chat_${message.id}`).setLabel('Apply Room').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`resp_panel_img_${message.id}`).setLabel('Image').setStyle(ButtonStyle.Secondary)
         );
 
         const panelRow2 = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`resp_panel_full_${message.id}`).setLabel('Full Slots').setEmoji('✅').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId(`resp_panel_access_${message.id}`).setLabel('Access Roles').setEmoji('🔐').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId(`resp_panel_cooldown_${message.id}`).setLabel('Cooldown').setEmoji('⏱️').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId(`resp_panel_clear_${message.id}`).setLabel('Clear Members').setEmoji('🧹').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(`resp_panel_full_${message.id}`).setLabel('Full Slots').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`resp_panel_access_${message.id}`).setLabel('Access Roles').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`resp_panel_cooldown_${message.id}`).setLabel('Cooldown').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`resp_panel_clear_${message.id}`).setLabel('Clear Members').setStyle(ButtonStyle.Secondary)
         );
 
         const panelMessage = await message.reply({ embeds: [panelEmbed], components: [panelRow1, panelRow2] });
@@ -1604,7 +1604,7 @@ module.exports = {
             try {
                 if (interaction.customId.startsWith('resp_panel_setup_')) {
                     const roomMsg = await interaction.reply({
-                        content: '**اختر روم الاقتراحات ثم روم عرض المسؤوليات (بحث / اختيار مباشر).**',
+                        content: '**اختر روم الاقتراحات ثم روم عرض المسؤوليات).**',
                         components: [
                             new ActionRowBuilder().addComponents(
                                 new ChannelSelectMenuBuilder()
@@ -1958,7 +1958,7 @@ module.exports = {
                                 buildRestrictionsPreview(),
                                 '',
                                 '**اختر المسؤوليات المطلوب تطبيق نفس التقييد عليها :**',
-                                `**صفحة :** ${page + 1}/${totalPages}`,
+                                `**Page :** ${page + 1}/${totalPages}`,
                                 `**المحدد حالياً :** ${selectedResponsibilities.size}`
                             ].join('\n'),
                             components: [
@@ -2034,7 +2034,7 @@ module.exports = {
                             `**إدارة Access Roles : ${selectedList.join(' ، ')}**`,
                             `**عدد المسؤوليات المحددة :** ${selectedList.length}`,
                             '',
-                            '**اختر الرولات الجديدة (بحث / اختيار) أو اضغط إزالة التقييد.**'
+                            '**اختر الرولات الجديدة أو اضغط إزالة التقييد.**'
                         ].join('\n'),
                         components: [
                             new ActionRowBuilder().addComponents(
