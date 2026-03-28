@@ -189,6 +189,30 @@ function applyEmojiSafely(button, emojiValue) {
     return button;
 }
 
+function buildDisabledComponents(rows = []) {
+    if (!Array.isArray(rows)) return [];
+    return rows
+        .filter((row) => row?.components?.length)
+        .map((row) => {
+            const rowData = row.toJSON ? row.toJSON() : row;
+            const disabledRowData = {
+                ...rowData,
+                components: (rowData.components || []).map((component) => ({
+                    ...component,
+                    disabled: true
+                }))
+            };
+            return ActionRowBuilder.from(disabledRowData);
+        });
+}
+
+async function disableMessageComponents(messageLike) {
+    if (!messageLike?.components?.length || typeof messageLike.edit !== 'function') return;
+    const disabledComponents = buildDisabledComponents(messageLike.components);
+    if (!disabledComponents.length) return;
+    await messageLike.edit({ components: disabledComponents }).catch(() => {});
+}
+
 
 async function createImageAttachment(url) {
     try {
@@ -970,6 +994,14 @@ async function handleApplyRespButton(interaction, client) {
                 await pickInteraction.update(buildPayload()).catch(() => {});
             }
         });
+
+        pickerCollector.on('end', async () => {
+            const disabledComponents = buildDisabledComponents(targetMessage.components || []);
+            if (!disabledComponents.length) return;
+            await targetMessage.edit({
+                components: disabledComponents
+            }).catch(() => {});
+        });
     } catch (error) {
         console.error('Error in handleApplyRespButton:', error);
     }
@@ -1403,48 +1435,50 @@ module.exports = {
         }
 
         const guildId = message.guild.id;
-        const guildRespConfig = getGuildRespConfig(guildId);
-        const guildCfg = guildRespConfig.guilds[guildId] || {};
-        const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
-        const currentRestrictions = getRespRoleRestrictions(guildId);
-        const currentFull = Array.isArray(guildCfg.fullResponsibilities) ? guildCfg.fullResponsibilities : [];
-        const cooldownMsNow = getRespApplyCooldownMs(guildId);
-        const cooldownText = cooldownMsNow ? `${Math.round(cooldownMsNow / 60000)} دقيقة` : 'مغلق';
-        const formatText = guildCfg.messageFormat || 'embed';
-        const suggestionsChannelText = guildCfg.suggestionsChannel ? `<#${guildCfg.suggestionsChannel}>` : 'غير محدد';
-        const embedChannelText = guildCfg.embedChannel ? `<#${guildCfg.embedChannel}>` : 'غير محدد';
-        const applyChannelText = guildCfg.applyChannel ? `<#${guildCfg.applyChannel}>` : 'غير محدد';
-        const globalImageText = guildCfg.globalImageUrl ? 'موجودة ✅' : 'غير محددة';
+        const createPanelEmbed = () => {
+            const guildRespConfig = getGuildRespConfig(guildId);
+            const guildCfg = guildRespConfig.guilds[guildId] || {};
+            const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
+            const currentRestrictions = getRespRoleRestrictions(guildId);
+            const currentFull = Array.isArray(guildCfg.fullResponsibilities) ? guildCfg.fullResponsibilities : [];
+            const cooldownMsNow = getRespApplyCooldownMs(guildId);
+            const cooldownText = cooldownMsNow ? `${Math.round(cooldownMsNow / 60000)} دقيقة` : 'مغلق';
+            const formatText = guildCfg.messageFormat || 'embed';
+            const suggestionsChannelText = guildCfg.suggestionsChannel ? `<#${guildCfg.suggestionsChannel}>` : 'غير محدد';
+            const embedChannelText = guildCfg.embedChannel ? `<#${guildCfg.embedChannel}>` : 'غير محدد';
+            const applyChannelText = guildCfg.applyChannel ? `<#${guildCfg.applyChannel}>` : 'غير محدد';
+            const globalImageText = guildCfg.globalImageUrl ? 'موجودة ✅' : 'غير محددة';
 
-        const panelEmbed = colorManager.createEmbed()
-            .setTitle('**Resp Control Panel**')
-            .setThumbnail(message.guild.iconURL({ dynamic: true }))
-            .setDescription([
-                '* *Responsibilities Setup*',
-                '',
-                '**⚙️ Setup** — إعداد الرومات + نوع الرسالة',
-                `> **Suggestions :** ${suggestionsChannelText}`,
-                `> **Embed Room :** ${embedChannelText}`,
-                `> **Format :** ${formatText}`,
-                '',
-                '**💬 Apply Room** — تحديد روم التقديم',
-                `> **Current :** ${applyChannelText}`,
-                '',
-                '**🖼️ Image** — صورة مسؤولية أو الجميع',
-                `> **Global Image :** ${globalImageText}`,
-                `> **Responsibilities with image :** ${Object.values(currentResps).filter((r) => r?.image).length}/${Object.keys(currentResps).length}`,
-                '',
-                '**✅ Full Slots** — المسؤوليات المكتملة',
-                `> **Count :** ${currentFull.length}`,
-                '',
-                '**🔐 Access Roles** — رولات مسموح لها بالتقديم على مسؤولية',
-                `> **Restricted responsibilities :** ${Object.keys(currentRestrictions).length}`,
-                '',
-                '**⏱️ Cooldown** — تخصيص/إيقاف كولداون التقديم',
-                `> **Current :** ${cooldownText}`,
-                '',
-                '**🧹 Clear Members** — تفريغ جميع المسؤولين'
-            ].join('\n'));
+            return colorManager.createEmbed()
+                .setTitle('**Resp Control Panel**')
+                .setThumbnail(message.guild.iconURL({ dynamic: true }))
+                .setDescription([
+                    '* *Responsibilities Setup*',
+                    '',
+                    '**⚙️ Setup** — إعداد الرومات + نوع الرسالة',
+                    `> **Suggestions :** ${suggestionsChannelText}`,
+                    `> **Embed Room :** ${embedChannelText}`,
+                    `> **Format :** ${formatText}`,
+                    '',
+                    '**💬 Apply Room** — تحديد روم التقديم',
+                    `> **Current :** ${applyChannelText}`,
+                    '',
+                    '**🖼️ Image** — صورة مسؤولية أو الجميع',
+                    `> **Global Image :** ${globalImageText}`,
+                    `> **Responsibilities with image :** ${Object.values(currentResps).filter((r) => r?.image).length}/${Object.keys(currentResps).length}`,
+                    '',
+                    '**✅ Full Slots** — المسؤوليات المكتملة',
+                    `> **Count :** ${currentFull.length}`,
+                    '',
+                    '**🔐 Access Roles** — رولات مسموح لها بالتقديم على مسؤولية',
+                    `> **Restricted responsibilities :** ${Object.keys(currentRestrictions).length}`,
+                    '',
+                    '**⏱️ Cooldown** — تخصيص/إيقاف كولداون التقديم',
+                    `> **Current :** ${cooldownText}`,
+                    '',
+                    '**🧹 Clear Members** — تفريغ جميع المسؤولين'
+                ].join('\n'));
+        };
 
         const panelRow1 = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`resp_panel_setup_${message.id}`).setLabel('Setup').setStyle(ButtonStyle.Secondary),
@@ -1459,7 +1493,10 @@ module.exports = {
             new ButtonBuilder().setCustomId(`resp_panel_clear_${message.id}`).setLabel('Clear Members').setStyle(ButtonStyle.Secondary)
         );
 
-        const panelMessage = await message.reply({ embeds: [panelEmbed], components: [panelRow1, panelRow2] });
+        const panelMessage = await message.reply({ embeds: [createPanelEmbed()], components: [panelRow1, panelRow2] });
+        const refreshPanelMessage = async () => {
+            await panelMessage.edit({ embeds: [createPanelEmbed()], components: [panelRow1, panelRow2] }).catch(() => {});
+        };
 
         const buildRestrictionsPreview = () => {
             const restrictions = getRespRoleRestrictions(guildId);
@@ -1575,6 +1612,8 @@ module.exports = {
                     const selectedValue = picked.values[0];
                     if (acknowledgeOnSelect) {
                         await picked.update({ content: `**✅ تم اختيار :** ${selectedValue === '__all__' ? 'all' : selectedValue}`, components: [] }).catch(() => {});
+                    } else {
+                        await picked.update({ components: [] }).catch(() => {});
                     }
                     return {
                         value: selectedValue === '__all__' ? 'all' : selectedValue,
@@ -1790,6 +1829,7 @@ module.exports = {
                         time: 120000
                     }).catch(() => null);
                     if (!submit) return;
+                    await disableMessageComponents(actionMessage);
 
                     const safeImageUrl = normalizeImageUrl(submit.fields.getTextInputValue('image_url').trim());
                     if (!isValidImageUrl(safeImageUrl)) {
@@ -1927,7 +1967,7 @@ module.exports = {
                             updatedConfig.guilds[guildId].fullResponsibilities = nextValues;
                             writeJSONFile(DATA_FILES.respConfig, updatedConfig);
                             appendRespAuditLog(guildId, message.author.id, 'resp.full.update', { before: previous, after: nextValues });
-                            await picked.followUp({ content: `**✅ تم حفظ المسؤوليات المكتملة (${nextValues.length}).**`, ephemeral: true }).catch(() => {});
+                            await picked.update({ content: `**✅ تم حفظ المسؤوليات المكتملة (${nextValues.length}).**`, components: [] }).catch(() => {});
                             return;
                         }
                     }
@@ -2074,7 +2114,10 @@ module.exports = {
                             responsibilities: selectedList,
                             before: previousMap
                         });
-                        await followPick.followUp({ content: `**✅ تم إلغاء التقييد عن ${selectedList.length} مسؤولية.**\n\n**التقييدات الحالية :**\n${buildRestrictionsPreview()}`, ephemeral: true });
+                        await followPick.update({
+                            content: `**✅ تم إلغاء التقييد عن ${selectedList.length} مسؤولية.**\n\n**التقييدات الحالية :**\n${buildRestrictionsPreview()}`,
+                            components: []
+                        }).catch(() => {});
                         return;
                     }
 
@@ -2106,7 +2149,10 @@ module.exports = {
                         before: previousMap,
                         after: roleIds
                     });
-                    await followPick.followUp({ content: `**✅ تم حفظ التقييد لـ ${selectedList.length} مسؤولية.**\n\n**التقييدات الحالية :**\n${buildRestrictionsPreview()}`, ephemeral: true });
+                    await followPick.update({
+                        content: `**✅ تم حفظ التقييد لـ ${selectedList.length} مسؤولية.**\n\n**التقييدات الحالية :**\n${buildRestrictionsPreview()}`,
+                        components: []
+                    }).catch(() => {});
                     return;
                 }
 
@@ -2221,6 +2267,8 @@ module.exports = {
                 if (!interaction.replied && !interaction.deferred) {
                     await interaction.reply({ content: '**❌ حدث خطأ أثناء تنفيذ الإجراء.**', ephemeral: true }).catch(() => {});
                 }
+            } finally {
+                await refreshPanelMessage();
             }
         });
 
