@@ -1,4 +1,4 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ComponentType, StringSelectMenuBuilder, AttachmentBuilder } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ComponentType, StringSelectMenuBuilder, ChannelSelectMenuBuilder, RoleSelectMenuBuilder, AttachmentBuilder, ChannelType } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
@@ -8,7 +8,7 @@ const colorManager = require('../utils/colorManager.js');
 
 // نظام الكولداون
 const applyCooldowns = new Map();
-const COOLDOWN_TIME = 30 * 60 * 1000; // 30 دقيقة بالملي ثانية
+const DEFAULT_COOLDOWN_TIME = 30 * 60 * 1000; // 30 دقيقة بالملي ثانية
 
 const DATA_FILES = {
     responsibilities: path.join(__dirname, '..', 'data', 'responsibilities.json'),
@@ -75,6 +75,71 @@ function getFullResponsibilities(guildId) {
 
 function isResponsibilityFull(guildId, responsibilityName) {
     return getFullResponsibilities(guildId).includes(responsibilityName);
+}
+
+function getRespApplyCooldownMs(guildId) {
+    const config = getGuildRespConfig(guildId);
+    const guildConfig = config.guilds[guildId] || {};
+    const rawMinutes = guildConfig.applyCooldownMinutes;
+
+    if (rawMinutes === 0 || rawMinutes === '0' || rawMinutes === 'off' || rawMinutes === false) {
+        return null;
+    }
+
+    const minutes = Number(rawMinutes);
+    if (Number.isFinite(minutes) && minutes > 0) {
+        return minutes * 60 * 1000;
+    }
+
+    return DEFAULT_COOLDOWN_TIME;
+}
+
+function getRespRoleRestrictions(guildId) {
+    const config = getGuildRespConfig(guildId);
+    const restrictions = config.guilds[guildId]?.respRoleRestrictions;
+    return restrictions && typeof restrictions === 'object' ? restrictions : {};
+}
+
+function setRespRoleRestriction(guildId, respName, roleIds = []) {
+    const config = getGuildRespConfig(guildId);
+    if (!config.guilds[guildId]) config.guilds[guildId] = {};
+    if (!config.guilds[guildId].respRoleRestrictions || typeof config.guilds[guildId].respRoleRestrictions !== 'object') {
+        config.guilds[guildId].respRoleRestrictions = {};
+    }
+
+    if (!Array.isArray(roleIds) || roleIds.length === 0) {
+        delete config.guilds[guildId].respRoleRestrictions[respName];
+    } else {
+        config.guilds[guildId].respRoleRestrictions[respName] = [...new Set(roleIds)];
+    }
+
+    writeJSONFile(DATA_FILES.respConfig, config);
+}
+
+function getAllowedAdminRolesForGuild(guildId) {
+    const adminRolesData = readJSONFile(path.join(__dirname, '..', 'data', 'adminRoles.json'), []);
+    if (Array.isArray(adminRolesData)) return adminRolesData;
+    if (adminRolesData && typeof adminRolesData === 'object') {
+        const byGuild = adminRolesData[guildId];
+        return Array.isArray(byGuild) ? byGuild : [];
+    }
+    return [];
+}
+
+function appendRespAuditLog(guildId, actorId, action, details = {}) {
+    const config = getGuildRespConfig(guildId);
+    if (!config.guilds[guildId]) config.guilds[guildId] = {};
+    if (!Array.isArray(config.guilds[guildId].auditTrail)) config.guilds[guildId].auditTrail = [];
+
+    config.guilds[guildId].auditTrail.unshift({
+        at: Date.now(),
+        actorId,
+        action,
+        details
+    });
+
+    config.guilds[guildId].auditTrail = config.guilds[guildId].auditTrail.slice(0, 100);
+    writeJSONFile(DATA_FILES.respConfig, config);
 }
 
 function getImageNameFromUrl(url) {
@@ -608,7 +673,7 @@ async function handleSuggestionModal(interaction, client) {
         // تأكيد أن القناة تنتمي لنفس السيرفر
         if (!channel || channel.guild.id !== guildId) {
             await interaction.reply({
-                content: 'قناة الاقتراحات غير موجودة أو غير صحيحة',
+                content: 'روم الاقتراحات غير موجود أو غير صحيح',
                 ephemeral: true
             });
             return;
@@ -797,9 +862,11 @@ async function handleApplyRespButton(interaction, client) {
         if (interaction.replied || interaction.deferred) return;
 
         // التحقق من الكولداون
-        const lastApply = applyCooldowns.get(interaction.user.id);
-        if (lastApply) {
-            const timeLeft = lastApply + COOLDOWN_TIME - Date.now();
+        const cooldownMs = getRespApplyCooldownMs(interaction.guild.id);
+        const cooldownKey = `${interaction.guild.id}:${interaction.user.id}`;
+        const lastApply = applyCooldowns.get(cooldownKey);
+        if (cooldownMs && lastApply) {
+            const timeLeft = lastApply + cooldownMs - Date.now();
             if (timeLeft > 0) {
                 const minutes = Math.floor(timeLeft / 60000);
                 const seconds = Math.floor((timeLeft % 60000) / 1000);
@@ -820,43 +887,89 @@ async function handleApplyRespButton(interaction, client) {
         }
 
         const sortedResps = Object.entries(currentResps)
-            .sort((a, b) => (a[1].order || 0) - (b[1].order || 0))
-            .slice(0, 25);
-        
+            .sort((a, b) => (a[1].order || 0) - (b[1].order || 0));
         const fullResponsibilities = getFullResponsibilities(interaction.guild.id);
-        const options = sortedResps.map(([name, data]) => {
-            const isAlreadyResponsible = data.responsibles && data.responsibles.includes(interaction.user.id);
-            const isFull = fullResponsibilities.includes(name);
+
+        let page = 0;
+        const pageSize = 25;
+        const totalPages = Math.max(1, Math.ceil(sortedResps.length / pageSize));
+        const token = `apply_picker_${interaction.user.id}_${Date.now()}`;
+
+        const buildPayload = () => {
+            const pageItems = sortedResps.slice(page * pageSize, page * pageSize + pageSize);
+            const options = pageItems.map(([name, data]) => {
+                const isAlreadyResponsible = data.responsibles && data.responsibles.includes(interaction.user.id);
+                const isFull = fullResponsibilities.includes(name);
+                return {
+                    label: name.substring(0, 100),
+                    value: name.substring(0, 100),
+                    description: isAlreadyResponsible
+                        ? 'أنت بالفعل مسؤول في هذه المسؤولية'
+                        : isFull
+                            ? 'مكتملة: لا يمكن التقديم حالياً'
+                            : `عدد المسؤولين : ${data.responsibles ? data.responsibles.length : 0}`.substring(0, 100)
+                };
+            });
+
             return {
-                label: name,
-                value: name,
-                description: isAlreadyResponsible
-                    ? 'أنت بالفعل مسؤول في هذه المسؤولية'
-                    : isFull
-                        ? 'مكتملة: لا يمكن التقديم حالياً'
-                        : `عدد المسؤولين : ${data.responsibles ? data.responsibles.length : 0}`
+                content: `يرجى اختيار المسؤولية من القائمة أدناه:\n**صفحة ${page + 1}/${totalPages}**`,
+                components: [
+                    new ActionRowBuilder().addComponents(
+                        new StringSelectMenuBuilder()
+                            .setCustomId(`apply_resp_select_${token}`)
+                            .setPlaceholder('اختر المسؤولية التي تود التقديم عليها')
+                            .addOptions(options)
+                    ),
+                    new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`apply_resp_prev_${token}`).setLabel('السابق').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+                        new ButtonBuilder().setCustomId(`apply_resp_next_${token}`).setLabel('التالي').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages - 1)
+                    )
+                ]
             };
+        };
+
+        const pickerMessage = interaction.replied || interaction.deferred
+            ? await interaction.editReply(buildPayload())
+            : await interaction.reply({ ...buildPayload(), ephemeral: true, fetchReply: true });
+
+        const targetMessage = pickerMessage?.awaitMessageComponent ? pickerMessage : await interaction.fetchReply();
+        const pickerCollector = targetMessage.createMessageComponentCollector({
+            filter: (i) => i.user.id === interaction.user.id && i.customId.includes(token),
+            time: 10 * 60 * 1000
         });
-        
-        const selectMenu = new StringSelectMenuBuilder()
-            .setCustomId('apply_resp_select')
-            .setPlaceholder('اختر المسؤولية التي تود التقديم عليها')
-            .addOptions(options);
-        
-        const row = new ActionRowBuilder().addComponents(selectMenu);
-        
-        if (interaction.replied || interaction.deferred) {
-            await interaction.editReply({
-                content: 'يرجى اختيار المسؤولية من القائمة أدناه:',
-                components: [row]
-            });
-        } else {
-            await interaction.reply({
-                content: 'يرجى اختيار المسؤولية من القائمة أدناه:',
-                components: [row],
-                ephemeral: true
-            });
-        }
+
+        pickerCollector.on('collect', async (pickInteraction) => {
+            if (pickInteraction.customId === `apply_resp_select_${token}`) {
+                const selectedResp = pickInteraction.values[0];
+                pickerCollector.stop('selected');
+                await pickInteraction.showModal(
+                    new ModalBuilder()
+                        .setCustomId(`apply_resp_modal_${selectedResp}`)
+                        .setTitle(`تقديم طلب مسؤولية : ${selectedResp}`)
+                        .addComponents(
+                            new ActionRowBuilder().addComponents(
+                                new TextInputBuilder()
+                                    .setCustomId('apply_reason')
+                                    .setLabel('لماذا تود الحصول على هذه المسؤولية؟')
+                                    .setStyle(TextInputStyle.Paragraph)
+                                    .setPlaceholder('اكتب أسبابك وخبراتك هنا...')
+                                    .setRequired(true)
+                            )
+                        )
+                );
+                return;
+            }
+
+            if (pickInteraction.customId === `apply_resp_prev_${token}`) {
+                page = Math.max(0, page - 1);
+                await pickInteraction.update(buildPayload()).catch(() => {});
+                return;
+            }
+            if (pickInteraction.customId === `apply_resp_next_${token}`) {
+                page = Math.min(totalPages - 1, page + 1);
+                await pickInteraction.update(buildPayload()).catch(() => {});
+            }
+        });
     } catch (error) {
         console.error('Error in handleApplyRespButton:', error);
     }
@@ -868,9 +981,11 @@ async function handleApplyRespSelect(interaction, client) {
         if (interaction.replied || interaction.deferred) return;
 
         // التحقق من الكولداون
-        const lastApply = applyCooldowns.get(interaction.user.id);
-        if (lastApply) {
-            const timeLeft = lastApply + COOLDOWN_TIME - Date.now();
+        const cooldownMs = getRespApplyCooldownMs(interaction.guild.id);
+        const cooldownKey = `${interaction.guild.id}:${interaction.user.id}`;
+        const lastApply = applyCooldowns.get(cooldownKey);
+        if (cooldownMs && lastApply) {
+            const timeLeft = lastApply + cooldownMs - Date.now();
             if (timeLeft > 0) {
                 const minutes = Math.floor(timeLeft / 60000);
                 const seconds = Math.floor((timeLeft % 60000) / 1000);
@@ -889,6 +1004,20 @@ async function handleApplyRespSelect(interaction, client) {
                 content: `❌ **عدد المسؤولين مكتمل في "${selectedResp}"، لا يمكنك التقديم على هذه المسؤولية حالياً.**`,
                 ephemeral: true
             });
+        }
+
+        const restrictions = getRespRoleRestrictions(interaction.guild.id);
+        const requiredRoleIds = Array.isArray(restrictions[selectedResp]) ? restrictions[selectedResp] : [];
+        if (requiredRoleIds.length > 0) {
+            const hasAccessRole = interaction.member?.roles?.cache
+                ? requiredRoleIds.some((roleId) => interaction.member.roles.cache.has(roleId))
+                : false;
+            if (!hasAccessRole) {
+                return await interaction.reply({
+                    content: `❌ **لا يمكنك التقديم على "${selectedResp}" إلا إذا كنت تحمل أحد الرولات المسموحة.**`,
+                    ephemeral: true
+                });
+            }
         }
 
         // التحقق من أن العضو ليس مسؤولاً بالفعل في هذه المسؤولية
@@ -928,9 +1057,12 @@ async function handleApplyRespModal(interaction, client) {
         await interaction.deferReply({ ephemeral: true });
 
         // التحقق من الكولداون
-        const lastApply = applyCooldowns.get(interaction.user.id);
-        if (lastApply) {
-            const timeLeft = lastApply + COOLDOWN_TIME - Date.now();
+        const guildId = interaction.guild.id;
+        const cooldownMs = getRespApplyCooldownMs(guildId);
+        const cooldownKey = `${guildId}:${interaction.user.id}`;
+        const lastApply = applyCooldowns.get(cooldownKey);
+        if (cooldownMs && lastApply) {
+            const timeLeft = lastApply + cooldownMs - Date.now();
             if (timeLeft > 0) {
                 const minutes = Math.floor(timeLeft / 60000);
                 const seconds = Math.floor((timeLeft % 60000) / 1000);
@@ -942,7 +1074,7 @@ async function handleApplyRespModal(interaction, client) {
 
         const respName = interaction.customId.replace('apply_resp_modal_', '');
         const reason = interaction.fields.getTextInputValue('apply_reason');
-        const guildId = interaction.guild.id;
+        
       
         const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
 
@@ -950,6 +1082,19 @@ async function handleApplyRespModal(interaction, client) {
             return await interaction.editReply({
                 content: `❌ **عدد المسؤولين مكتمل في "${respName}"، لا يمكنك التقديم على هذه المسؤولية حالياً.**`
             });
+        }
+
+        const restrictions = getRespRoleRestrictions(guildId);
+        const requiredRoleIds = Array.isArray(restrictions[respName]) ? restrictions[respName] : [];
+        if (requiredRoleIds.length > 0) {
+            const hasAccessRole = interaction.member?.roles?.cache
+                ? requiredRoleIds.some((roleId) => interaction.member.roles.cache.has(roleId))
+                : false;
+            if (!hasAccessRole) {
+                return await interaction.editReply({
+                    content: `❌ **هذه المسؤولية مخصصة لرولات إدارية محددة فقط.**`
+                });
+            }
         }
         
         // التحقق من أن العضو ليس مسؤولاً بالفعل في هذه المسؤولية
@@ -989,14 +1134,14 @@ async function handleApplyRespModal(interaction, client) {
 
         if (!applyChannelId) {
             return await interaction.editReply({
-                content: 'نظام الطلبات غير مفعل حالياً (لم يتم تحديد قناة الطلبات)'
+                content: 'نظام الطلبات غير مفعل حالياً (لم يتم تحديد روم الطلبات)'
             });
         }
 
         const channel = await client.channels.fetch(applyChannelId).catch(() => null);
         if (!channel) {
             return await interaction.editReply({
-                content: 'قناة الطلبات غير موجودة، يرجى التواصل مع الإدارة'
+                content: 'روم الطلبات غير موجود، يرجى التواصل مع الإدارة'
             });
         }
 
@@ -1029,18 +1174,21 @@ async function handleApplyRespModal(interaction, client) {
         );
 
         await channel.send({ embeds: [applyEmbed], components: [row] });
-        
-        // إرسال صورة المسؤولية (المعينة عبر resp img) كخط فاصل منفصل بعد الإيمبد مباشرة
-        if (respData && respData.image) {
-            await channel.send({ content: respData.image }).catch(err => console.error('Failed to send responsibility separator image:', err));
+
+        // إرسال صورة المسؤولية بعد الإيمبد كمرفق فعلي (وليس رابط نصي)
+        const defaultSeparator = 'https://cdn.discordapp.com/attachments/1446184605056106690/1447086623954173972/colors-5.png?ex=693657f0&is=69350670&hm=126e0ab559dc0a642e9672d1c0d1a3e62d10a704b14fa25c46460870b67d9682&';
+        const separatorImageUrl = respData?.image || defaultSeparator;
+        const separatorAttachment = await createImageAttachment(separatorImageUrl);
+
+        if (separatorAttachment) {
+            await channel.send({ files: [separatorAttachment] }).catch(err => console.error('Failed to send separator image attachment:', err));
         } else {
-            // خط فاصل افتراضي في حال عدم وجود صورة للمسؤولية
-            const defaultSeparator = 'https://cdn.discordapp.com/attachments/1446184605056106690/1447086623954173972/colors-5.png?ex=693657f0&is=69350670&hm=126e0ab559dc0a642e9672d1c0d1a3e62d10a704b14fa25c46460870b67d9682&';
-            await channel.send({ content: defaultSeparator }).catch(err => console.error('Failed to send default separator image:', err));
+            // fallback آمن: إذا تعذر جلب الصورة كمرفق نحاول إرسال الرابط مباشرة
+            await channel.send({ content: separatorImageUrl }).catch(err => console.error('Failed to send separator image fallback URL:', err));
         }
 
         // تعيين الكولداون للمستخدم بعد إرسال الطلب بنجاح
-        applyCooldowns.set(interaction.user.id, Date.now());
+        applyCooldowns.set(`${guildId}:${interaction.user.id}`, Date.now());
         
         await interaction.editReply({
             content: '*تم إرسال طلبك بنجاح، سيتم الرد عليك قريباً*'
@@ -1187,7 +1335,7 @@ async function handleRejectReasonModal(interaction, client) {
             
             const rejectEmbed = colorManager.createEmbed()
                 .setTitle('Rejected')
-                .setDescription(`**تم رفض طلبك لمسؤولية ال${respName}**\n\n ** في سيرفر ${interaction.guild.name}**\n\n**السبب للرفض:** ${reason}`)
+                .setDescription(`**تم رفض طلبك لمسؤولية ال${respName}**\n\n ** في سيرفر ${interaction.guild.name}**\n\n**السبب للرفض :** ${reason}`)
                 .setThumbnail(interaction.guild.iconURL({ dynamic: true }));
             
             if (respData && respData.image) {
@@ -1244,9 +1392,7 @@ module.exports = {
     
     async execute(message, args, context) {
         const { client } = context;
-        const subCommand = args[0] ? args[0].toLowerCase() : null;
-        
-        // فحص إذا كان المستخدم مالكًا
+
         const botConfig = readJSONFile(path.join(__dirname, '..', 'data', 'botConfig.json'), {});
         const BOT_OWNERS = botConfig.owners || [];
         const isOwner = BOT_OWNERS.includes(message.author.id) || message.guild.ownerId === message.author.id;
@@ -1257,524 +1403,839 @@ module.exports = {
         }
 
         const guildId = message.guild.id;
-        const config = getGuildConfig(guildId);
-        const guildConfig = config.guilds[guildId];
-        
-        // دالة لسؤال نوع الرسالة
-        async function askMessageFormat(channel, authorId, callback) {
-            const formatRow = new ActionRowBuilder()
-                .addComponents(
-                    new ButtonBuilder()
-                        .setCustomId('format_embed')
-                        .setLabel('Embed')
-                        .setStyle(ButtonStyle.Secondary),
-                    new ButtonBuilder()
-                        .setCustomId('format_text')
-                        .setLabel('Text')
-                        .setStyle(ButtonStyle.Secondary)
-                );
-            
-            const formatMsg = await channel.send({
-                content: 'اختر نوع رسالة المسؤوليات:',
-                components: [formatRow]
-            });
-            
-            const formatCollector = formatMsg.createMessageComponentCollector({
-                filter: i => i.user.id === authorId && (i.customId === 'format_embed' || i.customId === 'format_text'),
-                time: 60000,
-                max: 1
-            });
-            
-            formatCollector.on('collect', async (interaction) => {
-                const format = interaction.customId === 'format_embed' ? 'embed' : 'text';
-                setGuildConfig(guildId, { messageFormat: format });
-                await interaction.update({ content: `** Done : ${format === 'embed' ? 'Embed' : 'Text'}`, components: [] });
-                callback(format);
-            });
-            
-            formatCollector.on('end', (collected) => {
-                if (collected.size === 0) {
-                    formatMsg.edit({ content: 'انتهت مهلة الانتظار لاختيار نوع الرسالة', components: [] });
-                }
-            });
-        }
+        const guildRespConfig = getGuildRespConfig(guildId);
+        const guildCfg = guildRespConfig.guilds[guildId] || {};
+        const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
+        const currentRestrictions = getRespRoleRestrictions(guildId);
+        const currentFull = Array.isArray(guildCfg.fullResponsibilities) ? guildCfg.fullResponsibilities : [];
+        const cooldownMsNow = getRespApplyCooldownMs(guildId);
+        const cooldownText = cooldownMsNow ? `${Math.round(cooldownMsNow / 60000)} دقيقة` : 'مغلق';
+        const formatText = guildCfg.messageFormat || 'embed';
+        const suggestionsChannelText = guildCfg.suggestionsChannel ? `<#${guildCfg.suggestionsChannel}>` : 'غير محدد';
+        const embedChannelText = guildCfg.embedChannel ? `<#${guildCfg.embedChannel}>` : 'غير محدد';
+        const applyChannelText = guildCfg.applyChannel ? `<#${guildCfg.applyChannel}>` : 'غير محدد';
+        const globalImageText = guildCfg.globalImageUrl ? 'موجودة ✅' : 'غير محددة';
 
-        
-if (subCommand === 'delete' && args[1] === 'all') {
-    const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
-    let totalRemoved = 0;
-    let totalRolesRemoved = 0;
+        const panelEmbed = colorManager.createEmbed()
+            .setTitle('**Resp Control Panel**')
+            .setThumbnail(message.guild.iconURL({ dynamic: true }))
+            .setDescription([
+                '**كل إعدادات Resp من هذا الأمر فقط (بدون subcommands).**',
+                '',
+                '**⚙️ Setup** — إعداد الرومات + نوع الرسالة',
+                `> **Suggestions :** ${suggestionsChannelText}`,
+                `> **Embed Room :** ${embedChannelText}`,
+                `> **Format :** ${formatText}`,
+                '',
+                '**💬 Apply Room** — تحديد روم التقديم',
+                `> **Current :** ${applyChannelText}`,
+                '',
+                '**🖼️ Image** — صورة مسؤولية أو الجميع',
+                `> **Global Image :** ${globalImageText}`,
+                `> **Responsibilities with image :** ${Object.values(currentResps).filter((r) => r?.image).length}/${Object.keys(currentResps).length}`,
+                '',
+                '**✅ Full Slots** — المسؤوليات المكتملة',
+                `> **Count :** ${currentFull.length}`,
+                '',
+                '**🔐 Access Roles** — رولات مسموح لها بالتقديم على مسؤولية',
+                `> **Restricted responsibilities :** ${Object.keys(currentRestrictions).length}`,
+                '',
+                '**⏱️ Cooldown** — تخصيص/إيقاف كولداون التقديم',
+                `> **Current :** ${cooldownText}`,
+                '',
+                '**🧹 Clear Members** — تفريغ جميع المسؤولين'
+            ].join('\n'));
 
-    const confirmMsg = await message.reply(
-        '**⚠️ هل أنت متأكد من إزالة جميع المسؤولين من كافة المسؤوليات؟**\n' +
-        'سيتم فقط:\n' +
-        '- سحب رولات المسؤوليات\n' +
-        '- تفريغ المسؤولين\n' +
-        '**(لن يتم حذف أي مسؤولية أو إعداداتها)**\n\n' +
-        'لديك 15 ثانية للتأكيد.'
-    );
+        const panelRow1 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`resp_panel_setup_${message.id}`).setLabel('Setup').setEmoji('⚙️').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`resp_panel_chat_${message.id}`).setLabel('Apply Room').setEmoji('💬').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`resp_panel_img_${message.id}`).setLabel('Image').setEmoji('🖼️').setStyle(ButtonStyle.Secondary)
+        );
 
-    await confirmMsg.react('✅');
-    await confirmMsg.react('❌');
+        const panelRow2 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`resp_panel_full_${message.id}`).setLabel('Full Slots').setEmoji('✅').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`resp_panel_access_${message.id}`).setLabel('Access Roles').setEmoji('🔐').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`resp_panel_cooldown_${message.id}`).setLabel('Cooldown').setEmoji('⏱️').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`resp_panel_clear_${message.id}`).setLabel('Clear Members').setEmoji('🧹').setStyle(ButtonStyle.Secondary)
+        );
 
-    const filter = (reaction, user) =>
-        ['✅', '❌'].includes(reaction.emoji.name) &&
-        user.id === message.author.id;
+        const panelMessage = await message.reply({ embeds: [panelEmbed], components: [panelRow1, panelRow2] });
 
-    const collected = await confirmMsg
-        .awaitReactions({ filter, max: 1, time: 15000 })
-        .catch(() => null);
+        const buildRestrictionsPreview = () => {
+            const restrictions = getRespRoleRestrictions(guildId);
+            const entries = Object.entries(restrictions);
+            if (!entries.length) return '**لا توجد تقييدات حالياً.**';
 
-    const firstReaction = collected?.first?.();
-    if (!firstReaction || firstReaction.emoji?.name === '❌') {
-        return confirmMsg.edit('**❌ تم إلغاء العملية.**');
-    }
+            return entries
+                .slice(0, 15)
+                .map(([respName, roleIds]) => {
+                    const rolesText = Array.isArray(roleIds) && roleIds.length
+                        ? roleIds.map((id) => `<@&${id}>`).join(' ')
+                        : '**غير محدد**';
+                    return `• **${respName}** → ${rolesText}`;
+                })
+                .join('\n');
+        };
 
-    await confirmMsg.edit('**⏳ جاري إزالة المسؤولين وسحب الرولات...**');
-
-    const { dbManager } = require('../utils/database.js');
-
-    for (const respName in currentResps) {
-        const resp = currentResps[respName];
-        const roleIds = Array.isArray(resp.roles)
-            ? resp.roles.filter(Boolean)
-            : (resp.roleId ? [resp.roleId] : []);
-
-        // توحيد المصدر
-        const members = resp.responsibles || resp.members || [];
-
-        if (members.length > 0) {
-            for (const userId of members) {
-                totalRemoved++;
-                try {
-                    const member = await message.guild.members.fetch(userId).catch(() => null);
-                    if (member && roleIds.length > 0) {
-                        for (const roleId of roleIds) {
-                            if (member.roles.cache.has(roleId)) {
-                                await member.roles.remove(roleId).catch(() => {});
-                                totalRolesRemoved++;
-                            }
-                        }
-                    }
-                } catch (_) {}
-            }
-        }
-
-        // تفريغ المسؤولين
-        resp.members = [];
-        resp.responsibles = [];
-        
-        // تحديث قاعدة البيانات لكل مسؤولية بشكل صحيح
-        if (dbManager && dbManager.updateResponsibility) {
-            await dbManager.updateResponsibility(respName, resp);
-        }
-    }
-
-    // مزامنة الملف والذاكرة العالمية
-    writeJSONFile(DATA_FILES.responsibilities, currentResps);
-    global.responsibilities = currentResps;
-
-    // تحديث إيمبد العرض تلقائياً ليعكس التغييرات
-    try {
-        await updateEmbedMessage(message.client, guildId);
-    } catch (error) {
-        console.error('Error updating embed message after delete all:', error);
-    }
-
-    return confirmMsg.edit(
-        `**✅ تم بنجاح.**\n` +
-        `- عدد المسؤولين المزالين: \`${totalRemoved}\`\n` +
-        `- عدد الرولات المسحوبة: \`${totalRolesRemoved}\`\n\n` +
-        `**المسؤوليات ما زالت موجودة بدون أي تغيير ✅**`
-    );
-}
-
-        if (subCommand === 'img') {
-    const respName = args[1];
-
-    if (!respName) {
-        return message.reply({
-            content: '❌ يرجى تحديد اسم المسؤولية أو كتابة `all`.\nمثال: `resp img الشات` أو `resp img all`'
-        });
-    }
-
-    const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
-
-    // جلب الصورة (مرفوعة أو رابط)
-    const attachment = message.attachments.first();
-    const imageUrl = attachment?.url || args[2];
-    const safeImageUrl = normalizeImageUrl(imageUrl);
-
-    if (!imageUrl) {
-        return message.reply({ content: '❌ يرجى إرفاق صورة أو وضع رابطها.' });
-    }
-
-    // فحص بسيط للصورة
-    const isImage = attachment || isValidImageUrl(safeImageUrl);
-
-    if (!isImage) {
-        return message.reply({ content: '❌ الرابط المقدم لا يبدو أنه صورة صالحة.' });
-    }
-
-    const { dbManager } = require('../utils/database.js');
-
-    // ===== img all =====
-    if (respName.toLowerCase() === 'all') {
-        const respKeys = Object.keys(currentResps);
-
-        if (respKeys.length === 0) {
-            return message.reply({ content: '❌ لا توجد مسؤوليات مسجلة حالياً.' });
-        }
-
-        for (const name of respKeys) {
-            currentResps[name].image = safeImageUrl;
-        }
-
-        // حفظ الصورة العامة لنظام التقديم التفاعلي
-        const configData = readJSONFile(DATA_FILES.respConfig, { guilds: {} });
-        if (!configData.guilds[guildId]) configData.guilds[guildId] = {};
-        configData.guilds[guildId].globalImageUrl = safeImageUrl;
-        writeJSONFile(DATA_FILES.respConfig, configData);
-
-        writeJSONFile(DATA_FILES.responsibilities, currentResps);
-        global.responsibilities = currentResps;
-
-        // تحديث قاعدة البيانات (مرة وحدة فقط)
-        try {
-            if (dbManager?.run) {
-                // التحقق من وجود العمود أولاً لمنع خطأ SQLITE_ERROR: duplicate column name
-                const tableInfo = await dbManager.all("PRAGMA table_info(responsibilities)");
-                const hasImage = tableInfo.some(col => col.name === 'image');
-                if (!hasImage) {
-                    await dbManager.run('ALTER TABLE responsibilities ADD COLUMN image TEXT').catch(() => {});
-                }
-                await dbManager.run(
-                    'UPDATE responsibilities SET image = ?',
-                    [safeImageUrl]
-                );
-            }
-        } catch (_) {}
-
-        await updateEmbedMessage(message.client, guildId);
-
-        return message.reply({
-            content: `✅ تم تعيين الصورة لجميع المسؤوليات (${respKeys.length}) بنجاح.`
-        });
-    }
-
-    // ===== img <respName> =====
-    if (!currentResps[respName]) {
-        return message.reply({
-            content: `❌ المسؤولية "**${respName}**" غير موجودة.`
-        });
-    }
-
-    currentResps[respName].image = safeImageUrl;
-
-    writeJSONFile(DATA_FILES.responsibilities, currentResps);
-    global.responsibilities = currentResps;
-
-    try {
-        if (dbManager?.run) {
-            // التحقق من وجود العمود أولاً لمنع خطأ SQLITE_ERROR: duplicate column name
-            const tableInfo = await dbManager.all("PRAGMA table_info(responsibilities)");
-            const hasImage = tableInfo.some(col => col.name === 'image');
-            if (!hasImage) {
-                await dbManager.run('ALTER TABLE responsibilities ADD COLUMN image TEXT').catch(() => {});
-            }
-            await dbManager.run(
-                'UPDATE responsibilities SET image = ? WHERE name = ?',
-                [safeImageUrl, respName]
-            );
-        }
-    } catch (_) {}
-
-    await updateEmbedMessage(message.client, guildId);
-
-    return message.reply({
-        content: `✅ تم تعيين الصورة للمسؤولية "**${respName}**" بنجاح.`
-    });
-}
-
-        if (subCommand === 'full') {
+        const requireNonEmptyResponsibilities = async (interactionLike) => {
             const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
-            const orderedRespNames = Object.entries(currentResps)
-                .sort((a, b) => (a[1].order || 0) - (b[1].order || 0))
-                .map(([name]) => name);
+            if (!Object.keys(currentResps).length) {
+                await interactionLike.reply({ content: '**❌ لا توجد مسؤوليات حالياً.**', ephemeral: true }).catch(() => {});
+                return null;
+            }
+            return currentResps;
+        };
 
-            if (orderedRespNames.length === 0) {
-                return message.reply({ content: '❌ لا توجد مسؤوليات حالياً.' });
+        const createSessionToken = (prefix = 'resp') => `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
+        const confirmEphemeralAction = async (interaction, summaryText) => {
+            const token = createSessionToken('confirm');
+            const payload = {
+                content: `${summaryText}\n\n**هل تريد التأكيد؟**`,
+                components: [
+                    new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`resp_confirm_yes_${token}`).setLabel('تأكيد').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`resp_confirm_no_${token}`).setLabel('إلغاء').setStyle(ButtonStyle.Secondary)
+                    )
+                ],
+                ephemeral: true,
+                fetchReply: true
+            };
+
+            const replyMsg = interaction.replied || interaction.deferred
+                ? await interaction.followUp(payload)
+                : await interaction.reply(payload);
+
+            const picked = await replyMsg.awaitMessageComponent({
+                filter: (i) => i.user.id === message.author.id && [
+                    `resp_confirm_yes_${token}`,
+                    `resp_confirm_no_${token}`
+                ].includes(i.customId),
+                time: 120000
+            }).catch(() => null);
+
+            if (!picked) return false;
+            if (picked.customId.endsWith(`no_${token}`)) {
+                await picked.update({ content: '**❌ تم إلغاء العملية.**', components: [] }).catch(() => {});
+                return false;
             }
 
-            const configData = getGuildRespConfig(guildId);
-            const initialFull = new Set(Array.isArray(configData.guilds[guildId].fullResponsibilities)
-                ? configData.guilds[guildId].fullResponsibilities
-                : []);
+            await picked.update({ content: '**✅ تم التأكيد. جاري التنفيذ...**', components: [] }).catch(() => {});
+            return true;
+        };
 
-            const selected = new Set(initialFull);
+        const pickResponsibilityWithPagination = async (interaction, titleText, includeAll = false, acknowledgeOnSelect = true) => {
+            const currentResps = await requireNonEmptyResponsibilities(interaction);
+            if (!currentResps) return null;
+
+            const names = Object.keys(currentResps);
             let page = 0;
             const pageSize = 25;
-            const totalPages = Math.ceil(orderedRespNames.length / pageSize);
-            const sessionId = `${message.author.id}_${Date.now()}`;
+            const totalPages = Math.max(1, Math.ceil(names.length / pageSize));
+            const token = createSessionToken('resp_pick');
 
-            const buildState = (currentPage) => {
-                const start = currentPage * pageSize;
-                const pageItems = orderedRespNames.slice(start, start + pageSize);
-                const options = pageItems.map((respName) => {
-                    const count = currentResps[respName]?.responsibles?.length || 0;
-                    return {
-                        label: respName.substring(0, 100),
-                        value: respName,
-                        default: selected.has(respName),
-                        description: `المسؤولين: ${count}`.substring(0, 100)
-                    };
-                });
+            const buildPayload = () => {
+                const start = page * pageSize;
+                const options = names.slice(start, start + pageSize).map((name) => ({
+                    label: name.substring(0, 100),
+                    value: name.substring(0, 100)
+                }));
 
-                const menu = new StringSelectMenuBuilder()
-                    .setCustomId(`resp_full_select_${sessionId}_${currentPage}`)
-                    .setPlaceholder(`حدد المسؤوليات المكتملة (صفحة ${currentPage + 1}/${totalPages})`)
-                    .setMinValues(0)
-                    .setMaxValues(options.length)
-                    .addOptions(options);
-
-                const navRow = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder()
-                        .setCustomId(`resp_full_prev_${sessionId}`)
-                        .setLabel('السابق')
-                        .setStyle(ButtonStyle.Secondary)
-                        .setDisabled(currentPage === 0),
-                    new ButtonBuilder()
-                        .setCustomId(`resp_full_info_${sessionId}`)
-                        .setLabel(`صفحة ${currentPage + 1}/${totalPages}`)
-                        .setStyle(ButtonStyle.Secondary)
-                        .setDisabled(true),
-                    new ButtonBuilder()
-                        .setCustomId(`resp_full_next_${sessionId}`)
-                        .setLabel('التالي')
-                        .setStyle(ButtonStyle.Secondary)
-                        .setDisabled(currentPage >= totalPages - 1)
-                );
-
-                const actionRow = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder()
-                        .setCustomId(`resp_full_save_${sessionId}`)
-                        .setLabel('حفظ')
-                        .setStyle(ButtonStyle.Success),
-                    new ButtonBuilder()
-                        .setCustomId(`resp_full_cancel_${sessionId}`)
-                        .setLabel('إلغاء')
-                        .setStyle(ButtonStyle.Danger)
-                );
+                if (includeAll && page === 0) {
+                    options.unshift({ label: 'All responsibilities', value: '__all__', description: 'تطبيق على الجميع' });
+                }
 
                 return {
-                    content: `**إدارة المسؤوليات المكتملة للتقديم**\n- اختر المسؤوليات المكتملة (لا يمكن التقديم عليها).\n- الإزالة تكون بإلغاء التحديد ثم حفظ.\n\nالمحدد حالياً: **${selected.size}**`,
-                    components: [new ActionRowBuilder().addComponents(menu), navRow, actionRow]
+                    content: `${titleText}\n**صفحة ${page + 1}/${totalPages}**`,
+                    components: [
+                        new ActionRowBuilder().addComponents(
+                            new StringSelectMenuBuilder()
+                                .setCustomId(`resp_pick_select_${token}`)
+                                .setPlaceholder('Search responsibility')
+                                .addOptions(options.slice(0, 25))
+                        ),
+                        new ActionRowBuilder().addComponents(
+                            new ButtonBuilder().setCustomId(`resp_pick_prev_${token}`).setLabel('السابق').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+                            new ButtonBuilder().setCustomId(`resp_pick_next_${token}`).setLabel('التالي').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages - 1)
+                        )
+                    ]
                 };
             };
 
-            const panelMessage = await message.channel.send(buildState(page));
+            let pickerMessage = await interaction.reply({ ...buildPayload(), ephemeral: true, fetchReply: true });
 
-            const collector = panelMessage.createMessageComponentCollector({
-                time: 10 * 60 * 1000,
-                filter: (i) => i.user.id === message.author.id && i.customId.includes(sessionId)
-            });
+            while (true) {
+                const picked = await pickerMessage.awaitMessageComponent({
+                    filter: (i) => i.user.id === message.author.id && i.customId.includes(token),
+                    time: 120000
+                }).catch(() => null);
+                if (!picked) return null;
 
-            collector.on('collect', async (interaction) => {
-                try {
-                    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('resp_full_select_')) {
-                        const parts = interaction.customId.split('_');
-                        const currentPage = Number(parts[parts.length - 1]);
-                        const start = currentPage * pageSize;
-                        const pageItems = orderedRespNames.slice(start, start + pageSize);
-
-                        for (const name of pageItems) selected.delete(name);
-                        for (const name of interaction.values) selected.add(name);
-
-                        await interaction.update(buildState(page));
-                        return;
+                if (picked.customId === `resp_pick_select_${token}`) {
+                    const selectedValue = picked.values[0];
+                    if (acknowledgeOnSelect) {
+                        await picked.update({ content: `**✅ تم اختيار :** ${selectedValue === '__all__' ? 'all' : selectedValue}`, components: [] }).catch(() => {});
                     }
-
-                    if (interaction.customId === `resp_full_prev_${sessionId}`) {
-                        page = Math.max(0, page - 1);
-                        await interaction.update(buildState(page));
-                        return;
-                    }
-
-                    if (interaction.customId === `resp_full_next_${sessionId}`) {
-                        page = Math.min(totalPages - 1, page + 1);
-                        await interaction.update(buildState(page));
-                        return;
-                    }
-
-                    if (interaction.customId === `resp_full_cancel_${sessionId}`) {
-                        collector.stop('cancelled');
-                        await interaction.update({ content: '❌ تم إلغاء العملية.', components: [] });
-                        return;
-                    }
-
-                    if (interaction.customId === `resp_full_save_${sessionId}`) {
-                        const updatedConfig = getGuildRespConfig(guildId);
-                        updatedConfig.guilds[guildId].fullResponsibilities = [...selected];
-                        writeJSONFile(DATA_FILES.respConfig, updatedConfig);
-
-                        collector.stop('saved');
-                        await interaction.update({
-                            content: `✅ تم حفظ المسؤوليات المكتملة بنجاح. العدد الحالي: **${selected.size}**`,
-                            components: []
-                        });
-                    }
-                } catch (err) {
-                    console.error('خطأ في إدارة resp full:', err);
+                    return {
+                        value: selectedValue === '__all__' ? 'all' : selectedValue,
+                        sourceInteraction: picked
+                    };
                 }
-            });
 
-            collector.on('end', async (_collected, reason) => {
-                if (!['saved', 'cancelled'].includes(reason)) {
-                    await panelMessage.edit({
-                        content: '⌛ انتهى وقت إعداد المسؤوليات المكتملة. أعد الأمر إذا لزم.',
-                        components: []
-                    }).catch((err) => {
-                        console.error('Failed to edit message on collector timeout:', err);
-                    });
+                if (picked.customId === `resp_pick_prev_${token}`) {
+                    page = Math.max(0, page - 1);
+                    await picked.update(buildPayload()).catch(() => {});
+                    continue;
                 }
-            });
-
-            return;
-        }
-
-
-        if (args[0] === 'chat') {
-            const channel = message.mentions.channels.first() || message.guild.channels.cache.get(args[1]);
-            if (!channel) return message.reply('**يرجى منشن القناة أو كتابة الآيدي الخاص بها**');
-            
-            const configData = readJSONFile(DATA_FILES.respConfig, { guilds: {} });
-            if (!configData.guilds[guildId]) configData.guilds[guildId] = {};
-            configData.guilds[guildId].applyChannel = channel.id;
-            writeJSONFile(DATA_FILES.respConfig, configData);
-            
-            return message.reply(`**✅ تم تحديد قناة طلبات المسؤولية: <#${channel.id}>**`);
-        }
-
-        if (subCommand === 'setup') {
-            // التحقق من وجود قناة الاقتراحات
-            if (!guildConfig.suggestionsChannel) {
-                await message.channel.send('منشن روم الاقتراحات');
-                
-                // انتظار منشن القناة
-                const channelCollector = message.channel.createMessageCollector({
-                    filter: m => m.author.id === message.author.id && m.mentions.channels.size > 0,
-                    time: 60000,
-                    max: 1
-                });
-                
-                channelCollector.on('collect', async (msg) => {
-                    const suggestionsChannel = msg.mentions.channels.first();
-                    
-                    // تأكيد أن القناة تنتمي لنفس السيرفر
-                    if (suggestionsChannel.guild.id !== guildId) {
-                        await msg.channel.send('يجب اختيار روم من نفس السيرفر');
-                        return;
-                    }
-                    
-                    setGuildConfig(guildId, { suggestionsChannel: suggestionsChannel.id });
-                    
-                    await msg.channel.send('منشن روم الايمبد');
-                    
-                    // انتظار منشن روم الايمبد
-                    const embedCollector = msg.channel.createMessageCollector({
-                        filter: m => m.author.id === message.author.id && m.mentions.channels.size > 0,
-                        time: 60000,
-                        max: 1
-                    });
-                    
-                    embedCollector.on('collect', async (embedMsg) => {
-                        const embedChannel = embedMsg.mentions.channels.first();
-                        
-                        // تأكيد أن القناة تنتمي لنفس السيرفر
-                        if (embedChannel.guild.id !== guildId) {
-                            await embedMsg.channel.send('يجب اختيار قناة من نفس السيرفر');
-                            return;
-                        }
-                        
-                        setGuildConfig(guildId, { embedChannel: embedChannel.id });
-                        
-                        // سؤال نوع الرسالة
-                        askMessageFormat(embedMsg.channel, message.author.id, async (format) => {
-                            await sendResponsibilitiesMessage(embedChannel, client, format);
-                        });
-                    });
-                    
-                    embedCollector.on('end', (collected) => {
-                        if (collected.size === 0) {
-                            msg.channel.send('انتهت مهلة الانتظار لمنشن روم الايمبد');
-                        }
-                    });
-                });
-                
-                channelCollector.on('end', (collected) => {
-                    if (collected.size === 0) {
-                        message.channel.send('انتهت مهلة الانتظار لمنشن روم الاقتراحات');
-                    }
-                });
-                
-            } else if (!guildConfig.embedChannel) {
-                await message.channel.send('منشن روم الايمبد');
-                
-                const embedCollector = message.channel.createMessageCollector({
-                    filter: m => m.author.id === message.author.id && m.mentions.channels.size > 0,
-                    time: 60000,
-                    max: 1
-                });
-                
-                embedCollector.on('collect', async (msg) => {
-                    const embedChannel = msg.mentions.channels.first();
-                    
-                    // تأكيد أن القناة تنتمي لنفس السيرفر
-                    if (embedChannel.guild.id !== guildId) {
-                        await msg.channel.send('يجب اختيار قناة من نفس السيرفر');
-                        return;
-                    }
-                    
-                    setGuildConfig(guildId, { embedChannel: embedChannel.id });
-                    
-                    // سؤال نوع الرسالة
-                    askMessageFormat(msg.channel, message.author.id, async (format) => {
-                        await sendResponsibilitiesMessage(embedChannel, client, format);
-                    });
-                });
-                
-                embedCollector.on('end', (collected) => {
-                    if (collected.size === 0) {
-                        message.channel.send('انتهت مهلة الانتظار لمنشن روم الايمبد');
-                    }
-                });
-                
-            } else {
-                // إذا كانت القنوات محددة، اسأل عن نوع الرسالة ثم أرسلها
-                try {
-                    const embedChannel = await client.channels.fetch(guildConfig.embedChannel);
-                    if (embedChannel && embedChannel.guild.id === guildId) {
-                        // سؤال نوع الرسالة
-                        askMessageFormat(message.channel, message.author.id, async (format) => {
-                            await sendResponsibilitiesMessage(embedChannel, client, format);
-                        });
-                    } else {
-                        await message.channel.send('روم الايمبد المحدد غير موجود أو غير صحيح، منشن روم جديد للايمبد');
-                    }
-                } catch (error) {
-                    console.error('خطأ في جلب قناة الايمبد:', error);
-                    await message.channel.send('حدث خطأ في جلب روم الايمبد، منشن روم جديد للايمبد');
+                if (picked.customId === `resp_pick_next_${token}`) {
+                    page = Math.min(totalPages - 1, page + 1);
+                    await picked.update(buildPayload()).catch(() => {});
                 }
             }
-        }
+        };
+
+        const panelCollector = panelMessage.createMessageComponentCollector({
+            componentType: ComponentType.Button,
+            time: 10 * 60 * 1000,
+            filter: (i) => i.user.id === message.author.id && i.customId.endsWith(message.id)
+        });
+
+        panelCollector.on('collect', async (interaction) => {
+            try {
+                if (interaction.customId.startsWith('resp_panel_setup_')) {
+                    const roomMsg = await interaction.reply({
+                        content: '**اختر روم الاقتراحات ثم روم عرض المسؤوليات (بحث / اختيار مباشر).**',
+                        components: [
+                            new ActionRowBuilder().addComponents(
+                                new ChannelSelectMenuBuilder()
+                                    .setCustomId(`resp_setup_suggestions_${message.id}`)
+                                    .setChannelTypes(ChannelType.GuildText)
+                                    .setPlaceholder('اختر روم الاقتراحات')
+                            ),
+                            new ActionRowBuilder().addComponents(
+                                new ChannelSelectMenuBuilder()
+                                    .setCustomId(`resp_setup_embed_${message.id}`)
+                                    .setChannelTypes(ChannelType.GuildText)
+                                    .setPlaceholder('اختر روم عرض المسؤوليات')
+                            )
+                        ],
+                        ephemeral: true,
+                        fetchReply: true
+                    });
+
+                    const suggestionPick = await roomMsg.awaitMessageComponent({
+                        filter: (i) => i.user.id === message.author.id && i.customId === `resp_setup_suggestions_${message.id}`,
+                        time: 120000
+                    }).catch(() => null);
+                    if (!suggestionPick) return;
+                    const suggestionsChannel = suggestionPick.channels.first();
+                    if (!suggestionsChannel || suggestionsChannel.guildId !== guildId) {
+                        await suggestionPick.reply({ content: '**❌ اختر روم من نفس السيرفر.**', ephemeral: true }).catch(() => {});
+                        return;
+                    }
+
+                    const embedPick = await roomMsg.awaitMessageComponent({
+                        filter: (i) => i.user.id === message.author.id && i.customId === `resp_setup_embed_${message.id}`,
+                        time: 120000
+                    }).catch(() => null);
+                    if (!embedPick) return;
+                    const embedChannel = embedPick.channels.first();
+                    if (!embedChannel || embedChannel.guildId !== guildId) {
+                        await embedPick.reply({ content: '**❌ اختر روم من نفس السيرفر.**', ephemeral: true }).catch(() => {});
+                        return;
+                    }
+
+                    setGuildConfig(guildId, { suggestionsChannel: suggestionsChannel.id, embedChannel: embedChannel.id });
+
+                    await embedPick.update({
+                        content: '**اختر نوع رسالة المسؤوليات :**',
+                        components: [
+                            new ActionRowBuilder().addComponents(
+                                new ButtonBuilder().setCustomId(`resp_setup_fmt_embed_${message.id}`).setLabel('Embed').setStyle(ButtonStyle.Secondary),
+                                new ButtonBuilder().setCustomId(`resp_setup_fmt_text_${message.id}`).setLabel('Text').setStyle(ButtonStyle.Secondary)
+                            )
+                        ]
+                    });
+
+                    const fmtPick = await roomMsg.awaitMessageComponent({
+                        filter: (i) => i.user.id === message.author.id && [
+                            `resp_setup_fmt_embed_${message.id}`,
+                            `resp_setup_fmt_text_${message.id}`
+                        ].includes(i.customId),
+                        time: 120000
+                    }).catch(() => null);
+                    if (!fmtPick) return;
+
+                    const format = fmtPick.customId.includes('_embed_') ? 'embed' : 'text';
+                    setGuildConfig(guildId, { messageFormat: format });
+                    await sendResponsibilitiesMessage(embedChannel, client, format);
+                    appendRespAuditLog(guildId, message.author.id, 'resp.setup', {
+                        suggestionsChannel: suggestionsChannel.id,
+                        embedChannel: embedChannel.id,
+                        format
+                    });
+                    await fmtPick.update({ content: `**✅ تم الإعداد بنجاح.**\n**نوع الرسالة :** ${format}`, components: [] });
+                    return;
+                }
+
+                if (interaction.customId.startsWith('resp_panel_chat_')) {
+                    const selectMsg = await interaction.reply({
+                        content: '**اختر روم طلبات المسؤولية :**',
+                        components: [
+                            new ActionRowBuilder().addComponents(
+                                new ChannelSelectMenuBuilder()
+                                    .setCustomId(`resp_apply_room_${message.id}`)
+                                    .setChannelTypes(ChannelType.GuildText)
+                                    .setPlaceholder('Search/Select Apply Room')
+                            )
+                        ],
+                        ephemeral: true,
+                        fetchReply: true
+                    });
+
+                    const picked = await selectMsg.awaitMessageComponent({
+                        filter: (i) => i.user.id === message.author.id && i.customId === `resp_apply_room_${message.id}`,
+                        time: 120000
+                    }).catch(() => null);
+                    if (!picked) return;
+
+                    const channel = picked.channels.first();
+                    if (!channel || channel.guildId !== guildId) {
+                        await picked.reply({ content: '**❌ اختر روم من نفس السيرفر.**', ephemeral: true }).catch(() => {});
+                        return;
+                    }
+                    const configData = readJSONFile(DATA_FILES.respConfig, { guilds: {} });
+                    if (!configData.guilds[guildId]) configData.guilds[guildId] = {};
+                    const previousApplyChannel = configData.guilds[guildId].applyChannel || null;
+                    configData.guilds[guildId].applyChannel = channel.id;
+                    writeJSONFile(DATA_FILES.respConfig, configData);
+                    appendRespAuditLog(guildId, message.author.id, 'resp.applyChannel.update', {
+                        before: previousApplyChannel,
+                        after: channel.id
+                    });
+                    await picked.update({ content: `**✅ تم تحديد روم طلبات المسؤولية :** <#${channel.id}>`, components: [] });
+                    return;
+                }
+
+                if (interaction.customId.startsWith('resp_panel_img_')) {
+                    const currentResps = await requireNonEmptyResponsibilities(interaction);
+                    if (!currentResps) return;
+                    const pickedResp = await pickResponsibilityWithPagination(interaction, '**اختر المسؤولية لتعيين الصورة :**', true, false);
+                    if (!pickedResp) return;
+                    const respName = pickedResp.value;
+                    const latestConfig = getGuildRespConfig(guildId);
+                    const guildImageConfig = latestConfig.guilds[guildId] || {};
+                    const currentImageUrl = respName === 'all'
+                        ? (guildImageConfig.globalImageUrl || null)
+                        : (currentResps[respName]?.image || null);
+                    const imageSession = createSessionToken('img_action');
+
+                    const previewEmbed = colorManager.createEmbed()
+                        .setTitle(`**Image Settings : ${respName === 'all' ? 'All responsibilities' : respName}**`)
+                        .setDescription([
+                            `**الصورة الحالية :** ${currentImageUrl || 'غير محددة'}`,
+                            '',
+                            '**اختر الإجراء:**',
+                            '- **معاينة** : عرض الصورة الحالية فقط',
+                            '- **تعديل** : إدخال رابط صورة جديدة'
+                        ].join('\n'))
+                        .setThumbnail(message.guild.iconURL({ dynamic: true }));
+
+                    if (currentImageUrl && isValidImageUrl(currentImageUrl)) {
+                        previewEmbed.setImage(currentImageUrl);
+                    }
+
+                    const actionMessage = await pickedResp.sourceInteraction.reply({
+                        embeds: [previewEmbed],
+                        components: [
+                            new ActionRowBuilder().addComponents(
+                                new ButtonBuilder().setCustomId(`resp_img_preview_${imageSession}`).setLabel('معاينة').setStyle(ButtonStyle.Secondary),
+                                new ButtonBuilder().setCustomId(`resp_img_edit_${imageSession}`).setLabel('تعديل').setStyle(ButtonStyle.Secondary),
+                                new ButtonBuilder().setCustomId(`resp_img_cancel_${imageSession}`).setLabel('إلغاء').setStyle(ButtonStyle.Secondary)
+                            )
+                        ],
+                        ephemeral: true,
+                        fetchReply: true
+                    });
+
+                    const actionPick = await actionMessage.awaitMessageComponent({
+                        filter: (i) => i.user.id === message.author.id && i.customId.includes(imageSession),
+                        time: 120000
+                    }).catch(() => null);
+                    if (!actionPick) return;
+
+                    if (actionPick.customId === `resp_img_cancel_${imageSession}`) {
+                        await actionPick.update({ content: '**❌ تم إلغاء عملية الصورة.**', embeds: [], components: [] }).catch(() => {});
+                        return;
+                    }
+
+                    if (actionPick.customId === `resp_img_preview_${imageSession}`) {
+                        await actionPick.update({
+                            content: currentImageUrl ? `**✅ هذه الصورة الحالية لـ ${respName === 'all' ? 'الكل' : respName}.**` : '**⚠️ لا توجد صورة حالية.**',
+                            embeds: [previewEmbed],
+                            components: []
+                        }).catch(() => {});
+                        return;
+                    }
+
+                    const imageEditSession = createSessionToken('img');
+                    const modal = new ModalBuilder().setCustomId(`resp_img_modal_${imageEditSession}`).setTitle('تعيين صورة المسؤولية');
+                    modal.addComponents(new ActionRowBuilder().addComponents(
+                        new TextInputBuilder().setCustomId('image_url').setLabel('رابط الصورة المباشر').setStyle(TextInputStyle.Short).setRequired(true)
+                    ));
+                    await actionPick.showModal(modal);
+
+                    const submit = await actionPick.awaitModalSubmit({
+                        filter: (i) => i.user.id === message.author.id && i.customId === `resp_img_modal_${imageEditSession}`,
+                        time: 120000
+                    }).catch(() => null);
+                    if (!submit) return;
+
+                    const safeImageUrl = normalizeImageUrl(submit.fields.getTextInputValue('image_url').trim());
+                    if (!isValidImageUrl(safeImageUrl)) {
+                        await submit.reply({ content: '**❌ رابط صورة غير صالح.**', ephemeral: true });
+                        return;
+                    }
+
+                    const { dbManager } = require('../utils/database.js');
+                    if (respName === 'all') {
+                        const confirmed = await confirmEphemeralAction(
+                            submit,
+                            `**سيتم تطبيق الصورة على جميع المسؤوليات (${Object.keys(currentResps).length}).**`
+                        );
+                        if (!confirmed) return;
+                        for (const name of Object.keys(currentResps)) currentResps[name].image = safeImageUrl;
+                        const configData = readJSONFile(DATA_FILES.respConfig, { guilds: {} });
+                        if (!configData.guilds[guildId]) configData.guilds[guildId] = {};
+                        configData.guilds[guildId].globalImageUrl = safeImageUrl;
+                        writeJSONFile(DATA_FILES.respConfig, configData);
+                        writeJSONFile(DATA_FILES.responsibilities, currentResps);
+                        global.responsibilities = currentResps;
+                        try {
+                            const tableInfo = await dbManager.all('PRAGMA table_info(responsibilities)');
+                            if (!tableInfo.some(col => col.name === 'image')) await dbManager.run('ALTER TABLE responsibilities ADD COLUMN image TEXT').catch(() => {});
+                            await dbManager.run('UPDATE responsibilities SET image = ?', [safeImageUrl]);
+                        } catch (_) {}
+                        await updateEmbedMessage(message.client, guildId);
+                        appendRespAuditLog(guildId, message.author.id, 'resp.image.all', { imageUrl: safeImageUrl });
+                        await submit.followUp({ content: '**✅ تم تعيين صورة لجميع المسؤوليات.**', ephemeral: true });
+                        return;
+                    }
+
+                    if (!currentResps[respName]) {
+                        await submit.reply({ content: '**❌ المسؤولية غير موجودة.**', ephemeral: true });
+                        return;
+                    }
+
+                    currentResps[respName].image = safeImageUrl;
+                    writeJSONFile(DATA_FILES.responsibilities, currentResps);
+                    global.responsibilities = currentResps;
+                    try {
+                        const tableInfo = await dbManager.all('PRAGMA table_info(responsibilities)');
+                        if (!tableInfo.some(col => col.name === 'image')) await dbManager.run('ALTER TABLE responsibilities ADD COLUMN image TEXT').catch(() => {});
+                        await dbManager.run('UPDATE responsibilities SET image = ? WHERE name = ?', [safeImageUrl, respName]);
+                    } catch (_) {}
+                    await updateEmbedMessage(message.client, guildId);
+                    appendRespAuditLog(guildId, message.author.id, 'resp.image.single', { respName, imageUrl: safeImageUrl });
+                    await submit.followUp({ content: `**✅ تم تعيين صورة مسؤولية "${respName}".**`, ephemeral: true });
+                    return;
+                }
+
+                if (interaction.customId.startsWith('resp_panel_full_')) {
+                    const currentResps = await requireNonEmptyResponsibilities(interaction);
+                    if (!currentResps) return;
+                    const allNames = Object.keys(currentResps);
+                    const token = createSessionToken('full');
+                    const pageSize = 25;
+                    const totalPages = Math.max(1, Math.ceil(allNames.length / pageSize));
+                    let page = 0;
+
+                    const configSnapshot = getGuildRespConfig(guildId);
+                    const previous = Array.isArray(configSnapshot.guilds[guildId]?.fullResponsibilities)
+                        ? [...configSnapshot.guilds[guildId].fullResponsibilities]
+                        : [];
+                    const selected = new Set(previous);
+
+                    const buildFullPayload = () => {
+                        const pageItems = allNames.slice(page * pageSize, page * pageSize + pageSize);
+                        const options = pageItems.map((name) => ({
+                            label: name.substring(0, 100),
+                            value: name.substring(0, 100),
+                            default: selected.has(name)
+                        }));
+
+                        return {
+                            content: [
+                                '**إدارة Full Slots**',
+                                `**صفحة :** ${page + 1}/${totalPages}`,
+                                `**المحدد حالياً :** ${selected.size}`,
+                                `**المحفوظ مسبقاً :** ${previous.length ? previous.join(' ، ') : 'لا يوجد'}`
+                            ].join('\n'),
+                            components: [
+                                new ActionRowBuilder().addComponents(
+                                    new StringSelectMenuBuilder()
+                                        .setCustomId(`resp_full_select_${token}`)
+                                        .setPlaceholder('Search & select full responsibilities')
+                                        .setMinValues(0)
+                                        .setMaxValues(options.length)
+                                        .addOptions(options)
+                                ),
+                                new ActionRowBuilder().addComponents(
+                                    new ButtonBuilder().setCustomId(`resp_full_prev_${token}`).setLabel('السابق').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+                                    new ButtonBuilder().setCustomId(`resp_full_next_${token}`).setLabel('التالي').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages - 1),
+                                    new ButtonBuilder().setCustomId(`resp_full_save_${token}`).setLabel('حفظ').setStyle(ButtonStyle.Secondary)
+                                )
+                            ]
+                        };
+                    };
+
+                    const fullMsg = await interaction.reply({ ...buildFullPayload(), ephemeral: true, fetchReply: true });
+
+                    while (true) {
+                        const picked = await fullMsg.awaitMessageComponent({
+                            filter: (i) => i.user.id === message.author.id && i.customId.includes(token),
+                            time: 120000
+                        }).catch(() => null);
+                        if (!picked) return;
+
+                        if (picked.customId === `resp_full_select_${token}`) {
+                            const pageItems = allNames.slice(page * pageSize, page * pageSize + pageSize);
+                            for (const item of pageItems) selected.delete(item);
+                            for (const item of picked.values) selected.add(item);
+                            await picked.update(buildFullPayload()).catch(() => {});
+                            continue;
+                        }
+                        if (picked.customId === `resp_full_prev_${token}`) {
+                            page = Math.max(0, page - 1);
+                            await picked.update(buildFullPayload()).catch(() => {});
+                            continue;
+                        }
+                        if (picked.customId === `resp_full_next_${token}`) {
+                            page = Math.min(totalPages - 1, page + 1);
+                            await picked.update(buildFullPayload()).catch(() => {});
+                            continue;
+                        }
+                        if (picked.customId === `resp_full_save_${token}`) {
+                            const nextValues = [...selected];
+                            const confirmed = await confirmEphemeralAction(
+                                picked,
+                                `**التغيير المقترح للمسؤوليات المكتملة :**\n**قبل :** ${previous.join(' , ') || 'لا يوجد'}\n**بعد :** ${nextValues.join(' , ') || 'لا يوجد'}`
+                            );
+                            if (!confirmed) return;
+
+                            const updatedConfig = getGuildRespConfig(guildId);
+                            updatedConfig.guilds[guildId].fullResponsibilities = nextValues;
+                            writeJSONFile(DATA_FILES.respConfig, updatedConfig);
+                            appendRespAuditLog(guildId, message.author.id, 'resp.full.update', { before: previous, after: nextValues });
+                            await picked.followUp({ content: `**✅ تم حفظ المسؤوليات المكتملة (${nextValues.length}).**`, ephemeral: true }).catch(() => {});
+                            return;
+                        }
+                    }
+                    return;
+                }
+
+                if (interaction.customId.startsWith('resp_panel_access_')) {
+                    const currentResps = await requireNonEmptyResponsibilities(interaction);
+                    if (!currentResps) return;
+                    const accessSession = createSessionToken('access');
+                    const allRespNames = Object.keys(currentResps);
+                    const pageSize = 25;
+                    const totalPages = Math.max(1, Math.ceil(allRespNames.length / pageSize));
+                    let page = 0;
+                    const selectedResponsibilities = new Set();
+
+                    const buildAccessResponsibilitiesPayload = () => {
+                        const pageItems = allRespNames.slice(page * pageSize, page * pageSize + pageSize);
+                        const options = pageItems.map((resp) => ({
+                            label: resp.substring(0, 100),
+                            value: resp.substring(0, 100),
+                            default: selectedResponsibilities.has(resp)
+                        }));
+
+                        return {
+                            content: [
+                                '**التقييدات الحالية :**',
+                                buildRestrictionsPreview(),
+                                '',
+                                '**اختر المسؤوليات المطلوب تطبيق نفس التقييد عليها :**',
+                                `**صفحة :** ${page + 1}/${totalPages}`,
+                                `**المحدد حالياً :** ${selectedResponsibilities.size}`
+                            ].join('\n'),
+                            components: [
+                                new ActionRowBuilder().addComponents(
+                                    new StringSelectMenuBuilder()
+                                        .setCustomId(`resp_access_resp_select_${accessSession}`)
+                                        .setPlaceholder('Search responsibilities')
+                                        .setMinValues(0)
+                                        .setMaxValues(options.length)
+                                        .addOptions(options)
+                                ),
+                                new ActionRowBuilder().addComponents(
+                                    new ButtonBuilder().setCustomId(`resp_access_prev_${accessSession}`).setLabel('السابق').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+                                    new ButtonBuilder().setCustomId(`resp_access_next_${accessSession}`).setLabel('التالي').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages - 1),
+                                    new ButtonBuilder().setCustomId(`resp_access_continue_${accessSession}`).setLabel('متابعة').setStyle(ButtonStyle.Secondary),
+                                    new ButtonBuilder().setCustomId(`resp_access_cancel_${accessSession}`).setLabel('إلغاء').setStyle(ButtonStyle.Secondary)
+                                )
+                            ]
+                        };
+                    };
+
+                    const respPickerMessage = await interaction.reply({
+                        ...buildAccessResponsibilitiesPayload(),
+                        ephemeral: true,
+                        fetchReply: true
+                    });
+
+                    while (true) {
+                        const respPick = await respPickerMessage.awaitMessageComponent({
+                            filter: (i) => i.user.id === message.author.id && i.customId.includes(accessSession),
+                            time: 120000
+                        }).catch(() => null);
+                        if (!respPick) return;
+
+                        if (respPick.customId === `resp_access_cancel_${accessSession}`) {
+                            await respPick.update({ content: '**❌ تم إلغاء العملية.**', components: [] }).catch(() => {});
+                            return;
+                        }
+
+                        if (respPick.customId === `resp_access_resp_select_${accessSession}`) {
+                            const pageItems = allRespNames.slice(page * pageSize, page * pageSize + pageSize);
+                            for (const resp of pageItems) selectedResponsibilities.delete(resp);
+                            for (const resp of respPick.values) selectedResponsibilities.add(resp);
+                            await respPick.update(buildAccessResponsibilitiesPayload()).catch(() => {});
+                            continue;
+                        }
+
+                        if (respPick.customId === `resp_access_prev_${accessSession}`) {
+                            page = Math.max(0, page - 1);
+                            await respPick.update(buildAccessResponsibilitiesPayload()).catch(() => {});
+                            continue;
+                        }
+
+                        if (respPick.customId === `resp_access_next_${accessSession}`) {
+                            page = Math.min(totalPages - 1, page + 1);
+                            await respPick.update(buildAccessResponsibilitiesPayload()).catch(() => {});
+                            continue;
+                        }
+
+                        if (respPick.customId === `resp_access_continue_${accessSession}`) {
+                            if (!selectedResponsibilities.size) {
+                                await respPick.reply({ content: '**❌ لازم تحدد مسؤولية واحدة على الأقل.**', ephemeral: true }).catch(() => {});
+                                continue;
+                            }
+                            await respPick.update({ content: `**✅ تم تحديد ${selectedResponsibilities.size} مسؤولية.**`, components: [] }).catch(() => {});
+                            break;
+                        }
+                    }
+
+                    const selectedList = [...selectedResponsibilities];
+                    const accessMsg = await interaction.followUp({
+                        content: [
+                            `**إدارة Access Roles : ${selectedList.join(' ، ')}**`,
+                            `**عدد المسؤوليات المحددة :** ${selectedList.length}`,
+                            '',
+                            '**اختر الرولات الجديدة (بحث / اختيار) أو اضغط إزالة التقييد.**'
+                        ].join('\n'),
+                        components: [
+                            new ActionRowBuilder().addComponents(
+                                new RoleSelectMenuBuilder().setCustomId(`resp_access_roles_${accessSession}`).setMinValues(1).setMaxValues(10).setPlaceholder('Search roles')
+                            ),
+                            new ActionRowBuilder().addComponents(
+                                new ButtonBuilder().setCustomId(`resp_access_off_${accessSession}`).setLabel('إزالة التقييد').setStyle(ButtonStyle.Secondary)
+                            )
+                        ],
+                        ephemeral: true,
+                        fetchReply: true
+                    });
+
+                    const followPick = await accessMsg.awaitMessageComponent({
+                        filter: (i) => i.user.id === message.author.id && (
+                            i.customId === `resp_access_roles_${accessSession}` ||
+                            i.customId === `resp_access_off_${accessSession}`
+                        ),
+                        time: 120000
+                    }).catch(() => null);
+                    if (!followPick) return;
+
+                    if (followPick.customId.includes('resp_access_off_')) {
+                        const previousMap = {};
+                        for (const respName of selectedList) {
+                            previousMap[respName] = getRespRoleRestrictions(guildId)[respName] || [];
+                        }
+                        const confirmed = await confirmEphemeralAction(
+                            followPick,
+                            `**إلغاء التقييد عن المسؤوليات المحددة (${selectedList.length}).**`
+                        );
+                        if (!confirmed) return;
+                        for (const respName of selectedList) {
+                            setRespRoleRestriction(guildId, respName, []);
+                        }
+                        appendRespAuditLog(guildId, message.author.id, 'resp.access.clear', {
+                            responsibilities: selectedList,
+                            before: previousMap
+                        });
+                        await followPick.followUp({ content: `**✅ تم إلغاء التقييد عن ${selectedList.length} مسؤولية.**\n\n**التقييدات الحالية :**\n${buildRestrictionsPreview()}`, ephemeral: true });
+                        return;
+                    }
+
+                    const adminRoles = getAllowedAdminRolesForGuild(guildId);
+                    const roleIds = [...followPick.values];
+                    const invalidAdminRoles = adminRoles.length
+                        ? roleIds.filter((roleId) => !adminRoles.includes(roleId))
+                        : [];
+                    if (invalidAdminRoles.length) {
+                        await followPick.reply({ content: '**❌ بعض الرولات ليست ضمن adminRoles المسموحة.**', ephemeral: true });
+                        return;
+                    }
+
+                    const previousMap = {};
+                    for (const respName of selectedList) {
+                        previousMap[respName] = getRespRoleRestrictions(guildId)[respName] || [];
+                    }
+                    const confirmed = await confirmEphemeralAction(
+                        followPick,
+                        `**تحديث التقييد على ${selectedList.length} مسؤولية.**\n**الرولات الجديدة :** ${roleIds.map((id) => `<@&${id}>`).join(' ')}`
+                    );
+                    if (!confirmed) return;
+
+                    for (const respName of selectedList) {
+                        setRespRoleRestriction(guildId, respName, roleIds);
+                    }
+                    appendRespAuditLog(guildId, message.author.id, 'resp.access.update', {
+                        responsibilities: selectedList,
+                        before: previousMap,
+                        after: roleIds
+                    });
+                    await followPick.followUp({ content: `**✅ تم حفظ التقييد لـ ${selectedList.length} مسؤولية.**\n\n**التقييدات الحالية :**\n${buildRestrictionsPreview()}`, ephemeral: true });
+                    return;
+                }
+
+                if (interaction.customId.startsWith('resp_panel_cooldown_')) {
+                    const modal = new ModalBuilder().setCustomId(`resp_cd_modal_${message.id}`).setTitle('تخصيص كولداون التقديم');
+                    modal.addComponents(new ActionRowBuilder().addComponents(
+                        new TextInputBuilder()
+                            .setCustomId('cooldown_value')
+                            .setLabel('دقائق الكولداون (مثال 30) أو off')
+                            .setStyle(TextInputStyle.Short)
+                            .setRequired(true)
+                    ));
+                    await interaction.showModal(modal);
+
+                    const submit = await interaction.awaitModalSubmit({
+                        filter: (i) => i.user.id === message.author.id && i.customId === `resp_cd_modal_${message.id}`,
+                        time: 120000
+                    }).catch(() => null);
+                    if (!submit) return;
+
+                    const rawValue = submit.fields.getTextInputValue('cooldown_value').trim().toLowerCase();
+                    const configData = getGuildRespConfig(guildId);
+                    if (!configData.guilds[guildId]) configData.guilds[guildId] = {};
+
+                    if (rawValue === 'off' || rawValue === '0') {
+                        const confirmed = await confirmEphemeralAction(submit, '**سيتم إيقاف كولداون التقديم بالكامل.**');
+                        if (!confirmed) return;
+                        configData.guilds[guildId].applyCooldownMinutes = 0;
+                        writeJSONFile(DATA_FILES.respConfig, configData);
+                        appendRespAuditLog(guildId, message.author.id, 'resp.cooldown.update', { value: 0 });
+                        await submit.followUp({ content: '**✅ تم إيقاف كولداون التقديم.**', ephemeral: true });
+                        return;
+                    }
+
+                    const minutes = Number(rawValue);
+                    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440) {
+                        await submit.reply({ content: '**❌ قيمة غير صالحة.**\nاكتب رقم بين **1** و **1440** أو **off**.', ephemeral: true });
+                        return;
+                    }
+
+                    const confirmed = await confirmEphemeralAction(submit, `**سيتم ضبط الكولداون على ${minutes} دقيقة.**`);
+                    if (!confirmed) return;
+                    configData.guilds[guildId].applyCooldownMinutes = minutes;
+                    writeJSONFile(DATA_FILES.respConfig, configData);
+                    appendRespAuditLog(guildId, message.author.id, 'resp.cooldown.update', { value: minutes });
+                    await submit.followUp({ content: `**✅ تم ضبط الكولداون على ${minutes} دقيقة.**`, ephemeral: true });
+                    return;
+                }
+
+                if (interaction.customId.startsWith('resp_panel_clear_')) {
+                    await interaction.reply({
+                        content: '**تأكيد :** هل تريد تفريغ جميع المسؤولين؟',
+                        components: [new ActionRowBuilder().addComponents(
+                            new ButtonBuilder().setCustomId(`resp_clear_yes_${message.id}`).setLabel('تأكيد').setStyle(ButtonStyle.Secondary),
+                            new ButtonBuilder().setCustomId(`resp_clear_no_${message.id}`).setLabel('إلغاء').setStyle(ButtonStyle.Secondary)
+                        )],
+                        ephemeral: true,
+                        fetchReply: true
+                    });
+
+                    const confirm = await interaction.fetchReply().then((m) => m.awaitMessageComponent({
+                        filter: (i) => i.user.id === message.author.id && [
+                            `resp_clear_yes_${message.id}`,
+                            `resp_clear_no_${message.id}`
+                        ].includes(i.customId),
+                        time: 120000
+                    })).catch(() => null);
+                    if (!confirm) return;
+                    if (confirm.customId.includes('_no_')) {
+                        await confirm.update({ content: '**❌ تم إلغاء العملية.**', components: [] });
+                        return;
+                    }
+
+                    const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
+                    let totalRemoved = 0;
+                    let totalRolesRemoved = 0;
+                    const { dbManager } = require('../utils/database.js');
+
+                    for (const respName in currentResps) {
+                        const resp = currentResps[respName];
+                        const roleIds = Array.isArray(resp.roles) ? resp.roles.filter(Boolean) : (resp.roleId ? [resp.roleId] : []);
+                        const members = resp.responsibles || resp.members || [];
+
+                        for (const userId of members) {
+                            totalRemoved++;
+                            const member = await message.guild.members.fetch(userId).catch(() => null);
+                            if (!member) continue;
+                            for (const roleId of roleIds) {
+                                if (member.roles.cache.has(roleId)) {
+                                    await member.roles.remove(roleId).catch(() => {});
+                                    totalRolesRemoved++;
+                                }
+                            }
+                        }
+
+                        resp.members = [];
+                        resp.responsibles = [];
+                        if (dbManager?.updateResponsibility) await dbManager.updateResponsibility(respName, resp);
+                    }
+
+                    writeJSONFile(DATA_FILES.responsibilities, currentResps);
+                    global.responsibilities = currentResps;
+                    await updateEmbedMessage(message.client, guildId).catch(() => {});
+                    appendRespAuditLog(guildId, message.author.id, 'resp.clearMembers', {
+                        removedMembers: totalRemoved,
+                        removedRoles: totalRolesRemoved
+                    });
+                    await confirm.update({ content: `**✅ تم تفريغ المسؤولين (${totalRemoved}) وسحب الرولات (${totalRolesRemoved}).**`, components: [] });
+                }
+            } catch (error) {
+                console.error('Error in resp control panel:', error);
+                if (!interaction.replied && !interaction.deferred) {
+                    await interaction.reply({ content: '**❌ حدث خطأ أثناء تنفيذ الإجراء.**', ephemeral: true }).catch(() => {});
+                }
+            }
+        });
+
+        panelCollector.on('end', async () => {
+            await panelMessage.edit({ components: [] }).catch(() => {});
+        });
+
+        return;
     },
-    
+
     // دوال مساعدة
     updateEmbedMessage,
     handleSuggestionButton,
     handleSuggestionModal,
-    handleResponsibilitySelect,
-    initialize: (client) => loadEmbedData(client)
+    handleResponsibilitySelect
 };
 
 // دوال إدارة الإعدادات لكل سيرفر
