@@ -13,6 +13,45 @@ const SETROOM_TEXT_SCALE_STEP = 0.05;
 const SETROOM_GAP_STEP = 0.15;
 const SETROOM_GAP_MIN = 0.2;
 const SETROOM_GAP_MAX = 6;
+const DEFAULT_ROOM_DELETE_HOURS = 24;
+const DEFAULT_REJECT_COOLDOWN_MINUTES = 30;
+const MIN_ROOM_DELETE_HOURS = 1;
+const MAX_ROOM_DELETE_HOURS = 168;
+const MIN_REJECT_COOLDOWN_MINUTES = 0;
+const MAX_REJECT_COOLDOWN_MINUTES = 10080;
+
+function getRoomDeletionMs(guildConfig = {}) {
+    const hours = Number(guildConfig.roomDeleteAfterHours ?? DEFAULT_ROOM_DELETE_HOURS);
+    if (!Number.isFinite(hours)) return DEFAULT_ROOM_DELETE_HOURS * 60 * 60 * 1000;
+    const normalized = Math.min(MAX_ROOM_DELETE_HOURS, Math.max(MIN_ROOM_DELETE_HOURS, hours));
+    return normalized * 60 * 60 * 1000;
+}
+
+function getRejectCooldownMs(guildConfig = {}) {
+    const minutes = Number(guildConfig.rejectCooldownMinutes ?? DEFAULT_REJECT_COOLDOWN_MINUTES);
+    if (!Number.isFinite(minutes)) return DEFAULT_REJECT_COOLDOWN_MINUTES * 60 * 1000;
+    const normalized = Math.min(MAX_REJECT_COOLDOWN_MINUTES, Math.max(MIN_REJECT_COOLDOWN_MINUTES, minutes));
+    return normalized * 60 * 1000;
+}
+
+function shouldDisableDefaultDecoration(message = '') {
+    return /[#*\-]/.test(message || '');
+}
+
+function getFormattedRoomMessageBody(message = '') {
+    const cleanMessage = (message || '').trim();
+    if (!cleanMessage) return '';
+    if (shouldDisableDefaultDecoration(cleanMessage)) return cleanMessage;
+    return `** - ${cleanMessage} - **`;
+}
+
+function extractTargetUserId(forWho = '') {
+    const mentionMatch = String(forWho || '').match(/<@!?(\d+)>/);
+    if (mentionMatch) return mentionMatch[1];
+    const idMatch = String(forWho || '').trim().match(/^(\d{16,20})$/);
+    if (idMatch) return idMatch[1];
+    return null;
+}
 
 // مسار ملف إعدادات الغرف
 const roomConfigPath = path.join(__dirname, '..', 'data', 'roomConfig.json');
@@ -100,7 +139,8 @@ function loadActiveRooms() {
                     guildId: room.guildId,
                     createdAt: room.createdAt,
                     emojis: room.emojis || [],
-                    requestId: room.requestId
+                    requestId: room.requestId,
+                    deleteAfterMs: Number(room.deleteAfterMs) || (DEFAULT_ROOM_DELETE_HOURS * 60 * 60 * 1000)
                 });
             });
             return roomsMap;
@@ -154,7 +194,10 @@ async function deleteRoom(channelId, client) {
             saveActiveRooms();
             return;
         }
-        await channel.delete('انتهت مدة الروم (24 ساعة)');
+        const roomData = activeRooms.get(channelId);
+        const deleteAfterMs = Number(roomData?.deleteAfterMs) || (DEFAULT_ROOM_DELETE_HOURS * 60 * 60 * 1000);
+        const deleteAfterHours = Math.round(deleteAfterMs / (60 * 60 * 1000));
+        await channel.delete(`انتهت مدة الروم (${deleteAfterHours} ساعة)`);
         console.log(`🗑️ تم حذف الروم: ${channel.name}`);
 
         activeRooms.delete(channelId);
@@ -164,9 +207,9 @@ async function deleteRoom(channelId, client) {
         console.error(`❌ خطأ في حذف الروم ${channelId}:`, error);
     }
 }
-// جدولة حذف روم بعد 12 ساعة
-function scheduleRoomDeletion(channelId, client) {
-    const deletionTime = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 ساعة
+// جدولة حذف روم وفق الوقت المحدد
+function scheduleRoomDeletion(channelId, client, deleteAfterMs = DEFAULT_ROOM_DELETE_HOURS * 60 * 60 * 1000) {
+    const deletionTime = new Date(Date.now() + deleteAfterMs);
     const job = schedule.scheduleJob(deletionTime, async () => {
         console.log(`⏰ حان موعد حذف الروم: ${channelId}`);
         await deleteRoom(channelId, client);
@@ -174,7 +217,8 @@ function scheduleRoomDeletion(channelId, client) {
     });
 
     roomDeletionJobs.set(channelId, job);
-    console.log(`✅ تم جدولة حذف الروم ${channelId} بعد 12 ساعة`);
+    const deleteAfterHours = (deleteAfterMs / (60 * 60 * 1000)).toFixed(2);
+    console.log(`✅ تم جدولة حذف الروم ${channelId} بعد ${deleteAfterHours} ساعة`);
 }
 
 // إعادة إرسال setup embed - مبسط بدون كولداون
@@ -227,20 +271,19 @@ async function resendSetupEmbed(guildId, client) {
 async function checkAndDeleteOldRooms(client) {
     const now = Date.now();
     const roomsToDelete = [];
-const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000; // 24 ساعة
-
     for (const [channelId, roomData] of activeRooms.entries()) {
+        const deleteAfterMs = Number(roomData.deleteAfterMs) || (DEFAULT_ROOM_DELETE_HOURS * 60 * 60 * 1000);
         const roomAge = now - roomData.createdAt;
         const hoursSinceCreation = roomAge / (1000 * 60 * 60);
 
         console.log(`🔍 فحص الروم ${channelId}: عمر الروم ${hoursSinceCreation.toFixed(2)} ساعة`);
 
-        if (hoursSinceCreation >= 24) {
-            console.log(`⚠️ الروم ${channelId} تجاوز 12 ساعة - سيتم حذفه فوراً`);
+        if (roomAge >= deleteAfterMs) {
+            console.log(`⚠️ الروم ${channelId} تجاوز المدة المحددة - سيتم حذفه فوراً`);
             roomsToDelete.push(channelId);
         } else {
-            const remainingTime = TWENTY_FOUR_HOURS - roomAge;
-            const deletionTime = new Date(roomData.createdAt + TWENTY_FOUR_HOURS);
+            const remainingTime = deleteAfterMs - roomAge;
+            const deletionTime = new Date(roomData.createdAt + deleteAfterMs);
 
             const job = schedule.scheduleJob(deletionTime, async () => {
                 console.log(`⏰ حان موعد حذف الروم: ${channelId}`);
@@ -689,6 +732,16 @@ function saveRoomRequests(requests) {
         console.error('خطأ في حفظ طلبات الغرف:', error);
         return false;
     }
+}
+
+function getUserPendingRequest(requests = [], guildId, userId) {
+    return requests.find(r => r.guildId === guildId && r.userId === userId && r.status === 'pending');
+}
+
+function getUserLatestRejectedRequest(requests = [], guildId, userId) {
+    return requests
+        .filter(r => r.guildId === guildId && r.userId === userId && r.status === 'rejected')
+        .sort((a, b) => (b.reviewedAt || 0) - (a.reviewedAt || 0))[0] || null;
 }
 
 function loadSetupEmbedMessages() {
@@ -1272,6 +1325,30 @@ async function handleRoomModalSubmit(interaction, client) {
         return;
     }
 
+    if (!guildConfig.requestsChannelId || !guildConfig.embedChannelId) {
+        await interaction.reply({ content: '❌ **الإعدادات غير مكتملة: يجب تحديد روم الطلبات وروم السيتب أولاً**', flags: 64 });
+        return;
+    }
+
+    const requests = loadRoomRequests();
+    const pendingRequest = getUserPendingRequest(requests, interaction.guild.id, interaction.user.id);
+    if (pendingRequest) {
+        await interaction.reply({ content: '❌ **لديك طلب روم معلّق بالفعل، انتظر حتى يتم مراجعته أولاً**', flags: 64 });
+        return;
+    }
+
+    const rejectCooldownMs = getRejectCooldownMs(guildConfig);
+    if (rejectCooldownMs > 0) {
+        const lastRejected = getUserLatestRejectedRequest(requests, interaction.guild.id, interaction.user.id);
+        const lastRejectedAt = lastRejected?.reviewedAt || lastRejected?.createdAt || 0;
+        const remainingMs = (lastRejectedAt + rejectCooldownMs) - Date.now();
+        if (remainingMs > 0) {
+            const remainingMinutes = Math.ceil(remainingMs / (60 * 1000));
+            await interaction.reply({ content: `❌ **تم رفض طلبك سابقًا. يمكنك التقديم بعد ${remainingMinutes} دقيقة**`, flags: 64 });
+            return;
+        }
+    }
+
     // طلب الإيموجي من المستخدم
     const emojiPrompt = colorManager.createEmbed()
         .setTitle('**خطوة أخيرة**')
@@ -1356,6 +1433,22 @@ async function handleEmojiMessage(message, client) {
     const guildConfig = getGuildConfigWithDefaults(config, requestData.guildId);
     const texts = getSetroomTexts(guildConfig);
 
+    const existingRequests = loadRoomRequests();
+    if (getUserPendingRequest(existingRequests, requestData.guildId, userId)) {
+        await message.reply('❌ **لديك طلب معلّق بالفعل. تم إلغاء الطلب الجديد**').then(msg => {
+            setTimeout(() => msg.delete().catch(() => {}), 6000);
+        });
+        return;
+    }
+
+    const requestsChannel = await client.channels.fetch(guildConfig.requestsChannelId).catch(() => null);
+    if (!requestsChannel || requestsChannel.type !== ChannelType.GuildText) {
+        await message.reply('❌ **روم الطلبات غير صالح أو غير موجود. تواصل مع الإدارة**').then(msg => {
+            setTimeout(() => msg.delete().catch(() => {}), 7000);
+        });
+        return;
+    }
+
     // إنشاء الطلب
     const request = {
         id: `${Date.now()}_${userId}`,
@@ -1373,13 +1466,11 @@ async function handleEmojiMessage(message, client) {
     };
 
     // حفظ الطلب
-    const requests = loadRoomRequests();
+    const requests = existingRequests;
     requests.push(request);
     saveRoomRequests(requests);
 
     // إرسال الطلب لروم الطلبات
-    const requestsChannel = await client.channels.fetch(guildConfig.requestsChannelId);
-
     const requestEmbed = colorManager.createEmbed()
         .setTitle(`${requestData.roomEmoji} **طلب روم : ${requestData.roomType} جديد**`)
         .setDescription(`**تم استلام طلب جديد :**`)
@@ -1491,6 +1582,10 @@ async function handleRoomRequestAction(interaction, client) {
     }
 
     const request = requests[requestIndex];
+    if (request.guildId !== interaction.guild.id) {
+        await interaction.reply({ content: '❌ **هذا الطلب لا يخص هذا السيرفر**', flags: 64 });
+        return;
+    }
 
     if (request.status !== 'pending') {
         await interaction.reply({ content: `**هذا الطلب تم ${request.status === 'accepted' ? 'قبوله' : 'رفضه'} مسبقاً**`, flags: 64 });
@@ -1583,6 +1678,8 @@ async function createRoom(request, client, guildConfig) {
             return;
         }
 
+        const targetUserId = extractTargetUserId(request.forWho);
+
         // استخراج اسم العرض (nickname) من forWho
         let displayName = request.forWho;
 
@@ -1611,14 +1708,29 @@ async function createRoom(request, client, guildConfig) {
         
         // إضافة الكاتيجوري إذا كان محدد
         if (guildConfig && guildConfig.roomsCategoryId) {
-            channelOptions.parent = guildConfig.roomsCategoryId;
+            const category = guild.channels.cache.get(guildConfig.roomsCategoryId) || await guild.channels.fetch(guildConfig.roomsCategoryId).catch(() => null);
+            if (category && category.type === ChannelType.GuildCategory) {
+                channelOptions.parent = guildConfig.roomsCategoryId;
+            } else {
+                console.warn(`⚠️ كاتقوري الرومات غير صالح في السيرفر ${guild.id}، سيتم إنشاء الروم بدون كاتقوري`);
+            }
         }
         
         const channel = await guild.channels.create(channelOptions);
 
         console.log(`✅ تم إنشاء القناة: ${channel.name} (${channel.id})`);
 
-        const roomContent = ['@here', request.message, `لـ : ${request.forWho}`, `بواسطة : <@${request.userId}>`].filter(Boolean).join('\n\n');
+        const texts = getSetroomTexts(guildConfig);
+        const prefix = (texts.roomContentPrefix || '@here').trim();
+        const toLabel = (texts.roomToLabel || 'لـ').trim();
+        const byLabel = (texts.roomByLabel || 'بواسطة').trim();
+        const decoratedMessage = getFormattedRoomMessageBody(request.message);
+        const roomContent = [
+            prefix,
+            decoratedMessage,
+            `**${toLabel} : ${request.forWho}**`,
+            `**${byLabel} : <@${request.userId}>**`
+        ].filter(Boolean).join('\n\n');
         const sentMessage = await channel.send({ content: roomContent });
         console.log(`✅ تم إرسال رسالة عادية في الروم`);
 
@@ -1667,30 +1779,38 @@ async function createRoom(request, client, guildConfig) {
             guildId: request.guildId,
             createdAt: Date.now(),
             emojis: emojis,
-            requestId: request.id
+            requestId: request.id,
+            deleteAfterMs: getRoomDeletionMs(guildConfig)
         });
         saveActiveRooms();
 
-        // جدولة حذف الروم بعد 12 ساعة
-        scheduleRoomDeletion(channel.id, client);
-        console.log(`✅ تم إنشاء روم ${request.roomType} بنجاح: ${roomName} (سيتم حذفها تلقائياً بعد 12 ساعة)`);
+        const deleteAfterMs = getRoomDeletionMs(guildConfig);
+        const deleteAfterHours = (deleteAfterMs / (60 * 60 * 1000)).toFixed(2);
+        scheduleRoomDeletion(channel.id, client, deleteAfterMs);
+        console.log(`✅ تم إنشاء روم ${request.roomType} بنجاح: ${roomName} (سيتم حذفها تلقائياً بعد ${deleteAfterHours} ساعة)`);
 
-        // إرسال إشعار لصاحب الطلب
-        try {
-            const requester = await client.users.fetch(request.userId);
-            const notificationEmbed = colorManager.createEmbed()
-                .setTitle('✅ تم إنشاء الروم')
-                .setDescription(`تم إنشاء روم ${request.roomType} الذي طلبته`)
-                .addFields([
-                    { name: 'اسم الروم', value: roomName, inline: true },
-                    { name: 'رابط الروم', value: `<#${channel.id}>`, inline: true }
-                ])
-                .setTimestamp();
+        const notifyUserIds = new Set([request.userId]);
+        if (targetUserId) notifyUserIds.add(targetUserId);
 
-            await requester.send({ embeds: [notificationEmbed] });
-            console.log(`✅ تم إرسال إشعار لصاحب الطلب`);
-        } catch (dmError) {
-            console.error('فشل في إرسال إشعار لصاحب الطلب:', dmError.message);
+        for (const notifyUserId of notifyUserIds) {
+            try {
+                const notifyUser = await client.users.fetch(notifyUserId);
+                if (!notifyUser) continue;
+
+                const notificationEmbed = colorManager.createEmbed()
+                    .setTitle('📢 تم إنشاء روم')
+                    .setDescription(`تم إنشاء روم ${request.roomType} بواسطة <@${request.userId}>`)
+                    .addFields([
+                        { name: 'الروم', value: `<#${channel.id}>`, inline: true },
+                        { name: 'السيرفر', value: guild.name, inline: true }
+                    ])
+                    .setTimestamp();
+
+                await notifyUser.send({ embeds: [notificationEmbed] });
+                console.log(`✅ تم إرسال إشعار إنشاء الروم إلى ${notifyUserId}`);
+            } catch (dmError) {
+                console.error(`تعذر إرسال إشعار إنشاء الروم إلى ${notifyUserId}:`, dmError.message);
+            }
         }
 
     } catch (error) {
@@ -2055,6 +2175,8 @@ function ensureGuildRoomConfig(config, guildId) {
     }
     if (!Array.isArray(config[guildId].reviewAcceptRoleIds)) config[guildId].reviewAcceptRoleIds = [];
     if (!Array.isArray(config[guildId].reviewRejectRoleIds)) config[guildId].reviewRejectRoleIds = [];
+    if (!Number.isFinite(Number(config[guildId].roomDeleteAfterHours))) config[guildId].roomDeleteAfterHours = DEFAULT_ROOM_DELETE_HOURS;
+    if (!Number.isFinite(Number(config[guildId].rejectCooldownMinutes))) config[guildId].rejectCooldownMinutes = DEFAULT_REJECT_COOLDOWN_MINUTES;
     config[guildId].texts = { ...getDefaultSetroomTexts(), ...(config[guildId].texts || {}) };
     return config[guildId];
 }
@@ -2064,6 +2186,8 @@ function getSetroomSummaryEmbed(guild, guildConfig = {}, actor = null) {
     const rejectRoles = guildConfig.reviewRejectRoleIds?.length ? guildConfig.reviewRejectRoleIds.map(id => `<@&${id}>`).join(', ') : 'Admins فقط';
     const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
     const texts = getSetroomTexts(guildConfig);
+    const deleteAfterHours = Number(guildConfig.roomDeleteAfterHours ?? DEFAULT_ROOM_DELETE_HOURS);
+    const rejectCooldownMinutes = Number(guildConfig.rejectCooldownMinutes ?? DEFAULT_REJECT_COOLDOWN_MINUTES);
 
     const embed = colorManager.createEmbed()
         .setTitle(texts.panelTitle || '**SetRoom Control Panel**')
@@ -2077,6 +2201,8 @@ function getSetroomSummaryEmbed(guild, guildConfig = {}, actor = null) {
             { name: 'عدد رولات الألوان', value: `${guildConfig.colorRoleIds?.length || 0}`, inline: true },
             { name: 'رولات القبول', value: acceptRoles, inline: false },
             { name: 'رولات الرفض', value: rejectRoles, inline: false },
+            { name: 'حذف الروم', value: `${deleteAfterHours} ساعة`, inline: true },
+            { name: 'كولداون بعد الرفض', value: `${rejectCooldownMinutes} دقيقة`, inline: true },
             { name: 'نص الألوان', value: guildConfig.colorsTitle === '' ? 'مخفي' : `${guildConfig.colorsTitle || 'Colors list :'}
 اللون: ${normalizeHexColor(guildConfig.textColor, '#ffffff')}`, inline: false },
             { name: 'افتار السيرفر', value: `الافتار: ${guildConfig.guildIconEnabled ? 'مفعّل' : 'مقفّل'}\nالإطار: ${layout.guildBorderEnabled === false ? 'مقفّل' : 'مفعّل'}`, inline: true },
@@ -2096,17 +2222,20 @@ function createSetroomMainRows() {
     return [
         new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('setroom_panel_channels').setLabel('القنوات').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_panel_roles').setLabel('رولات القبول/الرفض').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_panel_safety').setLabel('الأمان والكولداون').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_panel_setup_texts').setLabel('نصوص السيتب').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_panel_room_output').setLabel('رسالة الروم').setStyle(ButtonStyle.Secondary)
+        ),
+        new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('setroom_panel_image').setLabel('الصورة').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('setroom_panel_text').setLabel('نص الألوان').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('setroom_panel_roles').setLabel('رولات القبول/الرفض').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_panel_toggle_embed').setLabel('تبديل الإيمبد').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_panel_refresh_colors').setLabel('تحديث الألوان').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('setroom_panel_preview').setLabel('معاينة').setStyle(ButtonStyle.Primary)
         ),
         new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('setroom_panel_setup_texts').setLabel('نصوص السيتب').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('setroom_panel_room_output').setLabel('رسالة الروم').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('setroom_panel_toggle_embed').setLabel('تبديل الإيمبد').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('setroom_panel_refresh_colors').setLabel('تحديث الألوان').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('setroom_panel_publish').setLabel('تعيين').setStyle(ButtonStyle.Success)
+            new ButtonBuilder().setCustomId('setroom_panel_publish').setLabel('حفظ وتعيين').setStyle(ButtonStyle.Success)
         )
     ];
 }
@@ -2197,6 +2326,17 @@ async function refreshSetroomPanelMessage(interaction, guildConfig, extra = {}) 
     return interaction.reply({ ...payload, flags: 64 });
 }
 
+async function refreshSetroomPanelIfPossible(interaction, guildConfig, extra = {}) {
+    try {
+        if (interaction.message && interaction.message.id) {
+            const payload = await buildSetroomPanelPayload(interaction.guild, guildConfig, interaction.user, extra);
+            await interaction.message.edit(payload).catch(() => null);
+        }
+    } catch (error) {
+        console.error('⚠️ تعذر تحديث رسالة لوحة setroom تلقائيًا:', error.message);
+    }
+}
+
 async function syncSetupMessageForGuild(guild, client) {
     const config = loadRoomConfig();
     const guildConfig = ensureGuildRoomConfig(config, guild.id);
@@ -2261,6 +2401,32 @@ function registerHandlers(client) {
                         new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId('setroom_select_reject_roles').setPlaceholder('رولات مسؤولة عن الرفض').setMinValues(0).setMaxValues(10))
                     ];
                     await interaction.reply({ content: 'اختر الرولات المسؤولة عن القبول والرفض. تركها فارغة يعني Admins فقط.', components: rows, flags: 64 });
+                    return;
+                }
+
+                if (customId === 'setroom_panel_safety') {
+                    const modal = new ModalBuilder().setCustomId('setroom_modal_safety').setTitle('أمان وكولداون الطلبات');
+                    modal.addComponents(
+                        new ActionRowBuilder().addComponents(
+                            new TextInputBuilder()
+                                .setCustomId('delete_after_hours')
+                                .setLabel('حذف الروم بعد كم ساعة؟')
+                                .setStyle(TextInputStyle.Short)
+                                .setRequired(false)
+                                .setPlaceholder(`من ${MIN_ROOM_DELETE_HOURS} إلى ${MAX_ROOM_DELETE_HOURS}`)
+                                .setValue(String(guildConfig.roomDeleteAfterHours ?? DEFAULT_ROOM_DELETE_HOURS))
+                        ),
+                        new ActionRowBuilder().addComponents(
+                            new TextInputBuilder()
+                                .setCustomId('reject_cooldown_minutes')
+                                .setLabel('كولداون بعد الرفض (دقيقة)')
+                                .setStyle(TextInputStyle.Short)
+                                .setRequired(false)
+                                .setPlaceholder(`من ${MIN_REJECT_COOLDOWN_MINUTES} إلى ${MAX_REJECT_COOLDOWN_MINUTES}`)
+                                .setValue(String(guildConfig.rejectCooldownMinutes ?? DEFAULT_REJECT_COOLDOWN_MINUTES))
+                        )
+                    );
+                    await interaction.showModal(modal);
                     return;
                 }
 
@@ -2397,6 +2563,7 @@ function registerHandlers(client) {
                 if (interaction.customId === 'setroom_select_embed_channel') guildConfig.embedChannelId = interaction.values[0] || null;
                 if (interaction.customId === 'setroom_select_category') guildConfig.roomsCategoryId = interaction.values[0] || null;
                 saveRoomConfig(config);
+                await refreshSetroomPanelIfPossible(interaction, guildConfig);
                 await interaction.reply({ content: '✅ تم حفظ القناة المطلوبة.', flags: 64 });
                 return;
             }
@@ -2405,6 +2572,7 @@ function registerHandlers(client) {
                 if (interaction.customId === 'setroom_select_accept_roles') guildConfig.reviewAcceptRoleIds = interaction.values;
                 if (interaction.customId === 'setroom_select_reject_roles') guildConfig.reviewRejectRoleIds = interaction.values;
                 saveRoomConfig(config);
+                await refreshSetroomPanelIfPossible(interaction, guildConfig);
                 await interaction.reply({ content: '✅ تم حفظ الرولات المسؤولة.', flags: 64 });
                 return;
             }
@@ -2416,6 +2584,7 @@ function registerHandlers(client) {
                     const localPath = await saveImageLocally(imageUrl, interaction.guild.id);
                     if (localPath) guildConfig.localImagePath = localPath;
                     saveRoomConfig(config);
+                    await refreshSetroomPanelIfPossible(interaction, guildConfig);
                     await interaction.reply({ content: '✅ تم تحديث الصورة.', flags: 64 });
                     return;
                 }
@@ -2443,6 +2612,7 @@ function registerHandlers(client) {
                     if (guildToggleValue) guildConfig.guildIconEnabled = guildToggleValue === 'on';
                     if (guildBorderToggleValue) guildConfig.layoutSettings.guildBorderEnabled = guildBorderToggleValue === 'on';
                     saveRoomConfig(config);
+                    await refreshSetroomPanelIfPossible(interaction, guildConfig);
                     await interaction.reply({ content: `✅ تم تحديث نص الألوان ولونه إلى ${normalizedTextColor} مع إعدادات افتار السيرفر.`, flags: 64 });
                     return;
                 }
@@ -2456,6 +2626,7 @@ function registerHandlers(client) {
                         setupFooter: interaction.fields.getTextInputValue('setup_footer').trim()
                     };
                     saveRoomConfig(config);
+                    await refreshSetroomPanelIfPossible(interaction, guildConfig);
                     await interaction.reply({ content: '✅ تم تحديث نصوص السيتب.', flags: 64 });
                     return;
                 }
@@ -2469,7 +2640,30 @@ function registerHandlers(client) {
                         requestRejectLabel: interaction.fields.getTextInputValue('reject_label').trim()
                     };
                     saveRoomConfig(config);
+                    await refreshSetroomPanelIfPossible(interaction, guildConfig);
                     await interaction.reply({ content: '✅ تم تحديث نصوص رسالة الروم والأزرار.', flags: 64 });
+                    return;
+                }
+                if (interaction.customId === 'setroom_modal_safety') {
+                    const deleteAfterHoursInput = interaction.fields.getTextInputValue('delete_after_hours').trim();
+                    const rejectCooldownInput = interaction.fields.getTextInputValue('reject_cooldown_minutes').trim();
+                    const deleteAfterHours = Number(deleteAfterHoursInput || guildConfig.roomDeleteAfterHours || DEFAULT_ROOM_DELETE_HOURS);
+                    const rejectCooldownMinutes = Number(rejectCooldownInput || guildConfig.rejectCooldownMinutes || DEFAULT_REJECT_COOLDOWN_MINUTES);
+
+                    if (!Number.isFinite(deleteAfterHours) || deleteAfterHours < MIN_ROOM_DELETE_HOURS || deleteAfterHours > MAX_ROOM_DELETE_HOURS) {
+                        await interaction.reply({ content: `❌ مدة حذف الروم يجب أن تكون بين ${MIN_ROOM_DELETE_HOURS} و ${MAX_ROOM_DELETE_HOURS} ساعة.`, flags: 64 });
+                        return;
+                    }
+                    if (!Number.isFinite(rejectCooldownMinutes) || rejectCooldownMinutes < MIN_REJECT_COOLDOWN_MINUTES || rejectCooldownMinutes > MAX_REJECT_COOLDOWN_MINUTES) {
+                        await interaction.reply({ content: `❌ كولداون الرفض يجب أن يكون بين ${MIN_REJECT_COOLDOWN_MINUTES} و ${MAX_REJECT_COOLDOWN_MINUTES} دقيقة.`, flags: 64 });
+                        return;
+                    }
+
+                    guildConfig.roomDeleteAfterHours = deleteAfterHours;
+                    guildConfig.rejectCooldownMinutes = rejectCooldownMinutes;
+                    saveRoomConfig(config);
+                    await refreshSetroomPanelIfPossible(interaction, guildConfig);
+                    await interaction.reply({ content: `✅ تم حفظ الأمان: حذف الروم بعد ${deleteAfterHours} ساعة وكولداون رفض ${rejectCooldownMinutes} دقيقة.`, flags: 64 });
                     return;
                 }
             }
