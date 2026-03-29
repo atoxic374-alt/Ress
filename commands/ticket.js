@@ -1343,6 +1343,19 @@ function loadResponsibilities() {
   return hydrated;
 }
 
+async function waitForResponsibilitiesRecovery({ attempts = 4, delayMs = 300 } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const responsibilities = loadResponsibilities();
+    if (responsibilities && Object.keys(responsibilities).length > 0) {
+      return responsibilities;
+    }
+    if (attempt < attempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  return loadResponsibilities();
+}
+
 function ensureTicketImagesDir() {
   if (!fs.existsSync(ticketImagesDir)) fs.mkdirSync(ticketImagesDir, { recursive: true });
 }
@@ -2378,7 +2391,11 @@ async function buildTicketControls(guildId, panelId, channelId, config, options 
     new ButtonBuilder().setCustomId(`ticket_ping_${guildId}_${panelId}_${channelId}`).setEmoji('<:emoji_3:1484364925865558086>').setStyle(ButtonStyle.Secondary)
   );
 
-  const responsibilities = loadResponsibilities();
+  let responsibilities = loadResponsibilities();
+  const responsibilitiesFileExists = fs.existsSync(responsibilitiesPath);
+  if (!responsibilitiesFileExists && Object.keys(responsibilities || {}).length === 0) {
+    responsibilities = await waitForResponsibilitiesRecovery();
+  }
   const allResponsibilityNames = Object.keys(responsibilities);
   const canSearchResponsibilities = allResponsibilityNames.length > 25;
   const responsibilityNames = canSearchResponsibilities ? allResponsibilityNames.slice(0, 24) : allResponsibilityNames.slice(0, 25);
@@ -2408,8 +2425,19 @@ async function buildTicketControls(guildId, panelId, channelId, config, options 
   const row3 = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId(`ticket_transfer_${guildId}_${panelId}_${channelId}`)
-      .setPlaceholder('اختر مسؤولية لتحويل التكت')
-      .addOptions(responsibilityOptions.length ? responsibilityOptions : [{ label: 'لا توجد مسؤوليات', value: 'resp_none' }])
+      .setPlaceholder(
+        responsibilityOptions.length
+          ? 'اختر مسؤولية لتحويل التكت'
+          : (responsibilitiesFileExists ? 'لا توجد مسؤوليات متاحة للتحويل' : 'ملف المسؤوليات محذوف أو فارغ')
+      )
+      .addOptions(
+        responsibilityOptions.length
+          ? responsibilityOptions
+          : [{
+            label: responsibilitiesFileExists ? 'لا توجد مسؤوليات' : '⚠️ ملف المسؤوليات محذوف/فارغ',
+            value: 'resp_none'
+          }]
+      )
       .setDisabled(responsibilityOptions.length === 0)
   );
 
@@ -5572,14 +5600,28 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     return;
   }
 
-  const responsibilities = loadResponsibilities();
+  let responsibilities = loadResponsibilities();
   const responsibilityNames = Object.keys(responsibilities);
+  const responsibilitiesFileExists = fs.existsSync(responsibilitiesPath);
+
+  if (!responsibilitiesFileExists && responsibilityNames.length === 0) {
+    responsibilities = await waitForResponsibilitiesRecovery();
+  }
+  const refreshedNames = Object.keys(responsibilities || {});
+
+  if (refreshedNames.length === 0) {
+    const missingHint = responsibilitiesFileExists
+      ? '**لا توجد مسؤوليات حاليًا.**'
+      : '**ملف responsibilities.json محذوف/فارغ، وحاولت الاسترجاع من الكاش لكن ما لقيت بيانات كافية.**';
+    await interaction.editReply(buildTicketMessagePayload('Error', missingHint)).catch((error) => logSilentError('suppressed', error));
+    return;
+  }
 
   let respName = null;
   if (value.startsWith('respidx_')) {
     const index = Number(value.replace('respidx_', ''));
-    if (Number.isInteger(index) && index >= 0 && index < responsibilityNames.length) {
-      respName = responsibilityNames[index];
+    if (Number.isInteger(index) && index >= 0 && index < refreshedNames.length) {
+      respName = refreshedNames[index];
     }
   } else if (value.startsWith('resp_')) {
     respName = value.replace('resp_', '');
