@@ -84,10 +84,24 @@ function formatMinutesArabic(totalMinutes) {
     const hours = Math.floor((minutes % 1440) / 60);
     const mins = minutes % 60;
     const parts = [];
-    if (days) parts.push(`${days} يوم`);
-    if (hours) parts.push(`${hours} ساعة`);
-    if (mins) parts.push(`${mins} دقيقة`);
-    return parts.join(' و ');
+    if (days) parts.push(`${days}d`);
+    if (hours) parts.push(`${hours}h`);
+    if (mins) parts.push(`${mins}m`);
+    return parts.join(' , ');
+}
+
+function formatRemainingTimeFromMs(durationMs) {
+    const totalSeconds = Math.max(1, Math.ceil((Number(durationMs) || 0) / 1000));
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const parts = [];
+    if (days) parts.push(`${days}d`);
+    if (hours) parts.push(`${hours}h`);
+    if (minutes) parts.push(`${minutes}m`);
+    if (seconds && parts.length < 2) parts.push(`${seconds}s`);
+    return parts.join(' , ');
 }
 
 function isValidImageUrl(url) {
@@ -859,11 +873,8 @@ async function handleResponsibilitySelect(interaction, client) {
         const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
         const rejectedCooldown = getActiveRejectedApplyCooldown(interaction.guild.id, interaction.user.id, selectedResp);
         if (rejectedCooldown) {
-            const minutes = Math.floor(rejectedCooldown.timeLeft / 60000);
-            const seconds = Math.floor((rejectedCooldown.timeLeft % 60000) / 1000);
-            return await interaction.reply({
-                content: `⏳ **تم رفضك سابقًا على "${selectedResp}". يمكنك التقديم مرة أخرى بعد ${minutes}m ${seconds}s.**`,
-                ephemeral: true
+            return await interaction.editReply({
+                content: `⏳ **تم رفضك سابقًا على "${selectedResp}". يمكنك التقديم مرة أخرى بعد ${formatRemainingTimeFromMs(rejectedCooldown.timeLeft)}.**`
             });
         }
         
@@ -1019,10 +1030,8 @@ async function handleApplyRespButton(interaction, client) {
         if (cooldownMs && lastApply) {
             const timeLeft = lastApply + cooldownMs - Date.now();
             if (timeLeft > 0) {
-                const minutes = Math.floor(timeLeft / 60000);
-                const seconds = Math.floor((timeLeft % 60000) / 1000);
                 return await interaction.reply({
-                    content: `⏳ **يجب عليك الانتظار ${minutes}m , ${seconds}s , ث قبل تقديم طلب آخر أو اختيار مسؤولية أخرى.**`,
+                    content: `⏳ **يجب عليك الانتظار ${formatRemainingTimeFromMs(timeLeft)} قبل تقديم طلب آخر أو اختيار مسؤولية أخرى.**`,
                     ephemeral: true
                 });
             }
@@ -1146,10 +1155,8 @@ async function handleApplyRespSelect(interaction, client) {
         if (cooldownMs && lastApply) {
             const timeLeft = lastApply + cooldownMs - Date.now();
             if (timeLeft > 0) {
-                const minutes = Math.floor(timeLeft / 60000);
-                const seconds = Math.floor((timeLeft % 60000) / 1000);
                 return await interaction.reply({
-                    content: `⏳ **يجب عليك الانتظار ${minutes}m , ${seconds}s ث قبل تقديم طلب آخر أو اختيار مسؤولية أخرى.**`,
+                    content: `⏳ **يجب عليك الانتظار ${formatRemainingTimeFromMs(timeLeft)} قبل تقديم طلب آخر أو اختيار مسؤولية أخرى.**`,
                     ephemeral: true
                 });
             }
@@ -1159,10 +1166,8 @@ async function handleApplyRespSelect(interaction, client) {
         const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
         const rejectedCooldown = getActiveRejectedApplyCooldown(interaction.guild.id, interaction.user.id, selectedResp);
         if (rejectedCooldown) {
-            const minutes = Math.floor(rejectedCooldown.timeLeft / 60000);
-            const seconds = Math.floor((rejectedCooldown.timeLeft % 60000) / 1000);
             return await interaction.reply({
-                content: `⏳ **تم رفضك سابقًا على "${selectedResp}". يمكنك التقديم مرة أخرى بعد ${minutes}m ${seconds}s.**`,
+                content: `⏳ **تم رفضك سابقًا على "${selectedResp}". يمكنك التقديم مرة أخرى بعد ${formatRemainingTimeFromMs(rejectedCooldown.timeLeft)}.**`,
                 ephemeral: true
             });
         }
@@ -1232,10 +1237,8 @@ async function handleApplyRespModal(interaction, client) {
         if (cooldownMs && lastApply) {
             const timeLeft = lastApply + cooldownMs - Date.now();
             if (timeLeft > 0) {
-                const minutes = Math.floor(timeLeft / 60000);
-                const seconds = Math.floor((timeLeft % 60000) / 1000);
                 return await interaction.editReply({
-                    content: `⏳ **يجب عليك الانتظار ${minutes}m  ${seconds}s قبل تقديم طلب آخر أو اختيار مسؤولية أخرى.**`
+                    content: `⏳ **يجب عليك الانتظار ${formatRemainingTimeFromMs(timeLeft)} قبل تقديم طلب آخر أو اختيار مسؤولية أخرى.**`
                 });
             }
         }
@@ -1244,10 +1247,8 @@ async function handleApplyRespModal(interaction, client) {
         const reason = interaction.fields.getTextInputValue('apply_reason');
         const rejectedCooldown = getActiveRejectedApplyCooldown(guildId, interaction.user.id, respName);
         if (rejectedCooldown) {
-            const minutes = Math.floor(rejectedCooldown.timeLeft / 60000);
-            const seconds = Math.floor((rejectedCooldown.timeLeft % 60000) / 1000);
             return await interaction.editReply({
-                content: `⏳ **تم رفض طلبك سابقًا على "${respName}". انتظر ${minutes}m ${seconds}s قبل إعادة التقديم على نفس المسؤولية.**`
+                content: `⏳ **تم رفض طلبك سابقًا على "${respName}". انتظر ${formatRemainingTimeFromMs(rejectedCooldown.timeLeft)} قبل إعادة التقديم على نفس المسؤولية.**`
             });
         }
         

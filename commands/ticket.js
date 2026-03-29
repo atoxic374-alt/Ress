@@ -2814,9 +2814,8 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
       return new ActionRowBuilder().addComponents(updatedComponents);
     });
 
-    const keepClaimMessageInTicketFlow = Boolean(config.autoCreateOnRequest && !config.claimFromDedicatedChannel);
-    if (config.deleteClaimMessageOnClaim && !keepClaimMessageInTicketFlow) {
-      postClaimTasks.push(deleteClaimMessageIfEnabled(interaction, config));
+const keepClaimMessageInTicketFlow = Boolean(config.autoCreateOnRequest && !config.claimFromDedicatedChannel);
+    if (config.deleteClaimMessageOnClaim && !keepClaimMessageInTicketFlow) {      postClaimTasks.push(deleteClaimMessageIfEnabled(interaction, config));
     } else {
       postClaimTasks.push(interaction.message.edit({
         components: updatedRows
@@ -4362,7 +4361,11 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     }
     return;
   }
-
+const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || message.guild.ownerId === message.author.id;
+  if (!isServerOwnerOrBotOwner) {
+    await message.reply(buildTicketMessagePayload('Perm', '**لا تملك صلاحية تعديل اعدادات التكت.**')).catch((error) => logSilentError('suppressed', error));
+    return;
+  }
   const setupSessionKey = `${message.guild.id}:${message.author.id}`;
   let existingSession = activeTicketSetupSessions.get(setupSessionKey);
   if (!existingSession) {
