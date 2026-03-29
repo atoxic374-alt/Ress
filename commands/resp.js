@@ -1456,27 +1456,27 @@ module.exports = {
                     '* *Responsibilities Setup*',
                     '',
                     '**⚙️ Setup** — إعداد الرومات + نوع الرسالة',
-                    `> **Suggestions :** ${suggestionsChannelText}`,
-                    `> **Embed Room :** ${embedChannelText}`,
-                    `> **Format :** ${formatText}`,
+                    `> **Suggestions : ${suggestionsChannelText}**`,
+                    `> **Embed Room : ${embedChannelText}**`,
+                    `> **Format : ${formatText}**`,
                     '',
                     '**💬 Apply Room** — تحديد روم التقديم',
-                    `> **Current :** ${applyChannelText}`,
+                    `> **Current : ${applyChannelText}**`,
                     '',
                     '**🖼️ Image** — صورة مسؤولية أو الجميع',
-                    `> **Global Image :** ${globalImageText}`,
-                    `> **Responsibilities with image :** ${Object.values(currentResps).filter((r) => r?.image).length}/${Object.keys(currentResps).length}`,
+                    `> **Global Image : ${globalImageText}**`,
+                    `> **Responsibilities with image : ${Object.values(currentResps).filter((r) => r?.image).length}/${Object.keys(currentResps).length}**`,
                     '',
                     '**✅ Full Slots** — المسؤوليات المكتملة',
-                    `> **Count :** ${currentFull.length}`,
+                    `> **Count : ${currentFull.length}**`,
                     '',
                     '**🔐 Access Roles** — رولات مسموح لها بالتقديم على مسؤولية',
-                    `> **Restricted responsibilities :** ${Object.keys(currentRestrictions).length}`,
+                    `> **Restricted responsibilities : ${Object.keys(currentRestrictions).length}**`,
                     '',
                     '**⏱️ Cooldown** — تخصيص/إيقاف كولداون التقديم',
-                    `> **Current :** ${cooldownText}`,
+                    `> **Current : ${cooldownText}**`,
                     '',
-                    '**🧹 Clear Members** — تفريغ جميع المسؤولين'
+                    '**🧹 Clear Resps** —  ازالة جميع المسؤولين'
                 ].join('\n'));
         };
 
@@ -1490,7 +1490,7 @@ module.exports = {
             new ButtonBuilder().setCustomId(`resp_panel_full_${message.id}`).setLabel('Full Slots').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(`resp_panel_access_${message.id}`).setLabel('Access Roles').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(`resp_panel_cooldown_${message.id}`).setLabel('Cooldown').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId(`resp_panel_clear_${message.id}`).setLabel('Clear Members').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(`resp_panel_clear_${message.id}`).setLabel('Clear Resps').setStyle(ButtonStyle.Danger)
         );
 
         const panelMessage = await message.reply({ embeds: [createPanelEmbed()], components: [panelRow1, panelRow2] });
