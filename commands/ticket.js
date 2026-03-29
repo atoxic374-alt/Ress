@@ -4089,13 +4089,15 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId, o
 
   const reasonSettings = getReasonVisualSettings(config, ticket.reasonKey);
   const reason = reasonSettings.reason;
-  const requestText = [
-    '# طلب تغيير الاداري',
-    `**العضو :** <@${ticket.memberId}>`,
-    `**السبب :** ${reason.name || `سبب ${ticket.reasonKey}`}`,
-    `**التكت :** <#${actionChannelId}>`,
-    '**تم تغير المستلم، انتظر مستلم جديد.**'
-  ].join('\n');
+  const isInternalReassignFlow = !config.claimFromDedicatedChannel && targetChannelId === actionChannelId;
+  const requestText = isInternalReassignFlow
+    ? '**تم تغير المستلم، انتظر مستلم جديد.**'
+    : [
+      '# طلب تغيير الاداري',
+      `**العضو :** <@${ticket.memberId}>`,
+      `**السبب :** ${reason.name || `سبب ${ticket.reasonKey}`}`,
+      `**التكت :** <#${actionChannelId}>`
+    ].join('\n');
 
   try {
     ticket.reassignRequestMessageRefs = [];
