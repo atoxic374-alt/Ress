@@ -350,7 +350,10 @@ async function resolveGuildMember(guild, userId, timeoutMs = 2500) {
   const key = `${guild.id}:${userId}`;
   if (!memberFetchInFlight.has(key)) {
     memberFetchInFlight.set(key, guild.members.fetch(userId).catch((error) => {
-      logSilentError('guild.member.fetch', error);
+      const errMsg = String(error?.message || error || '');
+      if (!/Unknown Member/i.test(errMsg)) {
+        logSilentError('guild.member.fetch', error);
+      }
       return null;
     }).finally(() => {
       memberFetchInFlight.delete(key);
@@ -964,13 +967,28 @@ async function warmMentionCaches(channel, rawText = '') {
   );
 }
 
-async function buildTicketTranscript(channel, maxMessages = Infinity) {
+async function buildTicketTranscript(channel, maxMessagesOrOptions = Infinity, maybeOptions = {}) {
   try {
+    const options = (typeof maxMessagesOrOptions === 'object' && maxMessagesOrOptions !== null)
+      ? maxMessagesOrOptions
+      : maybeOptions;
+    const maxMessages = (typeof maxMessagesOrOptions === 'number')
+      ? maxMessagesOrOptions
+      : Number.isFinite(options.maxMessages) ? Number(options.maxMessages) : Infinity;
+    const fastMode = options.fastMode === true;
+    const warmMentions = options.warmMentions !== false && !fastMode;
+    const timeBudgetMs = Number.isFinite(options.timeBudgetMs) && options.timeBudgetMs > 0
+      ? Number(options.timeBudgetMs)
+      : Infinity;
+    const startedAt = Date.now();
+    const deadlineAt = Number.isFinite(timeBudgetMs) ? (startedAt + timeBudgetMs) : Infinity;
+
     const rows = [];
     let lastId = null;
     let fetchedTotal = 0;
 
     while (true) {
+      if (Date.now() >= deadlineAt) break;
       if (Number.isFinite(maxMessages) && fetchedTotal >= maxMessages) break;
       const remaining = Number.isFinite(maxMessages) ? Math.min(100, maxMessages - fetchedTotal) : 100;
       const batch = await channel.messages.fetch({ limit: remaining, before: lastId }).catch(() => null);
@@ -978,6 +996,7 @@ async function buildTicketTranscript(channel, maxMessages = Infinity) {
 
       const ordered = [...batch.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
       for (const msg of ordered) {
+        if (Date.now() >= deadlineAt) break;
         const warmTexts = [msg.content || ''];
         if (Array.isArray(msg.embeds) && msg.embeds.length) {
           for (const embed of msg.embeds) {
@@ -989,10 +1008,12 @@ async function buildTicketTranscript(channel, maxMessages = Infinity) {
             }
           }
         }
-        await runConcurrentTasks(
-          warmTexts.filter(Boolean).map((textItem) => warmMentionCaches(channel, textItem)),
-          'transcript.warm.texts'
-        );
+        if (warmMentions) {
+          await runConcurrentTasks(
+            warmTexts.filter(Boolean).map((textItem) => warmMentionCaches(channel, textItem)),
+            'transcript.warm.texts'
+          );
+        }
         const ts = new Date(msg.createdTimestamp).toLocaleString('en-GB', { hour12: false, timeZone: 'UTC' });
         const author = msg.author?.tag || msg.author?.username || msg.author?.id || 'unknown';
         const content = renderTranscriptContent(channel, (msg.content || '').trim());
@@ -1092,6 +1113,7 @@ async function buildTicketTranscript(channel, maxMessages = Infinity) {
       <h1>#${escapeHtml(channel.name || channel.id)}</h1>
       <p>Channel ID: ${escapeHtml(channel.id)}</p>
       <p>Generated at: ${escapeHtml(new Date().toISOString())}</p>
+      ${Number.isFinite(timeBudgetMs) ? `<p>Mode: fast transcript (${escapeHtml(String(timeBudgetMs))}ms budget)</p>` : ''}
     </section>
     ${logTimeline ? `<section class="timeline"><strong>Ticket activity</strong><br>${logTimeline}</section>` : ''}
     ${combinedRows.join('\n')}
@@ -6128,27 +6150,55 @@ function registerHandlers(client) {
             { ephemeral: true }
           )).catch((error) => logSilentError('suppressed', error));
 
-          interaction.channel.ticketMeta = ticket;
+          const channelRef = interaction.channel;
+          channelRef.ticketMeta = ticket;
           ticket.deletedChannel = true;
-          await Promise.allSettled([
-            (async () => {
-              const transcriptFile = await buildTicketTranscript(interaction.channel).catch(() => null);
-              await syncTicketLogMessage({
+
+          delete tickets[channelId];
+          setGuildData(guildId, config, tickets, pendingRequests || {}, resolvedPanelId);
+
+          const deleteStartedAt = Date.now();
+          (async () => {
+            const baseLogTask = withTimeout(syncTicketLogMessage({
+              guild: interaction.guild,
+              config,
+              ticket,
+              channelId,
+              actionText: `تم حذف التكت عن طريق : <@${interaction.user.id}>`,
+              actor: interaction.user,
+              transcriptFile: null
+            }), 2500);
+
+            const transcriptTask = withTimeout(
+              buildTicketTranscript(channelRef, {
+                fastMode: true,
+                warmMentions: false,
+                timeBudgetMs: 2800
+              }).catch(() => null),
+              2900
+            );
+            const transcriptLogTask = (async () => {
+              const transcriptFile = await transcriptTask;
+              if (!transcriptFile) return null;
+              return withTimeout(syncTicketLogMessage({
                 guild: interaction.guild,
                 config,
                 ticket,
                 channelId,
-                actionText: `تم حذف التكت عن طريق : <@${interaction.user.id}>`,
+                actionText: { type: 'action', message: `تم حفظ الترانسكريبت قبل حذف التكت بواسطة <@${interaction.user.id}>`, actorId: interaction.user.id },
                 actor: interaction.user,
                 transcriptFile
-              });
-            })(),
-            (async () => {
-              delete tickets[channelId];
-              setGuildData(guildId, config, tickets, pendingRequests || {}, resolvedPanelId);
-            })()
-          ]);
-          setTimeout(() => interaction.channel.delete().catch((error) => logSilentError('suppressed', error)), 3000);
+              }), 2500);
+            })();
+
+            await Promise.allSettled([baseLogTask, transcriptLogTask]);
+
+            const remaining = Math.max(0, 3000 - (Date.now() - deleteStartedAt));
+            setTimeout(() => channelRef.delete().catch((error) => logSilentError('suppressed', error)), remaining);
+          })().catch((error) => {
+            logSilentError('ticket.delete.background', error);
+            setTimeout(() => channelRef.delete().catch((err) => logSilentError('suppressed', err)), 3000);
+          });
           return;
         }
 
