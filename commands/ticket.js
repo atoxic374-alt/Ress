@@ -302,6 +302,37 @@ async function runConcurrentTasks(tasks = [], scope = 'task.batch') {
   return settled;
 }
 
+async function editOverwriteFast(channel, targetId, permissions, timeoutMs = 8000) {
+  if (!channel || !targetId) return null;
+  return withTimeout(
+    channel.permissionOverwrites.edit(targetId, permissions)
+      .catch((error) => {
+        logSilentError('permission.edit', error);
+        return null;
+      }),
+    timeoutMs
+  );
+}
+
+
+async function runTransferParallelPipeline(stages = {}, scope = 'transfer.pipeline') {
+  const entries = Object.entries(stages).filter(([, tasks]) => {
+    if (Array.isArray(tasks)) return tasks.length > 0;
+    return Boolean(tasks);
+  });
+  if (!entries.length) return [];
+
+  const started = entries.map(([stageName, tasks]) => {
+    const list = Array.isArray(tasks) ? tasks : [tasks];
+    const normalized = list
+      .filter(Boolean)
+      .map((task) => (typeof task === 'function' ? task() : task));
+    return runConcurrentTasks(normalized, `${scope}.${stageName}`);
+  });
+
+  return Promise.allSettled(started);
+}
+
 async function withTimeout(promise, timeoutMs = 2500) {
   let timeoutRef;
   const timeoutPromise = new Promise((resolve) => {
@@ -4062,7 +4093,8 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId, o
     '# طلب تغيير الاداري',
     `**العضو :** <@${ticket.memberId}>`,
     `**السبب :** ${reason.name || `سبب ${ticket.reasonKey}`}`,
-    `**التكت :** <#${actionChannelId}>`
+    `**التكت :** <#${actionChannelId}>`,
+    '**تم تغير المستلم، انتظر مستلم جديد.**'
   ].join('\n');
 
   try {
@@ -4100,16 +4132,16 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId, o
   ticket.reassignPreviousClaimer = previousClaimer || interaction.user.id;
 
   if (interaction.user.id) {
-    await interaction.channel.permissionOverwrites.edit(interaction.user.id, {
+    await editOverwriteFast(interaction.channel, interaction.user.id, {
       ViewChannel: false,
       SendMessages: false
-    }).catch((error) => logSilentError('suppressed', error));
+    });
   }
   if (previousClaimer && previousClaimer !== interaction.user.id) {
-    await interaction.channel.permissionOverwrites.edit(previousClaimer, {
+    await editOverwriteFast(interaction.channel, previousClaimer, {
       ViewChannel: false,
       SendMessages: false
-    }).catch((error) => logSilentError('suppressed', error));
+    });
   }
 
   setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
@@ -4121,11 +4153,15 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId, o
     actionText: `تم تغيير المستلم عن طريق : <@${interaction.user.id}>`,
     actor: interaction.user
   });
-  if (!silent) {
-    await interaction.channel.send({
-      content: `**تم تغير المستلم :** ${previousClaimer ? `<@${previousClaimer}>` : (interaction.user.id ? `<@${interaction.user.id}>` : 'غير محدد')}\n**انتظر المستلم الجديد.**`
-    }).catch((error) => logSilentError('suppressed', error));
+  if (interaction.message?.editable) {
+    const refreshedControls = await buildTicketControls(guildId, resolvedPanelId, actionChannelId, config, {
+      includeClaimButton: true,
+      disableClaimButton: false,
+      hideReassignButton: true
+    });
+    await interaction.message.edit({ components: refreshedControls }).catch((error) => logSilentError('suppressed', error));
   }
+
   await reply(buildTicketMessagePayload('Done', '**تم إخراجك من التكت وإرسال طلب استلام جديد.**', { ephemeral: true }));
   return true;
 }
@@ -5670,17 +5706,14 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   const adminRoles = getAdminRoles(config, ticket?.reasonKey);
   const allKnownRoles = [...new Set([...generalResponsibleRoles, ...targetRoles, ...adminRoles])];
 
-  const rolesPermissionTask = runConcurrentTasks(
-    allKnownRoles.map((roleId) => {
-      const shouldSee = targetRoles.includes(roleId) || generalResponsibleRoles.includes(roleId);
-      return interaction.channel.permissionOverwrites.edit(roleId, {
-        ViewChannel: shouldSee,
-        SendMessages: shouldSee,
-        ReadMessageHistory: shouldSee
-      });
-    }),
-    'transfer.roles.permissions'
-  );
+  const rolesPermissionTasks = allKnownRoles.map((roleId) => {
+    const shouldSee = targetRoles.includes(roleId) || generalResponsibleRoles.includes(roleId);
+    return () => editOverwriteFast(interaction.channel, roleId, {
+      ViewChannel: shouldSee,
+      SendMessages: shouldSee,
+      ReadMessageHistory: shouldSee
+    });
+  });
 
   ticket.transferredRoleIds = [...targetRoles];
   await syncTicketLogMessage({
@@ -5699,17 +5732,14 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   const existingResponsibleUsers = [...new Set(responsibleUsers)];
   const shouldGrantIndividualTransferUsers = true;
 
-  const usersPermissionTask = runConcurrentTasks(
-    [...new Set([...previousTransferredUserIds, ...existingResponsibleUsers])].map((userId) => {
-      const shouldSee = shouldGrantIndividualTransferUsers && existingResponsibleUsers.includes(userId);
-      return interaction.channel.permissionOverwrites.edit(userId, {
-        ViewChannel: shouldSee,
-        SendMessages: shouldSee,
-        ReadMessageHistory: true
-      });
-    }),
-    'transfer.users.permissions'
-  );
+  const usersPermissionTasks = [...new Set([...previousTransferredUserIds, ...existingResponsibleUsers])].map((userId) => {
+    const shouldSee = shouldGrantIndividualTransferUsers && existingResponsibleUsers.includes(userId);
+    return () => editOverwriteFast(interaction.channel, userId, {
+      ViewChannel: shouldSee,
+      SendMessages: shouldSee,
+      ReadMessageHistory: true
+    });
+  });
 
   const mentions = [
     ...targetRoles.map((id) => `<@&${id}>`),
@@ -5724,9 +5754,9 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     })
     .map((uid) => `<@${uid}>`);
 
-  const previousClaimerHideTask = previousClaimer
-    ? interaction.channel.permissionOverwrites.edit(previousClaimer, { ViewChannel: false, SendMessages: false }).catch((error) => logSilentError('suppressed', error))
-    : Promise.resolve();
+  const previousClaimerHideTasks = previousClaimer
+    ? [() => editOverwriteFast(interaction.channel, previousClaimer, { ViewChannel: false, SendMessages: false })]
+    : [];
   ticket.transferredUserIds = [...existingResponsibleUsers];
   const dmEmbed = makeTicketEmbed(
     'Ticket Change',
@@ -5738,26 +5768,29 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   if (!Array.isArray(ticket.transferDmNotifications)) ticket.transferDmNotifications = [];
 
   const renamed = `مسؤولين-${sanitizeName(respName)}`.slice(0, 90);
-  const transferUiTasks = [interaction.channel.setName(renamed)];
+  const transferUiTasks = [() => interaction.channel.setName(renamed)];
   if (interaction.message?.editable) {
-    transferUiTasks.push((async () => {
+    transferUiTasks.push(async () => {
       const refreshedControls = await buildTicketControls(guildId, resolvedPanelId, actionChannelId, config, {
         includeClaimButton: false,
         disableClaimButton: true,
         hideReassignButton: true
       });
       await interaction.message.edit({ components: refreshedControls });
-    })());
+    });
   }
-  await Promise.allSettled([rolesPermissionTask, usersPermissionTask, previousClaimerHideTask]);
-  await runConcurrentTasks(transferUiTasks, 'transfer.ui.update');
 
-  await interaction.channel.send({
-    content: mentions.join(' ') || undefined,
-    ...buildTicketMessagePayload('Changed', `**تم تحويل التكت لمسؤولين : ${respName}**\n**المتصلون الآن :** ${onlineResponsibleMentions.join(' ') || 'N/A'}\n**الرولات :** ${targetRoles.map((id) => `<@&${id}>`).join(' ') || 'N/A'}`, { user: interaction.user })
-  }).catch((error) => logSilentError('suppressed', error));
-
-  await interaction.editReply(buildTicketMessagePayload('Changed', '**تم التحويل بنجاح.**', { ephemeral: true, user: interaction.user })).catch((error) => logSilentError('suppressed', error));
+  await runTransferParallelPipeline({
+    permissions: [...rolesPermissionTasks, ...usersPermissionTasks, ...previousClaimerHideTasks],
+    ui: transferUiTasks,
+    feedback: [
+      () => interaction.channel.send({
+        content: mentions.join(' ') || undefined,
+        ...buildTicketMessagePayload('Changed', `**تم تحويل التكت لمسؤولين : ${respName}**\n**المتصلون الآن :** ${onlineResponsibleMentions.join(' ') || 'N/A'}\n**الرولات :** ${targetRoles.map((id) => `<@&${id}>`).join(' ') || 'N/A'}`, { user: interaction.user })
+      }).catch((error) => logSilentError('suppressed', error)),
+      () => interaction.editReply(buildTicketMessagePayload('Changed', '**تم التحويل بنجاح.**', { ephemeral: true, user: interaction.user })).catch((error) => logSilentError('suppressed', error))
+    ]
+  }, 'transfer.parallel');
 
   Promise.allSettled(
     existingResponsibleUsers.map(async (uid) => {
