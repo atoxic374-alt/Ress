@@ -175,6 +175,23 @@ function normalizeImageUrl(url) {
     }
 }
 
+function resolveResponsibilityImageUrl(guildId, respData = null, { allowGlobalFallback = true } = {}) {
+    const directImage = normalizeImageUrl(respData?.image);
+    if (directImage && isValidImageUrl(directImage)) {
+        return directImage;
+    }
+
+    if (!allowGlobalFallback) return null;
+
+    const config = getGuildRespConfig(guildId);
+    const globalImage = normalizeImageUrl(config.guilds?.[guildId]?.globalImageUrl);
+    if (globalImage && isValidImageUrl(globalImage)) {
+        return globalImage;
+    }
+
+    return null;
+}
+
 function applyEmojiSafely(button, emojiValue) {
     const normalized = typeof emojiValue === 'string' ? emojiValue.trim() : emojiValue;
 
@@ -758,8 +775,9 @@ async function handleResponsibilitySelect(interaction, client) {
             .setFooter({ text: `طلب بواسطة : ${interaction.user.tag}`, iconURL: interaction.user.displayAvatarURL({ dynamic: true }) });
 
         // إضافة الصورة للمسؤولية إذا وجدت
-        if (respData.image) {
-            embed.setImage(respData.image);
+        const resolvedImageUrl = resolveResponsibilityImageUrl(interaction.guild.id, respData);
+        if (resolvedImageUrl) {
+            embed.setImage(resolvedImageUrl);
         }
         
         // إضافة الحقول
@@ -1209,7 +1227,7 @@ async function handleApplyRespModal(interaction, client) {
 
         // إرسال صورة المسؤولية بعد الإيمبد كمرفق فعلي (وليس رابط نصي)
         const defaultSeparator = 'https://cdn.discordapp.com/attachments/1446184605056106690/1447086623954173972/colors-5.png?ex=693657f0&is=69350670&hm=126e0ab559dc0a642e9672d1c0d1a3e62d10a704b14fa25c46460870b67d9682&';
-        const separatorImageUrl = respData?.image || defaultSeparator;
+        const separatorImageUrl = resolveResponsibilityImageUrl(guildId, respData) || defaultSeparator;
         const separatorAttachment = await createImageAttachment(separatorImageUrl);
 
         if (separatorAttachment) {
@@ -1282,8 +1300,9 @@ async function handleApplyAction(interaction, client) {
                         .setDescription(`** تم قبول طلبك لمسؤولية ال${respName}**\n\n ** في سيرفر ${interaction.guild.name}**`)
                         .setThumbnail(interaction.guild.iconURL({ dynamic: true }));
                     
-                    if (respData && respData.image) {
-                        approveEmbed.setImage(respData.image);
+                    const resolvedApproveImageUrl = resolveResponsibilityImageUrl(interaction.guild.id, respData);
+                    if (resolvedApproveImageUrl) {
+                        approveEmbed.setImage(resolvedApproveImageUrl);
                     }
                     
                     await targetMember.send({ embeds: [approveEmbed] }).catch(() => {});
@@ -1370,8 +1389,9 @@ async function handleRejectReasonModal(interaction, client) {
                 .setDescription(`**تم رفض طلبك لمسؤولية ال${respName}**\n\n ** في سيرفر ${interaction.guild.name}**\n\n**السبب للرفض :** ${reason}`)
                 .setThumbnail(interaction.guild.iconURL({ dynamic: true }));
             
-            if (respData && respData.image) {
-                rejectEmbed.setImage(respData.image);
+            const resolvedRejectImageUrl = resolveResponsibilityImageUrl(interaction.guild.id, respData);
+            if (resolvedRejectImageUrl) {
+                rejectEmbed.setImage(resolvedRejectImageUrl);
             }
             
             await targetMember.send({ embeds: [rejectEmbed] }).catch(() => {});
@@ -1765,8 +1785,8 @@ module.exports = {
                     const latestConfig = getGuildRespConfig(guildId);
                     const guildImageConfig = latestConfig.guilds[guildId] || {};
                     const currentImageUrl = respName === 'all'
-                        ? (guildImageConfig.globalImageUrl || null)
-                        : (currentResps[respName]?.image || null);
+                        ? (normalizeImageUrl(guildImageConfig.globalImageUrl) || null)
+                        : (resolveResponsibilityImageUrl(guildId, currentResps[respName]) || null);
                     const imageSession = createSessionToken('img_action');
 
                     const previewEmbed = colorManager.createEmbed()
@@ -1784,7 +1804,7 @@ module.exports = {
                         previewEmbed.setImage(currentImageUrl);
                     }
 
-                    const actionMessage = await pickedResp.sourceInteraction.reply({
+                    const actionMessage = await pickedResp.sourceInteraction.followUp({
                         embeds: [previewEmbed],
                         components: [
                             new ActionRowBuilder().addComponents(
@@ -1854,7 +1874,9 @@ module.exports = {
                         try {
                             const tableInfo = await dbManager.all('PRAGMA table_info(responsibilities)');
                             if (!tableInfo.some(col => col.name === 'image')) await dbManager.run('ALTER TABLE responsibilities ADD COLUMN image TEXT').catch(() => {});
-                            await dbManager.run('UPDATE responsibilities SET image = ?', [safeImageUrl]);
+                            for (const name of Object.keys(currentResps)) {
+                                await dbManager.updateResponsibility(name, currentResps[name]);
+                            }
                         } catch (_) {}
                         await updateEmbedMessage(message.client, guildId);
                         appendRespAuditLog(guildId, message.author.id, 'resp.image.all', { imageUrl: safeImageUrl });
@@ -1873,7 +1895,7 @@ module.exports = {
                     try {
                         const tableInfo = await dbManager.all('PRAGMA table_info(responsibilities)');
                         if (!tableInfo.some(col => col.name === 'image')) await dbManager.run('ALTER TABLE responsibilities ADD COLUMN image TEXT').catch(() => {});
-                        await dbManager.run('UPDATE responsibilities SET image = ? WHERE name = ?', [safeImageUrl, respName]);
+                        await dbManager.updateResponsibility(respName, currentResps[respName]);
                     } catch (_) {}
                     await updateEmbedMessage(message.client, guildId);
                     appendRespAuditLog(guildId, message.author.id, 'resp.image.single', { respName, imageUrl: safeImageUrl });
