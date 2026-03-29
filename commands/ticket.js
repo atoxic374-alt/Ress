@@ -302,6 +302,37 @@ async function runConcurrentTasks(tasks = [], scope = 'task.batch') {
   return settled;
 }
 
+async function editOverwriteFast(channel, targetId, permissions, timeoutMs = 8000) {
+  if (!channel || !targetId) return null;
+  return withTimeout(
+    channel.permissionOverwrites.edit(targetId, permissions)
+      .catch((error) => {
+        logSilentError('permission.edit', error);
+        return null;
+      }),
+    timeoutMs
+  );
+}
+
+
+async function runTransferParallelPipeline(stages = {}, scope = 'transfer.pipeline') {
+  const entries = Object.entries(stages).filter(([, tasks]) => {
+    if (Array.isArray(tasks)) return tasks.length > 0;
+    return Boolean(tasks);
+  });
+  if (!entries.length) return [];
+
+  const started = entries.map(([stageName, tasks]) => {
+    const list = Array.isArray(tasks) ? tasks : [tasks];
+    const normalized = list
+      .filter(Boolean)
+      .map((task) => (typeof task === 'function' ? task() : task));
+    return runConcurrentTasks(normalized, `${scope}.${stageName}`);
+  });
+
+  return Promise.allSettled(started);
+}
+
 async function withTimeout(promise, timeoutMs = 2500) {
   let timeoutRef;
   const timeoutPromise = new Promise((resolve) => {
@@ -319,7 +350,10 @@ async function resolveGuildMember(guild, userId, timeoutMs = 2500) {
   const key = `${guild.id}:${userId}`;
   if (!memberFetchInFlight.has(key)) {
     memberFetchInFlight.set(key, guild.members.fetch(userId).catch((error) => {
-      logSilentError('guild.member.fetch', error);
+      const errMsg = String(error?.message || error || '');
+      if (!/Unknown Member/i.test(errMsg)) {
+        logSilentError('guild.member.fetch', error);
+      }
       return null;
     }).finally(() => {
       memberFetchInFlight.delete(key);
@@ -933,13 +967,28 @@ async function warmMentionCaches(channel, rawText = '') {
   );
 }
 
-async function buildTicketTranscript(channel, maxMessages = Infinity) {
+async function buildTicketTranscript(channel, maxMessagesOrOptions = Infinity, maybeOptions = {}) {
   try {
+    const options = (typeof maxMessagesOrOptions === 'object' && maxMessagesOrOptions !== null)
+      ? maxMessagesOrOptions
+      : maybeOptions;
+    const maxMessages = (typeof maxMessagesOrOptions === 'number')
+      ? maxMessagesOrOptions
+      : Number.isFinite(options.maxMessages) ? Number(options.maxMessages) : Infinity;
+    const fastMode = options.fastMode === true;
+    const warmMentions = options.warmMentions !== false && !fastMode;
+    const timeBudgetMs = Number.isFinite(options.timeBudgetMs) && options.timeBudgetMs > 0
+      ? Number(options.timeBudgetMs)
+      : Infinity;
+    const startedAt = Date.now();
+    const deadlineAt = Number.isFinite(timeBudgetMs) ? (startedAt + timeBudgetMs) : Infinity;
+
     const rows = [];
     let lastId = null;
     let fetchedTotal = 0;
 
     while (true) {
+      if (Date.now() >= deadlineAt) break;
       if (Number.isFinite(maxMessages) && fetchedTotal >= maxMessages) break;
       const remaining = Number.isFinite(maxMessages) ? Math.min(100, maxMessages - fetchedTotal) : 100;
       const batch = await channel.messages.fetch({ limit: remaining, before: lastId }).catch(() => null);
@@ -947,6 +996,7 @@ async function buildTicketTranscript(channel, maxMessages = Infinity) {
 
       const ordered = [...batch.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
       for (const msg of ordered) {
+        if (Date.now() >= deadlineAt) break;
         const warmTexts = [msg.content || ''];
         if (Array.isArray(msg.embeds) && msg.embeds.length) {
           for (const embed of msg.embeds) {
@@ -958,10 +1008,12 @@ async function buildTicketTranscript(channel, maxMessages = Infinity) {
             }
           }
         }
-        await runConcurrentTasks(
-          warmTexts.filter(Boolean).map((textItem) => warmMentionCaches(channel, textItem)),
-          'transcript.warm.texts'
-        );
+        if (warmMentions) {
+          await runConcurrentTasks(
+            warmTexts.filter(Boolean).map((textItem) => warmMentionCaches(channel, textItem)),
+            'transcript.warm.texts'
+          );
+        }
         const ts = new Date(msg.createdTimestamp).toLocaleString('en-GB', { hour12: false, timeZone: 'UTC' });
         const author = msg.author?.tag || msg.author?.username || msg.author?.id || 'unknown';
         const content = renderTranscriptContent(channel, (msg.content || '').trim());
@@ -1061,6 +1113,7 @@ async function buildTicketTranscript(channel, maxMessages = Infinity) {
       <h1>#${escapeHtml(channel.name || channel.id)}</h1>
       <p>Channel ID: ${escapeHtml(channel.id)}</p>
       <p>Generated at: ${escapeHtml(new Date().toISOString())}</p>
+      ${Number.isFinite(timeBudgetMs) ? `<p>Mode: fast transcript (${escapeHtml(String(timeBudgetMs))}ms budget)</p>` : ''}
     </section>
     ${logTimeline ? `<section class="timeline"><strong>Ticket activity</strong><br>${logTimeline}</section>` : ''}
     ${combinedRows.join('\n')}
@@ -4058,12 +4111,15 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId, o
 
   const reasonSettings = getReasonVisualSettings(config, ticket.reasonKey);
   const reason = reasonSettings.reason;
-  const requestText = [
-    '# طلب تغيير الاداري',
-    `**العضو :** <@${ticket.memberId}>`,
-    `**السبب :** ${reason.name || `سبب ${ticket.reasonKey}`}`,
-    `**التكت :** <#${actionChannelId}>`
-  ].join('\n');
+  const isInternalReassignFlow = !config.claimFromDedicatedChannel && targetChannelId === actionChannelId;
+  const requestText = isInternalReassignFlow
+    ? '**تم تغير المستلم، انتظر مستلم جديد.**'
+    : [
+      '# طلب تغيير الاداري',
+      `**العضو :** <@${ticket.memberId}>`,
+      `**السبب :** ${reason.name || `سبب ${ticket.reasonKey}`}`,
+      `**التكت :** <#${actionChannelId}>`
+    ].join('\n');
 
   try {
     ticket.reassignRequestMessageRefs = [];
@@ -4100,16 +4156,16 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId, o
   ticket.reassignPreviousClaimer = previousClaimer || interaction.user.id;
 
   if (interaction.user.id) {
-    await interaction.channel.permissionOverwrites.edit(interaction.user.id, {
+    await editOverwriteFast(interaction.channel, interaction.user.id, {
       ViewChannel: false,
       SendMessages: false
-    }).catch((error) => logSilentError('suppressed', error));
+    });
   }
   if (previousClaimer && previousClaimer !== interaction.user.id) {
-    await interaction.channel.permissionOverwrites.edit(previousClaimer, {
+    await editOverwriteFast(interaction.channel, previousClaimer, {
       ViewChannel: false,
       SendMessages: false
-    }).catch((error) => logSilentError('suppressed', error));
+    });
   }
 
   setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
@@ -4121,11 +4177,15 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId, o
     actionText: `تم تغيير المستلم عن طريق : <@${interaction.user.id}>`,
     actor: interaction.user
   });
-  if (!silent) {
-    await interaction.channel.send({
-      content: `**تم تغير المستلم :** ${previousClaimer ? `<@${previousClaimer}>` : (interaction.user.id ? `<@${interaction.user.id}>` : 'غير محدد')}\n**انتظر المستلم الجديد.**`
-    }).catch((error) => logSilentError('suppressed', error));
+  if (interaction.message?.editable) {
+    const refreshedControls = await buildTicketControls(guildId, resolvedPanelId, actionChannelId, config, {
+      includeClaimButton: true,
+      disableClaimButton: false,
+      hideReassignButton: true
+    });
+    await interaction.message.edit({ components: refreshedControls }).catch((error) => logSilentError('suppressed', error));
   }
+
   await reply(buildTicketMessagePayload('Done', '**تم إخراجك من التكت وإرسال طلب استلام جديد.**', { ephemeral: true }));
   return true;
 }
@@ -5670,17 +5730,14 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   const adminRoles = getAdminRoles(config, ticket?.reasonKey);
   const allKnownRoles = [...new Set([...generalResponsibleRoles, ...targetRoles, ...adminRoles])];
 
-  const rolesPermissionTask = runConcurrentTasks(
-    allKnownRoles.map((roleId) => {
-      const shouldSee = targetRoles.includes(roleId) || generalResponsibleRoles.includes(roleId);
-      return interaction.channel.permissionOverwrites.edit(roleId, {
-        ViewChannel: shouldSee,
-        SendMessages: shouldSee,
-        ReadMessageHistory: shouldSee
-      });
-    }),
-    'transfer.roles.permissions'
-  );
+  const rolesPermissionTasks = allKnownRoles.map((roleId) => {
+    const shouldSee = targetRoles.includes(roleId) || generalResponsibleRoles.includes(roleId);
+    return () => editOverwriteFast(interaction.channel, roleId, {
+      ViewChannel: shouldSee,
+      SendMessages: shouldSee,
+      ReadMessageHistory: shouldSee
+    });
+  });
 
   ticket.transferredRoleIds = [...targetRoles];
   await syncTicketLogMessage({
@@ -5699,17 +5756,14 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   const existingResponsibleUsers = [...new Set(responsibleUsers)];
   const shouldGrantIndividualTransferUsers = true;
 
-  const usersPermissionTask = runConcurrentTasks(
-    [...new Set([...previousTransferredUserIds, ...existingResponsibleUsers])].map((userId) => {
-      const shouldSee = shouldGrantIndividualTransferUsers && existingResponsibleUsers.includes(userId);
-      return interaction.channel.permissionOverwrites.edit(userId, {
-        ViewChannel: shouldSee,
-        SendMessages: shouldSee,
-        ReadMessageHistory: true
-      });
-    }),
-    'transfer.users.permissions'
-  );
+  const usersPermissionTasks = [...new Set([...previousTransferredUserIds, ...existingResponsibleUsers])].map((userId) => {
+    const shouldSee = shouldGrantIndividualTransferUsers && existingResponsibleUsers.includes(userId);
+    return () => editOverwriteFast(interaction.channel, userId, {
+      ViewChannel: shouldSee,
+      SendMessages: shouldSee,
+      ReadMessageHistory: true
+    });
+  });
 
   const mentions = [
     ...targetRoles.map((id) => `<@&${id}>`),
@@ -5724,9 +5778,9 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     })
     .map((uid) => `<@${uid}>`);
 
-  const previousClaimerHideTask = previousClaimer
-    ? interaction.channel.permissionOverwrites.edit(previousClaimer, { ViewChannel: false, SendMessages: false }).catch((error) => logSilentError('suppressed', error))
-    : Promise.resolve();
+  const previousClaimerHideTasks = previousClaimer
+    ? [() => editOverwriteFast(interaction.channel, previousClaimer, { ViewChannel: false, SendMessages: false })]
+    : [];
   ticket.transferredUserIds = [...existingResponsibleUsers];
   const dmEmbed = makeTicketEmbed(
     'Ticket Change',
@@ -5738,26 +5792,29 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   if (!Array.isArray(ticket.transferDmNotifications)) ticket.transferDmNotifications = [];
 
   const renamed = `مسؤولين-${sanitizeName(respName)}`.slice(0, 90);
-  const transferUiTasks = [interaction.channel.setName(renamed)];
+  const transferUiTasks = [() => interaction.channel.setName(renamed)];
   if (interaction.message?.editable) {
-    transferUiTasks.push((async () => {
+    transferUiTasks.push(async () => {
       const refreshedControls = await buildTicketControls(guildId, resolvedPanelId, actionChannelId, config, {
         includeClaimButton: false,
         disableClaimButton: true,
         hideReassignButton: true
       });
       await interaction.message.edit({ components: refreshedControls });
-    })());
+    });
   }
-  await Promise.allSettled([rolesPermissionTask, usersPermissionTask, previousClaimerHideTask]);
-  await runConcurrentTasks(transferUiTasks, 'transfer.ui.update');
 
-  await interaction.channel.send({
-    content: mentions.join(' ') || undefined,
-    ...buildTicketMessagePayload('Changed', `**تم تحويل التكت لمسؤولين : ${respName}**\n**المتصلون الآن :** ${onlineResponsibleMentions.join(' ') || 'N/A'}\n**الرولات :** ${targetRoles.map((id) => `<@&${id}>`).join(' ') || 'N/A'}`, { user: interaction.user })
-  }).catch((error) => logSilentError('suppressed', error));
-
-  await interaction.editReply(buildTicketMessagePayload('Changed', '**تم التحويل بنجاح.**', { ephemeral: true, user: interaction.user })).catch((error) => logSilentError('suppressed', error));
+  await runTransferParallelPipeline({
+    permissions: [...rolesPermissionTasks, ...usersPermissionTasks, ...previousClaimerHideTasks],
+    ui: transferUiTasks,
+    feedback: [
+      () => interaction.channel.send({
+        content: mentions.join(' ') || undefined,
+        ...buildTicketMessagePayload('Changed', `**تم تحويل التكت لمسؤولين : ${respName}**\n**المتصلون الآن :** ${onlineResponsibleMentions.join(' ') || 'N/A'}\n**الرولات :** ${targetRoles.map((id) => `<@&${id}>`).join(' ') || 'N/A'}`, { user: interaction.user })
+      }).catch((error) => logSilentError('suppressed', error)),
+      () => interaction.editReply(buildTicketMessagePayload('Changed', '**تم التحويل بنجاح.**', { ephemeral: true, user: interaction.user })).catch((error) => logSilentError('suppressed', error))
+    ]
+  }, 'transfer.parallel');
 
   Promise.allSettled(
     existingResponsibleUsers.map(async (uid) => {
@@ -6093,27 +6150,55 @@ function registerHandlers(client) {
             { ephemeral: true }
           )).catch((error) => logSilentError('suppressed', error));
 
-          interaction.channel.ticketMeta = ticket;
+          const channelRef = interaction.channel;
+          channelRef.ticketMeta = ticket;
           ticket.deletedChannel = true;
-          await Promise.allSettled([
-            (async () => {
-              const transcriptFile = await buildTicketTranscript(interaction.channel).catch(() => null);
-              await syncTicketLogMessage({
+
+          delete tickets[channelId];
+          setGuildData(guildId, config, tickets, pendingRequests || {}, resolvedPanelId);
+
+          const deleteStartedAt = Date.now();
+          (async () => {
+            const baseLogTask = withTimeout(syncTicketLogMessage({
+              guild: interaction.guild,
+              config,
+              ticket,
+              channelId,
+              actionText: `تم حذف التكت عن طريق : <@${interaction.user.id}>`,
+              actor: interaction.user,
+              transcriptFile: null
+            }), 2500);
+
+            const transcriptTask = withTimeout(
+              buildTicketTranscript(channelRef, {
+                fastMode: true,
+                warmMentions: false,
+                timeBudgetMs: 2800
+              }).catch(() => null),
+              2900
+            );
+            const transcriptLogTask = (async () => {
+              const transcriptFile = await transcriptTask;
+              if (!transcriptFile) return null;
+              return withTimeout(syncTicketLogMessage({
                 guild: interaction.guild,
                 config,
                 ticket,
                 channelId,
-                actionText: `تم حذف التكت عن طريق : <@${interaction.user.id}>`,
+                actionText: { type: 'action', message: `تم حفظ الترانسكريبت قبل حذف التكت بواسطة <@${interaction.user.id}>`, actorId: interaction.user.id },
                 actor: interaction.user,
                 transcriptFile
-              });
-            })(),
-            (async () => {
-              delete tickets[channelId];
-              setGuildData(guildId, config, tickets, pendingRequests || {}, resolvedPanelId);
-            })()
-          ]);
-          setTimeout(() => interaction.channel.delete().catch((error) => logSilentError('suppressed', error)), 3000);
+              }), 2500);
+            })();
+
+            await Promise.allSettled([baseLogTask, transcriptLogTask]);
+
+            const remaining = Math.max(0, 3000 - (Date.now() - deleteStartedAt));
+            setTimeout(() => channelRef.delete().catch((error) => logSilentError('suppressed', error)), remaining);
+          })().catch((error) => {
+            logSilentError('ticket.delete.background', error);
+            setTimeout(() => channelRef.delete().catch((err) => logSilentError('suppressed', err)), 3000);
+          });
           return;
         }
 
