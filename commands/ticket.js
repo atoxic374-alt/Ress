@@ -20,6 +20,7 @@ const path = require('path');
 const { registerTicketInteractionRouter } = require('../utils/ticketInteractionRouter');
 const colorManager = require('../utils/colorManager');
 const { getDatabase } = require('../utils/database');
+const { getResponsibilitiesSnapshot } = require('../utils/responsibilitiesStore');
 
 const name = 'ticket';
 const aliases = ['تكت', 'tclose', 'اغلاق', 'قفل', 'اقفال', 'myticket', 'نقاطي', 'tadd', 'اضافه', 'اضافة', 'إضافة', 'tremove', 'ازاله', 'ازالة', 'إزالة', 'tchange', 'تغيير', 'تحويل', 'ttop', 'نقاط', 'tname', 'اسم', 'تسميه', 'تسمية', 'remind', 'تنبيه', 'استدعاء', 'points', 'tm', 'treset', 'tmreset', 'tblock'];
@@ -311,7 +312,7 @@ async function withTimeout(promise, timeoutMs = 2500) {
   return result;
 }
 
-async function resolveGuildMember(guild, userId) {
+async function resolveGuildMember(guild, userId, timeoutMs = 2500) {
   if (!guild || !userId) return null;
   const cached = guild.members.cache.get(userId);
   if (cached) return cached;
@@ -324,7 +325,7 @@ async function resolveGuildMember(guild, userId) {
       memberFetchInFlight.delete(key);
     }));
   }
-  return memberFetchInFlight.get(key);
+  return withTimeout(memberFetchInFlight.get(key), timeoutMs);
 }
 
 function pruneTicketSearchSessions(now = Date.now()) {
@@ -1317,7 +1318,29 @@ function saveStore(store) {
  * @returns {object} The responsibilities configuration.
  */
 function loadResponsibilities() {
-  return hydrateStateCache(STATE_KEY_RESPONSIBILITIES, responsibilitiesPath);
+  const fromFile = getResponsibilitiesSnapshot();
+  const hydrated = hydrateStateCache(STATE_KEY_RESPONSIBILITIES, responsibilitiesPath);
+  const hasFileData = fromFile && typeof fromFile === 'object' && Object.keys(fromFile).length > 0;
+
+  // استرجاع من كاش التكت القديم فقط إذا كان ملف المسؤوليات فارغاً
+  // حتى لا تتعطل تحديثات الإضافة/الإزالة الجديدة.
+  if (!hasFileData && hydrated && typeof hydrated === 'object' && Object.keys(hydrated).length) {
+    try {
+      fs.writeFileSync(responsibilitiesPath, JSON.stringify(hydrated, null, 2), 'utf8');
+      global.responsibilities = hydrated;
+    } catch (error) {
+      logSilentError('responsibilities.restore.from.ticket.cache', error);
+    }
+    storeCache[STATE_KEY_RESPONSIBILITIES] = hydrated;
+    return hydrated;
+  }
+
+  if (hasFileData) {
+    storeCache[STATE_KEY_RESPONSIBILITIES] = fromFile;
+    return fromFile;
+  }
+
+  return hydrated;
 }
 
 function ensureTicketImagesDir() {
@@ -5541,7 +5564,7 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
 
 async function handleTransferResponsibility(interaction, guildId, panelId, channelId, value) {
   if (!interaction.deferred && !interaction.replied) {
-    await interaction.deferReply({ ephemeral: true }).catch((error) => logSilentError('suppressed', error));
+    await interaction.reply(buildTicketMessagePayload('تحويل', '**يرجى الانتظار...**', { ephemeral: true, user: interaction.user })).catch((error) => logSilentError('suppressed', error));
   }
 
   if (!value || value === 'resp_none') {
@@ -5605,7 +5628,7 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   const adminRoles = getAdminRoles(config, ticket?.reasonKey);
   const allKnownRoles = [...new Set([...generalResponsibleRoles, ...targetRoles, ...adminRoles])];
 
-  await runConcurrentTasks(
+  const rolesPermissionTask = runConcurrentTasks(
     allKnownRoles.map((roleId) => {
       const shouldSee = targetRoles.includes(roleId) || generalResponsibleRoles.includes(roleId);
       return interaction.channel.permissionOverwrites.edit(roleId, {
@@ -5631,10 +5654,10 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   const responsibleUsers = (selected.responsibles || [])
     .map((id) => String(id || '').trim())
     .filter((id) => /^\d{16,20}$/.test(id));
-  const existingResponsibleUsers = await resolveExistingGuildMembers(interaction.guild, responsibleUsers, 1500);
+  const existingResponsibleUsers = [...new Set(responsibleUsers)];
   const shouldGrantIndividualTransferUsers = true;
 
-  await runConcurrentTasks(
+  const usersPermissionTask = runConcurrentTasks(
     [...new Set([...previousTransferredUserIds, ...existingResponsibleUsers])].map((userId) => {
       const shouldSee = shouldGrantIndividualTransferUsers && existingResponsibleUsers.includes(userId);
       return interaction.channel.permissionOverwrites.edit(userId, {
@@ -5651,36 +5674,26 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     ...existingResponsibleUsers.map((id) => `<@${id}>`)
   ];
 
-  const onlineResolved = await Promise.allSettled(existingResponsibleUsers.map((uid) => resolveGuildMember(interaction.guild, uid, 1200)));
-  const onlineResponsibleMentions = onlineResolved
-    .map((item, idx) => ({ item, uid: existingResponsibleUsers[idx] }))
-    .filter(({ item }) => item.status === 'fulfilled' && item.value?.presence?.status && item.value.presence.status !== 'offline')
-    .map(({ uid }) => `<@${uid}>`);
-
-  if (previousClaimer) {
-    await interaction.channel.permissionOverwrites.edit(previousClaimer, { ViewChannel: false, SendMessages: false }).catch((error) => logSilentError('suppressed', error));
-  }
-  ticket.transferredUserIds = [...existingResponsibleUsers];
-  const dmEmbed = makeTicketEmbed('Ticket Change', `يوجد تكت تم تحويله لمسؤوليتكم في <#${actionChannelId}>`);
-  if (!Array.isArray(ticket.transferDmNotifications)) ticket.transferDmNotifications = [];
-  const dmResults = await Promise.allSettled(
-    existingResponsibleUsers.map(async (uid) => {
-      const user = await interaction.client.users.fetch(uid).catch(() => null);
-      if (!user) return null;
-      const sentDm = await user.send({ embeds: [dmEmbed] }).catch(() => null);
-      if (!sentDm) return null;
-      return {
-        userId: uid,
-        messageId: sentDm.id,
-        transferredById: interaction.user.id
-      };
+  const onlineResponsibleMentions = existingResponsibleUsers
+    .filter((uid) => {
+      const member = interaction.guild.members.cache.get(uid);
+      const presence = member?.presence?.status;
+      return presence && presence !== 'offline';
     })
-  );
-  for (const item of dmResults) {
-    if (item.status === 'fulfilled' && item.value) {
-      ticket.transferDmNotifications.push(item.value);
-    }
-  }
+    .map((uid) => `<@${uid}>`);
+
+  const previousClaimerHideTask = previousClaimer
+    ? interaction.channel.permissionOverwrites.edit(previousClaimer, { ViewChannel: false, SendMessages: false }).catch((error) => logSilentError('suppressed', error))
+    : Promise.resolve();
+  ticket.transferredUserIds = [...existingResponsibleUsers];
+  const dmEmbed = makeTicketEmbed(
+    'Ticket Change',
+    [
+      `يوجد تكت تم تحويله لمسؤوليتكم في <#${actionChannelId}>`,
+      `**الاداري الذي حول :** <@${interaction.user.id}>`
+    ].join('\n')
+  ).setThumbnail(interaction.user.displayAvatarURL({ dynamic: true, size: 256 }));
+  if (!Array.isArray(ticket.transferDmNotifications)) ticket.transferDmNotifications = [];
 
   const renamed = `مسؤولين-${sanitizeName(respName)}`.slice(0, 90);
   const transferUiTasks = [interaction.channel.setName(renamed)];
@@ -5694,6 +5707,7 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
       await interaction.message.edit({ components: refreshedControls });
     })());
   }
+  await Promise.allSettled([rolesPermissionTask, usersPermissionTask, previousClaimerHideTask]);
   await runConcurrentTasks(transferUiTasks, 'transfer.ui.update');
 
   await interaction.channel.send({
@@ -5702,6 +5716,27 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   }).catch((error) => logSilentError('suppressed', error));
 
   await interaction.editReply(buildTicketMessagePayload('Changed', '**تم التحويل بنجاح.**', { ephemeral: true, user: interaction.user })).catch((error) => logSilentError('suppressed', error));
+
+  Promise.allSettled(
+    existingResponsibleUsers.map(async (uid) => {
+      const user = await interaction.client.users.fetch(uid).catch(() => null);
+      if (!user) return null;
+      const sentDm = await user.send({ embeds: [dmEmbed] }).catch(() => null);
+      if (!sentDm) return null;
+      return {
+        userId: uid,
+        messageId: sentDm.id,
+        transferredById: interaction.user.id
+      };
+    })
+  ).then((dmResults) => {
+    for (const item of dmResults) {
+      if (item.status === 'fulfilled' && item.value) {
+        ticket.transferDmNotifications.push(item.value);
+      }
+    }
+    setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
+  }).catch((error) => logSilentError('transfer.dm.notifications', error));
 }
 
 async function showInputModal(interaction, customId, title, label, placeholder = '') {

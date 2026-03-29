@@ -5,6 +5,7 @@ const axios = require('axios');
 const dns = require('dns').promises;
 const net = require('net');
 const colorManager = require('../utils/colorManager.js');
+const { getResponsibilitiesSnapshot, normalizeResponsibilitiesMap } = require('../utils/responsibilitiesStore');
 
 // نظام الكولداون
 const applyCooldowns = new Map();
@@ -15,6 +16,10 @@ const DATA_FILES = {
     respConfig: path.join(__dirname, '..', 'data', 'respConfig.json'),
     categories: path.join(__dirname, '..', 'data', 'respCategories.json')
 };
+
+function getCurrentResponsibilities() {
+    return getResponsibilitiesSnapshot();
+}
 
 // دالة لقراءة ملف JSON
 function readJSONFile(filePath, defaultValue = {}) {
@@ -122,6 +127,7 @@ function isValidImageUrl(url) {
         return false;
     }
 }
+
 
 function getGuildRespConfig(guildId) {
     const config = readJSONFile(DATA_FILES.respConfig, { guilds: {} });
@@ -435,7 +441,8 @@ function createResponsibilitiesEmbed(responsibilities) {
     const embed = colorManager.createEmbed()
         .setTitle('Responsibilities');
     
-    const currentResps = global.responsibilities || responsibilities;
+    const normalizedInput = normalizeResponsibilitiesMap(responsibilities);
+    const currentResps = Object.keys(normalizedInput).length > 0 ? normalizedInput : getCurrentResponsibilities();
     const categories = readJSONFile(DATA_FILES.categories, {});
     
     if (Object.keys(currentResps).length === 0 && Object.keys(categories).length === 0) {
@@ -513,7 +520,8 @@ function createResponsibilitiesEmbed(responsibilities) {
 
 // دالة لإنشاء رسالة نصية للمسؤوليات
 function createResponsibilitiesText(responsibilities) {
-    const currentResps = global.responsibilities || responsibilities;
+    const normalizedInput = normalizeResponsibilitiesMap(responsibilities);
+    const currentResps = Object.keys(normalizedInput).length > 0 ? normalizedInput : getCurrentResponsibilities();
     const categories = readJSONFile(DATA_FILES.categories, {});
     
     if (Object.keys(currentResps).length === 0 && Object.keys(categories).length === 0) {
@@ -613,7 +621,7 @@ function splitText(text, maxLength = 2000) {
 
 // دالة لإنشاء الأزرار والمنيو
 function createSuggestionComponents() {
-    const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
+    const currentResps = getCurrentResponsibilities();
     const components = [];
     
     // إنشاء منيو المسؤوليات إذا وجدت
@@ -671,7 +679,7 @@ async function updateEmbedMessage(client, targetGuildId = null) {
         const { dbManager } = require('../utils/database.js');
         const responsibilities = await dbManager.getResponsibilities();
         if (responsibilities && Object.keys(responsibilities).length > 0) {
-            global.responsibilities = responsibilities;
+            global.responsibilities = normalizeResponsibilitiesMap(responsibilities);
         }
         
         const newEmbed = createResponsibilitiesEmbed(responsibilities);
@@ -870,7 +878,7 @@ async function handleResponsibilitySelect(interaction, client) {
         await interaction.deferReply({ ephemeral: true });
         
         const selectedResp = interaction.values[0];
-        const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
+        const currentResps = getCurrentResponsibilities();
         const rejectedCooldown = getActiveRejectedApplyCooldown(interaction.guild.id, interaction.user.id, selectedResp);
         if (rejectedCooldown) {
             return await interaction.editReply({
@@ -1037,7 +1045,7 @@ async function handleApplyRespButton(interaction, client) {
             }
         }
 
-        const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
+        const currentResps = getCurrentResponsibilities();
         
         if (Object.keys(currentResps).length === 0) {
             return await interaction.reply({
@@ -1163,7 +1171,7 @@ async function handleApplyRespSelect(interaction, client) {
         }
 
         const selectedResp = interaction.values[0];
-        const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
+        const currentResps = getCurrentResponsibilities();
         const rejectedCooldown = getActiveRejectedApplyCooldown(interaction.guild.id, interaction.user.id, selectedResp);
         if (rejectedCooldown) {
             return await interaction.reply({
@@ -1253,7 +1261,7 @@ async function handleApplyRespModal(interaction, client) {
         }
         
       
-        const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
+        const currentResps = getCurrentResponsibilities();
 
         if (isResponsibilityFull(guildId, respName)) {
             return await interaction.editReply({
@@ -1396,7 +1404,7 @@ async function handleApplyAction(interaction, client) {
             if (interaction.replied || interaction.deferred) return;
             await interaction.deferUpdate();
 
-            const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
+            const currentResps = getCurrentResponsibilities();
             if (!currentResps[respName]) {
                 return interaction.followUp({ content: 'المسؤولية لم تعد موجودة', ephemeral: true });
             }
@@ -1419,7 +1427,7 @@ async function handleApplyAction(interaction, client) {
                 
                 // إخطار المستخدم
                 if (targetMember) {
-                    const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
+                    const currentResps = getCurrentResponsibilities();
                     const respData = currentResps[respName];
                     
                     const approveEmbed = colorManager.createEmbed()
@@ -1509,7 +1517,7 @@ async function handleRejectReasonModal(interaction, client) {
         const targetMember = await interaction.guild.members.fetch(userId).catch(() => null);
         
         if (targetMember) {
-            const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
+            const currentResps = getCurrentResponsibilities();
             const respData = currentResps[respName];
             
             const rejectEmbed = colorManager.createEmbed()
@@ -1590,7 +1598,7 @@ module.exports = {
         const createPanelEmbed = () => {
             const guildRespConfig = getGuildRespConfig(guildId);
             const guildCfg = guildRespConfig.guilds[guildId] || {};
-            const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
+            const currentResps = getCurrentResponsibilities();
             const currentRestrictions = getRespRoleRestrictions(guildId);
             const currentFull = Array.isArray(guildCfg.fullResponsibilities) ? guildCfg.fullResponsibilities : [];
             const cooldownMsNow = getRespApplyCooldownMs(guildId);
@@ -1675,7 +1683,7 @@ module.exports = {
         };
 
         const requireNonEmptyResponsibilities = async (interactionLike) => {
-            const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
+            const currentResps = getCurrentResponsibilities();
             if (!Object.keys(currentResps).length) {
                 await interactionLike.reply({ content: '**❌ لا توجد مسؤوليات حالياً.**', ephemeral: true }).catch(() => {});
                 return null;
@@ -2420,7 +2428,7 @@ module.exports = {
                         return;
                     }
 
-                    const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
+                    const currentResps = getCurrentResponsibilities();
                     let totalRemoved = 0;
                     let totalRolesRemoved = 0;
                     const { dbManager } = require('../utils/database.js');
