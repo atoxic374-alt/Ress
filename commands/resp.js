@@ -41,6 +41,55 @@ function writeJSONFile(filePath, data) {
     }
 }
 
+function parseDurationToMinutes(rawValue) {
+    const value = String(rawValue || '').trim().toLowerCase();
+    if (!value) return { error: 'empty' };
+    if (value === 'off' || value === '0') return { minutes: 0 };
+    if (/^\d+$/.test(value)) return { minutes: Number(value) };
+
+    let totalMinutes = 0;
+    const regex = /(\d+)\s*(d|day|days|ي|يوم|ايام|h|hr|hrs|hour|hours|س|ساعة|ساعات|m|min|mins|minute|minutes|د|دقيقة|دقائق)/g;
+    let matched = false;
+    let consumed = '';
+    let match;
+
+    while ((match = regex.exec(value)) !== null) {
+        matched = true;
+        consumed += match[0];
+        const amount = Number(match[1]);
+        const unit = match[2];
+        if (!Number.isFinite(amount)) continue;
+
+        if (['d', 'day', 'days', 'ي', 'يوم', 'ايام'].includes(unit)) {
+            totalMinutes += amount * 24 * 60;
+        } else if (['h', 'hr', 'hrs', 'hour', 'hours', 'س', 'ساعة', 'ساعات'].includes(unit)) {
+            totalMinutes += amount * 60;
+        } else {
+            totalMinutes += amount;
+        }
+    }
+
+    if (!matched) return { error: 'invalid' };
+    const cleaned = value.replace(/\s+/g, '');
+    const consumedClean = consumed.replace(/\s+/g, '');
+    if (cleaned !== consumedClean) return { error: 'invalid' };
+
+    return { minutes: totalMinutes };
+}
+
+function formatMinutesArabic(totalMinutes) {
+    const minutes = Math.max(0, Number(totalMinutes) || 0);
+    if (minutes <= 0) return 'مغلق';
+    const days = Math.floor(minutes / 1440);
+    const hours = Math.floor((minutes % 1440) / 60);
+    const mins = minutes % 60;
+    const parts = [];
+    if (days) parts.push(`${days} يوم`);
+    if (hours) parts.push(`${hours} ساعة`);
+    if (mins) parts.push(`${mins} دقيقة`);
+    return parts.join(' و ');
+}
+
 function isValidImageUrl(url) {
     if (!url || typeof url !== 'string') return false;
 
@@ -1544,9 +1593,9 @@ module.exports = {
             const currentRestrictions = getRespRoleRestrictions(guildId);
             const currentFull = Array.isArray(guildCfg.fullResponsibilities) ? guildCfg.fullResponsibilities : [];
             const cooldownMsNow = getRespApplyCooldownMs(guildId);
-            const cooldownText = cooldownMsNow ? `${Math.round(cooldownMsNow / 60000)} دقيقة` : 'مغلق';
+            const cooldownText = cooldownMsNow ? formatMinutesArabic(Math.round(cooldownMsNow / 60000)) : 'مغلق';
             const rejectCooldownMsNow = getRespRejectCooldownMs(guildId);
-            const rejectCooldownText = rejectCooldownMsNow ? `${Math.round(rejectCooldownMsNow / 60000)} دقيقة` : 'مغلق';
+            const rejectCooldownText = rejectCooldownMsNow ? formatMinutesArabic(Math.round(rejectCooldownMsNow / 60000)) : 'مغلق';
             const formatText = guildCfg.messageFormat || 'embed';
             const suggestionsChannelText = guildCfg.suggestionsChannel ? `<#${guildCfg.suggestionsChannel}>` : 'غير محدد';
             const embedChannelText = guildCfg.embedChannel ? `<#${guildCfg.embedChannel}>` : 'غير محدد';
@@ -1577,7 +1626,7 @@ module.exports = {
                     '**🔐 Access Roles** — رولات مسموح لها بالتقديم على مسؤولية',
                     `> **Restricted responsibilities : ${Object.keys(currentRestrictions).length}**`,
                     '',
-                    '**⏱️ Cooldown** — تخصيص/إيقاف كولداون التقديم',
+                    '**⏱️ Cooldown** — تخصيص/إيقاف كولداون التقديم + كولداون الرفض',
                     `> **Current : ${cooldownText}**`,
                     '',
                     '**🚫 Reject Cooldown** — كولداون إعادة التقديم بعد الرفض (نفس المسؤولية)',
@@ -1600,7 +1649,6 @@ module.exports = {
         );
 
         const panelRow3 = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`resp_panel_rejectcooldown_${message.id}`).setLabel('Reject Cooldown').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(`resp_panel_clear_${message.id}`).setLabel('Clear Resps').setStyle(ButtonStyle.Danger)
         );
 
@@ -2270,14 +2318,23 @@ module.exports = {
                 }
 
                 if (interaction.customId.startsWith('resp_panel_cooldown_')) {
-                    const modal = new ModalBuilder().setCustomId(`resp_cd_modal_${message.id}`).setTitle('تخصيص كولداون التقديم');
-                    modal.addComponents(new ActionRowBuilder().addComponents(
-                        new TextInputBuilder()
-                            .setCustomId('cooldown_value')
-                            .setLabel('دقائق الكولداون (مثال 30) أو off')
-                            .setStyle(TextInputStyle.Short)
-                            .setRequired(true)
-                    ));
+                    const modal = new ModalBuilder().setCustomId(`resp_cd_modal_${message.id}`).setTitle('تخصيص الكولداون');
+                    modal.addComponents(
+                        new ActionRowBuilder().addComponents(
+                            new TextInputBuilder()
+                                .setCustomId('cooldown_value')
+                                .setLabel('كولداون التقديم (مثال: 30m أو 2h أو 1d)')
+                                .setStyle(TextInputStyle.Short)
+                                .setRequired(true)
+                        ),
+                        new ActionRowBuilder().addComponents(
+                            new TextInputBuilder()
+                                .setCustomId('reject_cooldown_value')
+                                .setLabel('كولداون الرفض (مثال: 1d 2h 30m أو off)')
+                                .setStyle(TextInputStyle.Short)
+                                .setRequired(true)
+                        )
+                    );
                     await interaction.showModal(modal);
 
                     const submit = await interaction.awaitModalSubmit({
@@ -2286,79 +2343,55 @@ module.exports = {
                     }).catch(() => null);
                     if (!submit) return;
 
-                    const rawValue = submit.fields.getTextInputValue('cooldown_value').trim().toLowerCase();
+                    const rawApplyValue = submit.fields.getTextInputValue('cooldown_value').trim().toLowerCase();
+                    const rawRejectValue = submit.fields.getTextInputValue('reject_cooldown_value').trim().toLowerCase();
                     const configData = getGuildRespConfig(guildId);
                     if (!configData.guilds[guildId]) configData.guilds[guildId] = {};
 
-                    if (rawValue === 'off' || rawValue === '0') {
-                        const confirmed = await confirmEphemeralAction(submit, '**سيتم إيقاف كولداون التقديم بالكامل.**');
-                        if (!confirmed) return;
-                        configData.guilds[guildId].applyCooldownMinutes = 0;
-                        writeJSONFile(DATA_FILES.respConfig, configData);
-                        appendRespAuditLog(guildId, message.author.id, 'resp.cooldown.update', { value: 0 });
-                        await submit.followUp({ content: '**✅ تم إيقاف كولداون التقديم.**', ephemeral: true });
+                    const applyParsed = parseDurationToMinutes(rawApplyValue);
+                    const rejectParsed = parseDurationToMinutes(rawRejectValue);
+
+                    if (applyParsed.error || rejectParsed.error) {
+                        await submit.reply({
+                            content: '**❌ قيمة غير صالحة.**\nاكتب مثل: `30m` أو `2h` أو `1d 3h 15m` أو `off`.',
+                            ephemeral: true
+                        });
                         return;
                     }
 
-                    const minutes = Number(rawValue);
-                    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440) {
-                        await submit.reply({ content: '**❌ قيمة غير صالحة.**\nاكتب رقم بين **1** و **1440** أو **off**.', ephemeral: true });
+                    const applyMinutes = applyParsed.minutes;
+                    const rejectMinutes = rejectParsed.minutes;
+                    if (!Number.isFinite(applyMinutes) || applyMinutes < 0 || applyMinutes > 43200) {
+                        await submit.reply({ content: '**❌ كولداون التقديم غير صالح.**\nالحد الأقصى: **30 يوم**.', ephemeral: true });
+                        return;
+                    }
+                    if (!Number.isFinite(rejectMinutes) || rejectMinutes < 0 || rejectMinutes > 43200) {
+                        await submit.reply({ content: '**❌ كولداون الرفض غير صالح.**\nالحد الأقصى: **30 يوم**.', ephemeral: true });
                         return;
                     }
 
-                    const confirmed = await confirmEphemeralAction(submit, `**سيتم ضبط الكولداون على ${minutes} دقيقة.**`);
+                    const confirmed = await confirmEphemeralAction(
+                        submit,
+                        `**سيتم ضبط كولداون التقديم على ${formatMinutesArabic(applyMinutes)}**\n` +
+                        `**وسيتم ضبط كولداون الرفض على ${formatMinutesArabic(rejectMinutes)}**`
+                    );
                     if (!confirmed) return;
-                    configData.guilds[guildId].applyCooldownMinutes = minutes;
-                    writeJSONFile(DATA_FILES.respConfig, configData);
-                    appendRespAuditLog(guildId, message.author.id, 'resp.cooldown.update', { value: minutes });
-                    await submit.followUp({ content: `**✅ تم ضبط الكولداون على ${minutes} دقيقة.**`, ephemeral: true });
-                    return;
-                }
 
-                if (interaction.customId.startsWith('resp_panel_rejectcooldown_')) {
-                    const modal = new ModalBuilder().setCustomId(`resp_reject_cd_modal_${message.id}`).setTitle('كولداون الرفض لنفس المسؤولية');
-                    modal.addComponents(new ActionRowBuilder().addComponents(
-                        new TextInputBuilder()
-                            .setCustomId('reject_cooldown_value')
-                            .setLabel('دقائق الكولداون بعد الرفض (مثال 60) أو off')
-                            .setStyle(TextInputStyle.Short)
-                            .setRequired(true)
-                    ));
-                    await interaction.showModal(modal);
-
-                    const submit = await interaction.awaitModalSubmit({
-                        filter: (i) => i.user.id === message.author.id && i.customId === `resp_reject_cd_modal_${message.id}`,
-                        time: 120000
-                    }).catch(() => null);
-                    if (!submit) return;
-
-                    const rawValue = submit.fields.getTextInputValue('reject_cooldown_value').trim().toLowerCase();
-                    const configData = getGuildRespConfig(guildId);
-                    if (!configData.guilds[guildId]) configData.guilds[guildId] = {};
-
-                    if (rawValue === 'off' || rawValue === '0') {
-                        const confirmed = await confirmEphemeralAction(submit, '**سيتم إيقاف كولداون إعادة التقديم بعد الرفض.**');
-                        if (!confirmed) return;
-                        configData.guilds[guildId].rejectApplyCooldownMinutes = 0;
+                    configData.guilds[guildId].applyCooldownMinutes = applyMinutes;
+                    configData.guilds[guildId].rejectApplyCooldownMinutes = rejectMinutes;
+                    if (!rejectMinutes) {
                         configData.guilds[guildId].rejectApplyCooldowns = {};
-                        writeJSONFile(DATA_FILES.respConfig, configData);
-                        appendRespAuditLog(guildId, message.author.id, 'resp.rejectCooldown.update', { value: 0 });
-                        await submit.followUp({ content: '**✅ تم إيقاف كولداون الرفض لنفس المسؤولية.**', ephemeral: true });
-                        return;
                     }
-
-                    const minutes = Number(rawValue);
-                    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 10080) {
-                        await submit.reply({ content: '**❌ قيمة غير صالحة.**\nاكتب رقم بين **1** و **10080** أو **off**.', ephemeral: true });
-                        return;
-                    }
-
-                    const confirmed = await confirmEphemeralAction(submit, `**سيتم ضبط كولداون الرفض لنفس المسؤولية على ${minutes} دقيقة.**`);
-                    if (!confirmed) return;
-                    configData.guilds[guildId].rejectApplyCooldownMinutes = minutes;
                     writeJSONFile(DATA_FILES.respConfig, configData);
-                    appendRespAuditLog(guildId, message.author.id, 'resp.rejectCooldown.update', { value: minutes });
-                    await submit.followUp({ content: `**✅ تم ضبط كولداون الرفض لنفس المسؤولية على ${minutes} دقيقة.**`, ephemeral: true });
+                    appendRespAuditLog(guildId, message.author.id, 'resp.cooldown.update', { value: applyMinutes });
+                    appendRespAuditLog(guildId, message.author.id, 'resp.rejectCooldown.update', { value: rejectMinutes });
+                    await submit.followUp({
+                        content:
+                            `**✅ تم تحديث الكولداون.**\n` +
+                            `• كولداون التقديم: **${formatMinutesArabic(applyMinutes)}**\n` +
+                            `• كولداون الرفض: **${formatMinutesArabic(rejectMinutes)}**`,
+                        ephemeral: true
+                    });
                     return;
                 }
 
