@@ -2814,7 +2814,8 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
       return new ActionRowBuilder().addComponents(updatedComponents);
     });
 
-    if (config.deleteClaimMessageOnClaim) {
+    const keepClaimMessageInTicketFlow = Boolean(config.autoCreateOnRequest && !config.claimFromDedicatedChannel);
+    if (config.deleteClaimMessageOnClaim && !keepClaimMessageInTicketFlow) {
       postClaimTasks.push(deleteClaimMessageIfEnabled(interaction, config));
     } else {
       postClaimTasks.push(interaction.message.edit({

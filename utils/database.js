@@ -84,12 +84,16 @@ class DatabaseManager {
 
     async getResponsibilities() {
         try {
-            const rows = await this.all('SELECT name, config FROM responsibilities');
+            const rows = await this.all('SELECT name, config, image FROM responsibilities');
             const data = {};
             for (const row of rows) {
                 try {
                     const configStr = row.config || '{}';
-                    data[row.name] = JSON.parse(configStr);
+                    const parsedConfig = JSON.parse(configStr);
+                    if (row.image) {
+                        parsedConfig.image = row.image;
+                    }
+                    data[row.name] = parsedConfig;
                 } catch (e) {
                     console.error(`Error parsing config for ${row.name}:`, e);
                     data[row.name] = { responsibles: [], description: '' };
@@ -122,22 +126,28 @@ class DatabaseManager {
 
     async updateResponsibility(name, config) {
         try {
+            const imageValue = typeof config?.image === 'string' ? config.image : null;
             await this.run(`
-                INSERT INTO responsibilities (name, config)
-                VALUES (?, ?)
+                INSERT INTO responsibilities (name, config, image)
+                VALUES (?, ?, ?)
                 ON CONFLICT(name) DO UPDATE SET
-                    config = excluded.config
-            `, [name, JSON.stringify(config)]);
+                    config = excluded.config,
+                    image = COALESCE(excluded.image, responsibilities.image)
+            `, [name, JSON.stringify(config), imageValue]);
             
             const fs = require('fs');
             const path = require('path');
             
             // Re-fetch all to ensure global state is fresh
-            const allResps = await this.all('SELECT name, config FROM responsibilities');
+            const allResps = await this.all('SELECT name, config, image FROM responsibilities');
             const data = {};
             for (const row of allResps) {
                 try {
-                    data[row.name] = JSON.parse(row.config || '{}');
+                    const parsedConfig = JSON.parse(row.config || '{}');
+                    if (row.image) {
+                        parsedConfig.image = row.image;
+                    }
+                    data[row.name] = parsedConfig;
                 } catch (e) {
                     data[row.name] = { responsibles: [], description: '' };
                 }

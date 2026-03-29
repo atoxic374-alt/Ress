@@ -94,6 +94,57 @@ function getRespApplyCooldownMs(guildId) {
     return DEFAULT_COOLDOWN_TIME;
 }
 
+function getRespRejectCooldownMs(guildId) {
+    const config = getGuildRespConfig(guildId);
+    const guildConfig = config.guilds[guildId] || {};
+    const rawMinutes = guildConfig.rejectApplyCooldownMinutes;
+
+    if (rawMinutes === 0 || rawMinutes === '0' || rawMinutes === 'off' || rawMinutes === false) {
+        return null;
+    }
+
+    const minutes = Number(rawMinutes);
+    if (Number.isFinite(minutes) && minutes > 0) {
+        return minutes * 60 * 1000;
+    }
+
+    return null;
+}
+
+function makeRejectCooldownKey(userId, respName) {
+    return `${userId}:${respName}`;
+}
+
+function setRejectedApplyCooldown(guildId, userId, respName, durationMs) {
+    if (!durationMs || durationMs <= 0) return;
+    const config = getGuildRespConfig(guildId);
+    if (!config.guilds[guildId]) config.guilds[guildId] = {};
+    if (!config.guilds[guildId].rejectApplyCooldowns || typeof config.guilds[guildId].rejectApplyCooldowns !== 'object') {
+        config.guilds[guildId].rejectApplyCooldowns = {};
+    }
+    config.guilds[guildId].rejectApplyCooldowns[makeRejectCooldownKey(userId, respName)] = Date.now() + durationMs;
+    writeJSONFile(DATA_FILES.respConfig, config);
+}
+
+function getActiveRejectedApplyCooldown(guildId, userId, respName) {
+    const config = getGuildRespConfig(guildId);
+    const guildConfig = config.guilds[guildId] || {};
+    const store = guildConfig.rejectApplyCooldowns && typeof guildConfig.rejectApplyCooldowns === 'object'
+        ? guildConfig.rejectApplyCooldowns
+        : {};
+    const key = makeRejectCooldownKey(userId, respName);
+    const until = Number(store[key] || 0);
+    if (!until) return null;
+    const timeLeft = until - Date.now();
+    if (timeLeft <= 0) {
+        delete store[key];
+        config.guilds[guildId].rejectApplyCooldowns = store;
+        writeJSONFile(DATA_FILES.respConfig, config);
+        return null;
+    }
+    return { until, timeLeft };
+}
+
 function getRespRoleRestrictions(guildId) {
     const config = getGuildRespConfig(guildId);
     const restrictions = config.guilds[guildId]?.respRoleRestrictions;
@@ -173,6 +224,23 @@ function normalizeImageUrl(url) {
     } catch (_) {
         return url;
     }
+}
+
+function resolveResponsibilityImageUrl(guildId, respData = null, { allowGlobalFallback = true } = {}) {
+    const directImage = normalizeImageUrl(respData?.image);
+    if (directImage && isValidImageUrl(directImage)) {
+        return directImage;
+    }
+
+    if (!allowGlobalFallback) return null;
+
+    const config = getGuildRespConfig(guildId);
+    const globalImage = normalizeImageUrl(config.guilds?.[guildId]?.globalImageUrl);
+    if (globalImage && isValidImageUrl(globalImage)) {
+        return globalImage;
+    }
+
+    return null;
 }
 
 function applyEmojiSafely(button, emojiValue) {
@@ -740,6 +808,15 @@ async function handleResponsibilitySelect(interaction, client) {
         
         const selectedResp = interaction.values[0];
         const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
+        const rejectedCooldown = getActiveRejectedApplyCooldown(interaction.guild.id, interaction.user.id, selectedResp);
+        if (rejectedCooldown) {
+            const minutes = Math.floor(rejectedCooldown.timeLeft / 60000);
+            const seconds = Math.floor((rejectedCooldown.timeLeft % 60000) / 1000);
+            return await interaction.reply({
+                content: `⏳ **تم رفضك سابقًا على "${selectedResp}". يمكنك التقديم مرة أخرى بعد ${minutes}m ${seconds}s.**`,
+                ephemeral: true
+            });
+        }
         
         if (!currentResps[selectedResp]) {
             await interaction.editReply({
@@ -758,8 +835,9 @@ async function handleResponsibilitySelect(interaction, client) {
             .setFooter({ text: `طلب بواسطة : ${interaction.user.tag}`, iconURL: interaction.user.displayAvatarURL({ dynamic: true }) });
 
         // إضافة الصورة للمسؤولية إذا وجدت
-        if (respData.image) {
-            embed.setImage(respData.image);
+        const resolvedImageUrl = resolveResponsibilityImageUrl(interaction.guild.id, respData);
+        if (resolvedImageUrl) {
+            embed.setImage(resolvedImageUrl);
         }
         
         // إضافة الحقول
@@ -1030,6 +1108,15 @@ async function handleApplyRespSelect(interaction, client) {
 
         const selectedResp = interaction.values[0];
         const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
+        const rejectedCooldown = getActiveRejectedApplyCooldown(interaction.guild.id, interaction.user.id, selectedResp);
+        if (rejectedCooldown) {
+            const minutes = Math.floor(rejectedCooldown.timeLeft / 60000);
+            const seconds = Math.floor((rejectedCooldown.timeLeft % 60000) / 1000);
+            return await interaction.reply({
+                content: `⏳ **تم رفضك سابقًا على "${selectedResp}". يمكنك التقديم مرة أخرى بعد ${minutes}m ${seconds}s.**`,
+                ephemeral: true
+            });
+        }
 
         if (isResponsibilityFull(interaction.guild.id, selectedResp)) {
             return await interaction.reply({
@@ -1106,6 +1193,14 @@ async function handleApplyRespModal(interaction, client) {
 
         const respName = interaction.customId.replace('apply_resp_modal_', '');
         const reason = interaction.fields.getTextInputValue('apply_reason');
+        const rejectedCooldown = getActiveRejectedApplyCooldown(guildId, interaction.user.id, respName);
+        if (rejectedCooldown) {
+            const minutes = Math.floor(rejectedCooldown.timeLeft / 60000);
+            const seconds = Math.floor((rejectedCooldown.timeLeft % 60000) / 1000);
+            return await interaction.editReply({
+                content: `⏳ **تم رفض طلبك سابقًا على "${respName}". انتظر ${minutes}m ${seconds}s قبل إعادة التقديم على نفس المسؤولية.**`
+            });
+        }
         
       
         const currentResps = global.responsibilities || readJSONFile(DATA_FILES.responsibilities, {});
@@ -1209,7 +1304,7 @@ async function handleApplyRespModal(interaction, client) {
 
         // إرسال صورة المسؤولية بعد الإيمبد كمرفق فعلي (وليس رابط نصي)
         const defaultSeparator = 'https://cdn.discordapp.com/attachments/1446184605056106690/1447086623954173972/colors-5.png?ex=693657f0&is=69350670&hm=126e0ab559dc0a642e9672d1c0d1a3e62d10a704b14fa25c46460870b67d9682&';
-        const separatorImageUrl = respData?.image || defaultSeparator;
+        const separatorImageUrl = resolveResponsibilityImageUrl(guildId, respData) || defaultSeparator;
         const separatorAttachment = await createImageAttachment(separatorImageUrl);
 
         if (separatorAttachment) {
@@ -1282,8 +1377,9 @@ async function handleApplyAction(interaction, client) {
                         .setDescription(`** تم قبول طلبك لمسؤولية ال${respName}**\n\n ** في سيرفر ${interaction.guild.name}**`)
                         .setThumbnail(interaction.guild.iconURL({ dynamic: true }));
                     
-                    if (respData && respData.image) {
-                        approveEmbed.setImage(respData.image);
+                    const resolvedApproveImageUrl = resolveResponsibilityImageUrl(interaction.guild.id, respData);
+                    if (resolvedApproveImageUrl) {
+                        approveEmbed.setImage(resolvedApproveImageUrl);
                     }
                     
                     await targetMember.send({ embeds: [approveEmbed] }).catch(() => {});
@@ -1355,6 +1451,7 @@ async function handleRejectReasonModal(interaction, client) {
 
         const [, , , userId, respName] = interaction.customId.split('_');
         const reason = interaction.fields.getTextInputValue('reject_reason');
+        const rejectCooldownMs = getRespRejectCooldownMs(interaction.guild.id);
         
         if (interaction.replied || interaction.deferred) return;
         await interaction.deferReply({ ephemeral: true });
@@ -1370,11 +1467,16 @@ async function handleRejectReasonModal(interaction, client) {
                 .setDescription(`**تم رفض طلبك لمسؤولية ال${respName}**\n\n ** في سيرفر ${interaction.guild.name}**\n\n**السبب للرفض :** ${reason}`)
                 .setThumbnail(interaction.guild.iconURL({ dynamic: true }));
             
-            if (respData && respData.image) {
-                rejectEmbed.setImage(respData.image);
+            const resolvedRejectImageUrl = resolveResponsibilityImageUrl(interaction.guild.id, respData);
+            if (resolvedRejectImageUrl) {
+                rejectEmbed.setImage(resolvedRejectImageUrl);
             }
             
             await targetMember.send({ embeds: [rejectEmbed] }).catch(() => {});
+        }
+
+        if (rejectCooldownMs && userId && respName) {
+            setRejectedApplyCooldown(interaction.guild.id, userId, respName, rejectCooldownMs);
         }
         
         const rejectResponseEmbed = colorManager.createEmbed()
@@ -1443,6 +1545,8 @@ module.exports = {
             const currentFull = Array.isArray(guildCfg.fullResponsibilities) ? guildCfg.fullResponsibilities : [];
             const cooldownMsNow = getRespApplyCooldownMs(guildId);
             const cooldownText = cooldownMsNow ? `${Math.round(cooldownMsNow / 60000)} دقيقة` : 'مغلق';
+            const rejectCooldownMsNow = getRespRejectCooldownMs(guildId);
+            const rejectCooldownText = rejectCooldownMsNow ? `${Math.round(rejectCooldownMsNow / 60000)} دقيقة` : 'مغلق';
             const formatText = guildCfg.messageFormat || 'embed';
             const suggestionsChannelText = guildCfg.suggestionsChannel ? `<#${guildCfg.suggestionsChannel}>` : 'غير محدد';
             const embedChannelText = guildCfg.embedChannel ? `<#${guildCfg.embedChannel}>` : 'غير محدد';
@@ -1476,6 +1580,9 @@ module.exports = {
                     '**⏱️ Cooldown** — تخصيص/إيقاف كولداون التقديم',
                     `> **Current : ${cooldownText}**`,
                     '',
+                    '**🚫 Reject Cooldown** — كولداون إعادة التقديم بعد الرفض (نفس المسؤولية)',
+                    `> **Current : ${rejectCooldownText}**`,
+                    '',
                     '**🧹 Clear Resps** —  ازالة جميع المسؤولين'
                 ].join('\n'));
         };
@@ -1489,13 +1596,17 @@ module.exports = {
         const panelRow2 = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`resp_panel_full_${message.id}`).setLabel('Full Slots').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(`resp_panel_access_${message.id}`).setLabel('Access Roles').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId(`resp_panel_cooldown_${message.id}`).setLabel('Cooldown').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`resp_panel_cooldown_${message.id}`).setLabel('Cooldown').setStyle(ButtonStyle.Secondary)
+        );
+
+        const panelRow3 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`resp_panel_rejectcooldown_${message.id}`).setLabel('Reject Cooldown').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(`resp_panel_clear_${message.id}`).setLabel('Clear Resps').setStyle(ButtonStyle.Danger)
         );
 
-        const panelMessage = await message.reply({ embeds: [createPanelEmbed()], components: [panelRow1, panelRow2] });
+        const panelMessage = await message.reply({ embeds: [createPanelEmbed()], components: [panelRow1, panelRow2, panelRow3] });
         const refreshPanelMessage = async () => {
-            await panelMessage.edit({ embeds: [createPanelEmbed()], components: [panelRow1, panelRow2] }).catch(() => {});
+            await panelMessage.edit({ embeds: [createPanelEmbed()], components: [panelRow1, panelRow2, panelRow3] }).catch(() => {});
         };
 
         const buildRestrictionsPreview = () => {
@@ -1765,8 +1876,8 @@ module.exports = {
                     const latestConfig = getGuildRespConfig(guildId);
                     const guildImageConfig = latestConfig.guilds[guildId] || {};
                     const currentImageUrl = respName === 'all'
-                        ? (guildImageConfig.globalImageUrl || null)
-                        : (currentResps[respName]?.image || null);
+                        ? (normalizeImageUrl(guildImageConfig.globalImageUrl) || null)
+                        : (resolveResponsibilityImageUrl(guildId, currentResps[respName]) || null);
                     const imageSession = createSessionToken('img_action');
 
                     const previewEmbed = colorManager.createEmbed()
@@ -1784,7 +1895,7 @@ module.exports = {
                         previewEmbed.setImage(currentImageUrl);
                     }
 
-                    const actionMessage = await pickedResp.sourceInteraction.reply({
+                    const actionMessage = await pickedResp.sourceInteraction.followUp({
                         embeds: [previewEmbed],
                         components: [
                             new ActionRowBuilder().addComponents(
@@ -1854,7 +1965,9 @@ module.exports = {
                         try {
                             const tableInfo = await dbManager.all('PRAGMA table_info(responsibilities)');
                             if (!tableInfo.some(col => col.name === 'image')) await dbManager.run('ALTER TABLE responsibilities ADD COLUMN image TEXT').catch(() => {});
-                            await dbManager.run('UPDATE responsibilities SET image = ?', [safeImageUrl]);
+                            for (const name of Object.keys(currentResps)) {
+                                await dbManager.updateResponsibility(name, currentResps[name]);
+                            }
                         } catch (_) {}
                         await updateEmbedMessage(message.client, guildId);
                         appendRespAuditLog(guildId, message.author.id, 'resp.image.all', { imageUrl: safeImageUrl });
@@ -1873,7 +1986,7 @@ module.exports = {
                     try {
                         const tableInfo = await dbManager.all('PRAGMA table_info(responsibilities)');
                         if (!tableInfo.some(col => col.name === 'image')) await dbManager.run('ALTER TABLE responsibilities ADD COLUMN image TEXT').catch(() => {});
-                        await dbManager.run('UPDATE responsibilities SET image = ? WHERE name = ?', [safeImageUrl, respName]);
+                        await dbManager.updateResponsibility(respName, currentResps[respName]);
                     } catch (_) {}
                     await updateEmbedMessage(message.client, guildId);
                     appendRespAuditLog(guildId, message.author.id, 'resp.image.single', { respName, imageUrl: safeImageUrl });
@@ -2199,6 +2312,53 @@ module.exports = {
                     writeJSONFile(DATA_FILES.respConfig, configData);
                     appendRespAuditLog(guildId, message.author.id, 'resp.cooldown.update', { value: minutes });
                     await submit.followUp({ content: `**✅ تم ضبط الكولداون على ${minutes} دقيقة.**`, ephemeral: true });
+                    return;
+                }
+
+                if (interaction.customId.startsWith('resp_panel_rejectcooldown_')) {
+                    const modal = new ModalBuilder().setCustomId(`resp_reject_cd_modal_${message.id}`).setTitle('كولداون الرفض لنفس المسؤولية');
+                    modal.addComponents(new ActionRowBuilder().addComponents(
+                        new TextInputBuilder()
+                            .setCustomId('reject_cooldown_value')
+                            .setLabel('دقائق الكولداون بعد الرفض (مثال 60) أو off')
+                            .setStyle(TextInputStyle.Short)
+                            .setRequired(true)
+                    ));
+                    await interaction.showModal(modal);
+
+                    const submit = await interaction.awaitModalSubmit({
+                        filter: (i) => i.user.id === message.author.id && i.customId === `resp_reject_cd_modal_${message.id}`,
+                        time: 120000
+                    }).catch(() => null);
+                    if (!submit) return;
+
+                    const rawValue = submit.fields.getTextInputValue('reject_cooldown_value').trim().toLowerCase();
+                    const configData = getGuildRespConfig(guildId);
+                    if (!configData.guilds[guildId]) configData.guilds[guildId] = {};
+
+                    if (rawValue === 'off' || rawValue === '0') {
+                        const confirmed = await confirmEphemeralAction(submit, '**سيتم إيقاف كولداون إعادة التقديم بعد الرفض.**');
+                        if (!confirmed) return;
+                        configData.guilds[guildId].rejectApplyCooldownMinutes = 0;
+                        configData.guilds[guildId].rejectApplyCooldowns = {};
+                        writeJSONFile(DATA_FILES.respConfig, configData);
+                        appendRespAuditLog(guildId, message.author.id, 'resp.rejectCooldown.update', { value: 0 });
+                        await submit.followUp({ content: '**✅ تم إيقاف كولداون الرفض لنفس المسؤولية.**', ephemeral: true });
+                        return;
+                    }
+
+                    const minutes = Number(rawValue);
+                    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 10080) {
+                        await submit.reply({ content: '**❌ قيمة غير صالحة.**\nاكتب رقم بين **1** و **10080** أو **off**.', ephemeral: true });
+                        return;
+                    }
+
+                    const confirmed = await confirmEphemeralAction(submit, `**سيتم ضبط كولداون الرفض لنفس المسؤولية على ${minutes} دقيقة.**`);
+                    if (!confirmed) return;
+                    configData.guilds[guildId].rejectApplyCooldownMinutes = minutes;
+                    writeJSONFile(DATA_FILES.respConfig, configData);
+                    appendRespAuditLog(guildId, message.author.id, 'resp.rejectCooldown.update', { value: minutes });
+                    await submit.followUp({ content: `**✅ تم ضبط كولداون الرفض لنفس المسؤولية على ${minutes} دقيقة.**`, ephemeral: true });
                     return;
                 }
 
