@@ -109,10 +109,17 @@ function getMainDbData(userId) {
                     // حساب الوقت الحي إذا كان العضو في روم صوتي حالياً
                     if (global.client && global.client.voiceSessions && global.client.voiceSessions.has(userId)) {
                         const session = global.client.voiceSessions.get(userId);
+                        const AFK_LIMIT = 24 * 60 * 60 * 1000;
+                        const STAGE_CHANNEL_TYPE = 13;
                         if (session && !session.isAFK) {
-                            const liveStart = session.lastTrackedTime || session.startTime || session.sessionStartTime;
-                            const liveDuration = Date.now() - liveStart;
-                            stats.total_voice_time = (stats.total_voice_time || 0) + Math.max(0, liveDuration);
+                            const sessionChannel = global.client.channels?.cache?.get(session.channelId);
+                            if (!sessionChannel || sessionChannel.type !== STAGE_CHANNEL_TYPE) {
+                                const sessionStart = session.startTime || session.sessionStartTime || Date.now();
+                                const liveStart = session.lastTrackedTime || sessionStart;
+                                const cappedNow = Math.min(Date.now(), sessionStart + AFK_LIMIT);
+                                const liveDuration = Math.max(0, cappedNow - liveStart);
+                                stats.total_voice_time = (stats.total_voice_time || 0) + liveDuration;
+                            }
                         }
                     }
                     
