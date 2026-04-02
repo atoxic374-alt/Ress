@@ -11,6 +11,7 @@ const colorManager = require('../utils/colorManager.js');
 const name = 'profile';
 const aliases = ['id'];
 const { getUserLevel, updateUserLevel, updateLastNotified } = require('../utils/database.js');
+const { ensureCairoFontsRegistered } = require('../utils/cairoFont');
 
 // دالة لإرسال إشعار الترقية
 async function sendLevelUpNotification(client, userId, oldVoiceLevel, newVoiceLevel, oldChatLevel, newChatLevel, voiceXP, chatXP) {
@@ -91,6 +92,8 @@ async function sendLevelUpNotification(client, userId, oldVoiceLevel, newVoiceLe
 // Database paths
 const mainDbPath = path.join(__dirname, '..', 'database', 'discord_bot.db');
 const streakDbPath = path.join(__dirname, '..', 'database', 'streak.db');
+
+ensureCairoFontsRegistered();
 
 // Helper function to get data from main database
 function getMainDbData(userId) {
@@ -305,7 +308,7 @@ function drawStatBox(ctx, x, y, label, value) {
     ctx.shadowBlur = 1;
     ctx.shadowOffsetY = 1;
     ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-    ctx.font = 'bold 12px Arial';
+    ctx.font = 'bold 12px Cairo';
     ctx.textAlign = 'center';
     ctx.fillText(label, x + 70, y + 24);
     ctx.restore();
@@ -313,7 +316,7 @@ function drawStatBox(ctx, x, y, label, value) {
     // Value text - SMALLER SIZE
     ctx.save();
     ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
-    ctx.font = 'bold 17px Arial';
+    ctx.font = 'bold 17px Cairo';
     ctx.textAlign = 'center';
     ctx.fillText(value, x + 70 + 1, y + 46 + 1);
     
@@ -918,7 +921,7 @@ async function execute(message, args, { client }) {
         
         ctx.save();
         ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-        ctx.font = 'bold 18px Arial';
+        ctx.font = 'bold 18px Cairo';
         ctx.fillText(nickname, 351, 318);
         
         ctx.fillStyle = '#FFFFFF';
@@ -938,7 +941,7 @@ async function execute(message, args, { client }) {
         ctx.save();
         ctx.textAlign = 'left';
         ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
-        ctx.font = 'bold 17px Arial';
+        ctx.font = 'bold 17px Cairo';
         ctx.fillText(`Lvl : ${voiceLevel.level}`, iconX + 51, 82);
         
         ctx.fillStyle = '#E8E8E8';
@@ -954,7 +957,7 @@ async function execute(message, args, { client }) {
         ctx.save();
         ctx.textAlign = 'left';
         ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
-        ctx.font = 'bold 17px Arial';
+        ctx.font = 'bold 17px Cairo';
         ctx.fillText(`Xp : ${formatNumber(voiceLevel.xp)}`, iconX + 51, 146);
         
         ctx.fillStyle = '#E8E8E8';
@@ -967,7 +970,7 @@ async function execute(message, args, { client }) {
         ctx.save();
         ctx.textAlign = 'right';
         ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
-        ctx.font = 'bold 17px Arial';
+        ctx.font = 'bold 17px Cairo';
         ctx.fillText(`Rank : #${voiceRank || 'N/A'}`, iconX + 426, 146);
         
         ctx.fillStyle = '#E8E8E8';
@@ -984,7 +987,7 @@ async function execute(message, args, { client }) {
         ctx.save();
         ctx.textAlign = 'left';
         ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
-        ctx.font = 'bold 17px Arial';
+        ctx.font = 'bold 17px Cairo';
         ctx.fillText(`Lvl : ${chatLevel.level}`, iconX + 51, 222);
         
         ctx.fillStyle = '#E8E8E8';
@@ -1000,7 +1003,7 @@ async function execute(message, args, { client }) {
         ctx.save();
         ctx.textAlign = 'left';
         ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
-        ctx.font = 'bold 17px Arial';
+        ctx.font = 'bold 17px Cairo';
         ctx.fillText(`Xp : ${formatNumber(chatLevel.xp)}`, iconX + 51, 286);
         
         ctx.fillStyle = '#E8E8E8';
@@ -1013,7 +1016,7 @@ async function execute(message, args, { client }) {
         ctx.save();
         ctx.textAlign = 'right';
         ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
-        ctx.font = 'bold 17px Arial';
+        ctx.font = 'bold 17px Cairo';
         ctx.fillText(`Rank : #${chatRank || 'N/A'}`, iconX + 426, 286);
         
         ctx.fillStyle = '#E8E8E8';

@@ -4,8 +4,9 @@ const { logEvent } = require('../utils/logs_system.js');
 const fs = require('fs');
 const path = require('path');
 const schedule = require('node-schedule');
-const { createCanvas, registerFont, loadImage } = require('canvas');
+const { createCanvas, loadImage } = require('canvas');
 const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+const { ensureCairoFontsRegistered } = require('../utils/cairoFont');
 
 const name = 'setroom';
 const SETROOM_TEXT_MOVE_STEP = 20;
@@ -19,6 +20,8 @@ const MIN_ROOM_DELETE_HOURS = 1;
 const MAX_ROOM_DELETE_HOURS = 168;
 const MIN_REJECT_COOLDOWN_MINUTES = 0;
 const MAX_REJECT_COOLDOWN_MINUTES = 10080;
+
+ensureCairoFontsRegistered();
 
 function getRoomDeletionMs(guildConfig = {}) {
     const hours = Number(guildConfig.roomDeleteAfterHours ?? DEFAULT_ROOM_DELETE_HOURS);
@@ -1048,7 +1051,7 @@ async function createColorsImage(guild, guildConfig) {
         // رسم النص فقط إذا لم يكن فارغاً
         if (layout.showText && colorsTitle && colorsTitle.length > 0) {
             ctx.fillStyle = textColor;
-            ctx.font = `bold ${titleFontSize}px Arial`;
+            ctx.font = `bold ${titleFontSize}px Cairo`;
             ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
             ctx.shadowBlur = Math.max(6, Math.round(10 * scaleFactor));
             ctx.textAlign = 'left';
@@ -1076,7 +1079,7 @@ async function createColorsImage(guild, guildConfig) {
             // إضافة رقم اللون داخل المربع
             const numberFontSize = Math.max(16, Math.round(24 * scaleFactor));
             ctx.fillStyle = getContrastColor(color);
-            ctx.font = `bold ${numberFontSize}px Arial`;
+            ctx.font = `bold ${numberFontSize}px Cairo`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(colorIndex.toString(), currentX + boxSize / 2, currentY + boxSize / 2);
