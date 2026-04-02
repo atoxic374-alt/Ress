@@ -17,7 +17,7 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
-const { createCanvas, loadImage } = require('canvas');
+const { createCanvas, loadImage, registerFont } = require('canvas');
 const { registerTicketInteractionRouter } = require('../utils/ticketInteractionRouter');
 const colorManager = require('../utils/colorManager');
 const { getDatabase } = require('../utils/database');
@@ -38,6 +38,27 @@ const botOwnersCache = new Set();
 
 let handlersRegistered = false;
 const pingCooldowns = new Map();
+
+let feedbackFontsRegistered = false;
+let feedbackFontNoticeShown = false;
+function ensureFeedbackFontsRegistered() {
+  if (feedbackFontsRegistered) return;
+  const customRegular = path.join(__dirname, '..', 'assets', 'fonts', 'Cairo-Regular.ttf');
+  const customBold = path.join(__dirname, '..', 'assets', 'fonts', 'Cairo-Bold.ttf');
+  const regularPath = fs.existsSync(customRegular) ? customRegular : '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
+  const boldPath = fs.existsSync(customBold) ? customBold : '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
+  try {
+    if (fs.existsSync(regularPath)) registerFont(regularPath, { family: 'Cairo', weight: 'normal' });
+    if (fs.existsSync(boldPath)) registerFont(boldPath, { family: 'Cairo', weight: 'bold' });
+    feedbackFontsRegistered = true;
+    if (!feedbackFontNoticeShown && (!fs.existsSync(customRegular) || !fs.existsSync(customBold))) {
+      feedbackFontNoticeShown = true;
+      console.warn('⚠️ Cairo TTF not found in assets/fonts. Using DejaVu fallback. Place Cairo-Regular.ttf and Cairo-Bold.ttf in assets/fonts for true Cairo.');
+    }
+  } catch (error) {
+    logSilentError('feedback.font.register', error);
+  }
+}
 const ticketClaimLocks = new Set();
 const ticketOpenRequestLocks = new Set();
 const activeTicketSetupSessions = new Map();
@@ -3181,69 +3202,25 @@ async function handleClaimFromRequest(interaction, reqId) {
 }
 
 async function buildFeedbackCardImage({ guild, member, stars, comment, style = {} }) {
+  ensureFeedbackFontsRegistered();
   const width = 1800;
   const height = 860;
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
   ctx.antialias = 'subpixel';
 
-  const bg = ctx.createLinearGradient(0, 0, width, height);
-  bg.addColorStop(0, normalizeHexColor(style.background, '#070b16'));
-  bg.addColorStop(1, '#0d1322');
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, width, height);
-
-  // Cinematic light blobs
-  const orb1 = ctx.createRadialGradient(width * 0.2, height * 0.15, 40, width * 0.2, height * 0.15, 520);
-  orb1.addColorStop(0, '#6b52dc2e');
-  orb1.addColorStop(1, '#7e61ff00');
-  ctx.fillStyle = orb1;
-  ctx.fillRect(0, 0, width, height);
-  const orb2 = ctx.createRadialGradient(width * 0.82, height * 0.22, 20, width * 0.82, height * 0.22, 420);
-  orb2.addColorStop(0, '#8d7add2a');
-  orb2.addColorStop(1, '#9f8dff00');
-  ctx.fillStyle = orb2;
-  ctx.fillRect(0, 0, width, height);
-
-  // Repeating geometric background pattern (closer to reference)
-  ctx.globalAlpha = 0.1;
-  ctx.strokeStyle = '#222a3f';
-  ctx.lineWidth = 1.8;
-  for (let x = 26; x < width; x += 118) {
-    for (let y = 16; y < height; y += 98) {
-      ctx.beginPath();
-      ctx.moveTo(x, y + 16);
-      ctx.lineTo(x + 24, y);
-      ctx.lineTo(x + 46, y + 10);
-      ctx.lineTo(x + 22, y + 26);
-      ctx.closePath();
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.moveTo(x + 54, y + 26);
-      ctx.lineTo(x + 78, y + 12);
-      ctx.lineTo(x + 102, y + 22);
-      ctx.lineTo(x + 78, y + 40);
-      ctx.closePath();
-      ctx.stroke();
-    }
-  }
-  const vignette = ctx.createRadialGradient(width / 2, height / 2, 120, width / 2, height / 2, width * 0.75);
-  vignette.addColorStop(0, '#00000000');
-  vignette.addColorStop(1, '#000000a0');
-  ctx.fillStyle = vignette;
-  ctx.fillRect(0, 0, width, height);
-  ctx.globalAlpha = 1;
+  // External background intentionally transparent (render card only)
+  ctx.clearRect(0, 0, width, height);
 
   const cardX = 250;
-  const cardY = 105;
+  const cardY = 104;
   const cardW = 1300;
   const cardH = 520;
   const radius = 58;
 
   const cardGrad = ctx.createLinearGradient(cardX, cardY, cardX + cardW, cardY + cardH);
-  cardGrad.addColorStop(0, normalizeHexColor(style.cardStart, '#57419f'));
-  cardGrad.addColorStop(1, normalizeHexColor(style.cardEnd, '#7663be'));
+  cardGrad.addColorStop(0, normalizeHexColor(style.cardStart, '#46357f'));
+  cardGrad.addColorStop(1, normalizeHexColor(style.cardEnd, '#6652a3'));
   // Multi-pass outer shadow for heavy 3D look
   ctx.save();
   ctx.shadowColor = normalizeHexColor(style.shadow, '#000000');
@@ -3276,59 +3253,33 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   drawRoundedRectPath(ctx, cardX, cardY, cardW, cardH, radius);
   ctx.stroke();
 
-  // Mid text-area: half plain + half patterned (as requested)
-  const textAreaX = cardX + 420;
-  const textAreaY = cardY + 145;
-  const textAreaW = 790;
-  const textAreaH = 230;
+  // Inner motifs on card (left + right) to match reference
   ctx.save();
-  drawRoundedRectPath(ctx, textAreaX, textAreaY, textAreaW, textAreaH, 28);
-  ctx.clip();
-  ctx.fillStyle = 'rgba(38, 32, 76, 0.35)';
-  ctx.fillRect(textAreaX, textAreaY, textAreaW * 0.55, textAreaH);
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.03)';
-  ctx.fillRect(textAreaX + (textAreaW * 0.55), textAreaY, textAreaW * 0.45, textAreaH);
-  ctx.globalAlpha = 0.12;
-  ctx.strokeStyle = '#b9adf6';
-  ctx.lineWidth = 1.4;
-  for (let px = textAreaX + (textAreaW * 0.58); px < textAreaX + textAreaW; px += 80) {
-    for (let py = textAreaY + 18; py < textAreaY + textAreaH; py += 70) {
-      ctx.beginPath();
-      ctx.moveTo(px, py + 18);
-      ctx.lineTo(px + 18, py);
-      ctx.lineTo(px + 36, py + 8);
-      ctx.lineTo(px + 20, py + 28);
-      ctx.closePath();
-      ctx.stroke();
-    }
-  }
-  ctx.restore();
-
-  // Inner motifs on card (left + right)
-  ctx.save();
-  ctx.globalAlpha = 0.08;
-  ctx.fillStyle = '#ffffff';
-  for (let i = 0; i < 4; i += 1) {
-    const lx = cardX + 120 + (i * 72);
-    const ly = cardY + 120 + (i * 54);
+  ctx.globalAlpha = 0.09;
+  ctx.strokeStyle = '#b6a9f0';
+  ctx.lineWidth = 1.25;
+  for (let i = 0; i < 6; i += 1) {
+    const lx = cardX + 82 + (i * 58);
+    const ly = cardY + 94 + (i * 46);
     ctx.beginPath();
-    ctx.moveTo(lx, ly + 50);
-    ctx.lineTo(lx + 46, ly);
-    ctx.lineTo(lx + 98, ly + 22);
-    ctx.lineTo(lx + 56, ly + 72);
+    ctx.moveTo(lx, ly + 36);
+    ctx.lineTo(lx + 34, ly);
+    ctx.lineTo(lx + 72, ly + 14);
+    ctx.lineTo(lx + 38, ly + 52);
     ctx.closePath();
-    ctx.fill();
+    ctx.stroke();
   }
-  for (let i = 0; i < 4; i += 1) {
-    const rx = cardX + cardW - 350 + (i * 38);
-    const ry = cardY + 76 + (i * 82);
+  ctx.globalAlpha = 0.085;
+  for (let i = 0; i < 6; i += 1) {
+    const rx = cardX + cardW - 330 + ((i % 2) * 72);
+    const ry = cardY + 118 + (i * 56);
     ctx.beginPath();
-    ctx.moveTo(rx, ry + 42);
-    ctx.lineTo(rx + 42, ry);
-    ctx.lineTo(rx + 86, ry + 18);
-    ctx.lineTo(rx + 42, ry + 62);
+    ctx.moveTo(rx, ry + 34);
+    ctx.lineTo(rx + 32, ry);
+    ctx.lineTo(rx + 68, ry + 13);
+    ctx.lineTo(rx + 36, ry + 48);
     ctx.closePath();
-    ctx.fill();
+    ctx.stroke();
   }
   ctx.restore();
 
@@ -3340,7 +3291,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   const finalComment = String(comment || 'بدون تعليق').trim();
   // Decorative mark (replaces quotes)
   ctx.fillStyle = quoteColor;
-  ctx.font = 'bold 104px Sans';
+  ctx.font = 'bold 104px Cairo';
   ctx.fillText('❝', cardX + 62, cardY + 118);
 
   // Star capsule
@@ -3378,19 +3329,19 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   }
 
   ctx.fillStyle = textColor;
-  ctx.font = 'bold 58px Cairo, Sans';
+  ctx.font = 'bold 46px Cairo';
   ctx.textAlign = 'right';
   ctx.direction = 'rtl';
-  ctx.shadowColor = '#00000035';
-  ctx.shadowBlur = 4;
-  ctx.shadowOffsetY = 2;
+  ctx.shadowColor = '#00000020';
+  ctx.shadowBlur = 2;
+  ctx.shadowOffsetY = 1;
   const wrapped = finalComment.slice(0, 220);
   const words = wrapped.split(/\s+/);
   const lines = [];
   let current = '';
   for (const word of words) {
     const next = current ? `${current} ${word}` : word;
-    if (ctx.measureText(next).width > 790) {
+    if (ctx.measureText(next).width > 680) {
       lines.push(current);
       current = word;
     } else {
@@ -3398,7 +3349,12 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
     }
   }
   if (current) lines.push(current);
-  lines.slice(0, 4).forEach((line, i) => ctx.fillText(line, cardX + cardW - 110, cardY + 285 + (i * 62)));
+  const maxLines = 3;
+  const drawLines = lines.slice(0, maxLines);
+  if (lines.length > maxLines && drawLines.length > 0) {
+    drawLines[maxLines - 1] = `${drawLines[maxLines - 1].replace(/\s+$/, '')}...`;
+  }
+  drawLines.forEach((line, i) => ctx.fillText(line, cardX + cardW - 74, cardY + 276 + (i * 56)));
   ctx.shadowBlur = 0;
   ctx.shadowOffsetY = 0;
   ctx.textAlign = 'left';
@@ -3452,7 +3408,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   }
 
   ctx.fillStyle = nameColor;
-  ctx.font = 'bold 54px Cairo, Sans';
+  ctx.font = 'bold 54px Cairo';
   ctx.fillText(member?.displayName || member?.user?.username || 'Member', cardX + 230, cardY + cardH - 48);
 
   // Server signature bottom-right with real server avatar crop
@@ -3485,53 +3441,115 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   ctx.fillStyle = textColor;
   ctx.globalAlpha = 0.92;
   ctx.textAlign = 'right';
-  ctx.font = '32px Cairo, Sans';
+  ctx.font = '32px Cairo';
   ctx.fillText(serverName, signX - 78, signY);
   ctx.textAlign = 'left';
   ctx.globalAlpha = 1;
 
-  // Cinematic finishing passes
-  const centerBloom = ctx.createRadialGradient(width / 2, height / 2, 140, width / 2, height / 2, width * 0.45);
-  centerBloom.addColorStop(0, '#ffffff22');
-  centerBloom.addColorStop(1, '#ffffff00');
-  ctx.fillStyle = centerBloom;
-  ctx.fillRect(0, 0, width, height);
-
-  // V6 cinematic streaks & high-end polish
-  ctx.save();
-  ctx.globalAlpha = 0.18;
-  for (let i = 0; i < 9; i += 1) {
-    const y = 90 + (i * 78);
-    const streak = ctx.createLinearGradient(0, y, width, y);
-    streak.addColorStop(0, '#ffffff00');
-    streak.addColorStop(0.5, '#ffffff66');
-    streak.addColorStop(1, '#ffffff00');
-    ctx.strokeStyle = streak;
-    ctx.lineWidth = i % 2 === 0 ? 1 : 2;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(width, y + (i % 3));
-    ctx.stroke();
-  }
-  ctx.restore();
-
-  const violetBloom = ctx.createRadialGradient(width * 0.7, height * 0.65, 40, width * 0.7, height * 0.65, 360);
-  violetBloom.addColorStop(0, '#8f7ce266');
-  violetBloom.addColorStop(1, '#8f7ce200');
-  ctx.fillStyle = violetBloom;
-  ctx.fillRect(0, 0, width, height);
-
-  const edgeVignette = ctx.createLinearGradient(0, 0, width, 0);
-  edgeVignette.addColorStop(0, '#00000066');
-  edgeVignette.addColorStop(0.08, '#00000000');
-  edgeVignette.addColorStop(0.92, '#00000000');
-  edgeVignette.addColorStop(1, '#00000066');
-  ctx.fillStyle = edgeVignette;
-  ctx.fillRect(0, 0, width, height);
-
-  addFilmGrain(ctx, width, height, 0.06);
-
   return canvas.toBuffer('image/png');
+}
+
+function hexToRgb(hex) {
+  const clean = String(hex || '').replace('#', '').trim();
+  if (!/^[0-9a-fA-F]{6}$/.test(clean)) return null;
+  return {
+    r: parseInt(clean.slice(0, 2), 16),
+    g: parseInt(clean.slice(2, 4), 16),
+    b: parseInt(clean.slice(4, 6), 16)
+  };
+}
+
+function rgbToHex(r, g, b) {
+  const clamp = (v) => Math.max(0, Math.min(255, Math.round(v)));
+  return `#${[clamp(r), clamp(g), clamp(b)].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function mixHex(a, b, amount = 0.5) {
+  const ca = hexToRgb(normalizeHexColor(a, '#6d54c7'));
+  const cb = hexToRgb(normalizeHexColor(b, '#8f7ce2'));
+  const t = Math.max(0, Math.min(1, Number(amount) || 0));
+  if (!ca || !cb) return '#7f69d5';
+  return rgbToHex(
+    ca.r + ((cb.r - ca.r) * t),
+    ca.g + ((cb.g - ca.g) * t),
+    ca.b + ((cb.b - ca.b) * t)
+  );
+}
+
+function shadeHex(hex, factor = 1) {
+  const c = hexToRgb(normalizeHexColor(hex, '#777777'));
+  const f = Math.max(0, Number(factor) || 0);
+  if (!c) return '#555555';
+  return rgbToHex(c.r * f, c.g * f, c.b * f);
+}
+
+function getLuminance(hex) {
+  const c = hexToRgb(normalizeHexColor(hex, '#777777'));
+  if (!c) return 0.5;
+  const toLinear = (v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  const r = toLinear(c.r);
+  const g = toLinear(c.g);
+  const b = toLinear(c.b);
+  return (0.2126 * r) + (0.7152 * g) + (0.0722 * b);
+}
+
+async function extractAverageHexFromImageUrl(url) {
+  if (!url) return null;
+  try {
+    const img = await loadImage(url);
+    const sample = createCanvas(24, 24);
+    const sctx = sample.getContext('2d');
+    sctx.drawImage(img, 0, 0, 24, 24);
+    const data = sctx.getImageData(0, 0, 24, 24).data;
+    let r = 0; let g = 0; let b = 0; let count = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const alpha = data[i + 3];
+      if (alpha < 20) continue;
+      r += data[i];
+      g += data[i + 1];
+      b += data[i + 2];
+      count += 1;
+    }
+    if (!count) return null;
+    return rgbToHex(r / count, g / count, b / count);
+  } catch (error) {
+    logSilentError('feedback.auto-style.extract', error);
+    return null;
+  }
+}
+
+async function generateAutoFeedbackStyle(guild, currentStyle = {}) {
+  const iconUrl = guild?.iconURL?.({ extension: 'png', size: 256 }) || null;
+  const bannerUrl = guild?.bannerURL?.({ extension: 'png', size: 512 }) || null;
+  const fromBanner = await extractAverageHexFromImageUrl(bannerUrl);
+  const fromIcon = await extractAverageHexFromImageUrl(iconUrl);
+  const base = fromBanner || fromIcon || '#7b69d4';
+
+  // Keep final scene background navy as requested, while matching the card to guild assets.
+  const background = '#040a1d';
+  const cardStart = shadeHex(base, 0.56);
+  const cardEnd = mixHex(base, '#ffffff', 0.2);
+  const border = mixHex(base, '#ffffff', 0.34);
+  const star = mixHex(base, '#ffffff', 0.28);
+  const textBase = getLuminance(cardEnd) > 0.46 ? '#101116' : '#f0eefb';
+
+  return {
+    ...currentStyle,
+    version: 'v6',
+    background,
+    cardStart,
+    cardEnd,
+    text: textBase,
+    name: textBase,
+    quote: textBase,
+    accent: shadeHex(base, 0.2),
+    border,
+    star,
+    shadow: '#000000'
+  };
 }
 
 async function sendFeedbackPrompt({ guild, channel, ticket, config, panelId, channelId }) {
@@ -5884,6 +5902,8 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
               { label: 'مكان الطلب (خاص/تكت)', value: 'scope' },
               { label: 'الفاصل بين التقييمات', value: 'separator' },
               { label: 'ألوان التصميم', value: 'style' },
+              { label: 'مطابقة تلقائية مع السيرفر', value: 'style_auto' },
+              { label: 'إعادة الألوان الافتراضية', value: 'style_reset' },
               { label: 'Finish', value: 'finish' }
             ])
         )]
@@ -5916,8 +5936,8 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
         const enabled = ((await ask('**تفعيل الفاصل؟ yes/no**')) || '').toLowerCase();
         feedbackCfg.separatorEnabled = ['yes', 'y', 'نعم'].includes(enabled);
         if (feedbackCfg.separatorEnabled) {
-          const text = await ask('**نص الفاصل (0 للإفتراضي)**');
-          feedbackCfg.separatorText = text === '0' ? baseConfig().feedback.separatorText : (text || feedbackCfg.separatorText);
+          const text = await ask('**نص الفاصل (0 للحذف)**');
+          feedbackCfg.separatorText = text === '0' ? '' : (text || feedbackCfg.separatorText);
           feedbackCfg.separatorImage = await promptAndStoreImage({
             prompt: '**صورة الفاصل: ارسل رابط مباشر/ارفق صورة (0 للحذف)**',
             currentValue: feedbackCfg.separatorImage,
@@ -5926,28 +5946,61 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
           });
         }
       }
+      if (c === 'style_reset') {
+        feedbackCfg.style = { ...(baseConfig().feedback.style || {}), version: 'v6' };
+      }
+      if (c === 'style_auto') {
+        feedbackCfg.style = await generateAutoFeedbackStyle(message.guild, feedbackCfg.style || {});
+      }
       if (c === 'style') {
-        const bg = await ask(`**لون الخلفية Hex (الآن ${feedbackCfg.style.background})**`);
-        const start = await ask(`**لون بداية الكرت Hex (الآن ${feedbackCfg.style.cardStart})**`);
-        const end = await ask(`**لون نهاية الكرت Hex (الآن ${feedbackCfg.style.cardEnd})**`);
-        const text = await ask(`**لون النص Hex (الآن ${feedbackCfg.style.text})**`);
-        const accent = await ask(`**لون ثانوي Hex (الآن ${feedbackCfg.style.accent})**`);
-        const border = await ask(`**لون الحدود Hex (الآن ${feedbackCfg.style.border})**`);
-        const quote = await ask(`**لون الاقتباس Hex (الآن ${feedbackCfg.style.quote})**`);
-        const star = await ask(`**لون النجوم Hex (الآن ${feedbackCfg.style.star})**`);
-        const name = await ask(`**لون اسم المقيم Hex (الآن ${feedbackCfg.style.name})**`);
-        const shadow = await ask(`**لون الظل Hex (الآن ${feedbackCfg.style.shadow})**`);
         feedbackCfg.style.version = 'v6';
-        feedbackCfg.style.background = normalizeHexColor(bg, feedbackCfg.style.background);
-        feedbackCfg.style.cardStart = normalizeHexColor(start, feedbackCfg.style.cardStart);
-        feedbackCfg.style.cardEnd = normalizeHexColor(end, feedbackCfg.style.cardEnd);
-        feedbackCfg.style.text = normalizeHexColor(text, feedbackCfg.style.text);
-        feedbackCfg.style.accent = normalizeHexColor(accent, feedbackCfg.style.accent);
-        feedbackCfg.style.border = normalizeHexColor(border, feedbackCfg.style.border);
-        feedbackCfg.style.quote = normalizeHexColor(quote, feedbackCfg.style.quote);
-        feedbackCfg.style.star = normalizeHexColor(star, feedbackCfg.style.star);
-        feedbackCfg.style.name = normalizeHexColor(name, feedbackCfg.style.name);
-        feedbackCfg.style.shadow = normalizeHexColor(shadow, feedbackCfg.style.shadow);
+        const styleMenu = new ActionRowBuilder().addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId(`ticket_feedback_style_field_${message.author.id}_${Date.now()}`)
+            .setPlaceholder('اختر العنصر الذي تريد تعديله')
+            .addOptions([
+              { label: 'الخلفية', value: 'background' },
+              { label: 'بداية الكرت', value: 'cardStart' },
+              { label: 'نهاية الكرت', value: 'cardEnd' },
+              { label: 'لون النص', value: 'text' },
+              { label: 'اللون الثانوي', value: 'accent' },
+              { label: 'حدود الكرت', value: 'border' },
+              { label: 'لون الاقتباس', value: 'quote' },
+              { label: 'لون النجوم', value: 'star' },
+              { label: 'لون الاسم', value: 'name' },
+              { label: 'لون الظل', value: 'shadow' },
+              { label: 'إعادة الافتراضي', value: 'reset' }
+            ])
+        );
+
+        const styleMsg = await message.channel.send({ content: '**اختر من القائمة لون واحد للتعديل (أو إعادة الافتراضي).**', components: [styleMenu] }).catch(() => null);
+        if (styleMsg) {
+          const stylePick = await styleMsg.awaitMessageComponent({
+            filter: (i) => i.user.id === message.author.id && i.isStringSelectMenu() && i.customId.startsWith('ticket_feedback_style_field_'),
+            time: 120000
+          }).catch(() => null);
+
+          if (stylePick) {
+            await stylePick.deferUpdate().catch((error) => logSilentError('suppressed', error));
+            const key = stylePick.values?.[0];
+            if (key === 'reset') {
+              feedbackCfg.style = { ...(baseConfig().feedback.style || {}), version: 'v6' };
+            } else if (key && ['background', 'cardStart', 'cardEnd', 'text', 'accent', 'border', 'quote', 'star', 'name', 'shadow'].includes(key)) {
+              const current = feedbackCfg.style[key];
+              const rawColor = await ask(`**اكتب اللون الجديد Hex للحقل (${key}) - الحالي: ${current}**`);
+              const normalizedInput = String(rawColor || '').trim();
+              const isValidHex = /^#?[0-9a-fA-F]{6}$/.test(normalizedInput);
+              if (!isValidHex) {
+                await message.channel.send('**❌ تنسيق اللون غير صحيح. استخدم Hex مثل: #7A5AF8**')
+                  .then((m) => setTimeout(() => m.delete().catch(() => {}), 7000))
+                  .catch(() => {});
+              } else {
+                feedbackCfg.style[key] = normalizeHexColor(normalizedInput, current);
+              }
+            }
+          }
+          await styleMsg.delete().catch(() => {});
+        }
       }
     }
   };
@@ -7353,6 +7406,8 @@ function registerHandlers(client) {
             await interaction.reply(buildTicketMessagePayload('التقييم', '**روم التقييم غير صالح.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
             return;
           }
+          // Prevent "Something went wrong" on slow render/send by acknowledging modal early
+          await interaction.deferReply({ ephemeral: true }).catch((error) => logSilentError('suppressed', error));
           const member = await resolveGuildMember(guild, interaction.user.id);
           const image = await buildFeedbackCardImage({ guild, member, stars, comment: review, style: feedbackCfg.style || {} });
           const attachment = new AttachmentBuilder(image, { name: `feedback_${interaction.user.id}_${Date.now()}.png` });
@@ -7378,7 +7433,11 @@ function registerHandlers(client) {
           }
           ticketFeedbackSessions.delete(token);
           deleteRuntimeSession('ticket-feedback', token);
-          await interaction.reply(buildTicketMessagePayload('التقييم', '**شكراً لك، تم إرسال تقييمك بنجاح.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+          if (interaction.deferred || interaction.replied) {
+            await interaction.editReply(buildTicketMessagePayload('التقييم', '**شكراً لك، تم إرسال تقييمك بنجاح.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+          } else {
+            await interaction.reply(buildTicketMessagePayload('التقييم', '**شكراً لك، تم إرسال تقييمك بنجاح.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+          }
           return;
         }
 
