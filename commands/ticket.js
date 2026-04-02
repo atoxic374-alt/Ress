@@ -17,6 +17,7 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const { createCanvas, loadImage } = require('canvas');
 const { registerTicketInteractionRouter } = require('../utils/ticketInteractionRouter');
 const colorManager = require('../utils/colorManager');
 const { getDatabase } = require('../utils/database');
@@ -31,6 +32,7 @@ const pointsPath = path.join(__dirname, '..', 'data', 'points.json');
 const ticketSearchSessions = new Map();
 const pointsAdjustSessions = new Map();
 const memberFetchInFlight = new Map();
+const ticketFeedbackSessions = new Map();
 
 let handlersRegistered = false;
 const pingCooldowns = new Map();
@@ -44,6 +46,7 @@ const CLOSE_DELETE_DELAY_MS = 3 * 1000;
 const PING_COOLDOWN_MS = 5 * 60 * 1000;
 const MAX_POINTS_AUDIT_ENTRIES = 5000;
 const MAX_MANAGER_AUDIT_ENTRIES = 5000;
+const FEEDBACK_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const TICKET_STATE_TABLES_READY = Symbol.for('ticket.state.tables.ready');
 const STATE_KEY_STORE = 'ticket.store';
 const STATE_KEY_POINTS = 'ticket.points';
@@ -1273,17 +1276,19 @@ async function syncTicketLogMessage({
   return true;
 }
 
-async function sendClaimAnnounce({ channel, config, ticket, claimerId, claimImage }) {
+async function sendClaimAnnounce({ channel, config, ticket, claimerId, claimImage, suppressRoleMentions = false }) {
   const adminRoleIds = getAdminRoles(config, ticket?.reasonKey)
     .map((id) => String(id || '').trim())
     .filter((id) => /^\d{16,20}$/.test(id));
 
   const reasonName = config.reasons?.[ticket.reasonKey]?.name || `سبب ${ticket.reasonKey}`;
-  const mentionChunks = buildMentionChunks(adminRoleIds);
-  await runConcurrentTasks(
-    mentionChunks.map((chunk) => channel.send({ content: chunk })),
-    'claim.announce.mentions'
-  );
+  if (!suppressRoleMentions) {
+    const mentionChunks = buildMentionChunks(adminRoleIds);
+    await runConcurrentTasks(
+      mentionChunks.map((chunk) => channel.send({ content: chunk })),
+      'claim.announce.mentions'
+    );
+  }
 
   const modalAnswers = ticket?.openModalAnswers && typeof ticket.openModalAnswers === 'object'
     ? Object.entries(ticket.openModalAnswers)
@@ -1474,6 +1479,63 @@ function formatSettingValue(value, fallback = 'غير مضبوط') {
   return text.length > 90 ? `${text.slice(0, 90)}...` : text;
 }
 
+function normalizeHexColor(input, fallback) {
+  const raw = String(input || '').trim();
+  if (/^#[0-9a-f]{6}$/i.test(raw)) return raw;
+  return fallback;
+}
+
+function parseStars(value) {
+  const n = Number(String(value || '').trim());
+  if (!Number.isFinite(n)) return null;
+  const rounded = Math.round(n);
+  if (rounded < 1 || rounded > 5) return null;
+  return rounded;
+}
+
+function buildFeedbackSessionToken() {
+  return `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function drawRoundedRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function drawStarPath(ctx, cx, cy, outer, inner, spikes = 5) {
+  let rot = Math.PI / 2 * 3;
+  const step = Math.PI / spikes;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - outer);
+  for (let i = 0; i < spikes; i += 1) {
+    ctx.lineTo(cx + Math.cos(rot) * outer, cy + Math.sin(rot) * outer);
+    rot += step;
+    ctx.lineTo(cx + Math.cos(rot) * inner, cy + Math.sin(rot) * inner);
+    rot += step;
+  }
+  ctx.lineTo(cx, cy - outer);
+  ctx.closePath();
+}
+
+function addFilmGrain(ctx, width, height, alpha = 0.06) {
+  const count = Math.floor((width * height) / 120);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  for (let i = 0; i < count; i += 1) {
+    const x = Math.random() * width;
+    const y = Math.random() * height;
+    const c = Math.random() > 0.5 ? 255 : 0;
+    ctx.fillStyle = `rgb(${c},${c},${c})`;
+    ctx.fillRect(x, y, 1.5, 1.5);
+  }
+  ctx.restore();
+}
+
 function baseConfig() {
   return {
     ticketNameMode: 'counter',
@@ -1495,6 +1557,27 @@ function baseConfig() {
     autoCloseEnabled: true,
     autoCloseHours: 12,
     autoCloseWarningMinutes: 10,
+    feedback: {
+      enabled: false,
+      channelId: null,
+      triggerWord: 'يرجى وضع تقييمك لخدماتنا',
+      triggerScope: 'dm',
+      separatorEnabled: true,
+      separatorText: '────────────',
+      style: {
+        background: '#0b1020',
+        cardStart: '#6d54c7',
+        cardEnd: '#8f7ce2',
+        text: '#ffffff',
+        accent: '#11121a',
+        border: '#9c88ff',
+        quote: '#1a142f',
+        star: '#8f7ce2',
+        name: '#0f0f16',
+        shadow: '#000000',
+        version: 'v6'
+      }
+    },
     messages: {
       beforeImage: '',
       ticketImage: '',
@@ -1551,6 +1634,14 @@ function getPanelData(guildId, panelId = 'default') {
   const { guild } = getGuildData(guildId);
   const panel = guild.panels[panelId] || { config: baseConfig(), tickets: {}, pendingRequests: {} };
   const config = { ...baseConfig(), ...(panel?.config || {}) };
+  config.feedback = {
+    ...baseConfig().feedback,
+    ...(panel?.config?.feedback || {}),
+    style: {
+      ...baseConfig().feedback.style,
+      ...(panel?.config?.feedback?.style || {})
+    }
+  };
   config.messages = { ...baseConfig().messages, ...(panel?.config?.messages || {}) };
   config.reasons = panel?.config?.reasons || {};
   const tickets = panel?.tickets || {};
@@ -2576,31 +2667,34 @@ async function createTicketChannel({
 
   const controls = await buildTicketControls(guild.id, panelId, channel.id, config, { includeClaimButton });
 
+  const shouldMentionAdminsOnOpen = Boolean(includeClaimButton && config.autoCreateOnRequest && !config.claimFromDedicatedChannel && !claimedByOnCreate);
+  const openMentionsText = shouldMentionAdminsOnOpen
+    ? buildMentionChunks(getAdminRoles(config, reasonKey)).join(' ')
+    : '';
+
   const introText = renderTicketText(reasonSettings.beforeText, memberId);
   const openImage = resolveImageForSend(reasonSettings.openImage);
   const outroText = renderTicketText(reasonSettings.afterText, memberId);
+  const introContent = introText && openMentionsText
+    ? `${introText} | ${openMentionsText}`
+    : (introText || openMentionsText || '');
 
-  const parallelCreationTasks = [];
-
-  // Send initial message with controls and intro text/image
-  parallelCreationTasks.push(channel.send({
-    ...(introText ? { content: introText } : {}),
+  // Send initial message with controls and intro text/image first
+  await channel.send({
+    ...(introContent ? { content: introContent } : {}),
     ...(openImage ? { files: [openImage] } : {}),
     components: controls
-  }).catch((error) => logSilentError("create.sendIntroMessage", error)));
+  }).catch((error) => logSilentError("create.sendIntroMessage", error));
 
-  // Send outro text if it exists
-  if (outroText) {
-    parallelCreationTasks.push(channel.send({ content: outroText }).catch((error) => logSilentError("create.sendOutroMessage", error)));
-  }
+  // Trigger outro after intro is confirmed to preserve order, without blocking the rest of creation flow.
+  const outroSendPromise = outroText
+    ? channel.send({ content: outroText }).catch((error) => logSilentError("create.sendOutroMessage", error))
+    : Promise.resolve();
 
   // Update counter if not in user mode (this will be handled by setGuildData which queues writes)
   if (config.ticketNameMode !== "user") {
     config.counter = (config.counter || 1) + 1;
   }
-
-  // Execute all parallel tasks
-  await Promise.allSettled(parallelCreationTasks);
 
   tickets[channel.id] = {
     channelId: channel.id,
@@ -2621,7 +2715,7 @@ async function createTicketChannel({
     lastActivityAt: Date.now()
   };
 
-  await syncTicketLogMessage({
+  const syncLogPromise = syncTicketLogMessage({
     guild,
     config,
     ticket: tickets[channel.id],
@@ -2629,6 +2723,8 @@ async function createTicketChannel({
     actionText: `تم فتح التكت عن طريق : <@${memberId}>`,
     actor: member?.user || null
   });
+
+  await Promise.allSettled([outroSendPromise, syncLogPromise]);
 
   setGuildData(guild.id, config, tickets, pendingRequests, panelId);
   return channel;
@@ -2879,7 +2975,8 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
     config,
     ticket,
     claimerId: interaction.user.id,
-    claimImage: null
+    claimImage: null,
+    suppressRoleMentions: Boolean(config.autoCreateOnRequest && !config.claimFromDedicatedChannel)
   }).catch((error) => logSilentError('suppressed', error));
 
   const postClaimTasks = [];
@@ -3079,6 +3176,276 @@ async function handleClaimFromRequest(interaction, reqId) {
   }
 }
 
+async function buildFeedbackCardImage({ guild, member, stars, comment, style = {} }) {
+  const width = 1800;
+  const height = 860;
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+  ctx.antialias = 'subpixel';
+
+  const bg = ctx.createLinearGradient(0, 0, width, height);
+  bg.addColorStop(0, normalizeHexColor(style.background, '#0b1020'));
+  bg.addColorStop(1, '#121a2b');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, width, height);
+
+  // Cinematic light blobs
+  const orb1 = ctx.createRadialGradient(width * 0.2, height * 0.15, 40, width * 0.2, height * 0.15, 520);
+  orb1.addColorStop(0, '#7e61ff88');
+  orb1.addColorStop(1, '#7e61ff00');
+  ctx.fillStyle = orb1;
+  ctx.fillRect(0, 0, width, height);
+  const orb2 = ctx.createRadialGradient(width * 0.82, height * 0.22, 20, width * 0.82, height * 0.22, 420);
+  orb2.addColorStop(0, '#9f8dff66');
+  orb2.addColorStop(1, '#9f8dff00');
+  ctx.fillStyle = orb2;
+  ctx.fillRect(0, 0, width, height);
+
+  // Premium repeating pattern + layered depth
+  ctx.globalAlpha = 0.14;
+  ctx.strokeStyle = normalizeHexColor(style.border, '#9c88ff');
+  ctx.lineWidth = 2.2;
+  for (let x = 24; x < width; x += 92) {
+    for (let y = 24; y < height; y += 92) {
+      ctx.beginPath();
+      ctx.moveTo(x, y + 24);
+      ctx.lineTo(x + 20, y);
+      ctx.lineTo(x + 44, y + 8);
+      ctx.lineTo(x + 56, y + 32);
+      ctx.lineTo(x + 36, y + 54);
+      ctx.lineTo(x + 12, y + 46);
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+  const vignette = ctx.createRadialGradient(width / 2, height / 2, 120, width / 2, height / 2, width * 0.75);
+  vignette.addColorStop(0, '#00000000');
+  vignette.addColorStop(1, '#000000a0');
+  ctx.fillStyle = vignette;
+  ctx.fillRect(0, 0, width, height);
+  ctx.globalAlpha = 1;
+
+  const cardX = 190;
+  const cardY = 120;
+  const cardW = 1420;
+  const cardH = 500;
+  const radius = 58;
+
+  const cardGrad = ctx.createLinearGradient(cardX, cardY, cardX + cardW, cardY + cardH);
+  cardGrad.addColorStop(0, normalizeHexColor(style.cardStart, '#6d54c7'));
+  cardGrad.addColorStop(1, normalizeHexColor(style.cardEnd, '#8f7ce2'));
+  // Multi-pass outer shadow for heavy 3D look
+  ctx.save();
+  ctx.shadowColor = normalizeHexColor(style.shadow, '#000000');
+  ctx.shadowBlur = 95;
+  ctx.shadowOffsetY = 20;
+  ctx.fillStyle = cardGrad;
+  drawRoundedRectPath(ctx, cardX, cardY, cardW, cardH, radius);
+  ctx.fill();
+  ctx.restore();
+
+  // Additional soft glow around top edge
+  const topGlow = ctx.createLinearGradient(cardX, cardY - 20, cardX, cardY + 120);
+  topGlow.addColorStop(0, '#ffffff66');
+  topGlow.addColorStop(1, '#ffffff00');
+  ctx.fillStyle = topGlow;
+  drawRoundedRectPath(ctx, cardX + 4, cardY + 2, cardW - 8, 130, radius - 8);
+  ctx.fill();
+
+  // Inner highlight and border pass
+  ctx.globalAlpha = 0.30;
+  const inner = ctx.createLinearGradient(cardX, cardY, cardX + cardW, cardY + cardH);
+  inner.addColorStop(0, '#ffffff');
+  inner.addColorStop(1, '#ffffff00');
+  ctx.fillStyle = inner;
+  drawRoundedRectPath(ctx, cardX, cardY, cardW, cardH, radius);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = normalizeHexColor(style.border, '#9c88ff');
+  ctx.lineWidth = 5;
+  drawRoundedRectPath(ctx, cardX, cardY, cardW, cardH, radius);
+  ctx.stroke();
+
+  const textColor = normalizeHexColor(style.text, '#ffffff');
+  const accentColor = normalizeHexColor(style.accent, '#11121a');
+  const quoteColor = normalizeHexColor(style.quote, '#1a142f');
+  const starColor = normalizeHexColor(style.star, '#8f7ce2');
+  const nameColor = normalizeHexColor(style.name, '#0f0f16');
+  // Quote block
+  ctx.fillStyle = quoteColor;
+  ctx.font = 'bold 112px Sans';
+  ctx.fillText('“', cardX + 52, cardY + 118);
+
+  // Star capsule
+  const pillX = cardX + cardW - 435;
+  const pillY = cardY + 28;
+  const pillW = 370;
+  const pillH = 90;
+  ctx.fillStyle = accentColor;
+  drawRoundedRectPath(ctx, pillX, pillY, pillW, pillH, 45);
+  ctx.fill();
+  ctx.globalAlpha = 0.24;
+  const pillGloss = ctx.createLinearGradient(0, pillY, 0, pillY + pillH);
+  pillGloss.addColorStop(0, '#ffffff');
+  pillGloss.addColorStop(1, '#ffffff00');
+  ctx.fillStyle = pillGloss;
+  drawRoundedRectPath(ctx, pillX + 3, pillY + 2, pillW - 6, (pillH / 2), 42);
+  ctx.fill();
+  ctx.globalAlpha = 0.2;
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2;
+  drawRoundedRectPath(ctx, pillX, pillY, pillW, pillH, 45);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  for (let i = 0; i < 5; i += 1) {
+    const cx = pillX + 45 + (i * 63);
+    const cy = pillY + 46;
+    const active = i < stars;
+    ctx.fillStyle = active ? starColor : '#5a5480';
+    ctx.strokeStyle = active ? '#ffffff88' : '#ffffff22';
+    drawStarPath(ctx, cx, cy, 20, 9, 5);
+    ctx.fill();
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = textColor;
+  ctx.font = 'bold 58px Sans';
+  ctx.shadowColor = '#00000077';
+  ctx.shadowBlur = 12;
+  ctx.shadowOffsetY = 4;
+  const wrapped = String(comment || 'بدون تعليق').slice(0, 220);
+  const words = wrapped.split(/\s+/);
+  const lines = [];
+  let current = '';
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word;
+    if (ctx.measureText(next).width > 860) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = next;
+    }
+  }
+  if (current) lines.push(current);
+  lines.slice(0, 4).forEach((line, i) => ctx.fillText(line, cardX + 520, cardY + 205 + (i * 64)));
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+
+  const avatarUrl = member?.displayAvatarURL?.({ extension: 'png', size: 256 }) || member?.user?.displayAvatarURL?.({ extension: 'png', size: 256 });
+  if (avatarUrl) {
+    try {
+      const avatar = await loadImage(avatarUrl);
+      const avX = cardX - 70;
+      const avY = cardY + cardH - 210;
+      const avSize = 230;
+      // Avatar frame
+      ctx.save();
+      ctx.fillStyle = normalizeHexColor(style.cardStart, '#6d54c7');
+      drawRoundedRectPath(ctx, avX - 26, avY - 26, avSize + 52, avSize + 52, 52);
+      ctx.fill();
+      ctx.restore();
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(avX + avSize / 2, avY + avSize / 2, avSize / 2, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      ctx.drawImage(avatar, avX, avY, avSize, avSize);
+      ctx.restore();
+    } catch (error) {
+      logSilentError('feedback.avatar.load', error);
+    }
+  }
+
+  ctx.fillStyle = nameColor;
+  ctx.font = 'bold 54px Sans';
+  ctx.fillText(member?.displayName || member?.user?.username || 'Member', cardX + 250, cardY + cardH - 46);
+  ctx.fillStyle = textColor;
+  ctx.globalAlpha = 0.9;
+  ctx.font = '34px Sans';
+  ctx.fillText(guild?.name || 'Server', cardX + 250, cardY + cardH + 2);
+  ctx.globalAlpha = 1;
+
+  // Cinematic finishing passes
+  const centerBloom = ctx.createRadialGradient(width / 2, height / 2, 140, width / 2, height / 2, width * 0.45);
+  centerBloom.addColorStop(0, '#ffffff22');
+  centerBloom.addColorStop(1, '#ffffff00');
+  ctx.fillStyle = centerBloom;
+  ctx.fillRect(0, 0, width, height);
+
+  // V6 cinematic streaks & high-end polish
+  ctx.save();
+  ctx.globalAlpha = 0.18;
+  for (let i = 0; i < 9; i += 1) {
+    const y = 90 + (i * 78);
+    const streak = ctx.createLinearGradient(0, y, width, y);
+    streak.addColorStop(0, '#ffffff00');
+    streak.addColorStop(0.5, '#ffffff66');
+    streak.addColorStop(1, '#ffffff00');
+    ctx.strokeStyle = streak;
+    ctx.lineWidth = i % 2 === 0 ? 1 : 2;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y + (i % 3));
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  const violetBloom = ctx.createRadialGradient(width * 0.7, height * 0.65, 40, width * 0.7, height * 0.65, 360);
+  violetBloom.addColorStop(0, '#8f7ce266');
+  violetBloom.addColorStop(1, '#8f7ce200');
+  ctx.fillStyle = violetBloom;
+  ctx.fillRect(0, 0, width, height);
+
+  const edgeVignette = ctx.createLinearGradient(0, 0, width, 0);
+  edgeVignette.addColorStop(0, '#00000066');
+  edgeVignette.addColorStop(0.08, '#00000000');
+  edgeVignette.addColorStop(0.92, '#00000000');
+  edgeVignette.addColorStop(1, '#00000066');
+  ctx.fillStyle = edgeVignette;
+  ctx.fillRect(0, 0, width, height);
+
+  addFilmGrain(ctx, width, height, 0.06);
+
+  return canvas.toBuffer('image/png');
+}
+
+async function sendFeedbackPrompt({ guild, channel, ticket, config, panelId, channelId }) {
+  const feedbackCfg = config?.feedback || {};
+  if (!feedbackCfg.enabled || !feedbackCfg.channelId || !ticket?.memberId) return;
+  const token = buildFeedbackSessionToken();
+  ticketFeedbackSessions.set(token, {
+    guildId: guild.id,
+    panelId,
+    ticketChannelId: channelId,
+    memberId: ticket.memberId,
+    expiresAt: Date.now() + FEEDBACK_SESSION_TTL_MS
+  });
+  saveRuntimeSession('ticket-feedback', token, ticketFeedbackSessions.get(token), FEEDBACK_SESSION_TTL_MS);
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`ticket_feedback_open_${token}`)
+      .setLabel('تقييم')
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  const text = `**${feedbackCfg.triggerWord || 'يرجى وضع تقييمك لخدماتنا'}**`;
+  if (feedbackCfg.triggerScope === 'ticket') {
+    await channel.send({ ...buildTicketMessagePayload('التقييم', text), components: [row] }).catch((error) => logSilentError('feedback.prompt.ticket', error));
+    return;
+  }
+
+  const user = await guild.client.users.fetch(ticket.memberId).catch(() => null);
+  if (!user) return;
+  const icon = guild.iconURL({ extension: 'png', size: 256 }) || undefined;
+  await user.send({
+    embeds: [colorManager.createEmbed().setTitle('يرجى وضع تقييمك لخدماتنا').setDescription(text).setThumbnail(icon)],
+    components: [row]
+  }).catch((error) => logSilentError('feedback.prompt.dm', error));
+}
+
 async function sendAutoCloseWarning(channel, ticket, dueAt) {
   const mentions = [...new Set([ticket?.claimedBy, ticket?.memberId].filter(Boolean))]
     .map((id) => `<@${id}>`)
@@ -3155,7 +3522,6 @@ async function closeTicketCore({
     }),
     finalizeTransferDmNotifications(ticket, channel.guild, closedByLabel || (autoClose ? 'خمول التكت' : 'غير محدد'))
   ]);
-
   if (!config.keepClosedTickets) {
     delete tickets[channelId];
     setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
@@ -4486,6 +4852,7 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
 
   let resumedSetupPanelId = null;
   let resumedSetupNotice = null;
+  let previousSetupMessageRef = null;
   if (existingSession && (Date.now() - existingSession.startedAt) < (30 * 60 * 1000)) {
     if (existingSession.sourceMessageId === message.id) return;
     resumedSetupPanelId = extractChannelId(existingSession.panelId || '') || null;
@@ -4494,11 +4861,19 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
       deleteRuntimeSession('ticket-setup', setupSessionKey);
       existingSession = null;
     } else {
+      if (existingSession.channelId && existingSession.messageId) {
+        previousSetupMessageRef = {
+          channelId: existingSession.channelId,
+          messageId: existingSession.messageId
+        };
+      }
       resumedSetupNotice = '**تم استرجاع جلسة الإعداد السابقة، ويمكنك المتابعة من آخر إعداد محفوظ.**';
     }
   }
 
+  const setupInstanceId = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   const initialSetupSession = {
+    setupInstanceId,
     startedAt: Date.now(),
     messageId: null,
     channelId: message.channel.id,
@@ -4539,6 +4914,16 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
   saveRuntimeSession('ticket-setup', setupSessionKey, initialSetupSession, 30 * 60 * 1000);
 
   const { config, tickets, pendingRequests } = getPanelData(message.guild.id, panelId);
+
+  if (previousSetupMessageRef) {
+    const previousSetupChannel = await message.guild.channels.fetch(previousSetupMessageRef.channelId).catch(() => null);
+    if (previousSetupChannel?.isTextBased?.()) {
+      const previousSetupMessage = await previousSetupChannel.messages.fetch(previousSetupMessageRef.messageId).catch(() => null);
+      if (previousSetupMessage?.editable) {
+        await previousSetupMessage.edit({ components: [] }).catch((error) => logSilentError('suppressed', error));
+      }
+    }
+  }
 
   const ask = async (prompt, timeout = 180000, options = {}) => {
     const opts = options && typeof options === 'object' ? options : {};
@@ -4727,6 +5112,7 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
         { label: 'الاستلام من شات مخصص', value: 'toggle_claim_channel', description: 'تفعيل شات القبول لطلبات الاستلام', emoji: '<:emoji_14:1484393414551408771>' },
         { label: 'الاحتفاظ بعد الاغلاق', value: 'toggle_keep_closed', description: 'حذف التكت أو إبقاؤه بعد الإغلاق', emoji: '<:emoji_14:1484393414551408771>' },
         { label: 'اعدادات الرسائل', value: 'set_messages', description: 'تخصيص النصوص قبل/بعد/قبول', emoji: '<:emoji_14:1484393414551408771>' },
+        { label: 'التقييم', value: 'set_feedback', description: 'إعدادات نظام تقييم العملاء', emoji: '<:emoji_14:1484393414551408771>' },
         { label: 'اعدادات الصور', value: 'set_images', description: 'تخصيص صور الفتح/الاستلام/الفاصل', emoji: '<:emoji_14:1484393414551408771>' },
         { label: 'تعديل الاسباب', value: 'set_reasons', description: 'تعديل أسماء/وصف/كاتوقري الأسباب', emoji: '<:emoji_14:1484393414551408771>' },
         { label: 'طريقة العرض', value: 'set_display_mode', description: 'الاختيار بين buttons أو menu', emoji: '<:emoji_14:1484393414551408771>' },
@@ -4742,6 +5128,7 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
 
   setupMessage = await controlChannel.send({ embeds: [buildSetupEmbed()], components: buildMenuComponents() });
   const liveSetupSession = {
+    setupInstanceId,
     startedAt: Date.now(),
     messageId: setupMessage.id,
     channelId: setupMessage.channel.id,
@@ -5286,6 +5673,101 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
     }
   };
 
+  const openFeedbackSubmenu = async () => {
+    if (!config.feedback || typeof config.feedback !== 'object') {
+      config.feedback = baseConfig().feedback;
+    }
+    let done = false;
+    while (!done) {
+      const feedbackCfg = config.feedback;
+      const style = feedbackCfg.style || {};
+      const state = colorManager.createEmbed()
+        .setTitle('**إعدادات التقييم**')
+        .setDescription('**خصص نظام التقييم، الروم، الكلمة، الفاصل، والألوان.**')
+        .addFields(
+          { name: 'الحالة', value: feedbackCfg.enabled ? 'مفعل ✅' : 'مقفل ❌', inline: true },
+          { name: 'روم التقييم', value: feedbackCfg.channelId ? `<#${feedbackCfg.channelId}>` : 'غير معين', inline: true },
+          { name: 'مكان زر التقييم', value: feedbackCfg.triggerScope === 'ticket' ? 'داخل التكت' : 'الخاص', inline: true },
+          { name: 'كلمة التقييم', value: formatSettingValue(feedbackCfg.triggerWord), inline: false },
+          { name: 'الفاصل', value: feedbackCfg.separatorEnabled ? `مفعل • ${formatSettingValue(feedbackCfg.separatorText)}` : 'مقفل', inline: false },
+          { name: 'ألوان التصميم', value: `الإصدار: v6 (ثابت)\nالخلفية: ${style.background}\nبداية الكرت: ${style.cardStart}\nنهاية الكرت: ${style.cardEnd}\nلون النص: ${style.text}\nاللون الثانوي: ${style.accent}\nحدود الكرت: ${style.border}\nلون الاقتباس: ${style.quote}\nلون النجوم: ${style.star}\nلون الاسم: ${style.name}\nلون الظل: ${style.shadow}`, inline: false }
+        );
+
+      await setupMessage.edit({
+        embeds: [normalizeEmbedForStandardMessage(state, '**اختر تعديل من القائمة.**')],
+        components: [new ActionRowBuilder().addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId(`ticket_feedback_menu_${message.author.id}_${Date.now()}`)
+            .setPlaceholder('Feedback Settings')
+            .addOptions([
+              { label: 'تفعيل/ايقاف', value: 'toggle' },
+              { label: 'روم التقييم', value: 'channel' },
+              { label: 'كلمة التقييم', value: 'word' },
+              { label: 'مكان الطلب (خاص/تكت)', value: 'scope' },
+              { label: 'الفاصل بين التقييمات', value: 'separator' },
+              { label: 'ألوان التصميم', value: 'style' },
+              { label: 'Finish', value: 'finish' }
+            ])
+        )]
+      }).catch((error) => logSilentError('suppressed', error));
+
+      const pick = await setupMessage.awaitMessageComponent({
+        filter: (i) => i.user.id === message.author.id && i.isStringSelectMenu() && i.customId.startsWith('ticket_feedback_menu_'),
+        time: 180000
+      }).catch(() => null);
+      if (!pick) break;
+      activePromptInteraction = pick;
+      await pick.deferUpdate().catch((error) => logSilentError('suppressed', error));
+      const c = pick.values?.[0];
+      if (c === 'finish') { done = true; break; }
+      if (c === 'toggle') feedbackCfg.enabled = !feedbackCfg.enabled;
+      if (c === 'channel') {
+        const raw = await ask('**ارسل منشن/ايدي روم التقييم (0 لاعادة التعيين)**');
+        if (raw === '0') feedbackCfg.channelId = null;
+        else feedbackCfg.channelId = normalizeId(raw);
+      }
+      if (c === 'word') {
+        const raw = await ask('**اكتب كلمة/رسالة طلب التقييم (0 لاعادة التعيين)**');
+        feedbackCfg.triggerWord = raw === '0' ? baseConfig().feedback.triggerWord : (raw || feedbackCfg.triggerWord);
+      }
+      if (c === 'scope') {
+        const raw = ((await ask('**مكان الزر: dm أو ticket**')) || '').toLowerCase();
+        if (raw === 'dm' || raw === 'ticket') feedbackCfg.triggerScope = raw;
+      }
+      if (c === 'separator') {
+        const enabled = ((await ask('**تفعيل الفاصل؟ yes/no**')) || '').toLowerCase();
+        feedbackCfg.separatorEnabled = ['yes', 'y', 'نعم'].includes(enabled);
+        if (feedbackCfg.separatorEnabled) {
+          const text = await ask('**نص الفاصل (0 للإفتراضي)**');
+          feedbackCfg.separatorText = text === '0' ? baseConfig().feedback.separatorText : (text || feedbackCfg.separatorText);
+        }
+      }
+      if (c === 'style') {
+        const bg = await ask(`**لون الخلفية Hex (الآن ${feedbackCfg.style.background})**`);
+        const start = await ask(`**لون بداية الكرت Hex (الآن ${feedbackCfg.style.cardStart})**`);
+        const end = await ask(`**لون نهاية الكرت Hex (الآن ${feedbackCfg.style.cardEnd})**`);
+        const text = await ask(`**لون النص Hex (الآن ${feedbackCfg.style.text})**`);
+        const accent = await ask(`**لون ثانوي Hex (الآن ${feedbackCfg.style.accent})**`);
+        const border = await ask(`**لون الحدود Hex (الآن ${feedbackCfg.style.border})**`);
+        const quote = await ask(`**لون الاقتباس Hex (الآن ${feedbackCfg.style.quote})**`);
+        const star = await ask(`**لون النجوم Hex (الآن ${feedbackCfg.style.star})**`);
+        const name = await ask(`**لون اسم المقيم Hex (الآن ${feedbackCfg.style.name})**`);
+        const shadow = await ask(`**لون الظل Hex (الآن ${feedbackCfg.style.shadow})**`);
+        feedbackCfg.style.version = 'v6';
+        feedbackCfg.style.background = normalizeHexColor(bg, feedbackCfg.style.background);
+        feedbackCfg.style.cardStart = normalizeHexColor(start, feedbackCfg.style.cardStart);
+        feedbackCfg.style.cardEnd = normalizeHexColor(end, feedbackCfg.style.cardEnd);
+        feedbackCfg.style.text = normalizeHexColor(text, feedbackCfg.style.text);
+        feedbackCfg.style.accent = normalizeHexColor(accent, feedbackCfg.style.accent);
+        feedbackCfg.style.border = normalizeHexColor(border, feedbackCfg.style.border);
+        feedbackCfg.style.quote = normalizeHexColor(quote, feedbackCfg.style.quote);
+        feedbackCfg.style.star = normalizeHexColor(star, feedbackCfg.style.star);
+        feedbackCfg.style.name = normalizeHexColor(name, feedbackCfg.style.name);
+        feedbackCfg.style.shadow = normalizeHexColor(shadow, feedbackCfg.style.shadow);
+      }
+    }
+  };
+
   collector.on('collect', async (interaction) => {
     try {
       const choice = interaction.values?.[0];
@@ -5473,6 +5955,13 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
         return;
       }
 
+      if (choice === 'set_feedback') {
+        await openFeedbackSubmenu();
+        await refresh('**✅ تم تحديث اعدادات التقييم.**');
+        await notifySetupResult('**✅ تم حفظ إعدادات التقييم بنجاح.**');
+        return;
+      }
+
       if (choice === 'set_images') {
         await openImagesSubmenu();
         await refresh('**✅ تم تحديث اعدادات الصور.**');
@@ -5642,6 +6131,8 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
   });
 
   collector.on('end', async () => {
+    const latestSetupSession = activeTicketSetupSessions.get(setupSessionKey);
+    if (!latestSetupSession || latestSetupSession.setupInstanceId !== setupInstanceId) return;
     setGuildData(message.guild.id, config, tickets, pendingRequests, panelId);
     await setupMessage.edit({ embeds: [buildSetupEmbed()], components: [] }).catch((error) => logSilentError('suppressed', error));
     await controlChannel.send(buildTicketMessagePayload('Done✅️', '**تم حفظ اعدادات التكت**')).catch((error) => logSilentError('suppressed', error));
@@ -5915,6 +6406,26 @@ function registerTicketMessageActivityTracker(client) {
     if (!message.guild || !message.channel || message.author?.bot) return;
     const guildId = message.guild.id;
     const channelId = message.channel.id;
+    const { config: defaultPanelConfig } = getPanelData(guildId, 'default');
+    const feedbackCfg = defaultPanelConfig?.feedback || baseConfig().feedback;
+    if (feedbackCfg.enabled && feedbackCfg.channelId && channelId === feedbackCfg.channelId) {
+      const rawText = String(message.content || '').trim();
+      const trigger = String(feedbackCfg.triggerWord || '').trim();
+      if (!trigger || rawText.startsWith(trigger) || rawText.length > 0) {
+        const starsMatch = rawText.match(/\b([1-5])\b/);
+        const stars = parseStars(starsMatch?.[1] || '5') || 5;
+        const comment = rawText.replace(/\b([1-5])\b/, '').replace(trigger, '').trim() || 'بدون تعليق';
+        await message.delete().catch((error) => logSilentError('suppressed', error));
+        const member = await resolveGuildMember(message.guild, message.author.id);
+        const image = await buildFeedbackCardImage({ guild: message.guild, member, stars, comment, style: feedbackCfg.style || {} });
+        const attachment = new AttachmentBuilder(image, { name: `feedback_${message.author.id}_${Date.now()}.png` });
+        await message.channel.send({ files: [attachment] }).catch((error) => logSilentError('suppressed', error));
+        if (feedbackCfg.separatorEnabled && feedbackCfg.separatorText) {
+          await message.channel.send({ content: feedbackCfg.separatorText }).catch((error) => logSilentError('suppressed', error));
+        }
+        return;
+      }
+    }
     const { panelId, config, tickets, pendingRequests, ticket } = getTicketContext(guildId, channelId, 'default');
     if (!ticket) return;
 
@@ -5923,6 +6434,26 @@ function registerTicketMessageActivityTracker(client) {
       await message.delete().catch((error) => logSilentError('suppressed', error));
       await recordUnauthorizedTicketMessage(message, ticket, config);
       setGuildData(guildId, config, tickets, pendingRequests, panelId);
+      return;
+    }
+
+    const feedbackConfig = config?.feedback || baseConfig().feedback;
+    const triggerWord = String(feedbackConfig.triggerWord || '').trim();
+    if (feedbackConfig.enabled && triggerWord && String(message.content || '').trim().toLowerCase() === triggerWord.toLowerCase()) {
+      await message.delete().catch((error) => logSilentError('suppressed', error));
+      await sendFeedbackPrompt({
+        guild: message.guild,
+        channel: message.channel,
+        ticket: { memberId: message.author.id },
+        config: { ...config, feedback: feedbackConfig },
+        panelId,
+        channelId
+      });
+      if (feedbackConfig.triggerScope === 'dm') {
+        await message.channel.send(buildTicketMessagePayload('التقييم', `**تم إرسال رسالة التقييم بالخاص لـ <@${message.author.id}>.**`))
+          .then((m) => setTimeout(() => m.delete().catch((error) => logSilentError('suppressed', error)), 12000))
+          .catch((error) => logSilentError('suppressed', error));
+      }
       return;
     }
 
@@ -6078,6 +6609,45 @@ function registerHandlers(client) {
           const panelId = payloadParts.length > 1 ? payloadParts.slice(0, -1).join('_') : 'default';
           const reasonKey = payloadParts.length ? payloadParts[payloadParts.length - 1] : parts[4];
           await handleOpenWithReasonModal(interaction, guildId, panelId, reasonKey, client);
+          return;
+        }
+
+        if (id.startsWith('ticket_feedback_open_')) {
+          const token = id.replace('ticket_feedback_open_', '');
+          let session = ticketFeedbackSessions.get(token);
+          if (!session) session = await loadRuntimeSession('ticket-feedback', token).catch(() => null);
+          if (!session || (session.expiresAt && Date.now() > session.expiresAt)) {
+            await interaction.reply(buildTicketMessagePayload('التقييم', '**انتهت صلاحية رابط التقييم.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+            return;
+          }
+          if (interaction.user.id !== session.memberId) {
+            await interaction.reply(buildTicketMessagePayload('التقييم', '**هذا الزر مخصص لصاحب التكت فقط.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+            return;
+          }
+
+          const modal = new ModalBuilder()
+            .setCustomId(`ticket_feedback_modal_${token}`)
+            .setTitle('تقييم الخدمة');
+          modal.addComponents(
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder()
+                .setCustomId('stars')
+                .setLabel('عدد النجوم (1-5)')
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setMaxLength(1)
+                .setPlaceholder('5')
+            ),
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder()
+                .setCustomId('review')
+                .setLabel('رأيك بالخدمة')
+                .setStyle(TextInputStyle.Paragraph)
+                .setRequired(true)
+                .setMaxLength(300)
+            )
+          );
+          await interaction.showModal(modal);
           return;
         }
 
@@ -6557,6 +7127,46 @@ function registerHandlers(client) {
           client.ticketOpenModalData.delete(modalId);
           interaction.ticketModalAnswers = answers;
           await handleOpenRequest(interaction, data.guildId, data.panelId, data.reasonKey);
+          return;
+        }
+
+        if (modalId.startsWith('ticket_feedback_modal_')) {
+          const token = modalId.replace('ticket_feedback_modal_', '');
+          let session = ticketFeedbackSessions.get(token);
+          if (!session) session = await loadRuntimeSession('ticket-feedback', token).catch(() => null);
+          if (!session || (session.expiresAt && Date.now() > session.expiresAt)) {
+            await interaction.reply(buildTicketMessagePayload('التقييم', '**انتهت صلاحية نموذج التقييم.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+            return;
+          }
+
+          const stars = parseStars(interaction.fields.getTextInputValue('stars'));
+          if (!stars) {
+            await interaction.reply(buildTicketMessagePayload('التقييم', '**النجوم يجب أن تكون من 1 إلى 5.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+            return;
+          }
+          const review = String(interaction.fields.getTextInputValue('review') || '').trim().slice(0, 300);
+          const { config } = getPanelData(session.guildId, session.panelId || 'default');
+          const feedbackCfg = config.feedback || baseConfig().feedback;
+          const guild = client.guilds.cache.get(session.guildId) || await client.guilds.fetch(session.guildId).catch(() => null);
+          if (!guild || !feedbackCfg.channelId) {
+            await interaction.reply(buildTicketMessagePayload('التقييم', '**تعذر العثور على روم التقييم.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+            return;
+          }
+          const feedbackChannel = guild.channels.cache.get(feedbackCfg.channelId) || await guild.channels.fetch(feedbackCfg.channelId).catch(() => null);
+          if (!feedbackChannel || !feedbackChannel.isTextBased?.()) {
+            await interaction.reply(buildTicketMessagePayload('التقييم', '**روم التقييم غير صالح.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+            return;
+          }
+          const member = await resolveGuildMember(guild, interaction.user.id);
+          const image = await buildFeedbackCardImage({ guild, member, stars, comment: review, style: feedbackCfg.style || {} });
+          const attachment = new AttachmentBuilder(image, { name: `feedback_${interaction.user.id}_${Date.now()}.png` });
+          await feedbackChannel.send({ files: [attachment] }).catch((error) => logSilentError('suppressed', error));
+          if (feedbackCfg.separatorEnabled && feedbackCfg.separatorText) {
+            await feedbackChannel.send({ content: feedbackCfg.separatorText }).catch((error) => logSilentError('suppressed', error));
+          }
+          ticketFeedbackSessions.delete(token);
+          deleteRuntimeSession('ticket-feedback', token);
+          await interaction.reply(buildTicketMessagePayload('التقييم', '**شكراً لك، تم إرسال تقييمك بنجاح.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
           return;
         }
 
