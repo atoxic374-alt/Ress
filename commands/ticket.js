@@ -17,7 +17,7 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
-const { createCanvas, loadImage } = require('canvas');
+const { createCanvas, loadImage, registerFont } = require('canvas');
 const { registerTicketInteractionRouter } = require('../utils/ticketInteractionRouter');
 const colorManager = require('../utils/colorManager');
 const { getDatabase } = require('../utils/database');
@@ -38,6 +38,20 @@ const botOwnersCache = new Set();
 
 let handlersRegistered = false;
 const pingCooldowns = new Map();
+
+let feedbackFontsRegistered = false;
+function ensureFeedbackFontsRegistered() {
+  if (feedbackFontsRegistered) return;
+  const regularPath = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
+  const boldPath = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
+  try {
+    if (fs.existsSync(regularPath)) registerFont(regularPath, { family: 'Cairo', weight: 'normal' });
+    if (fs.existsSync(boldPath)) registerFont(boldPath, { family: 'Cairo', weight: 'bold' });
+    feedbackFontsRegistered = true;
+  } catch (error) {
+    logSilentError('feedback.font.register', error);
+  }
+}
 const ticketClaimLocks = new Set();
 const ticketOpenRequestLocks = new Set();
 const activeTicketSetupSessions = new Map();
@@ -3181,6 +3195,7 @@ async function handleClaimFromRequest(interaction, reqId) {
 }
 
 async function buildFeedbackCardImage({ guild, member, stars, comment, style = {} }) {
+  ensureFeedbackFontsRegistered();
   const width = 1800;
   const height = 860;
   const canvas = createCanvas(width, height);
@@ -3193,42 +3208,23 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, width, height);
 
-  // Cinematic light blobs
-  const orb1 = ctx.createRadialGradient(width * 0.2, height * 0.15, 40, width * 0.2, height * 0.15, 520);
-  orb1.addColorStop(0, '#6b52dc2e');
-  orb1.addColorStop(1, '#7e61ff00');
-  ctx.fillStyle = orb1;
-  ctx.fillRect(0, 0, width, height);
-  const orb2 = ctx.createRadialGradient(width * 0.82, height * 0.22, 20, width * 0.82, height * 0.22, 420);
-  orb2.addColorStop(0, '#8d7add2a');
-  orb2.addColorStop(1, '#9f8dff00');
-  ctx.fillStyle = orb2;
-  ctx.fillRect(0, 0, width, height);
-  const navyBloom = ctx.createRadialGradient(width * 0.55, height * 0.72, 40, width * 0.55, height * 0.72, 520);
-  navyBloom.addColorStop(0, '#3a4d9a30');
+  // Keep outer background purely navy + subtle right motifs only
+  const navyBloom = ctx.createRadialGradient(width * 0.74, height * 0.24, 30, width * 0.74, height * 0.24, 460);
+  navyBloom.addColorStop(0, '#3a4d9a2a');
   navyBloom.addColorStop(1, '#3a4d9a00');
   ctx.fillStyle = navyBloom;
   ctx.fillRect(0, 0, width, height);
 
-  // Repeating geometric background pattern (closer to reference)
-  ctx.globalAlpha = 0.1;
-  ctx.strokeStyle = '#222a3f';
+  ctx.globalAlpha = 0.16;
+  ctx.strokeStyle = '#2a3550';
   ctx.lineWidth = 1.8;
-  for (let x = 26; x < width; x += 118) {
-    for (let y = 16; y < height; y += 98) {
+  for (let x = width - 520; x < width - 40; x += 96) {
+    for (let y = 26; y < height - 20; y += 90) {
       ctx.beginPath();
-      ctx.moveTo(x, y + 16);
-      ctx.lineTo(x + 24, y);
-      ctx.lineTo(x + 46, y + 10);
-      ctx.lineTo(x + 22, y + 26);
-      ctx.closePath();
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.moveTo(x + 54, y + 26);
-      ctx.lineTo(x + 78, y + 12);
-      ctx.lineTo(x + 102, y + 22);
-      ctx.lineTo(x + 78, y + 40);
+      ctx.moveTo(x, y + 22);
+      ctx.lineTo(x + 22, y);
+      ctx.lineTo(x + 48, y + 8);
+      ctx.lineTo(x + 24, y + 28);
       ctx.closePath();
       ctx.stroke();
     }
@@ -3319,7 +3315,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   const finalComment = String(comment || 'بدون تعليق').trim();
   // Decorative mark (replaces quotes)
   ctx.fillStyle = quoteColor;
-  ctx.font = 'bold 104px Sans';
+  ctx.font = 'bold 104px Cairo';
   ctx.fillText('❝', cardX + 62, cardY + 118);
 
   // Star capsule
@@ -3357,7 +3353,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   }
 
   ctx.fillStyle = textColor;
-  ctx.font = 'bold 52px Cairo, Sans';
+  ctx.font = 'bold 52px Cairo';
   ctx.textAlign = 'right';
   ctx.direction = 'rtl';
   ctx.shadowColor = '#00000020';
@@ -3431,7 +3427,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   }
 
   ctx.fillStyle = nameColor;
-  ctx.font = 'bold 54px Cairo, Sans';
+  ctx.font = 'bold 54px Cairo';
   ctx.fillText(member?.displayName || member?.user?.username || 'Member', cardX + 230, cardY + cardH - 48);
 
   // Server signature bottom-right with real server avatar crop
@@ -3464,7 +3460,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   ctx.fillStyle = textColor;
   ctx.globalAlpha = 0.92;
   ctx.textAlign = 'right';
-  ctx.font = '32px Cairo, Sans';
+  ctx.font = '32px Cairo';
   ctx.fillText(serverName, signX - 78, signY);
   ctx.textAlign = 'left';
   ctx.globalAlpha = 1;
