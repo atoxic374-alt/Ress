@@ -40,14 +40,21 @@ let handlersRegistered = false;
 const pingCooldowns = new Map();
 
 let feedbackFontsRegistered = false;
+let feedbackFontNoticeShown = false;
 function ensureFeedbackFontsRegistered() {
   if (feedbackFontsRegistered) return;
-  const regularPath = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
-  const boldPath = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
+  const customRegular = path.join(__dirname, '..', 'assets', 'fonts', 'Cairo-Regular.ttf');
+  const customBold = path.join(__dirname, '..', 'assets', 'fonts', 'Cairo-Bold.ttf');
+  const regularPath = fs.existsSync(customRegular) ? customRegular : '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
+  const boldPath = fs.existsSync(customBold) ? customBold : '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
   try {
     if (fs.existsSync(regularPath)) registerFont(regularPath, { family: 'Cairo', weight: 'normal' });
     if (fs.existsSync(boldPath)) registerFont(boldPath, { family: 'Cairo', weight: 'bold' });
     feedbackFontsRegistered = true;
+    if (!feedbackFontNoticeShown && (!fs.existsSync(customRegular) || !fs.existsSync(customBold))) {
+      feedbackFontNoticeShown = true;
+      console.warn('⚠️ Cairo TTF not found in assets/fonts. Using DejaVu fallback. Place Cairo-Regular.ttf and Cairo-Bold.ttf in assets/fonts for true Cairo.');
+    }
   } catch (error) {
     logSilentError('feedback.font.register', error);
   }
@@ -3334,7 +3341,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   let current = '';
   for (const word of words) {
     const next = current ? `${current} ${word}` : word;
-    if (ctx.measureText(next).width > 790) {
+    if (ctx.measureText(next).width > 680) {
       lines.push(current);
       current = word;
     } else {
@@ -3342,7 +3349,12 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
     }
   }
   if (current) lines.push(current);
-  lines.slice(0, 4).forEach((line, i) => ctx.fillText(line, cardX + cardW - 74, cardY + 276 + (i * 56)));
+  const maxLines = 3;
+  const drawLines = lines.slice(0, maxLines);
+  if (lines.length > maxLines && drawLines.length > 0) {
+    drawLines[maxLines - 1] = `${drawLines[maxLines - 1].replace(/\s+$/, '')}...`;
+  }
+  drawLines.forEach((line, i) => ctx.fillText(line, cardX + cardW - 74, cardY + 276 + (i * 56)));
   ctx.shadowBlur = 0;
   ctx.shadowOffsetY = 0;
   ctx.textAlign = 'left';
