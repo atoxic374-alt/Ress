@@ -3195,18 +3195,18 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
 
   // Cinematic light blobs
   const orb1 = ctx.createRadialGradient(width * 0.2, height * 0.15, 40, width * 0.2, height * 0.15, 520);
-  orb1.addColorStop(0, '#6b52dc44');
+  orb1.addColorStop(0, '#6b52dc2e');
   orb1.addColorStop(1, '#7e61ff00');
   ctx.fillStyle = orb1;
   ctx.fillRect(0, 0, width, height);
   const orb2 = ctx.createRadialGradient(width * 0.82, height * 0.22, 20, width * 0.82, height * 0.22, 420);
-  orb2.addColorStop(0, '#8d7add3d');
+  orb2.addColorStop(0, '#8d7add2a');
   orb2.addColorStop(1, '#9f8dff00');
   ctx.fillStyle = orb2;
   ctx.fillRect(0, 0, width, height);
 
   // Repeating geometric background pattern (closer to reference)
-  ctx.globalAlpha = 0.12;
+  ctx.globalAlpha = 0.1;
   ctx.strokeStyle = '#222a3f';
   ctx.lineWidth = 1.8;
   for (let x = 26; x < width; x += 118) {
@@ -3247,8 +3247,8 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   // Multi-pass outer shadow for heavy 3D look
   ctx.save();
   ctx.shadowColor = normalizeHexColor(style.shadow, '#000000');
-  ctx.shadowBlur = 70;
-  ctx.shadowOffsetY = 14;
+  ctx.shadowBlur = 62;
+  ctx.shadowOffsetY = 12;
   ctx.fillStyle = cardGrad;
   drawRoundedRectPath(ctx, cardX, cardY, cardW, cardH, radius);
   ctx.fill();
@@ -3256,14 +3256,14 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
 
   // Additional soft glow around top edge
   const topGlow = ctx.createLinearGradient(cardX, cardY - 20, cardX, cardY + 120);
-  topGlow.addColorStop(0, '#ffffff30');
+  topGlow.addColorStop(0, '#ffffff20');
   topGlow.addColorStop(1, '#ffffff00');
   ctx.fillStyle = topGlow;
   drawRoundedRectPath(ctx, cardX + 4, cardY + 2, cardW - 8, 130, radius - 8);
   ctx.fill();
 
   // Inner highlight and border pass
-  ctx.globalAlpha = 0.20;
+  ctx.globalAlpha = 0.16;
   const inner = ctx.createLinearGradient(cardX, cardY, cardX + cardW, cardY + cardH);
   inner.addColorStop(0, '#ffffff');
   inner.addColorStop(1, '#ffffff00');
@@ -3286,13 +3286,13 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   ctx.clip();
   ctx.fillStyle = 'rgba(38, 32, 76, 0.35)';
   ctx.fillRect(textAreaX, textAreaY, textAreaW * 0.55, textAreaH);
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.03)';
   ctx.fillRect(textAreaX + (textAreaW * 0.55), textAreaY, textAreaW * 0.45, textAreaH);
-  ctx.globalAlpha = 0.15;
-  ctx.strokeStyle = '#c5b8ff';
-  ctx.lineWidth = 1.6;
-  for (let px = textAreaX + (textAreaW * 0.58); px < textAreaX + textAreaW; px += 74) {
-    for (let py = textAreaY + 16; py < textAreaY + textAreaH; py += 64) {
+  ctx.globalAlpha = 0.12;
+  ctx.strokeStyle = '#b9adf6';
+  ctx.lineWidth = 1.4;
+  for (let px = textAreaX + (textAreaW * 0.58); px < textAreaX + textAreaW; px += 80) {
+    for (let py = textAreaY + 18; py < textAreaY + textAreaH; py += 70) {
       ctx.beginPath();
       ctx.moveTo(px, py + 18);
       ctx.lineTo(px + 18, py);
@@ -3337,15 +3337,11 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   const quoteColor = normalizeHexColor(style.quote, '#060608');
   const starColor = normalizeHexColor(style.star, '#7d68d8');
   const nameColor = normalizeHexColor(style.name, '#0f0f16');
-  const rawComment = String(comment ?? '');
-  const imageOnlyTokenRegex = /(--img|--image-only|image-only|صورة فقط|فاصل)/i;
-  const imageOnlyMode = Boolean(style.imageOnly) || imageOnlyTokenRegex.test(rawComment);
-  const cleanComment = rawComment.replace(imageOnlyTokenRegex, '').trim();
-  const finalComment = cleanComment || (imageOnlyMode ? '' : 'بدون تعليق');
+  const finalComment = String(comment || 'بدون تعليق').trim();
   // Decorative mark (replaces quotes)
   ctx.fillStyle = quoteColor;
-  ctx.font = 'bold 112px Sans';
-  ctx.fillText('❞', cardX + 62, cardY + 122);
+  ctx.font = 'bold 104px Sans';
+  ctx.fillText('❝', cardX + 62, cardY + 118);
 
   // Star capsule
   const pillX = cardX + cardW - 400;
@@ -3355,16 +3351,16 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   ctx.fillStyle = accentColor;
   drawRoundedRectPath(ctx, pillX, pillY, pillW, pillH, 45);
   ctx.fill();
-  ctx.globalAlpha = 0.16;
+  ctx.globalAlpha = 0.12;
   const pillGloss = ctx.createLinearGradient(0, pillY, 0, pillY + pillH);
   pillGloss.addColorStop(0, '#ffffff');
   pillGloss.addColorStop(1, '#ffffff00');
   ctx.fillStyle = pillGloss;
   drawRoundedRectPath(ctx, pillX + 3, pillY + 2, pillW - 6, (pillH / 2), 42);
   ctx.fill();
-  ctx.globalAlpha = 0.14;
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 2;
+  ctx.globalAlpha = 0.08;
+  ctx.strokeStyle = '#ffffff88';
+  ctx.lineWidth = 1.5;
   drawRoundedRectPath(ctx, pillX, pillY, pillW, pillH, 45);
   ctx.stroke();
   ctx.globalAlpha = 1;
@@ -3381,34 +3377,32 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
     ctx.stroke();
   }
 
-  if (!imageOnlyMode) {
-    ctx.fillStyle = textColor;
-    ctx.font = 'bold 58px Cairo, Sans';
-    ctx.textAlign = 'right';
-    ctx.direction = 'rtl';
-    ctx.shadowColor = '#00000035';
-    ctx.shadowBlur = 4;
-    ctx.shadowOffsetY = 2;
-    const wrapped = finalComment.slice(0, 220);
-    const words = wrapped.split(/\s+/);
-    const lines = [];
-    let current = '';
-    for (const word of words) {
-      const next = current ? `${current} ${word}` : word;
-      if (ctx.measureText(next).width > 790) {
-        lines.push(current);
-        current = word;
-      } else {
-        current = next;
-      }
+  ctx.fillStyle = textColor;
+  ctx.font = 'bold 58px Cairo, Sans';
+  ctx.textAlign = 'right';
+  ctx.direction = 'rtl';
+  ctx.shadowColor = '#00000035';
+  ctx.shadowBlur = 4;
+  ctx.shadowOffsetY = 2;
+  const wrapped = finalComment.slice(0, 220);
+  const words = wrapped.split(/\s+/);
+  const lines = [];
+  let current = '';
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word;
+    if (ctx.measureText(next).width > 790) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = next;
     }
-    if (current) lines.push(current);
-    lines.slice(0, 4).forEach((line, i) => ctx.fillText(line, cardX + cardW - 110, cardY + 285 + (i * 62)));
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetY = 0;
-    ctx.textAlign = 'left';
-    ctx.direction = 'ltr';
   }
+  if (current) lines.push(current);
+  lines.slice(0, 4).forEach((line, i) => ctx.fillText(line, cardX + cardW - 110, cardY + 285 + (i * 62)));
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.textAlign = 'left';
+  ctx.direction = 'ltr';
 
   const avatarUrl = member?.displayAvatarURL?.({ extension: 'png', size: 256 }) || member?.user?.displayAvatarURL?.({ extension: 'png', size: 256 });
   if (avatarUrl) {
@@ -3440,11 +3434,6 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
       ctx.fill();
 
       ctx.beginPath();
-      ctx.arc(avX + avSize / 2, avY + avSize / 2, (avSize / 2) + 6, 0, Math.PI * 2);
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = '#101116cc';
-      ctx.stroke();
-      ctx.beginPath();
       ctx.arc(avX + avSize / 2, avY + avSize / 2, (avSize / 2) + 2, 0, Math.PI * 2);
       ctx.lineWidth = 2;
       ctx.strokeStyle = '#ffffff88';
@@ -3462,11 +3451,9 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
     }
   }
 
-  if (!imageOnlyMode) {
-    ctx.fillStyle = '#000000';
-    ctx.font = 'bold 54px Cairo, Sans';
-    ctx.fillText(member?.displayName || member?.user?.username || 'Member', cardX + 230, cardY + cardH - 48);
-  }
+  ctx.fillStyle = nameColor;
+  ctx.font = 'bold 54px Cairo, Sans';
+  ctx.fillText(member?.displayName || member?.user?.username || 'Member', cardX + 230, cardY + cardH - 48);
 
   // Server signature bottom-right with real server avatar crop
   const serverName = guild?.name || 'Server';
@@ -3619,11 +3606,13 @@ async function sendFeedbackPrompt({ guild, channel, ticket, config, panelId, cha
 async function sendFeedbackSeparator(channel, feedbackCfg = {}) {
   if (!feedbackCfg?.separatorEnabled) return;
   const separatorImage = resolveImageForSend(feedbackCfg.separatorImage || '');
+  const separatorMode = String(feedbackCfg.separatorMode || '').toLowerCase();
+  const imageOnlySeparator = feedbackCfg.separatorImageOnly === true || separatorMode === 'image-only';
   if (separatorImage) {
     await channel.send({ files: [separatorImage] }).catch((error) => logSilentError('suppressed', error));
-    return;
+    if (imageOnlySeparator) return;
   }
-  if (feedbackCfg.separatorText) {
+  if (feedbackCfg.separatorText && !imageOnlySeparator) {
     await channel.send({ content: feedbackCfg.separatorText }).catch((error) => logSilentError('suppressed', error));
   }
 }
