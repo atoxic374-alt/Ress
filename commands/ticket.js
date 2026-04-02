@@ -3476,6 +3476,13 @@ function mixHex(a, b, amount = 0.5) {
   );
 }
 
+function shadeHex(hex, factor = 1) {
+  const c = hexToRgb(normalizeHexColor(hex, '#777777'));
+  const f = Math.max(0, Number(factor) || 0);
+  if (!c) return '#555555';
+  return rgbToHex(c.r * f, c.g * f, c.b * f);
+}
+
 function getLuminance(hex) {
   const c = hexToRgb(normalizeHexColor(hex, '#777777'));
   if (!c) return 0.5;
@@ -3523,10 +3530,10 @@ async function generateAutoFeedbackStyle(guild, currentStyle = {}) {
 
   // Keep final scene background navy as requested, while matching the card to guild assets.
   const background = '#040a1d';
-  const cardStart = mixHex(base, '#2f254f', 0.72);
-  const cardEnd = mixHex(base, '#7462ad', 0.32);
-  const border = mixHex(cardEnd, '#d7d1ee', 0.18);
-  const star = mixHex(cardEnd, '#9e92c8', 0.28);
+  const cardStart = shadeHex(base, 0.56);
+  const cardEnd = mixHex(base, '#ffffff', 0.2);
+  const border = mixHex(base, '#ffffff', 0.34);
+  const star = mixHex(base, '#ffffff', 0.28);
   const textBase = getLuminance(cardEnd) > 0.46 ? '#101116' : '#f0eefb';
 
   return {
@@ -3538,7 +3545,7 @@ async function generateAutoFeedbackStyle(guild, currentStyle = {}) {
     text: textBase,
     name: textBase,
     quote: textBase,
-    accent: mixHex(cardStart, '#0f111a', 0.45),
+    accent: shadeHex(base, 0.2),
     border,
     star,
     shadow: '#000000'
@@ -5929,8 +5936,8 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
         const enabled = ((await ask('**تفعيل الفاصل؟ yes/no**')) || '').toLowerCase();
         feedbackCfg.separatorEnabled = ['yes', 'y', 'نعم'].includes(enabled);
         if (feedbackCfg.separatorEnabled) {
-          const text = await ask('**نص الفاصل (0 للإفتراضي)**');
-          feedbackCfg.separatorText = text === '0' ? baseConfig().feedback.separatorText : (text || feedbackCfg.separatorText);
+          const text = await ask('**نص الفاصل (0 للحذف)**');
+          feedbackCfg.separatorText = text === '0' ? '' : (text || feedbackCfg.separatorText);
           feedbackCfg.separatorImage = await promptAndStoreImage({
             prompt: '**صورة الفاصل: ارسل رابط مباشر/ارفق صورة (0 للحذف)**',
             currentValue: feedbackCfg.separatorImage,
