@@ -17,11 +17,12 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
-const { createCanvas, loadImage, registerFont } = require('canvas');
+const { createCanvas, loadImage } = require('canvas');
 const { registerTicketInteractionRouter } = require('../utils/ticketInteractionRouter');
 const colorManager = require('../utils/colorManager');
 const { getDatabase } = require('../utils/database');
 const { getResponsibilitiesSnapshot } = require('../utils/responsibilitiesStore');
+const { ensureCairoFontsRegistered } = require('../utils/cairoFont');
 
 const name = 'ticket';
 const aliases = ['تكت', 'tclose', 'اغلاق', 'قفل', 'اقفال', 'myticket', 'نقاطي', 'tadd', 'اضافه', 'اضافة', 'إضافة', 'tremove', 'ازاله', 'ازالة', 'إزالة', 'tchange', 'تغيير', 'تحويل', 'ttop', 'نقاط', 'tname', 'اسم', 'تسميه', 'تسمية', 'remind', 'تنبيه', 'استدعاء', 'points', 'tm', 'treset', 'tmreset', 'tblock'];
@@ -39,26 +40,6 @@ const botOwnersCache = new Set();
 let handlersRegistered = false;
 const pingCooldowns = new Map();
 
-let feedbackFontsRegistered = false;
-let feedbackFontNoticeShown = false;
-function ensureFeedbackFontsRegistered() {
-  if (feedbackFontsRegistered) return;
-  const customRegular = path.join(__dirname, '..', 'assets', 'fonts', 'Cairo-Regular.ttf');
-  const customBold = path.join(__dirname, '..', 'assets', 'fonts', 'Cairo-Bold.ttf');
-  const regularPath = fs.existsSync(customRegular) ? customRegular : '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
-  const boldPath = fs.existsSync(customBold) ? customBold : '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
-  try {
-    if (fs.existsSync(regularPath)) registerFont(regularPath, { family: 'Cairo', weight: 'normal' });
-    if (fs.existsSync(boldPath)) registerFont(boldPath, { family: 'Cairo', weight: 'bold' });
-    feedbackFontsRegistered = true;
-    if (!feedbackFontNoticeShown && (!fs.existsSync(customRegular) || !fs.existsSync(customBold))) {
-      feedbackFontNoticeShown = true;
-      console.warn('⚠️ Cairo TTF not found in assets/fonts. Using DejaVu fallback. Place Cairo-Regular.ttf and Cairo-Bold.ttf in assets/fonts for true Cairo.');
-    }
-  } catch (error) {
-    logSilentError('feedback.font.register', error);
-  }
-}
 const ticketClaimLocks = new Set();
 const ticketOpenRequestLocks = new Set();
 const activeTicketSetupSessions = new Map();
@@ -3202,7 +3183,7 @@ async function handleClaimFromRequest(interaction, reqId) {
 }
 
 async function buildFeedbackCardImage({ guild, member, stars, comment, style = {} }) {
-  ensureFeedbackFontsRegistered();
+  ensureCairoFontsRegistered();
   const width = 1800;
   const height = 860;
   const canvas = createCanvas(width, height);

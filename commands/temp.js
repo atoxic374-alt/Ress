@@ -15,6 +15,7 @@ const {
 const fs = require('fs');
 const path = require('path');
 const { createCanvas, loadImage } = require('canvas');
+const { ensureCairoFontsRegistered } = require('../utils/cairoFont');
 const interactionRouter = require('../utils/interactionRouter');
 const colorManager = require('../utils/colorManager.js');
 
@@ -37,6 +38,8 @@ const TOP_SEPARATOR_FETCH_TIMEOUT_MS = 15000;
 const KICK_REJOIN_BLOCK_MS = 30 * 1000;
 const DATA_VERSION = 3;
 
+ensureCairoFontsRegistered();
+
 const SETTING_CONTROL_KEYS = [
   'open', 'lock', 'show', 'hide', 'invite',
   'rename', 'limit', 'region', 'allow', 'reject',
@@ -50,7 +53,7 @@ const CONTROL_LAYOUT_ORDER = [
   'transfer'
 ];
 
-const LATIN_FONT_FAMILY = '"Segoe UI", "Arial", sans-serif';
+const LATIN_FONT_FAMILY = '"Cairo", "Segoe UI", "Arial", sans-serif';
 const ARABIC_FONT_FAMILY = '"Cairo", "Tajawal", "Noto Sans Arabic", "Segoe UI", "Arial", sans-serif';
 
 const CONTROL_META = {
