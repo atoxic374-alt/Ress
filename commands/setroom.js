@@ -1798,8 +1798,8 @@ async function createRoom(request, client, guildConfig) {
                 if (!notifyUser) continue;
 
                 const notificationEmbed = colorManager.createEmbed()
-                    .setTitle('📢 تم إنشاء روم')
-                    .setDescription(`تم إنشاء روم ${request.roomType} بواسطة <@${request.userId}>`)
+                    .setTitle('تم انشاء روم ميلاد/دعاء')
+                    .setDescription(`**تم إنشاء روم خاص لك ${request.roomType}\n بواسطة <@${request.userId}>**`)
                     .addFields([
                         { name: 'الروم', value: `<#${channel.id}>`, inline: true },
                         { name: 'السيرفر', value: guild.name, inline: true }
@@ -2221,9 +2221,9 @@ function getSetroomSummaryEmbed(guild, guildConfig = {}, actor = null) {
 function createSetroomMainRows() {
     return [
         new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('setroom_panel_channels').setLabel('القنوات').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_panel_channels').setLabel('الرومات').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('setroom_panel_roles').setLabel('رولات القبول/الرفض').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('setroom_panel_safety').setLabel('الأمان والكولداون').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('setroom_panel_safety').setLabel('كولداون').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('setroom_panel_setup_texts').setLabel('نصوص السيتب').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('setroom_panel_room_output').setLabel('رسالة الروم').setStyle(ButtonStyle.Secondary)
         ),
