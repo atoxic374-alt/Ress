@@ -3188,36 +3188,42 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   ctx.antialias = 'subpixel';
 
   const bg = ctx.createLinearGradient(0, 0, width, height);
-  bg.addColorStop(0, normalizeHexColor(style.background, '#0b1020'));
-  bg.addColorStop(1, '#121a2b');
+  bg.addColorStop(0, normalizeHexColor(style.background, '#070b16'));
+  bg.addColorStop(1, '#0d1322');
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, width, height);
 
   // Cinematic light blobs
   const orb1 = ctx.createRadialGradient(width * 0.2, height * 0.15, 40, width * 0.2, height * 0.15, 520);
-  orb1.addColorStop(0, '#7e61ff88');
+  orb1.addColorStop(0, '#6b52dc2e');
   orb1.addColorStop(1, '#7e61ff00');
   ctx.fillStyle = orb1;
   ctx.fillRect(0, 0, width, height);
   const orb2 = ctx.createRadialGradient(width * 0.82, height * 0.22, 20, width * 0.82, height * 0.22, 420);
-  orb2.addColorStop(0, '#9f8dff66');
+  orb2.addColorStop(0, '#8d7add2a');
   orb2.addColorStop(1, '#9f8dff00');
   ctx.fillStyle = orb2;
   ctx.fillRect(0, 0, width, height);
 
-  // Premium repeating pattern + layered depth
-  ctx.globalAlpha = 0.14;
-  ctx.strokeStyle = normalizeHexColor(style.border, '#9c88ff');
-  ctx.lineWidth = 2.2;
-  for (let x = 24; x < width; x += 92) {
-    for (let y = 24; y < height; y += 92) {
+  // Repeating geometric background pattern (closer to reference)
+  ctx.globalAlpha = 0.1;
+  ctx.strokeStyle = '#222a3f';
+  ctx.lineWidth = 1.8;
+  for (let x = 26; x < width; x += 118) {
+    for (let y = 16; y < height; y += 98) {
       ctx.beginPath();
-      ctx.moveTo(x, y + 24);
-      ctx.lineTo(x + 20, y);
-      ctx.lineTo(x + 44, y + 8);
-      ctx.lineTo(x + 56, y + 32);
-      ctx.lineTo(x + 36, y + 54);
-      ctx.lineTo(x + 12, y + 46);
+      ctx.moveTo(x, y + 16);
+      ctx.lineTo(x + 24, y);
+      ctx.lineTo(x + 46, y + 10);
+      ctx.lineTo(x + 22, y + 26);
+      ctx.closePath();
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(x + 54, y + 26);
+      ctx.lineTo(x + 78, y + 12);
+      ctx.lineTo(x + 102, y + 22);
+      ctx.lineTo(x + 78, y + 40);
       ctx.closePath();
       ctx.stroke();
     }
@@ -3229,20 +3235,20 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   ctx.fillRect(0, 0, width, height);
   ctx.globalAlpha = 1;
 
-  const cardX = 190;
-  const cardY = 120;
-  const cardW = 1420;
-  const cardH = 500;
+  const cardX = 250;
+  const cardY = 105;
+  const cardW = 1300;
+  const cardH = 520;
   const radius = 58;
 
   const cardGrad = ctx.createLinearGradient(cardX, cardY, cardX + cardW, cardY + cardH);
-  cardGrad.addColorStop(0, normalizeHexColor(style.cardStart, '#6d54c7'));
-  cardGrad.addColorStop(1, normalizeHexColor(style.cardEnd, '#8f7ce2'));
+  cardGrad.addColorStop(0, normalizeHexColor(style.cardStart, '#57419f'));
+  cardGrad.addColorStop(1, normalizeHexColor(style.cardEnd, '#7663be'));
   // Multi-pass outer shadow for heavy 3D look
   ctx.save();
   ctx.shadowColor = normalizeHexColor(style.shadow, '#000000');
-  ctx.shadowBlur = 95;
-  ctx.shadowOffsetY = 20;
+  ctx.shadowBlur = 62;
+  ctx.shadowOffsetY = 12;
   ctx.fillStyle = cardGrad;
   drawRoundedRectPath(ctx, cardX, cardY, cardW, cardH, radius);
   ctx.fill();
@@ -3250,14 +3256,14 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
 
   // Additional soft glow around top edge
   const topGlow = ctx.createLinearGradient(cardX, cardY - 20, cardX, cardY + 120);
-  topGlow.addColorStop(0, '#ffffff66');
+  topGlow.addColorStop(0, '#ffffff20');
   topGlow.addColorStop(1, '#ffffff00');
   ctx.fillStyle = topGlow;
   drawRoundedRectPath(ctx, cardX + 4, cardY + 2, cardW - 8, 130, radius - 8);
   ctx.fill();
 
   // Inner highlight and border pass
-  ctx.globalAlpha = 0.30;
+  ctx.globalAlpha = 0.16;
   const inner = ctx.createLinearGradient(cardX, cardY, cardX + cardW, cardY + cardH);
   inner.addColorStop(0, '#ffffff');
   inner.addColorStop(1, '#ffffff00');
@@ -3266,47 +3272,102 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   ctx.fill();
   ctx.globalAlpha = 1;
   ctx.strokeStyle = normalizeHexColor(style.border, '#9c88ff');
-  ctx.lineWidth = 5;
+  ctx.lineWidth = 4;
   drawRoundedRectPath(ctx, cardX, cardY, cardW, cardH, radius);
   ctx.stroke();
 
-  const textColor = normalizeHexColor(style.text, '#ffffff');
+  // Mid text-area: half plain + half patterned (as requested)
+  const textAreaX = cardX + 420;
+  const textAreaY = cardY + 145;
+  const textAreaW = 790;
+  const textAreaH = 230;
+  ctx.save();
+  drawRoundedRectPath(ctx, textAreaX, textAreaY, textAreaW, textAreaH, 28);
+  ctx.clip();
+  ctx.fillStyle = 'rgba(38, 32, 76, 0.35)';
+  ctx.fillRect(textAreaX, textAreaY, textAreaW * 0.55, textAreaH);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.03)';
+  ctx.fillRect(textAreaX + (textAreaW * 0.55), textAreaY, textAreaW * 0.45, textAreaH);
+  ctx.globalAlpha = 0.12;
+  ctx.strokeStyle = '#b9adf6';
+  ctx.lineWidth = 1.4;
+  for (let px = textAreaX + (textAreaW * 0.58); px < textAreaX + textAreaW; px += 80) {
+    for (let py = textAreaY + 18; py < textAreaY + textAreaH; py += 70) {
+      ctx.beginPath();
+      ctx.moveTo(px, py + 18);
+      ctx.lineTo(px + 18, py);
+      ctx.lineTo(px + 36, py + 8);
+      ctx.lineTo(px + 20, py + 28);
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+
+  // Inner motifs on card (left + right)
+  ctx.save();
+  ctx.globalAlpha = 0.08;
+  ctx.fillStyle = '#ffffff';
+  for (let i = 0; i < 4; i += 1) {
+    const lx = cardX + 120 + (i * 72);
+    const ly = cardY + 120 + (i * 54);
+    ctx.beginPath();
+    ctx.moveTo(lx, ly + 50);
+    ctx.lineTo(lx + 46, ly);
+    ctx.lineTo(lx + 98, ly + 22);
+    ctx.lineTo(lx + 56, ly + 72);
+    ctx.closePath();
+    ctx.fill();
+  }
+  for (let i = 0; i < 4; i += 1) {
+    const rx = cardX + cardW - 350 + (i * 38);
+    const ry = cardY + 76 + (i * 82);
+    ctx.beginPath();
+    ctx.moveTo(rx, ry + 42);
+    ctx.lineTo(rx + 42, ry);
+    ctx.lineTo(rx + 86, ry + 18);
+    ctx.lineTo(rx + 42, ry + 62);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+
+  const textColor = normalizeHexColor(style.text, '#000000');
   const accentColor = normalizeHexColor(style.accent, '#11121a');
-  const quoteColor = normalizeHexColor(style.quote, '#1a142f');
-  const starColor = normalizeHexColor(style.star, '#8f7ce2');
+  const quoteColor = normalizeHexColor(style.quote, '#060608');
+  const starColor = normalizeHexColor(style.star, '#7d68d8');
   const nameColor = normalizeHexColor(style.name, '#0f0f16');
+  const finalComment = String(comment || 'بدون تعليق').trim();
   // Decorative mark (replaces quotes)
   ctx.fillStyle = quoteColor;
-  ctx.font = 'bold 86px Sans';
-  ctx.fillText('✦', cardX + 62, cardY + 112);
-  ctx.font = 'bold 64px Sans';
-  ctx.fillText('✦', cardX + 112, cardY + 144);
+  ctx.font = 'bold 104px Sans';
+  ctx.fillText('❝', cardX + 62, cardY + 118);
 
   // Star capsule
-  const pillX = cardX + cardW - 435;
-  const pillY = cardY + 28;
-  const pillW = 370;
-  const pillH = 90;
+  const pillX = cardX + cardW - 400;
+  const pillY = cardY + 26;
+  const pillW = 360;
+  const pillH = 86;
   ctx.fillStyle = accentColor;
   drawRoundedRectPath(ctx, pillX, pillY, pillW, pillH, 45);
   ctx.fill();
-  ctx.globalAlpha = 0.24;
+  ctx.globalAlpha = 0.12;
   const pillGloss = ctx.createLinearGradient(0, pillY, 0, pillY + pillH);
   pillGloss.addColorStop(0, '#ffffff');
   pillGloss.addColorStop(1, '#ffffff00');
   ctx.fillStyle = pillGloss;
   drawRoundedRectPath(ctx, pillX + 3, pillY + 2, pillW - 6, (pillH / 2), 42);
   ctx.fill();
-  ctx.globalAlpha = 0.2;
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 2;
+  ctx.globalAlpha = 0.08;
+  ctx.strokeStyle = '#ffffff88';
+  ctx.lineWidth = 1.5;
   drawRoundedRectPath(ctx, pillX, pillY, pillW, pillH, 45);
   ctx.stroke();
   ctx.globalAlpha = 1;
 
   for (let i = 0; i < 5; i += 1) {
-    const cx = pillX + 45 + (i * 63);
-    const cy = pillY + 46;
+    const cx = pillX + 44 + (i * 62);
+    const cy = pillY + 43;
     const active = i < stars;
     ctx.fillStyle = active ? starColor : '#5a5480';
     ctx.strokeStyle = active ? '#ffffff88' : '#ffffff22';
@@ -3320,16 +3381,16 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   ctx.font = 'bold 58px Cairo, Sans';
   ctx.textAlign = 'right';
   ctx.direction = 'rtl';
-  ctx.shadowColor = '#00000077';
-  ctx.shadowBlur = 12;
-  ctx.shadowOffsetY = 4;
-  const wrapped = String(comment || 'بدون تعليق').slice(0, 220);
+  ctx.shadowColor = '#00000035';
+  ctx.shadowBlur = 4;
+  ctx.shadowOffsetY = 2;
+  const wrapped = finalComment.slice(0, 220);
   const words = wrapped.split(/\s+/);
   const lines = [];
   let current = '';
   for (const word of words) {
     const next = current ? `${current} ${word}` : word;
-    if (ctx.measureText(next).width > 860) {
+    if (ctx.measureText(next).width > 790) {
       lines.push(current);
       current = word;
     } else {
@@ -3337,7 +3398,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
     }
   }
   if (current) lines.push(current);
-  lines.slice(0, 4).forEach((line, i) => ctx.fillText(line, cardX + cardW - 70, cardY + 225 + (i * 64)));
+  lines.slice(0, 4).forEach((line, i) => ctx.fillText(line, cardX + cardW - 110, cardY + 285 + (i * 62)));
   ctx.shadowBlur = 0;
   ctx.shadowOffsetY = 0;
   ctx.textAlign = 'left';
@@ -3347,26 +3408,35 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   if (avatarUrl) {
     try {
       const avatar = await loadImage(avatarUrl);
-      const avX = cardX - 70;
-      const avY = cardY + cardH - 210;
-      const avSize = 230;
-      // Avatar square frame + inner divider + black circle (as requested)
+      const avX = cardX - 58;
+      const avY = cardY + cardH - 206;
+      const avSize = 214;
+      // Avatar frame: cleaner and less black, with subtle glass effect
       ctx.save();
-      ctx.fillStyle = normalizeHexColor(style.cardStart, '#6d54c7');
-      ctx.shadowColor = '#00000099';
-      ctx.shadowBlur = 26;
-      ctx.shadowOffsetY = 10;
-      drawRoundedRectPath(ctx, avX - 32, avY - 32, avSize + 64, avSize + 64, 54);
+      const avatarFrame = ctx.createLinearGradient(avX - 24, avY - 24, avX + avSize + 24, avY + avSize + 24);
+      avatarFrame.addColorStop(0, normalizeHexColor(style.cardStart, '#725ad0'));
+      avatarFrame.addColorStop(1, normalizeHexColor(style.cardEnd, '#8d78df'));
+      ctx.fillStyle = avatarFrame;
+      ctx.shadowColor = '#00000055';
+      ctx.shadowBlur = 14;
+      ctx.shadowOffsetY = 6;
+      drawRoundedRectPath(ctx, avX - 24, avY - 24, avSize + 48, avSize + 48, 64);
       ctx.fill();
       ctx.shadowBlur = 0;
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 4;
-      drawRoundedRectPath(ctx, avX - 18, avY - 18, avSize + 36, avSize + 36, 46);
+      ctx.strokeStyle = '#ffffff66';
+      ctx.lineWidth = 2;
+      drawRoundedRectPath(ctx, avX - 16, avY - 16, avSize + 32, avSize + 32, 58);
       ctx.stroke();
+
+      // Transparent inner plate like reference
+      ctx.fillStyle = '#ffffff18';
+      drawRoundedRectPath(ctx, avX - 10, avY - 10, avSize + 20, avSize + 20, 52);
+      ctx.fill();
+
       ctx.beginPath();
-      ctx.arc(avX + avSize / 2, avY + avSize / 2, (avSize / 2) + 8, 0, Math.PI * 2);
-      ctx.lineWidth = 5;
-      ctx.strokeStyle = '#000000';
+      ctx.arc(avX + avSize / 2, avY + avSize / 2, (avSize / 2) + 2, 0, Math.PI * 2);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#ffffff88';
       ctx.stroke();
       ctx.restore();
       ctx.save();
@@ -3383,7 +3453,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
 
   ctx.fillStyle = nameColor;
   ctx.font = 'bold 54px Cairo, Sans';
-  ctx.fillText(member?.displayName || member?.user?.username || 'Member', cardX + 250, cardY + cardH - 46);
+  ctx.fillText(member?.displayName || member?.user?.username || 'Member', cardX + 230, cardY + cardH - 48);
 
   // Server signature bottom-right with real server avatar crop
   const serverName = guild?.name || 'Server';
@@ -3536,11 +3606,13 @@ async function sendFeedbackPrompt({ guild, channel, ticket, config, panelId, cha
 async function sendFeedbackSeparator(channel, feedbackCfg = {}) {
   if (!feedbackCfg?.separatorEnabled) return;
   const separatorImage = resolveImageForSend(feedbackCfg.separatorImage || '');
+  const separatorMode = String(feedbackCfg.separatorMode || '').toLowerCase();
+  const imageOnlySeparator = feedbackCfg.separatorImageOnly === true || separatorMode === 'image-only';
   if (separatorImage) {
     await channel.send({ files: [separatorImage] }).catch((error) => logSilentError('suppressed', error));
-    return;
+    if (imageOnlySeparator) return;
   }
-  if (feedbackCfg.separatorText) {
+  if (feedbackCfg.separatorText && !imageOnlySeparator) {
     await channel.send({ content: feedbackCfg.separatorText }).catch((error) => logSilentError('suppressed', error));
   }
 }
