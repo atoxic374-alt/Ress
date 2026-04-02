@@ -33,6 +33,8 @@ const ticketSearchSessions = new Map();
 const pointsAdjustSessions = new Map();
 const memberFetchInFlight = new Map();
 const ticketFeedbackSessions = new Map();
+const feedbackPromptSessions = new Map();
+const botOwnersCache = new Set();
 
 let handlersRegistered = false;
 const pingCooldowns = new Map();
@@ -3414,15 +3416,20 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
 async function sendFeedbackPrompt({ guild, channel, ticket, config, panelId, channelId }) {
   const feedbackCfg = config?.feedback || {};
   if (!feedbackCfg.enabled || !feedbackCfg.channelId || !ticket?.memberId) return;
+  const promptKey = `${guild.id}:${panelId || 'default'}:${channelId}:${ticket.memberId}`;
+  const existingPrompt = feedbackPromptSessions.get(promptKey);
+  if (existingPrompt && !existingPrompt.submittedAt) return;
+
   const token = buildFeedbackSessionToken();
-  ticketFeedbackSessions.set(token, {
+  const sessionPayload = {
     guildId: guild.id,
     panelId,
     ticketChannelId: channelId,
     memberId: ticket.memberId,
     expiresAt: Date.now() + FEEDBACK_SESSION_TTL_MS
-  });
-  saveRuntimeSession('ticket-feedback', token, ticketFeedbackSessions.get(token), FEEDBACK_SESSION_TTL_MS);
+  };
+  ticketFeedbackSessions.set(token, sessionPayload);
+  saveRuntimeSession('ticket-feedback', token, sessionPayload, FEEDBACK_SESSION_TTL_MS);
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -3433,17 +3440,37 @@ async function sendFeedbackPrompt({ guild, channel, ticket, config, panelId, cha
 
   const text = `**${feedbackCfg.triggerWord || 'يرجى وضع تقييمك لخدماتنا'}**`;
   if (feedbackCfg.triggerScope === 'ticket') {
-    await channel.send({ ...buildTicketMessagePayload('التقييم', text), components: [row] }).catch((error) => logSilentError('feedback.prompt.ticket', error));
+    const sent = await channel.send({ ...buildTicketMessagePayload('التقييم', text), components: [row] }).catch((error) => {
+      logSilentError('feedback.prompt.ticket', error);
+      return null;
+    });
+    if (sent?.id) {
+      sessionPayload.promptChannelId = sent.channelId;
+      sessionPayload.promptMessageId = sent.id;
+      ticketFeedbackSessions.set(token, sessionPayload);
+      feedbackPromptSessions.set(promptKey, { token, submittedAt: null });
+      saveRuntimeSession('ticket-feedback', token, sessionPayload, FEEDBACK_SESSION_TTL_MS);
+    }
     return;
   }
 
   const user = await guild.client.users.fetch(ticket.memberId).catch(() => null);
   if (!user) return;
   const icon = guild.iconURL({ extension: 'png', size: 256 }) || undefined;
-  await user.send({
+  const dmMsg = await user.send({
     embeds: [colorManager.createEmbed().setTitle('يرجى وضع تقييمك لخدماتنا').setDescription(text).setThumbnail(icon)],
     components: [row]
-  }).catch((error) => logSilentError('feedback.prompt.dm', error));
+  }).catch((error) => {
+    logSilentError('feedback.prompt.dm', error);
+    return null;
+  });
+  if (dmMsg?.id) {
+    sessionPayload.promptChannelId = dmMsg.channelId;
+    sessionPayload.promptMessageId = dmMsg.id;
+    ticketFeedbackSessions.set(token, sessionPayload);
+    feedbackPromptSessions.set(promptKey, { token, submittedAt: null });
+    saveRuntimeSession('ticket-feedback', token, sessionPayload, FEEDBACK_SESSION_TTL_MS);
+  }
 }
 
 async function sendAutoCloseWarning(channel, ticket, dueAt) {
@@ -4681,6 +4708,8 @@ function createReasonComponents(config, guildId, panelId = 'default') {
 }
 
 async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
+  botOwnersCache.clear();
+  for (const ownerId of BOT_OWNERS || []) botOwnersCache.add(String(ownerId));
   const dedupeKey = `${message.guild?.id || 'dm'}:${message.id}`;
   if (recentTicketCommandMessages.has(dedupeKey)) return;
   recentTicketCommandMessages.add(dedupeKey);
@@ -5112,7 +5141,6 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
         { label: 'الاستلام من شات مخصص', value: 'toggle_claim_channel', description: 'تفعيل شات القبول لطلبات الاستلام', emoji: '<:emoji_14:1484393414551408771>' },
         { label: 'الاحتفاظ بعد الاغلاق', value: 'toggle_keep_closed', description: 'حذف التكت أو إبقاؤه بعد الإغلاق', emoji: '<:emoji_14:1484393414551408771>' },
         { label: 'اعدادات الرسائل', value: 'set_messages', description: 'تخصيص النصوص قبل/بعد/قبول', emoji: '<:emoji_14:1484393414551408771>' },
-        { label: 'التقييم', value: 'set_feedback', description: 'إعدادات نظام تقييم العملاء', emoji: '<:emoji_14:1484393414551408771>' },
         { label: 'اعدادات الصور', value: 'set_images', description: 'تخصيص صور الفتح/الاستلام/الفاصل', emoji: '<:emoji_14:1484393414551408771>' },
         { label: 'تعديل الاسباب', value: 'set_reasons', description: 'تعديل أسماء/وصف/كاتوقري الأسباب', emoji: '<:emoji_14:1484393414551408771>' },
         { label: 'طريقة العرض', value: 'set_display_mode', description: 'الاختيار بين buttons أو menu', emoji: '<:emoji_14:1484393414551408771>' },
@@ -5123,7 +5151,12 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
         { label: 'Finish', value: 'finish', description: 'حفظ الإعدادات الإغلاق ', emoji: '<:emoji_14:1484393414551408771>' }
       ]);
 
-    return [new ActionRowBuilder().addComponents(menu)];
+    const feedbackButton = new ButtonBuilder()
+      .setCustomId(`ticket_setup_feedback_btn_${message.author.id}`)
+      .setLabel('التقييم')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('⭐');
+    return [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(feedbackButton)];
   };
 
   setupMessage = await controlChannel.send({ embeds: [buildSetupEmbed()], components: buildMenuComponents() });
@@ -5143,7 +5176,8 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
   }
 
   const collector = setupMessage.createMessageComponentCollector({
-    filter: (i) => i.user.id === message.author.id && i.customId.startsWith('ticket_setup_menu_'),
+    filter: (i) => i.user.id === message.author.id
+      && (i.customId.startsWith('ticket_setup_menu_') || i.customId === `ticket_setup_feedback_btn_${message.author.id}`),
     time: 30 * 60 * 1000
   });
 
@@ -5770,7 +5804,9 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
 
   collector.on('collect', async (interaction) => {
     try {
-      const choice = interaction.values?.[0];
+      const choice = interaction.customId === `ticket_setup_feedback_btn_${message.author.id}`
+        ? 'set_feedback'
+        : interaction.values?.[0];
       if (!choice) return;
 
       activePromptInteraction = interaction;
@@ -6440,6 +6476,14 @@ function registerTicketMessageActivityTracker(client) {
     const feedbackConfig = config?.feedback || baseConfig().feedback;
     const triggerWord = String(feedbackConfig.triggerWord || '').trim();
     if (feedbackConfig.enabled && triggerWord && String(message.content || '').trim().toLowerCase() === triggerWord.toLowerCase()) {
+      const isBotOwner = botOwnersCache.has(message.author.id);
+      const isServerOwner = message.guild.ownerId === message.author.id;
+      const isTicketClaimer = ticket?.claimedBy === message.author.id;
+      const isSystemResponsible = hasStaffAccess(message.member, config, ticket?.reasonKey, ticket);
+      if (!isBotOwner && !isServerOwner && !isTicketClaimer && !isSystemResponsible) {
+        await message.delete().catch((error) => logSilentError('suppressed', error));
+        return;
+      }
       await message.delete().catch((error) => logSilentError('suppressed', error));
       await sendFeedbackPrompt({
         guild: message.guild,
@@ -7147,6 +7191,10 @@ function registerHandlers(client) {
           const review = String(interaction.fields.getTextInputValue('review') || '').trim().slice(0, 300);
           const { config } = getPanelData(session.guildId, session.panelId || 'default');
           const feedbackCfg = config.feedback || baseConfig().feedback;
+          if (session.submittedAt) {
+            await interaction.reply(buildTicketMessagePayload('التقييم', '**تم إرسال تقييمك مسبقًا.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+            return;
+          }
           const guild = client.guilds.cache.get(session.guildId) || await client.guilds.fetch(session.guildId).catch(() => null);
           if (!guild || !feedbackCfg.channelId) {
             await interaction.reply(buildTicketMessagePayload('التقييم', '**تعذر العثور على روم التقييم.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
@@ -7163,6 +7211,24 @@ function registerHandlers(client) {
           await feedbackChannel.send({ files: [attachment] }).catch((error) => logSilentError('suppressed', error));
           if (feedbackCfg.separatorEnabled && feedbackCfg.separatorText) {
             await feedbackChannel.send({ content: feedbackCfg.separatorText }).catch((error) => logSilentError('suppressed', error));
+          }
+          session.submittedAt = Date.now();
+          ticketFeedbackSessions.set(token, session);
+          saveRuntimeSession('ticket-feedback', token, session, FEEDBACK_SESSION_TTL_MS);
+          const promptKey = `${session.guildId}:${session.panelId || 'default'}:${session.ticketChannelId}:${session.memberId}`;
+          feedbackPromptSessions.set(promptKey, { token, submittedAt: session.submittedAt });
+          if (session.promptChannelId && session.promptMessageId) {
+            const promptChannel = await client.channels.fetch(session.promptChannelId).catch(() => null);
+            const promptMsg = promptChannel?.messages?.fetch
+              ? await promptChannel.messages.fetch(session.promptMessageId).catch(() => null)
+              : null;
+            if (promptMsg?.editable && promptMsg.components?.length) {
+              const disabledRows = promptMsg.components.map((row) => {
+                const components = row.components.map((component) => ButtonBuilder.from(component).setDisabled(true));
+                return new ActionRowBuilder().addComponents(components);
+              });
+              await promptMsg.edit({ components: disabledRows }).catch((error) => logSilentError('suppressed', error));
+            }
           }
           ticketFeedbackSessions.delete(token);
           deleteRuntimeSession('ticket-feedback', token);
