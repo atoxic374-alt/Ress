@@ -1273,17 +1273,19 @@ async function syncTicketLogMessage({
   return true;
 }
 
-async function sendClaimAnnounce({ channel, config, ticket, claimerId, claimImage }) {
+async function sendClaimAnnounce({ channel, config, ticket, claimerId, claimImage, suppressRoleMentions = false }) {
   const adminRoleIds = getAdminRoles(config, ticket?.reasonKey)
     .map((id) => String(id || '').trim())
     .filter((id) => /^\d{16,20}$/.test(id));
 
   const reasonName = config.reasons?.[ticket.reasonKey]?.name || `سبب ${ticket.reasonKey}`;
-  const mentionChunks = buildMentionChunks(adminRoleIds);
-  await runConcurrentTasks(
-    mentionChunks.map((chunk) => channel.send({ content: chunk })),
-    'claim.announce.mentions'
-  );
+  if (!suppressRoleMentions) {
+    const mentionChunks = buildMentionChunks(adminRoleIds);
+    await runConcurrentTasks(
+      mentionChunks.map((chunk) => channel.send({ content: chunk })),
+      'claim.announce.mentions'
+    );
+  }
 
   const modalAnswers = ticket?.openModalAnswers && typeof ticket.openModalAnswers === 'object'
     ? Object.entries(ticket.openModalAnswers)
@@ -2576,31 +2578,35 @@ async function createTicketChannel({
 
   const controls = await buildTicketControls(guild.id, panelId, channel.id, config, { includeClaimButton });
 
+  const shouldMentionAdminsOnOpen = Boolean(includeClaimButton && config.autoCreateOnRequest && !config.claimFromDedicatedChannel && !claimedByOnCreate);
+  if (shouldMentionAdminsOnOpen) {
+    const openMentionChunks = buildMentionChunks(getAdminRoles(config, reasonKey));
+    for (const chunk of openMentionChunks) {
+      await channel.send({ content: chunk }).catch((error) => logSilentError('create.sendOpenMentions', error));
+    }
+  }
+
   const introText = renderTicketText(reasonSettings.beforeText, memberId);
   const openImage = resolveImageForSend(reasonSettings.openImage);
   const outroText = renderTicketText(reasonSettings.afterText, memberId);
+  const introContent = shouldMentionAdminsOnOpen && introText ? `|\n\n${introText}` : introText;
 
-  const parallelCreationTasks = [];
-
-  // Send initial message with controls and intro text/image
-  parallelCreationTasks.push(channel.send({
-    ...(introText ? { content: introText } : {}),
+  // Send initial message with controls and intro text/image first
+  await channel.send({
+    ...(introContent ? { content: introContent } : {}),
     ...(openImage ? { files: [openImage] } : {}),
     components: controls
-  }).catch((error) => logSilentError("create.sendIntroMessage", error)));
+  }).catch((error) => logSilentError("create.sendIntroMessage", error));
 
-  // Send outro text if it exists
-  if (outroText) {
-    parallelCreationTasks.push(channel.send({ content: outroText }).catch((error) => logSilentError("create.sendOutroMessage", error)));
-  }
+  // Trigger outro after intro is confirmed to preserve order, without blocking the rest of creation flow.
+  const outroSendPromise = outroText
+    ? channel.send({ content: outroText }).catch((error) => logSilentError("create.sendOutroMessage", error))
+    : Promise.resolve();
 
   // Update counter if not in user mode (this will be handled by setGuildData which queues writes)
   if (config.ticketNameMode !== "user") {
     config.counter = (config.counter || 1) + 1;
   }
-
-  // Execute all parallel tasks
-  await Promise.allSettled(parallelCreationTasks);
 
   tickets[channel.id] = {
     channelId: channel.id,
@@ -2621,7 +2627,7 @@ async function createTicketChannel({
     lastActivityAt: Date.now()
   };
 
-  await syncTicketLogMessage({
+  const syncLogPromise = syncTicketLogMessage({
     guild,
     config,
     ticket: tickets[channel.id],
@@ -2629,6 +2635,8 @@ async function createTicketChannel({
     actionText: `تم فتح التكت عن طريق : <@${memberId}>`,
     actor: member?.user || null
   });
+
+  await Promise.allSettled([outroSendPromise, syncLogPromise]);
 
   setGuildData(guild.id, config, tickets, pendingRequests, panelId);
   return channel;
@@ -2879,7 +2887,8 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
     config,
     ticket,
     claimerId: interaction.user.id,
-    claimImage: null
+    claimImage: null,
+    suppressRoleMentions: Boolean(config.autoCreateOnRequest && !config.claimFromDedicatedChannel)
   }).catch((error) => logSilentError('suppressed', error));
 
   const postClaimTasks = [];
@@ -4486,6 +4495,7 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
 
   let resumedSetupPanelId = null;
   let resumedSetupNotice = null;
+  let previousSetupMessageRef = null;
   if (existingSession && (Date.now() - existingSession.startedAt) < (30 * 60 * 1000)) {
     if (existingSession.sourceMessageId === message.id) return;
     resumedSetupPanelId = extractChannelId(existingSession.panelId || '') || null;
@@ -4494,11 +4504,19 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
       deleteRuntimeSession('ticket-setup', setupSessionKey);
       existingSession = null;
     } else {
+      if (existingSession.channelId && existingSession.messageId) {
+        previousSetupMessageRef = {
+          channelId: existingSession.channelId,
+          messageId: existingSession.messageId
+        };
+      }
       resumedSetupNotice = '**تم استرجاع جلسة الإعداد السابقة، ويمكنك المتابعة من آخر إعداد محفوظ.**';
     }
   }
 
+  const setupInstanceId = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   const initialSetupSession = {
+    setupInstanceId,
     startedAt: Date.now(),
     messageId: null,
     channelId: message.channel.id,
@@ -4539,6 +4557,16 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
   saveRuntimeSession('ticket-setup', setupSessionKey, initialSetupSession, 30 * 60 * 1000);
 
   const { config, tickets, pendingRequests } = getPanelData(message.guild.id, panelId);
+
+  if (previousSetupMessageRef) {
+    const previousSetupChannel = await message.guild.channels.fetch(previousSetupMessageRef.channelId).catch(() => null);
+    if (previousSetupChannel?.isTextBased?.()) {
+      const previousSetupMessage = await previousSetupChannel.messages.fetch(previousSetupMessageRef.messageId).catch(() => null);
+      if (previousSetupMessage?.editable) {
+        await previousSetupMessage.edit({ components: [] }).catch((error) => logSilentError('suppressed', error));
+      }
+    }
+  }
 
   const ask = async (prompt, timeout = 180000, options = {}) => {
     const opts = options && typeof options === 'object' ? options : {};
@@ -4742,6 +4770,7 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
 
   setupMessage = await controlChannel.send({ embeds: [buildSetupEmbed()], components: buildMenuComponents() });
   const liveSetupSession = {
+    setupInstanceId,
     startedAt: Date.now(),
     messageId: setupMessage.id,
     channelId: setupMessage.channel.id,
@@ -5642,6 +5671,8 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
   });
 
   collector.on('end', async () => {
+    const latestSetupSession = activeTicketSetupSessions.get(setupSessionKey);
+    if (!latestSetupSession || latestSetupSession.setupInstanceId !== setupInstanceId) return;
     setGuildData(message.guild.id, config, tickets, pendingRequests, panelId);
     await setupMessage.edit({ embeds: [buildSetupEmbed()], components: [] }).catch((error) => logSilentError('suppressed', error));
     await controlChannel.send(buildTicketMessagePayload('Done✅️', '**تم حفظ اعدادات التكت**')).catch((error) => logSilentError('suppressed', error));
