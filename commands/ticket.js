@@ -5863,6 +5863,7 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
               { label: 'مكان الطلب (خاص/تكت)', value: 'scope' },
               { label: 'الفاصل بين التقييمات', value: 'separator' },
               { label: 'ألوان التصميم', value: 'style' },
+              { label: 'إعادة الألوان الافتراضية', value: 'style_reset' },
               { label: 'Finish', value: 'finish' }
             ])
         )]
@@ -5905,28 +5906,78 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
           });
         }
       }
+      if (c === 'style_reset') {
+        feedbackCfg.style = { ...(baseConfig().feedback.style || {}), version: 'v6' };
+      }
       if (c === 'style') {
-        const bg = await ask(`**لون الخلفية Hex (الآن ${feedbackCfg.style.background})**`);
-        const start = await ask(`**لون بداية الكرت Hex (الآن ${feedbackCfg.style.cardStart})**`);
-        const end = await ask(`**لون نهاية الكرت Hex (الآن ${feedbackCfg.style.cardEnd})**`);
-        const text = await ask(`**لون النص Hex (الآن ${feedbackCfg.style.text})**`);
-        const accent = await ask(`**لون ثانوي Hex (الآن ${feedbackCfg.style.accent})**`);
-        const border = await ask(`**لون الحدود Hex (الآن ${feedbackCfg.style.border})**`);
-        const quote = await ask(`**لون الاقتباس Hex (الآن ${feedbackCfg.style.quote})**`);
-        const star = await ask(`**لون النجوم Hex (الآن ${feedbackCfg.style.star})**`);
-        const name = await ask(`**لون اسم المقيم Hex (الآن ${feedbackCfg.style.name})**`);
-        const shadow = await ask(`**لون الظل Hex (الآن ${feedbackCfg.style.shadow})**`);
+        const modeRaw = ((await ask('**ألوان التقييم: quick / advanced / default / preset-night / preset-lilac**')) || '').toLowerCase().trim();
+        const defaultStyle = { ...(baseConfig().feedback.style || {}) };
         feedbackCfg.style.version = 'v6';
-        feedbackCfg.style.background = normalizeHexColor(bg, feedbackCfg.style.background);
-        feedbackCfg.style.cardStart = normalizeHexColor(start, feedbackCfg.style.cardStart);
-        feedbackCfg.style.cardEnd = normalizeHexColor(end, feedbackCfg.style.cardEnd);
-        feedbackCfg.style.text = normalizeHexColor(text, feedbackCfg.style.text);
-        feedbackCfg.style.accent = normalizeHexColor(accent, feedbackCfg.style.accent);
-        feedbackCfg.style.border = normalizeHexColor(border, feedbackCfg.style.border);
-        feedbackCfg.style.quote = normalizeHexColor(quote, feedbackCfg.style.quote);
-        feedbackCfg.style.star = normalizeHexColor(star, feedbackCfg.style.star);
-        feedbackCfg.style.name = normalizeHexColor(name, feedbackCfg.style.name);
-        feedbackCfg.style.shadow = normalizeHexColor(shadow, feedbackCfg.style.shadow);
+
+        if (modeRaw === 'default' || modeRaw === 'reset' || modeRaw === 'افتراضي') {
+          feedbackCfg.style = { ...defaultStyle, version: 'v6' };
+        } else if (modeRaw === 'preset-night') {
+          feedbackCfg.style.background = '#050b20';
+          feedbackCfg.style.cardStart = '#4f3b93';
+          feedbackCfg.style.cardEnd = '#6d59b0';
+          feedbackCfg.style.text = '#000000';
+          feedbackCfg.style.accent = '#11121a';
+          feedbackCfg.style.border = '#9c88ff';
+          feedbackCfg.style.quote = '#060608';
+          feedbackCfg.style.star = '#7d68d8';
+          feedbackCfg.style.name = '#0f0f16';
+          feedbackCfg.style.shadow = '#000000';
+        } else if (modeRaw === 'preset-lilac') {
+          feedbackCfg.style.background = '#0a1025';
+          feedbackCfg.style.cardStart = '#6d54c7';
+          feedbackCfg.style.cardEnd = '#8f7ce2';
+          feedbackCfg.style.text = '#0b0b12';
+          feedbackCfg.style.accent = '#11121a';
+          feedbackCfg.style.border = '#a896ff';
+          feedbackCfg.style.quote = '#12131f';
+          feedbackCfg.style.star = '#8e7ae0';
+          feedbackCfg.style.name = '#11121a';
+          feedbackCfg.style.shadow = '#000000';
+        } else if (modeRaw === 'advanced') {
+          const bg = await ask(`**لون الخلفية Hex (الآن ${feedbackCfg.style.background})**`);
+          const start = await ask(`**لون بداية الكرت Hex (الآن ${feedbackCfg.style.cardStart})**`);
+          const end = await ask(`**لون نهاية الكرت Hex (الآن ${feedbackCfg.style.cardEnd})**`);
+          const text = await ask(`**لون النص Hex (الآن ${feedbackCfg.style.text})**`);
+          const accent = await ask(`**لون ثانوي Hex (الآن ${feedbackCfg.style.accent})**`);
+          const border = await ask(`**لون الحدود Hex (الآن ${feedbackCfg.style.border})**`);
+          const quote = await ask(`**لون الاقتباس Hex (الآن ${feedbackCfg.style.quote})**`);
+          const star = await ask(`**لون النجوم Hex (الآن ${feedbackCfg.style.star})**`);
+          const name = await ask(`**لون اسم المقيم Hex (الآن ${feedbackCfg.style.name})**`);
+          const shadow = await ask(`**لون الظل Hex (الآن ${feedbackCfg.style.shadow})**`);
+          feedbackCfg.style.background = normalizeHexColor(bg, feedbackCfg.style.background);
+          feedbackCfg.style.cardStart = normalizeHexColor(start, feedbackCfg.style.cardStart);
+          feedbackCfg.style.cardEnd = normalizeHexColor(end, feedbackCfg.style.cardEnd);
+          feedbackCfg.style.text = normalizeHexColor(text, feedbackCfg.style.text);
+          feedbackCfg.style.accent = normalizeHexColor(accent, feedbackCfg.style.accent);
+          feedbackCfg.style.border = normalizeHexColor(border, feedbackCfg.style.border);
+          feedbackCfg.style.quote = normalizeHexColor(quote, feedbackCfg.style.quote);
+          feedbackCfg.style.star = normalizeHexColor(star, feedbackCfg.style.star);
+          feedbackCfg.style.name = normalizeHexColor(name, feedbackCfg.style.name);
+          feedbackCfg.style.shadow = normalizeHexColor(shadow, feedbackCfg.style.shadow);
+        } else {
+          // quick mode (default): only the most important colors
+          const bg = await ask(`**[Quick] الخلفية Hex (الآن ${feedbackCfg.style.background})**`);
+          const start = await ask(`**[Quick] بداية الكرت Hex (الآن ${feedbackCfg.style.cardStart})**`);
+          const end = await ask(`**[Quick] نهاية الكرت Hex (الآن ${feedbackCfg.style.cardEnd})**`);
+          const text = await ask(`**[Quick] لون النص Hex (الآن ${feedbackCfg.style.text})**`);
+          const star = await ask(`**[Quick] لون النجوم Hex (الآن ${feedbackCfg.style.star})**`);
+          feedbackCfg.style.background = normalizeHexColor(bg, feedbackCfg.style.background);
+          feedbackCfg.style.cardStart = normalizeHexColor(start, feedbackCfg.style.cardStart);
+          feedbackCfg.style.cardEnd = normalizeHexColor(end, feedbackCfg.style.cardEnd);
+          feedbackCfg.style.text = normalizeHexColor(text, feedbackCfg.style.text);
+          feedbackCfg.style.star = normalizeHexColor(star, feedbackCfg.style.star);
+          // keep secondary details synced and clean in quick mode
+          feedbackCfg.style.name = feedbackCfg.style.name || '#0f0f16';
+          feedbackCfg.style.accent = feedbackCfg.style.accent || '#11121a';
+          feedbackCfg.style.border = feedbackCfg.style.border || '#9c88ff';
+          feedbackCfg.style.quote = feedbackCfg.style.quote || '#060608';
+          feedbackCfg.style.shadow = feedbackCfg.style.shadow || '#000000';
+        }
       }
     }
   };
