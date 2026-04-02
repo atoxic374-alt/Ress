@@ -3202,39 +3202,8 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   const ctx = canvas.getContext('2d');
   ctx.antialias = 'subpixel';
 
-  const bg = ctx.createLinearGradient(0, 0, width, height);
-  bg.addColorStop(0, normalizeHexColor(style.background, '#040a1d'));
-  bg.addColorStop(1, '#08112b');
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, width, height);
-
-  // Keep outer background purely navy + subtle right motifs only
-  const navyBloom = ctx.createRadialGradient(width * 0.74, height * 0.24, 30, width * 0.74, height * 0.24, 460);
-  navyBloom.addColorStop(0, '#3a4d9a2a');
-  navyBloom.addColorStop(1, '#3a4d9a00');
-  ctx.fillStyle = navyBloom;
-  ctx.fillRect(0, 0, width, height);
-
-  ctx.globalAlpha = 0.16;
-  ctx.strokeStyle = '#2a3550';
-  ctx.lineWidth = 1.8;
-  for (let x = width - 520; x < width - 40; x += 96) {
-    for (let y = 26; y < height - 20; y += 90) {
-      ctx.beginPath();
-      ctx.moveTo(x, y + 22);
-      ctx.lineTo(x + 22, y);
-      ctx.lineTo(x + 48, y + 8);
-      ctx.lineTo(x + 24, y + 28);
-      ctx.closePath();
-      ctx.stroke();
-    }
-  }
-  const vignette = ctx.createRadialGradient(width / 2, height / 2, 120, width / 2, height / 2, width * 0.75);
-  vignette.addColorStop(0, '#00000000');
-  vignette.addColorStop(1, '#000000a0');
-  ctx.fillStyle = vignette;
-  ctx.fillRect(0, 0, width, height);
-  ctx.globalAlpha = 1;
+  // External background intentionally transparent (render card only)
+  ctx.clearRect(0, 0, width, height);
 
   const cardX = 250;
   const cardY = 104;
@@ -3465,47 +3434,6 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   ctx.textAlign = 'left';
   ctx.globalAlpha = 1;
 
-  // Cinematic finishing passes
-  const centerBloom = ctx.createRadialGradient(width / 2, height / 2, 140, width / 2, height / 2, width * 0.45);
-  centerBloom.addColorStop(0, '#ffffff22');
-  centerBloom.addColorStop(1, '#ffffff00');
-  ctx.fillStyle = centerBloom;
-  ctx.fillRect(0, 0, width, height);
-
-  // V6 cinematic streaks & high-end polish
-  ctx.save();
-  ctx.globalAlpha = 0.18;
-  for (let i = 0; i < 9; i += 1) {
-    const y = 90 + (i * 78);
-    const streak = ctx.createLinearGradient(0, y, width, y);
-    streak.addColorStop(0, '#ffffff00');
-    streak.addColorStop(0.5, '#ffffff66');
-    streak.addColorStop(1, '#ffffff00');
-    ctx.strokeStyle = streak;
-    ctx.lineWidth = i % 2 === 0 ? 1 : 2;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(width, y + (i % 3));
-    ctx.stroke();
-  }
-  ctx.restore();
-
-  const violetBloom = ctx.createRadialGradient(width * 0.7, height * 0.65, 40, width * 0.7, height * 0.65, 360);
-  violetBloom.addColorStop(0, '#8f7ce266');
-  violetBloom.addColorStop(1, '#8f7ce200');
-  ctx.fillStyle = violetBloom;
-  ctx.fillRect(0, 0, width, height);
-
-  const edgeVignette = ctx.createLinearGradient(0, 0, width, 0);
-  edgeVignette.addColorStop(0, '#00000066');
-  edgeVignette.addColorStop(0.08, '#00000000');
-  edgeVignette.addColorStop(0.92, '#00000000');
-  edgeVignette.addColorStop(1, '#00000066');
-  ctx.fillStyle = edgeVignette;
-  ctx.fillRect(0, 0, width, height);
-
-  addFilmGrain(ctx, width, height, 0.06);
-
   return canvas.toBuffer('image/png');
 }
 
@@ -3583,11 +3511,11 @@ async function generateAutoFeedbackStyle(guild, currentStyle = {}) {
 
   // Keep final scene background navy as requested, while matching the card to guild assets.
   const background = '#040a1d';
-  const cardStart = mixHex(base, '#3d2f72', 0.55);
-  const cardEnd = mixHex(base, '#8a78da', 0.45);
-  const border = mixHex(cardEnd, '#ffffff', 0.22);
-  const star = mixHex(cardEnd, '#b6a9ff', 0.45);
-  const textBase = getLuminance(cardEnd) > 0.38 ? '#11121a' : '#f6f6ff';
+  const cardStart = mixHex(base, '#2f254f', 0.72);
+  const cardEnd = mixHex(base, '#7462ad', 0.32);
+  const border = mixHex(cardEnd, '#d7d1ee', 0.18);
+  const star = mixHex(cardEnd, '#9e92c8', 0.28);
+  const textBase = getLuminance(cardEnd) > 0.46 ? '#101116' : '#f0eefb';
 
   return {
     ...currentStyle,
@@ -3598,7 +3526,7 @@ async function generateAutoFeedbackStyle(guild, currentStyle = {}) {
     text: textBase,
     name: textBase,
     quote: textBase,
-    accent: '#11121a',
+    accent: mixHex(cardStart, '#0f111a', 0.45),
     border,
     star,
     shadow: '#000000'
