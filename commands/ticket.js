@@ -3566,6 +3566,7 @@ async function sendFeedbackPrompt({ guild, channel, ticket, config, panelId, cha
         colorManager.createEmbed()
           .setTitle('Rate')
           .setDescription(promptDescription)
+          .setFooter({ text: 'Thank you for trusting us' })
           .setThumbnail(actor?.displayAvatarURL?.({ extension: 'png', size: 256 }) || undefined)
       ],
       components: [row]
@@ -3587,7 +3588,13 @@ async function sendFeedbackPrompt({ guild, channel, ticket, config, panelId, cha
   if (!user) return;
   const icon = user.displayAvatarURL({ extension: 'png', size: 256 }) || undefined;
   const dmMsg = await user.send({
-    embeds: [colorManager.createEmbed().setTitle('Rate').setDescription(promptDescription).setThumbnail(icon)],
+    embeds: [
+      colorManager.createEmbed()
+        .setTitle('Rate')
+        .setDescription(promptDescription)
+        .setFooter({ text: 'Thank you for trusting us' })
+        .setThumbnail(icon)
+    ],
     components: [row]
   }).catch((error) => {
     logSilentError('feedback.prompt.dm', error);
@@ -5866,6 +5873,7 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
           { name: 'روم التقييم', value: feedbackCfg.channelId ? `<#${feedbackCfg.channelId}>` : 'غير معين', inline: true },
           { name: 'مكان زر التقييم', value: feedbackCfg.triggerScope === 'ticket' ? 'داخل التكت' : 'الخاص', inline: true },
           { name: 'كلمة التقييم', value: formatSettingValue(feedbackCfg.triggerWord), inline: false },
+          { name: 'نص ايمبد التقييم', value: formatSettingValue(feedbackCfg.promptText), inline: false },
           { name: 'الفاصل', value: feedbackCfg.separatorEnabled ? `مفعل • نص: ${formatSettingValue(feedbackCfg.separatorText)}\nصورة: ${formatSettingValue(feedbackCfg.separatorImage)}` : 'مقفل', inline: false },
           { name: 'ألوان التصميم', value: `الخلفية: ${style.background}\nبداية الكرت: ${style.cardStart}\nنهاية الكرت: ${style.cardEnd}\nلون النص: ${style.text}\nاللون الثانوي: ${style.accent}\nحدود الكرت: ${style.border}\nلون الاقتباس: ${style.quote}\nلون النجوم: ${style.star}\nلون الاسم: ${style.name}\nلون الظل: ${style.shadow}`, inline: false }
         );
@@ -5880,6 +5888,7 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
               { label: 'تفعيل/ايقاف', value: 'toggle' },
               { label: 'روم التقييم', value: 'channel' },
               { label: 'كلمة التقييم', value: 'word' },
+              { label: 'نص ايمبد التقييم', value: 'prompt_text' },
               { label: 'مكان الطلب (خاص/تكت)', value: 'scope' },
               { label: 'الفاصل بين التقييمات', value: 'separator' },
               { label: 'ألوان التصميم', value: 'style' },
@@ -5906,8 +5915,12 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
         else feedbackCfg.channelId = normalizeId(raw);
       }
       if (c === 'word') {
-        const raw = await ask('**اكتب كلمة/رسالة طلب التقييم (0 لاعادة التعيين)**');
+        const raw = await ask('**اكتب كلمة التقييم (Trigger) داخل التكت لعرض الايمبد فقط (0 لاعادة التعيين)**');
         feedbackCfg.triggerWord = raw === '0' ? baseConfig().feedback.triggerWord : (raw || feedbackCfg.triggerWord);
+      }
+      if (c === 'prompt_text') {
+        const raw = await ask('**اكتب نص ايمبد التقييم الذي يظهر مع زر Rate (0 لاعادة التعيين)**');
+        feedbackCfg.promptText = raw === '0' ? baseConfig().feedback.promptText : (raw || feedbackCfg.promptText);
       }
       if (c === 'scope') {
         const raw = ((await ask('**مكان الزر: dm أو ticket**')) || '').toLowerCase();
@@ -6658,11 +6671,8 @@ function registerTicketMessageActivityTracker(client) {
     const feedbackConfig = config?.feedback || baseConfig().feedback;
     const triggerWord = String(feedbackConfig.triggerWord || '').trim();
     if (feedbackConfig.enabled && triggerWord && String(message.content || '').trim().toLowerCase() === triggerWord.toLowerCase()) {
-      const isBotOwner = botOwnersCache.has(message.author.id);
-      const isServerOwner = message.guild.ownerId === message.author.id;
-      const isTicketClaimer = ticket?.claimedBy === message.author.id;
-      const isSystemResponsible = hasStaffAccess(message.member, config, ticket?.reasonKey, ticket);
-      if (!isBotOwner && !isServerOwner && !isTicketClaimer && !isSystemResponsible) {
+      const isTicketOpener = ticket?.memberId === message.author.id;
+      if (!isTicketOpener) {
         await message.delete().catch((error) => logSilentError('suppressed', error));
         return;
       }
@@ -7362,6 +7372,10 @@ function registerHandlers(client) {
           if (!session) session = await loadRuntimeSession('ticket-feedback', token).catch(() => null);
           if (!session || (session.expiresAt && Date.now() > session.expiresAt)) {
             await interaction.reply(buildTicketMessagePayload('التقييم', '**انتهت صلاحية نموذج التقييم.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+            return;
+          }
+          if (interaction.user.id !== session.memberId) {
+            await interaction.reply(buildTicketMessagePayload('التقييم', '**هذا النموذج مخصص لصاحب التكت فقط.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
             return;
           }
 
