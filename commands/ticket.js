@@ -3188,36 +3188,47 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   ctx.antialias = 'subpixel';
 
   const bg = ctx.createLinearGradient(0, 0, width, height);
-  bg.addColorStop(0, normalizeHexColor(style.background, '#0b1020'));
-  bg.addColorStop(1, '#121a2b');
+  bg.addColorStop(0, normalizeHexColor(style.background, '#040a1d'));
+  bg.addColorStop(1, '#08112b');
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, width, height);
 
   // Cinematic light blobs
   const orb1 = ctx.createRadialGradient(width * 0.2, height * 0.15, 40, width * 0.2, height * 0.15, 520);
-  orb1.addColorStop(0, '#7e61ff88');
+  orb1.addColorStop(0, '#6b52dc2e');
   orb1.addColorStop(1, '#7e61ff00');
   ctx.fillStyle = orb1;
   ctx.fillRect(0, 0, width, height);
   const orb2 = ctx.createRadialGradient(width * 0.82, height * 0.22, 20, width * 0.82, height * 0.22, 420);
-  orb2.addColorStop(0, '#9f8dff66');
+  orb2.addColorStop(0, '#8d7add2a');
   orb2.addColorStop(1, '#9f8dff00');
   ctx.fillStyle = orb2;
   ctx.fillRect(0, 0, width, height);
+  const navyBloom = ctx.createRadialGradient(width * 0.55, height * 0.72, 40, width * 0.55, height * 0.72, 520);
+  navyBloom.addColorStop(0, '#3a4d9a30');
+  navyBloom.addColorStop(1, '#3a4d9a00');
+  ctx.fillStyle = navyBloom;
+  ctx.fillRect(0, 0, width, height);
 
-  // Premium repeating pattern + layered depth
-  ctx.globalAlpha = 0.14;
-  ctx.strokeStyle = normalizeHexColor(style.border, '#9c88ff');
-  ctx.lineWidth = 2.2;
-  for (let x = 24; x < width; x += 92) {
-    for (let y = 24; y < height; y += 92) {
+  // Repeating geometric background pattern (closer to reference)
+  ctx.globalAlpha = 0.1;
+  ctx.strokeStyle = '#222a3f';
+  ctx.lineWidth = 1.8;
+  for (let x = 26; x < width; x += 118) {
+    for (let y = 16; y < height; y += 98) {
       ctx.beginPath();
-      ctx.moveTo(x, y + 24);
-      ctx.lineTo(x + 20, y);
-      ctx.lineTo(x + 44, y + 8);
-      ctx.lineTo(x + 56, y + 32);
-      ctx.lineTo(x + 36, y + 54);
-      ctx.lineTo(x + 12, y + 46);
+      ctx.moveTo(x, y + 16);
+      ctx.lineTo(x + 24, y);
+      ctx.lineTo(x + 46, y + 10);
+      ctx.lineTo(x + 22, y + 26);
+      ctx.closePath();
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(x + 54, y + 26);
+      ctx.lineTo(x + 78, y + 12);
+      ctx.lineTo(x + 102, y + 22);
+      ctx.lineTo(x + 78, y + 40);
       ctx.closePath();
       ctx.stroke();
     }
@@ -3229,20 +3240,20 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   ctx.fillRect(0, 0, width, height);
   ctx.globalAlpha = 1;
 
-  const cardX = 190;
-  const cardY = 120;
-  const cardW = 1420;
-  const cardH = 500;
+  const cardX = 250;
+  const cardY = 104;
+  const cardW = 1300;
+  const cardH = 520;
   const radius = 58;
 
   const cardGrad = ctx.createLinearGradient(cardX, cardY, cardX + cardW, cardY + cardH);
-  cardGrad.addColorStop(0, normalizeHexColor(style.cardStart, '#6d54c7'));
-  cardGrad.addColorStop(1, normalizeHexColor(style.cardEnd, '#8f7ce2'));
+  cardGrad.addColorStop(0, normalizeHexColor(style.cardStart, '#46357f'));
+  cardGrad.addColorStop(1, normalizeHexColor(style.cardEnd, '#6652a3'));
   // Multi-pass outer shadow for heavy 3D look
   ctx.save();
   ctx.shadowColor = normalizeHexColor(style.shadow, '#000000');
-  ctx.shadowBlur = 95;
-  ctx.shadowOffsetY = 20;
+  ctx.shadowBlur = 62;
+  ctx.shadowOffsetY = 12;
   ctx.fillStyle = cardGrad;
   drawRoundedRectPath(ctx, cardX, cardY, cardW, cardH, radius);
   ctx.fill();
@@ -3250,14 +3261,14 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
 
   // Additional soft glow around top edge
   const topGlow = ctx.createLinearGradient(cardX, cardY - 20, cardX, cardY + 120);
-  topGlow.addColorStop(0, '#ffffff66');
+  topGlow.addColorStop(0, '#ffffff20');
   topGlow.addColorStop(1, '#ffffff00');
   ctx.fillStyle = topGlow;
   drawRoundedRectPath(ctx, cardX + 4, cardY + 2, cardW - 8, 130, radius - 8);
   ctx.fill();
 
   // Inner highlight and border pass
-  ctx.globalAlpha = 0.30;
+  ctx.globalAlpha = 0.16;
   const inner = ctx.createLinearGradient(cardX, cardY, cardX + cardW, cardY + cardH);
   inner.addColorStop(0, '#ffffff');
   inner.addColorStop(1, '#ffffff00');
@@ -3266,47 +3277,76 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   ctx.fill();
   ctx.globalAlpha = 1;
   ctx.strokeStyle = normalizeHexColor(style.border, '#9c88ff');
-  ctx.lineWidth = 5;
+  ctx.lineWidth = 4;
   drawRoundedRectPath(ctx, cardX, cardY, cardW, cardH, radius);
   ctx.stroke();
 
-  const textColor = normalizeHexColor(style.text, '#ffffff');
+  // Inner motifs on card (left + right) to match reference
+  ctx.save();
+  ctx.globalAlpha = 0.09;
+  ctx.strokeStyle = '#b6a9f0';
+  ctx.lineWidth = 1.25;
+  for (let i = 0; i < 6; i += 1) {
+    const lx = cardX + 82 + (i * 58);
+    const ly = cardY + 94 + (i * 46);
+    ctx.beginPath();
+    ctx.moveTo(lx, ly + 36);
+    ctx.lineTo(lx + 34, ly);
+    ctx.lineTo(lx + 72, ly + 14);
+    ctx.lineTo(lx + 38, ly + 52);
+    ctx.closePath();
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 0.085;
+  for (let i = 0; i < 6; i += 1) {
+    const rx = cardX + cardW - 330 + ((i % 2) * 72);
+    const ry = cardY + 118 + (i * 56);
+    ctx.beginPath();
+    ctx.moveTo(rx, ry + 34);
+    ctx.lineTo(rx + 32, ry);
+    ctx.lineTo(rx + 68, ry + 13);
+    ctx.lineTo(rx + 36, ry + 48);
+    ctx.closePath();
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  const textColor = normalizeHexColor(style.text, '#000000');
   const accentColor = normalizeHexColor(style.accent, '#11121a');
-  const quoteColor = normalizeHexColor(style.quote, '#1a142f');
-  const starColor = normalizeHexColor(style.star, '#8f7ce2');
+  const quoteColor = normalizeHexColor(style.quote, '#060608');
+  const starColor = normalizeHexColor(style.star, '#7d68d8');
   const nameColor = normalizeHexColor(style.name, '#0f0f16');
+  const finalComment = String(comment || 'بدون تعليق').trim();
   // Decorative mark (replaces quotes)
   ctx.fillStyle = quoteColor;
-  ctx.font = 'bold 86px Sans';
-  ctx.fillText('✦', cardX + 62, cardY + 112);
-  ctx.font = 'bold 64px Sans';
-  ctx.fillText('✦', cardX + 112, cardY + 144);
+  ctx.font = 'bold 104px Sans';
+  ctx.fillText('❝', cardX + 62, cardY + 118);
 
   // Star capsule
-  const pillX = cardX + cardW - 435;
-  const pillY = cardY + 28;
-  const pillW = 370;
-  const pillH = 90;
+  const pillX = cardX + cardW - 400;
+  const pillY = cardY + 26;
+  const pillW = 360;
+  const pillH = 86;
   ctx.fillStyle = accentColor;
   drawRoundedRectPath(ctx, pillX, pillY, pillW, pillH, 45);
   ctx.fill();
-  ctx.globalAlpha = 0.24;
+  ctx.globalAlpha = 0.12;
   const pillGloss = ctx.createLinearGradient(0, pillY, 0, pillY + pillH);
   pillGloss.addColorStop(0, '#ffffff');
   pillGloss.addColorStop(1, '#ffffff00');
   ctx.fillStyle = pillGloss;
   drawRoundedRectPath(ctx, pillX + 3, pillY + 2, pillW - 6, (pillH / 2), 42);
   ctx.fill();
-  ctx.globalAlpha = 0.2;
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 2;
+  ctx.globalAlpha = 0.08;
+  ctx.strokeStyle = '#ffffff88';
+  ctx.lineWidth = 1.5;
   drawRoundedRectPath(ctx, pillX, pillY, pillW, pillH, 45);
   ctx.stroke();
   ctx.globalAlpha = 1;
 
   for (let i = 0; i < 5; i += 1) {
-    const cx = pillX + 45 + (i * 63);
-    const cy = pillY + 46;
+    const cx = pillX + 44 + (i * 62);
+    const cy = pillY + 43;
     const active = i < stars;
     ctx.fillStyle = active ? starColor : '#5a5480';
     ctx.strokeStyle = active ? '#ffffff88' : '#ffffff22';
@@ -3317,19 +3357,19 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   }
 
   ctx.fillStyle = textColor;
-  ctx.font = 'bold 58px Cairo, Sans';
+  ctx.font = 'bold 52px Cairo, Sans';
   ctx.textAlign = 'right';
   ctx.direction = 'rtl';
-  ctx.shadowColor = '#00000077';
-  ctx.shadowBlur = 12;
-  ctx.shadowOffsetY = 4;
-  const wrapped = String(comment || 'بدون تعليق').slice(0, 220);
+  ctx.shadowColor = '#00000020';
+  ctx.shadowBlur = 2;
+  ctx.shadowOffsetY = 1;
+  const wrapped = finalComment.slice(0, 220);
   const words = wrapped.split(/\s+/);
   const lines = [];
   let current = '';
   for (const word of words) {
     const next = current ? `${current} ${word}` : word;
-    if (ctx.measureText(next).width > 860) {
+    if (ctx.measureText(next).width > 790) {
       lines.push(current);
       current = word;
     } else {
@@ -3337,7 +3377,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
     }
   }
   if (current) lines.push(current);
-  lines.slice(0, 4).forEach((line, i) => ctx.fillText(line, cardX + cardW - 70, cardY + 225 + (i * 64)));
+  lines.slice(0, 4).forEach((line, i) => ctx.fillText(line, cardX + cardW - 110, cardY + 285 + (i * 62)));
   ctx.shadowBlur = 0;
   ctx.shadowOffsetY = 0;
   ctx.textAlign = 'left';
@@ -3347,26 +3387,35 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   if (avatarUrl) {
     try {
       const avatar = await loadImage(avatarUrl);
-      const avX = cardX - 70;
-      const avY = cardY + cardH - 210;
-      const avSize = 230;
-      // Avatar square frame + inner divider + black circle (as requested)
+      const avX = cardX - 58;
+      const avY = cardY + cardH - 206;
+      const avSize = 214;
+      // Avatar frame: cleaner and less black, with subtle glass effect
       ctx.save();
-      ctx.fillStyle = normalizeHexColor(style.cardStart, '#6d54c7');
-      ctx.shadowColor = '#00000099';
-      ctx.shadowBlur = 26;
-      ctx.shadowOffsetY = 10;
-      drawRoundedRectPath(ctx, avX - 32, avY - 32, avSize + 64, avSize + 64, 54);
+      const avatarFrame = ctx.createLinearGradient(avX - 24, avY - 24, avX + avSize + 24, avY + avSize + 24);
+      avatarFrame.addColorStop(0, normalizeHexColor(style.cardStart, '#725ad0'));
+      avatarFrame.addColorStop(1, normalizeHexColor(style.cardEnd, '#8d78df'));
+      ctx.fillStyle = avatarFrame;
+      ctx.shadowColor = '#00000055';
+      ctx.shadowBlur = 14;
+      ctx.shadowOffsetY = 6;
+      drawRoundedRectPath(ctx, avX - 24, avY - 24, avSize + 48, avSize + 48, 64);
       ctx.fill();
       ctx.shadowBlur = 0;
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 4;
-      drawRoundedRectPath(ctx, avX - 18, avY - 18, avSize + 36, avSize + 36, 46);
+      ctx.strokeStyle = '#ffffff66';
+      ctx.lineWidth = 2;
+      drawRoundedRectPath(ctx, avX - 16, avY - 16, avSize + 32, avSize + 32, 58);
       ctx.stroke();
+
+      // Transparent inner plate like reference
+      ctx.fillStyle = '#ffffff18';
+      drawRoundedRectPath(ctx, avX - 10, avY - 10, avSize + 20, avSize + 20, 52);
+      ctx.fill();
+
       ctx.beginPath();
-      ctx.arc(avX + avSize / 2, avY + avSize / 2, (avSize / 2) + 8, 0, Math.PI * 2);
-      ctx.lineWidth = 5;
-      ctx.strokeStyle = '#000000';
+      ctx.arc(avX + avSize / 2, avY + avSize / 2, (avSize / 2) + 2, 0, Math.PI * 2);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#ffffff88';
       ctx.stroke();
       ctx.restore();
       ctx.save();
@@ -3383,7 +3432,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
 
   ctx.fillStyle = nameColor;
   ctx.font = 'bold 54px Cairo, Sans';
-  ctx.fillText(member?.displayName || member?.user?.username || 'Member', cardX + 250, cardY + cardH - 46);
+  ctx.fillText(member?.displayName || member?.user?.username || 'Member', cardX + 230, cardY + cardH - 48);
 
   // Server signature bottom-right with real server avatar crop
   const serverName = guild?.name || 'Server';
@@ -3464,6 +3513,102 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   return canvas.toBuffer('image/png');
 }
 
+function hexToRgb(hex) {
+  const clean = String(hex || '').replace('#', '').trim();
+  if (!/^[0-9a-fA-F]{6}$/.test(clean)) return null;
+  return {
+    r: parseInt(clean.slice(0, 2), 16),
+    g: parseInt(clean.slice(2, 4), 16),
+    b: parseInt(clean.slice(4, 6), 16)
+  };
+}
+
+function rgbToHex(r, g, b) {
+  const clamp = (v) => Math.max(0, Math.min(255, Math.round(v)));
+  return `#${[clamp(r), clamp(g), clamp(b)].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function mixHex(a, b, amount = 0.5) {
+  const ca = hexToRgb(normalizeHexColor(a, '#6d54c7'));
+  const cb = hexToRgb(normalizeHexColor(b, '#8f7ce2'));
+  const t = Math.max(0, Math.min(1, Number(amount) || 0));
+  if (!ca || !cb) return '#7f69d5';
+  return rgbToHex(
+    ca.r + ((cb.r - ca.r) * t),
+    ca.g + ((cb.g - ca.g) * t),
+    ca.b + ((cb.b - ca.b) * t)
+  );
+}
+
+function getLuminance(hex) {
+  const c = hexToRgb(normalizeHexColor(hex, '#777777'));
+  if (!c) return 0.5;
+  const toLinear = (v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  const r = toLinear(c.r);
+  const g = toLinear(c.g);
+  const b = toLinear(c.b);
+  return (0.2126 * r) + (0.7152 * g) + (0.0722 * b);
+}
+
+async function extractAverageHexFromImageUrl(url) {
+  if (!url) return null;
+  try {
+    const img = await loadImage(url);
+    const sample = createCanvas(24, 24);
+    const sctx = sample.getContext('2d');
+    sctx.drawImage(img, 0, 0, 24, 24);
+    const data = sctx.getImageData(0, 0, 24, 24).data;
+    let r = 0; let g = 0; let b = 0; let count = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const alpha = data[i + 3];
+      if (alpha < 20) continue;
+      r += data[i];
+      g += data[i + 1];
+      b += data[i + 2];
+      count += 1;
+    }
+    if (!count) return null;
+    return rgbToHex(r / count, g / count, b / count);
+  } catch (error) {
+    logSilentError('feedback.auto-style.extract', error);
+    return null;
+  }
+}
+
+async function generateAutoFeedbackStyle(guild, currentStyle = {}) {
+  const iconUrl = guild?.iconURL?.({ extension: 'png', size: 256 }) || null;
+  const bannerUrl = guild?.bannerURL?.({ extension: 'png', size: 512 }) || null;
+  const fromBanner = await extractAverageHexFromImageUrl(bannerUrl);
+  const fromIcon = await extractAverageHexFromImageUrl(iconUrl);
+  const base = fromBanner || fromIcon || '#7b69d4';
+
+  // Keep final scene background navy as requested, while matching the card to guild assets.
+  const background = '#040a1d';
+  const cardStart = mixHex(base, '#3d2f72', 0.55);
+  const cardEnd = mixHex(base, '#8a78da', 0.45);
+  const border = mixHex(cardEnd, '#ffffff', 0.22);
+  const star = mixHex(cardEnd, '#b6a9ff', 0.45);
+  const textBase = getLuminance(cardEnd) > 0.38 ? '#11121a' : '#f6f6ff';
+
+  return {
+    ...currentStyle,
+    version: 'v6',
+    background,
+    cardStart,
+    cardEnd,
+    text: textBase,
+    name: textBase,
+    quote: textBase,
+    accent: '#11121a',
+    border,
+    star,
+    shadow: '#000000'
+  };
+}
+
 async function sendFeedbackPrompt({ guild, channel, ticket, config, panelId, channelId }) {
   const feedbackCfg = config?.feedback || {};
   if (!feedbackCfg.enabled || !feedbackCfg.channelId || !ticket?.memberId) return;
@@ -3536,11 +3681,13 @@ async function sendFeedbackPrompt({ guild, channel, ticket, config, panelId, cha
 async function sendFeedbackSeparator(channel, feedbackCfg = {}) {
   if (!feedbackCfg?.separatorEnabled) return;
   const separatorImage = resolveImageForSend(feedbackCfg.separatorImage || '');
+  const separatorMode = String(feedbackCfg.separatorMode || '').toLowerCase();
+  const imageOnlySeparator = feedbackCfg.separatorImageOnly === true || separatorMode === 'image-only';
   if (separatorImage) {
     await channel.send({ files: [separatorImage] }).catch((error) => logSilentError('suppressed', error));
-    return;
+    if (imageOnlySeparator) return;
   }
-  if (feedbackCfg.separatorText) {
+  if (feedbackCfg.separatorText && !imageOnlySeparator) {
     await channel.send({ content: feedbackCfg.separatorText }).catch((error) => logSilentError('suppressed', error));
   }
 }
@@ -5812,6 +5959,8 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
               { label: 'مكان الطلب (خاص/تكت)', value: 'scope' },
               { label: 'الفاصل بين التقييمات', value: 'separator' },
               { label: 'ألوان التصميم', value: 'style' },
+              { label: 'مطابقة تلقائية مع السيرفر', value: 'style_auto' },
+              { label: 'إعادة الألوان الافتراضية', value: 'style_reset' },
               { label: 'Finish', value: 'finish' }
             ])
         )]
@@ -5854,28 +6003,61 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
           });
         }
       }
+      if (c === 'style_reset') {
+        feedbackCfg.style = { ...(baseConfig().feedback.style || {}), version: 'v6' };
+      }
+      if (c === 'style_auto') {
+        feedbackCfg.style = await generateAutoFeedbackStyle(message.guild, feedbackCfg.style || {});
+      }
       if (c === 'style') {
-        const bg = await ask(`**لون الخلفية Hex (الآن ${feedbackCfg.style.background})**`);
-        const start = await ask(`**لون بداية الكرت Hex (الآن ${feedbackCfg.style.cardStart})**`);
-        const end = await ask(`**لون نهاية الكرت Hex (الآن ${feedbackCfg.style.cardEnd})**`);
-        const text = await ask(`**لون النص Hex (الآن ${feedbackCfg.style.text})**`);
-        const accent = await ask(`**لون ثانوي Hex (الآن ${feedbackCfg.style.accent})**`);
-        const border = await ask(`**لون الحدود Hex (الآن ${feedbackCfg.style.border})**`);
-        const quote = await ask(`**لون الاقتباس Hex (الآن ${feedbackCfg.style.quote})**`);
-        const star = await ask(`**لون النجوم Hex (الآن ${feedbackCfg.style.star})**`);
-        const name = await ask(`**لون اسم المقيم Hex (الآن ${feedbackCfg.style.name})**`);
-        const shadow = await ask(`**لون الظل Hex (الآن ${feedbackCfg.style.shadow})**`);
         feedbackCfg.style.version = 'v6';
-        feedbackCfg.style.background = normalizeHexColor(bg, feedbackCfg.style.background);
-        feedbackCfg.style.cardStart = normalizeHexColor(start, feedbackCfg.style.cardStart);
-        feedbackCfg.style.cardEnd = normalizeHexColor(end, feedbackCfg.style.cardEnd);
-        feedbackCfg.style.text = normalizeHexColor(text, feedbackCfg.style.text);
-        feedbackCfg.style.accent = normalizeHexColor(accent, feedbackCfg.style.accent);
-        feedbackCfg.style.border = normalizeHexColor(border, feedbackCfg.style.border);
-        feedbackCfg.style.quote = normalizeHexColor(quote, feedbackCfg.style.quote);
-        feedbackCfg.style.star = normalizeHexColor(star, feedbackCfg.style.star);
-        feedbackCfg.style.name = normalizeHexColor(name, feedbackCfg.style.name);
-        feedbackCfg.style.shadow = normalizeHexColor(shadow, feedbackCfg.style.shadow);
+        const styleMenu = new ActionRowBuilder().addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId(`ticket_feedback_style_field_${message.author.id}_${Date.now()}`)
+            .setPlaceholder('اختر العنصر الذي تريد تعديله')
+            .addOptions([
+              { label: 'الخلفية', value: 'background' },
+              { label: 'بداية الكرت', value: 'cardStart' },
+              { label: 'نهاية الكرت', value: 'cardEnd' },
+              { label: 'لون النص', value: 'text' },
+              { label: 'اللون الثانوي', value: 'accent' },
+              { label: 'حدود الكرت', value: 'border' },
+              { label: 'لون الاقتباس', value: 'quote' },
+              { label: 'لون النجوم', value: 'star' },
+              { label: 'لون الاسم', value: 'name' },
+              { label: 'لون الظل', value: 'shadow' },
+              { label: 'إعادة الافتراضي', value: 'reset' }
+            ])
+        );
+
+        const styleMsg = await message.channel.send({ content: '**اختر من القائمة لون واحد للتعديل (أو إعادة الافتراضي).**', components: [styleMenu] }).catch(() => null);
+        if (styleMsg) {
+          const stylePick = await styleMsg.awaitMessageComponent({
+            filter: (i) => i.user.id === message.author.id && i.isStringSelectMenu() && i.customId.startsWith('ticket_feedback_style_field_'),
+            time: 120000
+          }).catch(() => null);
+
+          if (stylePick) {
+            await stylePick.deferUpdate().catch((error) => logSilentError('suppressed', error));
+            const key = stylePick.values?.[0];
+            if (key === 'reset') {
+              feedbackCfg.style = { ...(baseConfig().feedback.style || {}), version: 'v6' };
+            } else if (key && ['background', 'cardStart', 'cardEnd', 'text', 'accent', 'border', 'quote', 'star', 'name', 'shadow'].includes(key)) {
+              const current = feedbackCfg.style[key];
+              const rawColor = await ask(`**اكتب اللون الجديد Hex للحقل (${key}) - الحالي: ${current}**`);
+              const normalizedInput = String(rawColor || '').trim();
+              const isValidHex = /^#?[0-9a-fA-F]{6}$/.test(normalizedInput);
+              if (!isValidHex) {
+                await message.channel.send('**❌ تنسيق اللون غير صحيح. استخدم Hex مثل: #7A5AF8**')
+                  .then((m) => setTimeout(() => m.delete().catch(() => {}), 7000))
+                  .catch(() => {});
+              } else {
+                feedbackCfg.style[key] = normalizeHexColor(normalizedInput, current);
+              }
+            }
+          }
+          await styleMsg.delete().catch(() => {});
+        }
       }
     }
   };
@@ -7281,6 +7463,8 @@ function registerHandlers(client) {
             await interaction.reply(buildTicketMessagePayload('التقييم', '**روم التقييم غير صالح.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
             return;
           }
+          // Prevent "Something went wrong" on slow render/send by acknowledging modal early
+          await interaction.deferReply({ ephemeral: true }).catch((error) => logSilentError('suppressed', error));
           const member = await resolveGuildMember(guild, interaction.user.id);
           const image = await buildFeedbackCardImage({ guild, member, stars, comment: review, style: feedbackCfg.style || {} });
           const attachment = new AttachmentBuilder(image, { name: `feedback_${interaction.user.id}_${Date.now()}.png` });
@@ -7306,7 +7490,11 @@ function registerHandlers(client) {
           }
           ticketFeedbackSessions.delete(token);
           deleteRuntimeSession('ticket-feedback', token);
-          await interaction.reply(buildTicketMessagePayload('التقييم', '**شكراً لك، تم إرسال تقييمك بنجاح.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+          if (interaction.deferred || interaction.replied) {
+            await interaction.editReply(buildTicketMessagePayload('التقييم', '**شكراً لك، تم إرسال تقييمك بنجاح.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+          } else {
+            await interaction.reply(buildTicketMessagePayload('التقييم', '**شكراً لك، تم إرسال تقييمك بنجاح.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+          }
           return;
         }
 
