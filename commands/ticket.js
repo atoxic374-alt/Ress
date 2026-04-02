@@ -3322,7 +3322,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   }
 
   ctx.fillStyle = textColor;
-  ctx.font = 'bold 52px Cairo';
+  ctx.font = 'bold 46px Cairo';
   ctx.textAlign = 'right';
   ctx.direction = 'rtl';
   ctx.shadowColor = '#00000020';
@@ -3342,7 +3342,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
     }
   }
   if (current) lines.push(current);
-  lines.slice(0, 4).forEach((line, i) => ctx.fillText(line, cardX + cardW - 110, cardY + 285 + (i * 62)));
+  lines.slice(0, 4).forEach((line, i) => ctx.fillText(line, cardX + cardW - 74, cardY + 276 + (i * 56)));
   ctx.shadowBlur = 0;
   ctx.shadowOffsetY = 0;
   ctx.textAlign = 'left';
