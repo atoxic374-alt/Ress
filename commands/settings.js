@@ -291,6 +291,110 @@ async function execute(message, args, { responsibilities, client, scheduleSave, 
     return modal;
   }
 
+  async function finalizeResponsibilityRolesCreation(interaction, { allowPartial = false } = {}) {
+    const currentSession = responsibilityRolesSession.get(interaction.user.id);
+    if (!currentSession || !currentSession.anchorRoleId || !Array.isArray(currentSession.selectedResponsibilities) || currentSession.selectedResponsibilities.length === 0) {
+      await safeReply(interaction, '**انتهت جلسة إنشاء الرولات. أعد المحاولة من القائمة.**');
+      return false;
+    }
+
+    const selectedResponsibilities = currentSession.selectedResponsibilities.slice(0, 24);
+    const anchorRole = await interaction.guild.roles.fetch(currentSession.anchorRoleId).catch(() => null);
+    if (!anchorRole) {
+      await safeReply(interaction, '**رول المركز غير صالح أو محذوف.**');
+      return false;
+    }
+
+    const me = await interaction.guild.members.fetchMe().catch(() => null);
+    if (!me || !me.permissions.has('ManageRoles')) {
+      await safeReply(interaction, '**لا أملك صلاحية إدارة الرولات ( Manage Roles ).**');
+      return false;
+    }
+
+    const botHighestRole = me.roles.highest;
+    if (!botHighestRole || anchorRole.position >= botHighestRole.position) {
+      await safeReply(interaction, '**لا يمكن الإنشاء تحت هذا الرول لأن ترتيبه أعلى أو مساوي لرولي الأعلى.**');
+      return false;
+    }
+
+    const rawNames = selectedResponsibilities.map((respName) => (currentSession.roleNamesByResponsibility?.[respName] || '').trim());
+    const fillable = selectedResponsibilities
+      .map((respName, index) => ({ respName, roleName: rawNames[index] }))
+      .filter((item) => item.roleName.length > 0);
+
+    if (!allowPartial && fillable.length !== selectedResponsibilities.length) {
+      await safeReply(interaction, '**يجب إدخال اسم لكل رول.**');
+      return false;
+    }
+
+    if (fillable.length === 0) {
+      await safeReply(interaction, '**لا يوجد أسماء رولات صالحة للإنشاء.**');
+      return false;
+    }
+
+    const lowerNames = fillable.map((item) => item.roleName.toLowerCase());
+    if (new Set(lowerNames).size !== lowerNames.length) {
+      await safeReply(interaction, '**يوجد تكرار في أسماء الرولات المدخلة.**');
+      return false;
+    }
+
+    for (const { respName } of fillable) {
+      const respData = responsibilities[respName];
+      if (!respData || (Array.isArray(respData.roles) && respData.roles.length > 0)) {
+        await safeReply(interaction, `**تم إيقاف العملية لأن المسؤولية "${respName}" مرتبطة مسبقاً.**`);
+        return false;
+      }
+    }
+
+    for (const { roleName } of fillable) {
+      const existingRoleByName = interaction.guild.roles.cache.find((r) => r.name.toLowerCase() === roleName.toLowerCase());
+      if (existingRoleByName) {
+        await safeReply(interaction, `**اسم الرول "${roleName}" مستخدم مسبقاً في السيرفر.**`);
+        return false;
+      }
+    }
+
+    const createdRoles = [];
+    try {
+      const targetPosition = Math.max(1, anchorRole.position - 1);
+      for (const { respName, roleName } of fillable) {
+        const createdRole = await interaction.guild.roles.create({
+          name: roleName,
+          reason: `إنشاء رول مسؤولية للمسؤولية ${respName} بواسطة ${interaction.user.tag}`,
+          permissions: []
+        });
+
+        await createdRole.setPosition(targetPosition);
+        await createdRole.setPermissions([]);
+
+        if (!Array.isArray(responsibilities[respName].roles)) {
+          responsibilities[respName].roles = [];
+        }
+        responsibilities[respName].roles = [createdRole.id];
+        createdRoles.push(createdRole);
+      }
+
+      const saved = await saveResponsibilities();
+      if (!saved) throw new Error('SAVE_FAILED');
+
+      currentSession.selectedResponsibilities = [];
+      currentSession.roleNamesByResponsibility = {};
+      responsibilityRolesSession.set(interaction.user.id, currentSession);
+
+      updateRespEmbeds(client);
+      await safeReply(interaction, `**✅ تم إنشاء ${createdRoles.length} رول وربطها بالمسؤوليات بنجاح.**`);
+      await openResponsibilityRolesCenter(interaction);
+      return true;
+    } catch (error) {
+      for (const role of createdRoles) {
+        await role.delete('Rollback after creation failure').catch(() => {});
+      }
+      console.error('خطأ في إنشاء رولات المسؤوليات:', error);
+      await safeReply(interaction, '**حدث خطأ أثناء إنشاء الرولات.**');
+      return false;
+    }
+  }
+
   async function openResponsibilityRolesCenter(interaction) {
     const rows = [];
     const sortedResponsibilities = getOrderedResponsibilities();
@@ -618,6 +722,30 @@ const deleteButton = new ButtonBuilder()
     return { embeds: [embed], components: [row] };
   }
 
+  async function sendResponsibilityMemberDM(targetMember, interaction, responsibilityName, actionType = 'added') {
+    try {
+      if (!targetMember) return;
+
+      const isAdded = actionType === 'added';
+      const actorAvatar = interaction.user.displayAvatarURL({ extension: 'png', size: 128 });
+
+      const notifyEmbed = colorManager.createEmbed()
+        .setTitle(isAdded ? '**Responsibility Assignment**' : '**Responsibility Removal**')
+        .setDescription(isAdded ? '**تم تحديث صلاحياتك داخل نظام المسؤوليات.**' : '**تم تحديث حالتك داخل نظام المسؤوليات.**')
+        .setThumbnail(actorAvatar)
+        .addFields(
+          { name: 'Action', value: isAdded ? 'تمت إضافتك كمسؤول.' : 'تمت إزالتك من المسؤولية.' },
+          { name: 'Responsibility', value: `المسؤولية: **${responsibilityName}**` },
+          { name: 'By', value: `تمت العملية بواسطة: <@${interaction.user.id}>` },
+          { name: 'Server', value: `داخل سيرفر: **${interaction.guild.name}**` }
+        );
+
+      await targetMember.send({ embeds: [notifyEmbed] }).catch(() => {});
+    } catch (dmError) {
+      console.error('خطأ في إرسال رسالة الخاص للمسؤول:', dmError);
+    }
+  }
+
   async function showResponsibleManagement(interaction, responsibilityName) {
     try {
       const responsibility = responsibilities[responsibilityName];
@@ -730,19 +858,7 @@ const deleteButton = new ButtonBuilder()
                   await syncResponsibilityRoles(responsibilityName, message.guild);
                   updateRespEmbeds(client);
 
-                  // إرسال رسالة ترحيبية للمسؤول الجديد
-                  try {
-                    const welcomeEmbed = colorManager.createEmbed()
-                      .setTitle('**Congrat ✅️**')
-                      .setDescription(`\nتم اضافتك مسؤول لمسؤوليه الـ **${responsibilityName}**\n\nبواسطه مسؤول المسؤوليات <@${interaction.user.id}>\n\nفي سيرفر : **${interaction.guild.name}**\n`)
-                      .setThumbnail(message.guild.iconURL({ dynamic: true }));
-                    
-                    await member.send({ embeds: [welcomeEmbed] }).catch(() => {
-                      console.log(`فشل إرسال رسالة ترحيب للمستخدم ${member.user.tag} (الخاص مغلق)`);
-                    });
-                  } catch (dmError) {
-                    console.error('خطأ في إرسال الرسالة الترحيبية:', dmError);
-                  }
+                  await sendResponsibilityMemberDM(member, interaction, responsibilityName, 'added');
 
                   const updatedContent = await generateManagementContent(responsibilityName);
                   await sentMessage.edit(updatedContent);
@@ -801,19 +917,7 @@ const deleteButton = new ButtonBuilder()
 
               await safeFollowUp(interaction, `**✅ تم حذف المسؤول رقم ${content} بنجاح**`);
 
-              // إرسال رسالة إشعار للمسؤول المزال
-              if (removedMember) {
-                  try {
-                      const goodbyeEmbed = colorManager.createEmbed()
-                          .setTitle('**إزالة مسؤولية**')
-                          .setDescription(`\nتم حذفك من مسؤولية الـ **${responsibilityName}**\n\nبواسطه مسؤول المسؤوليات <@${interaction.user.id}>\n\nفي سيرفر : **${interaction.guild.name}**\n`)
-                          .setThumbnail(message.guild.iconURL({ dynamic: true }));
-                      
-                      await removedMember.send({ embeds: [goodbyeEmbed] }).catch(() => {});
-                  } catch (dmError) {
-                      console.error('خطأ في إرسال رسالة الإزالة:', dmError);
-                  }
-              }
+              await sendResponsibilityMemberDM(removedMember, interaction, responsibilityName, 'removed');
 
               logEvent(client, message.guild, {
                 type: 'RESPONSIBILITY_MANAGEMENT',
@@ -880,16 +984,7 @@ const deleteButton = new ButtonBuilder()
                       }
                     }
 
-                    try {
-                      const welcomeEmbed = colorManager.createEmbed()
-                        .setTitle('**Congrat ✅️**')
-                        .setDescription(`\nتم اضافتك مسؤول لمسؤوليه الـ **${responsibilityName}**\n\nبواسطه مسؤول المسؤوليات <@${interaction.user.id}>\n\nفي سيرفر : **${interaction.guild.name}**\n`)
-                        .setThumbnail(message.guild.iconURL({ dynamic: true }));
-
-                      await member.send({ embeds: [welcomeEmbed] });
-                    } catch (error) {
-                      console.log(`لا يمكن إرسال رسالة للمستخدم ${userId}: ${error.message}`);
-                    }
+                    await sendResponsibilityMemberDM(member, interaction, responsibilityName, 'added');
 
                     logEvent(client, message.guild, {
                       type: 'RESPONSIBILITY_MANAGEMENT',
@@ -1629,6 +1724,17 @@ const deleteButton = new ButtonBuilder()
         responsibilityRolesSession.set(interaction.user.id, currentSession);
         const modal = buildResponsibilityRolesModal(0, currentSession.selectedResponsibilities);
         await interaction.showModal(modal);
+      } else if (interaction.customId.startsWith('settings_responsibility_roles_open_modal_') && interaction.isButton()) {
+        const currentSession = responsibilityRolesSession.get(interaction.user.id);
+        if (!currentSession || !Array.isArray(currentSession.selectedResponsibilities) || currentSession.selectedResponsibilities.length === 0) {
+          return await safeReply(interaction, '**انتهت جلسة إنشاء الرولات. أعد المحاولة من القائمة.**');
+        }
+
+        const step = parseInt(interaction.customId.replace('settings_responsibility_roles_open_modal_', ''), 10) || 0;
+        const modal = buildResponsibilityRolesModal(step, currentSession.selectedResponsibilities.slice(0, 24));
+        await interaction.showModal(modal);
+      } else if (interaction.customId === 'settings_responsibility_roles_finish_create' && interaction.isButton()) {
+        await finalizeResponsibilityRolesCreation(interaction, { allowPartial: true });
       } else if (interaction.isButton()) {
         const [action, responsibilityName] = interaction.customId.split('_');
 
@@ -2509,20 +2615,6 @@ const deleteButton = new ButtonBuilder()
         }
 
         const step = parseInt(interaction.customId.replace('settings_responsibility_roles_names_modal_', ''), 10) || 0;
-        const anchorRole = await message.guild.roles.fetch(currentSession.anchorRoleId).catch(() => null);
-        if (!anchorRole) {
-          return await safeReply(interaction, '**رول المركز غير صالح أو محذوف.**');
-        }
-        const me = await message.guild.members.fetchMe().catch(() => null);
-        if (!me || !me.permissions.has('ManageRoles')) {
-          return await safeReply(interaction, '**لا أملك صلاحية إدارة الرولات ( Manage Roles ).**');
-        }
-
-        const botHighestRole = me.roles.highest;
-        if (!botHighestRole || anchorRole.position >= botHighestRole.position) {
-          return await safeReply(interaction, '**لا يمكن الإنشاء تحت هذا الرول لأن ترتيبه أعلى أو مساوي لرولي الأعلى.**');
-        }
-
         const selectedResponsibilities = currentSession.selectedResponsibilities.slice(0, 24);
         const startIndex = step * 5;
         const currentChunk = selectedResponsibilities.slice(startIndex, startIndex + 5);
@@ -2543,67 +2635,26 @@ const deleteButton = new ButtonBuilder()
           const nextStepToFill = Math.floor(requestedRoleNames.findIndex((name) => !name) / 5);
           if (nextStepToFill > step) {
             responsibilityRolesSession.set(interaction.user.id, currentSession);
-            const nextModal = buildResponsibilityRolesModal(nextStepToFill, selectedResponsibilities);
-            return await interaction.showModal(nextModal);
+            return await interaction.reply({
+              content: `**✅ تم حفظ الجزء الحالي.**\n**اضغط \"إكمال\" لفتح الجزء التالي (${nextStepToFill + 1}).**`,
+              components: [
+                new ActionRowBuilder().addComponents(
+                  new ButtonBuilder()
+                    .setCustomId(`settings_responsibility_roles_open_modal_${nextStepToFill}`)
+                    .setLabel('إكمال')
+                    .setStyle(ButtonStyle.Secondary),
+                  new ButtonBuilder()
+                    .setCustomId('settings_responsibility_roles_finish_create')
+                    .setLabel('إنهاء وإنشاء')
+                    .setStyle(ButtonStyle.Success)
+                )
+              ],
+              ephemeral: true
+            });
           }
           return await safeReply(interaction, '**يجب إدخال اسم لكل رول.**');
         }
-
-        const lowerNames = requestedRoleNames.map(n => n.toLowerCase());
-        if (new Set(lowerNames).size !== lowerNames.length) {
-          return await safeReply(interaction, '**يوجد تكرار في أسماء الرولات المدخلة.**');
-        }
-
-        for (const respName of selectedResponsibilities) {
-          const respData = responsibilities[respName];
-          if (!respData || (Array.isArray(respData.roles) && respData.roles.length > 0)) {
-            return await safeReply(interaction, `**تم إيقاف العملية لأن المسؤولية "${respName}" مرتبطة مسبقاً.**`);
-          }
-        }
-
-        for (const roleName of requestedRoleNames) {
-          const existingRoleByName = message.guild.roles.cache.find(r => r.name.toLowerCase() === roleName.toLowerCase());
-          if (existingRoleByName) {
-            return await safeReply(interaction, `**اسم الرول "${roleName}" مستخدم مسبقاً في السيرفر.**`);
-          }
-        }
-
-        const createdRoles = [];
-        try {
-          for (let i = 0; i < selectedResponsibilities.length; i++) {
-            const respName = selectedResponsibilities[i];
-            const roleName = requestedRoleNames[i];
-
-            const createdRole = await message.guild.roles.create({
-              name: roleName,
-              reason: `إنشاء رول مسؤولية للمسؤولية ${respName} بواسطة ${interaction.user.tag}`,
-              permissions: []
-            });
-
-            await createdRole.setPosition(Math.max(1, anchorRole.position - 1)).catch(() => {});
-
-            if (!Array.isArray(responsibilities[respName].roles)) {
-              responsibilities[respName].roles = [];
-            }
-            responsibilities[respName].roles.push(createdRole.id);
-            createdRoles.push({ respName, roleId: createdRole.id, roleName: createdRole.name });
-          }
-
-          const saved = await saveResponsibilities();
-          if (!saved) {
-            throw new Error('SAVE_FAILED');
-          }
-
-          currentSession.selectedResponsibilities = [];
-          currentSession.roleNamesByResponsibility = {};
-          responsibilityRolesSession.set(interaction.user.id, currentSession);
-
-          await safeReply(interaction, `**✅ تم إنشاء ${createdRoles.length} رول وربطها بالمسؤوليات بنجاح.**`);
-          await openResponsibilityRolesCenter(interaction);
-        } catch (error) {
-          console.error('خطأ في إنشاء رولات المسؤوليات:', error);
-          return await safeReply(interaction, '**حدث خطأ أثناء إنشاء الرولات.**');
-        }
+        await finalizeResponsibilityRolesCreation(interaction, { allowPartial: false });
       }
     } catch (error) {
       console.error('خطأ في معالج المودال:', error);
