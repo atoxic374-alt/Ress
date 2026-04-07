@@ -1830,31 +1830,47 @@ module.exports = {
                         fetchReply: true
                     });
 
-                    const suggestionPick = await roomMsg.awaitMessageComponent({
-                        filter: (i) => i.user.id === message.author.id && i.customId === `resp_setup_suggestions_${message.id}`,
-                        time: 120000
-                    }).catch(() => null);
-                    if (!suggestionPick) return;
-                    const suggestionsChannel = suggestionPick.channels.first();
-                    if (!suggestionsChannel || suggestionsChannel.guildId !== guildId) {
-                        await suggestionPick.reply({ content: '**❌ اختر روم من نفس السيرفر.**', ephemeral: true }).catch(() => {});
-                        return;
-                    }
+                    let suggestionsChannel = null;
+                    let embedChannel = null;
+                    const setupIds = [
+                        `resp_setup_suggestions_${message.id}`,
+                        `resp_setup_embed_${message.id}`
+                    ];
 
-                    const embedPick = await roomMsg.awaitMessageComponent({
-                        filter: (i) => i.user.id === message.author.id && i.customId === `resp_setup_embed_${message.id}`,
-                        time: 120000
-                    }).catch(() => null);
-                    if (!embedPick) return;
-                    const embedChannel = embedPick.channels.first();
-                    if (!embedChannel || embedChannel.guildId !== guildId) {
-                        await embedPick.reply({ content: '**❌ اختر روم من نفس السيرفر.**', ephemeral: true }).catch(() => {});
-                        return;
+                    while (!suggestionsChannel || !embedChannel) {
+                        const pick = await roomMsg.awaitMessageComponent({
+                            filter: (i) => i.user.id === message.author.id && setupIds.includes(i.customId),
+                            time: 120000
+                        }).catch(() => null);
+                        if (!pick) return;
+
+                        const channel = pick.channels.first();
+                        if (!channel || channel.guildId !== guildId) {
+                            await pick.reply({ content: '**❌ اختر روم من نفس السيرفر.**', ephemeral: true }).catch(() => {});
+                            return;
+                        }
+
+                        if (pick.customId === `resp_setup_suggestions_${message.id}`) {
+                            suggestionsChannel = channel;
+                        } else if (pick.customId === `resp_setup_embed_${message.id}`) {
+                            embedChannel = channel;
+                        }
+
+                        const statusLines = [
+                            `**روم الاقتراحات :** ${suggestionsChannel ? `<#${suggestionsChannel.id}>` : 'لم يتم التحديد بعد'}`,
+                            `**روم عرض المسؤوليات :** ${embedChannel ? `<#${embedChannel.id}>` : 'لم يتم التحديد بعد'}`,
+                            '',
+                            suggestionsChannel && embedChannel
+                                ? '**✅ تم اختيار الرومين، تابع لاختيار نوع الرسالة.**'
+                                : '**اختر الروم المتبقي لإكمال الإعداد.**'
+                        ];
+
+                        await pick.update({ content: statusLines.join('\n') }).catch(() => {});
                     }
 
                     setGuildConfig(guildId, { suggestionsChannel: suggestionsChannel.id, embedChannel: embedChannel.id });
 
-                    await embedPick.update({
+                    await interaction.editReply({
                         content: '**اختر نوع رسالة المسؤوليات :**',
                         components: [
                             new ActionRowBuilder().addComponents(
