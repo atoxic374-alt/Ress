@@ -2427,21 +2427,29 @@ module.exports = {
                         await confirm.update({ content: '**❌ تم إلغاء العملية.**', components: [] });
                         return;
                     }
+                    await confirm.deferUpdate().catch(() => {});
 
                     const currentResps = getCurrentResponsibilities();
                     let totalRemoved = 0;
                     let totalRolesRemoved = 0;
+                    let skippedMissingMembers = 0;
                     const { dbManager } = require('../utils/database.js');
 
                     for (const respName in currentResps) {
                         const resp = currentResps[respName];
                         const roleIds = Array.isArray(resp.roles) ? resp.roles.filter(Boolean) : (resp.roleId ? [resp.roleId] : []);
-                        const members = resp.responsibles || resp.members || [];
+                        const members = [...new Set(resp.responsibles || resp.members || [])];
+                        const fetchedMembers = members.length > 0
+                            ? await message.guild.members.fetch({ user: members }).catch(() => null)
+                            : null;
 
                         for (const userId of members) {
                             totalRemoved++;
-                            const member = await message.guild.members.fetch(userId).catch(() => null);
-                            if (!member) continue;
+                            const member = fetchedMembers?.get(userId) || message.guild.members.cache.get(userId) || null;
+                            if (!member) {
+                                skippedMissingMembers++;
+                                continue;
+                            }
                             for (const roleId of roleIds) {
                                 if (member.roles.cache.has(roleId)) {
                                     await member.roles.remove(roleId).catch(() => {});
@@ -2460,9 +2468,16 @@ module.exports = {
                     await updateEmbedMessage(message.client, guildId).catch(() => {});
                     appendRespAuditLog(guildId, message.author.id, 'resp.clearMembers', {
                         removedMembers: totalRemoved,
-                        removedRoles: totalRolesRemoved
+                        removedRoles: totalRolesRemoved,
+                        skippedMissingMembers
                     });
-                    await confirm.update({ content: `**✅ تم تفريغ المسؤولين (${totalRemoved}) وسحب الرولات (${totalRolesRemoved}).**`, components: [] });
+                    const skippedLine = skippedMissingMembers > 0
+                        ? `\n**⚠️ لم يتم سحب رولات : ${skippedMissingMembers} (طالعين من السيرفر).**`
+                        : '';
+                    await interaction.editReply({
+                        content: `**✅ تم تفريغ المسؤولين (${totalRemoved}) وسحب الرولات (${totalRolesRemoved}).**${skippedLine}`,
+                        components: []
+                    });
                 }
             } catch (error) {
                 console.error('Error in resp control panel:', error);
