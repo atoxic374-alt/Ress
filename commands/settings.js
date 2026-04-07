@@ -1,4 +1,4 @@
-const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, RoleSelectMenuBuilder } = require('discord.js');
 const { logEvent } = require('../utils/logs_system.js');
 const colorManager = require('../utils/colorManager.js');
 const { isUserBlocked } = require('./block.js');
@@ -209,6 +209,11 @@ async function execute(message, args, { responsibilities, client, scheduleSave, 
       description: 'إنشاء مسؤولية جديدة',
       value: 'add_new'
     });
+    options.push({
+      label: 'رولات المسؤوليات',
+      description: 'إنشاء وإدارة رولات مرتبطة بالمسؤوليات',
+      value: 'responsibility_roles_center'
+    });
 
     const selectMenu = new StringSelectMenuBuilder()
       .setCustomId('settings_select_responsibility')
@@ -255,6 +260,133 @@ async function execute(message, args, { responsibilities, client, scheduleSave, 
 
   // تتبع الصفحة الحالية لكل مستخدم
   const userPages = new Map();
+  // تتبع جلسة إنشاء رولات المسؤوليات
+  const responsibilityRolesSession = new Map();
+
+  function buildResponsibilityRolesModal(step = 0, selectedResponsibilities = []) {
+    const startIndex = step * 5;
+    const chunk = selectedResponsibilities.slice(startIndex, startIndex + 5);
+
+    const modal = new ModalBuilder()
+      .setCustomId(`settings_responsibility_roles_names_modal_${step}`)
+      .setTitle(`أسماء رولات المسؤوليات (${step + 1})`);
+
+    chunk.forEach((respName, index) => {
+      const absoluteIndex = startIndex + index;
+      const roleNameInput = new TextInputBuilder()
+        .setCustomId(`resp_role_name_${absoluteIndex}`)
+        .setLabel(respName.slice(0, 45))
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setPlaceholder(`اسم رول ${respName}`);
+
+      modal.addComponents(new ActionRowBuilder().addComponents(roleNameInput));
+    });
+
+    return modal;
+  }
+
+  async function openResponsibilityRolesCenter(interaction) {
+    const rows = [];
+    const sortedResponsibilities = getOrderedResponsibilities();
+    const options = [];
+
+    for (const name of sortedResponsibilities.slice(0, 25)) {
+      const respData = responsibilities[name] || {};
+      const linkedRoleId = Array.isArray(respData.roles) && respData.roles.length > 0 ? respData.roles[0] : null;
+      const linkedRoleText = linkedRoleId ? `<@&${linkedRoleId}>` : 'N/A';
+
+      options.push({
+        label: name.length > 90 ? `${name.slice(0, 87)}...` : name,
+        value: name,
+        description: linkedRoleId ? `مرتبط: ${linkedRoleText}` : 'مرتبط: N/A'
+      });
+    }
+
+    const sessionData = responsibilityRolesSession.get(interaction.user.id) || {
+      anchorRoleId: null,
+      selectedResponsibilities: []
+    };
+
+    const withRoleCount = getOrderedResponsibilities().filter((name) => {
+      const respData = responsibilities[name] || {};
+      return Array.isArray(respData.roles) && respData.roles.length > 0;
+    }).length;
+
+    const statusThumbnail = sessionData.anchorRoleId
+      ? (interaction.guild?.iconURL({ dynamic: true, size: 256 }) || client.user.displayAvatarURL({ dynamic: true, size: 256 }))
+      : client.user.displayAvatarURL({ dynamic: true, size: 256 });
+
+    const embed = colorManager.createEmbed()
+      .setTitle('Responsibilities Roles Center')
+      .setThumbnail(statusThumbnail)
+      .setDescription([
+        `• **إجمالي المسؤوليات :** ${getOrderedResponsibilities().length}`,
+        `• **المسؤوليات المربوطة برول :** ${withRoleCount}`,
+        `• **المسؤوليات بدون رول :** ${Math.max(0, getOrderedResponsibilities().length - withRoleCount)}`,
+        '',
+        '• **حالة الربط الحالية :**',
+        ...getOrderedResponsibilities().map((name, idx) => {
+          const respData = responsibilities[name] || {};
+          const linkedRoleId = Array.isArray(respData.roles) && respData.roles.length > 0 ? respData.roles[0] : null;
+          return `• **${idx + 1}.** ${name} → ${linkedRoleId ? `<@&${linkedRoleId}>` : 'N/A'}`;
+        }).slice(0, 20),
+        '',
+        `• **رول المركز المحدد :** ${sessionData.anchorRoleId ? `<@&${sessionData.anchorRoleId}>` : 'غير محدد'}`,
+        `• **المسؤوليات المحددة للإنشاء :** ${sessionData.selectedResponsibilities.length > 0 ? `${sessionData.selectedResponsibilities.length}` : '0'}`,
+        `• **الحد الأقصى للاختيار :** 24`
+      ].join('\n'));
+
+    const anchorRoleMenu = new RoleSelectMenuBuilder()
+      .setCustomId('settings_responsibility_roles_anchor_select')
+      .setPlaceholder('اختر رول المركز (تنشأ الرولات تحته)')
+      .setMinValues(1)
+      .setMaxValues(1);
+
+    rows.push(new ActionRowBuilder().addComponents(anchorRoleMenu));
+
+    if (options.length > 0) {
+      const responsibilitiesSelect = new StringSelectMenuBuilder()
+        .setCustomId('settings_responsibility_roles_multi_select')
+        .setPlaceholder('اختر المسؤوليات (متعدد - حتى 24)')
+        .setMinValues(1)
+        .setMaxValues(Math.min(options.length, 24))
+        .addOptions(options);
+
+      rows.push(new ActionRowBuilder().addComponents(responsibilitiesSelect));
+
+      const editSelect = new StringSelectMenuBuilder()
+        .setCustomId('settings_responsibility_roles_edit_select')
+        .setPlaceholder('اختر مسؤولية لفتح شاشة التعديل')
+        .setMinValues(1)
+        .setMaxValues(1)
+        .addOptions(options.map((opt) => ({
+          label: opt.label,
+          value: opt.value,
+          description: `تعديل المسؤولية : ${opt.label}`
+        })));
+
+      rows.push(new ActionRowBuilder().addComponents(editSelect));
+    }
+
+    const createButton = new ButtonBuilder()
+      .setCustomId('settings_responsibility_roles_create')
+      .setLabel('تحديد المسؤوليات')
+      .setStyle(ButtonStyle.Secondary);
+
+    const backButton = new ButtonBuilder()
+      .setCustomId('back_to_menu')
+      .setLabel('main menu')
+      .setStyle(ButtonStyle.Secondary);
+
+    rows.push(new ActionRowBuilder().addComponents(createButton, backButton));
+
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.update({ embeds: [embed], components: rows });
+    } else {
+      await interaction.editReply({ embeds: [embed], components: rows });
+    }
+  }
 
   async function sendSettingsMenu(page = 0) {
     userPages.set(message.author.id, page);
@@ -1149,6 +1281,13 @@ const deleteButton = new ButtonBuilder()
 
           modal.addComponents(firstActionRow, secondActionRow);
           await interaction.showModal(modal);
+        } else if (selected === 'responsibility_roles_center') {
+          responsibilityRolesSession.set(interaction.user.id, {
+            anchorRoleId: null,
+            selectedResponsibilities: [],
+            roleNamesByResponsibility: {}
+          });
+          await openResponsibilityRolesCenter(interaction);
         } else {
           const responsibility = responsibilities[selected];
           if (!responsibility) {
@@ -1334,6 +1473,57 @@ const deleteButton = new ButtonBuilder()
         
         // وإلا، عد للقائمة الرئيسية
         await updateMainMenu();
+      } else if (interaction.customId === 'settings_responsibility_roles_anchor_select' && interaction.isRoleSelectMenu()) {
+        const selectedRoleId = interaction.values[0];
+        const currentSession = responsibilityRolesSession.get(interaction.user.id) || {
+          anchorRoleId: null,
+          selectedResponsibilities: [],
+          roleNamesByResponsibility: {}
+        };
+        currentSession.anchorRoleId = selectedRoleId;
+        responsibilityRolesSession.set(interaction.user.id, currentSession);
+        await openResponsibilityRolesCenter(interaction);
+      } else if (interaction.customId === 'settings_responsibility_roles_multi_select' && interaction.isStringSelectMenu()) {
+        const selectedResponsibilities = interaction.values;
+        const currentSession = responsibilityRolesSession.get(interaction.user.id) || {
+          anchorRoleId: null,
+          selectedResponsibilities: [],
+          roleNamesByResponsibility: {}
+        };
+        currentSession.selectedResponsibilities = selectedResponsibilities;
+        responsibilityRolesSession.set(interaction.user.id, currentSession);
+        await openResponsibilityRolesCenter(interaction);
+      } else if (interaction.customId === 'settings_responsibility_roles_edit_select' && interaction.isStringSelectMenu()) {
+        const selectedResponsibility = interaction.values[0];
+        if (!selectedResponsibility || !responsibilities[selectedResponsibility]) {
+          return await safeReply(interaction, '**المسؤولية غير موجودة أو تم حذفها.**');
+        }
+
+        await interaction.deferUpdate();
+        await updateResponsibilityView(selectedResponsibility);
+      } else if (interaction.customId === 'settings_responsibility_roles_create' && interaction.isButton()) {
+        const currentSession = responsibilityRolesSession.get(interaction.user.id);
+        if (!currentSession || !currentSession.anchorRoleId) {
+          return await safeReply(interaction, '**حدد رول المركز أولاً.**');
+        }
+
+        if (!Array.isArray(currentSession.selectedResponsibilities) || currentSession.selectedResponsibilities.length === 0) {
+          return await safeReply(interaction, '**حدد المسؤوليات أولاً.**');
+        }
+
+        const blockedResponsibilities = currentSession.selectedResponsibilities.filter((name) => {
+          const respData = responsibilities[name];
+          return respData && Array.isArray(respData.roles) && respData.roles.length > 0;
+        });
+
+        if (blockedResponsibilities.length > 0) {
+          return await safeReply(interaction, `**لا يمكن الإنشاء. المسؤوليات التالية مرتبطة مسبقاً برول:**\n${blockedResponsibilities.join('\n')}`);
+        }
+
+        currentSession.roleNamesByResponsibility = {};
+        responsibilityRolesSession.set(interaction.user.id, currentSession);
+        const modal = buildResponsibilityRolesModal(0, currentSession.selectedResponsibilities);
+        await interaction.showModal(modal);
       } else if (interaction.isButton()) {
         const [action, responsibilityName] = interaction.customId.split('_');
 
@@ -2207,6 +2397,108 @@ const deleteButton = new ButtonBuilder()
             console.error('خطأ في إضافة الأعضاء المبحوث عنهم:', error);
           }
         });
+      } else if (interaction.customId.startsWith('settings_responsibility_roles_names_modal_')) {
+        const currentSession = responsibilityRolesSession.get(interaction.user.id);
+        if (!currentSession || !currentSession.anchorRoleId || !Array.isArray(currentSession.selectedResponsibilities) || currentSession.selectedResponsibilities.length === 0) {
+          return await safeReply(interaction, '**انتهت جلسة إنشاء الرولات. أعد المحاولة من القائمة.**');
+        }
+
+        const step = parseInt(interaction.customId.replace('settings_responsibility_roles_names_modal_', ''), 10) || 0;
+        const anchorRole = await message.guild.roles.fetch(currentSession.anchorRoleId).catch(() => null);
+        if (!anchorRole) {
+          return await safeReply(interaction, '**رول المركز غير صالح أو محذوف.**');
+        }
+        const me = await message.guild.members.fetchMe().catch(() => null);
+        if (!me || !me.permissions.has('ManageRoles')) {
+          return await safeReply(interaction, '**لا أملك صلاحية إدارة الرولات ( Manage Roles ).**');
+        }
+
+        const botHighestRole = me.roles.highest;
+        if (!botHighestRole || anchorRole.position >= botHighestRole.position) {
+          return await safeReply(interaction, '**لا يمكن الإنشاء تحت هذا الرول لأن ترتيبه أعلى أو مساوي لرولي الأعلى.**');
+        }
+
+        const selectedResponsibilities = currentSession.selectedResponsibilities.slice(0, 24);
+        const startIndex = step * 5;
+        const currentChunk = selectedResponsibilities.slice(startIndex, startIndex + 5);
+
+        if (!currentSession.roleNamesByResponsibility || typeof currentSession.roleNamesByResponsibility !== 'object') {
+          currentSession.roleNamesByResponsibility = {};
+        }
+
+        for (let idx = 0; idx < currentChunk.length; idx++) {
+          const absoluteIndex = startIndex + idx;
+          const respName = selectedResponsibilities[absoluteIndex];
+          const value = interaction.fields.getTextInputValue(`resp_role_name_${absoluteIndex}`)?.trim() || '';
+          currentSession.roleNamesByResponsibility[respName] = value;
+        }
+
+        const requestedRoleNames = selectedResponsibilities.map((respName) => currentSession.roleNamesByResponsibility[respName] || '');
+        if (requestedRoleNames.some((name) => !name)) {
+          const nextStepToFill = Math.floor(requestedRoleNames.findIndex((name) => !name) / 5);
+          if (nextStepToFill > step) {
+            responsibilityRolesSession.set(interaction.user.id, currentSession);
+            const nextModal = buildResponsibilityRolesModal(nextStepToFill, selectedResponsibilities);
+            return await interaction.showModal(nextModal);
+          }
+          return await safeReply(interaction, '**يجب إدخال اسم لكل رول.**');
+        }
+
+        const lowerNames = requestedRoleNames.map(n => n.toLowerCase());
+        if (new Set(lowerNames).size !== lowerNames.length) {
+          return await safeReply(interaction, '**يوجد تكرار في أسماء الرولات المدخلة.**');
+        }
+
+        for (const respName of selectedResponsibilities) {
+          const respData = responsibilities[respName];
+          if (!respData || (Array.isArray(respData.roles) && respData.roles.length > 0)) {
+            return await safeReply(interaction, `**تم إيقاف العملية لأن المسؤولية "${respName}" مرتبطة مسبقاً.**`);
+          }
+        }
+
+        for (const roleName of requestedRoleNames) {
+          const existingRoleByName = message.guild.roles.cache.find(r => r.name.toLowerCase() === roleName.toLowerCase());
+          if (existingRoleByName) {
+            return await safeReply(interaction, `**اسم الرول "${roleName}" مستخدم مسبقاً في السيرفر.**`);
+          }
+        }
+
+        const createdRoles = [];
+        try {
+          for (let i = 0; i < selectedResponsibilities.length; i++) {
+            const respName = selectedResponsibilities[i];
+            const roleName = requestedRoleNames[i];
+
+            const createdRole = await message.guild.roles.create({
+              name: roleName,
+              reason: `إنشاء رول مسؤولية للمسؤولية ${respName} بواسطة ${interaction.user.tag}`,
+              permissions: []
+            });
+
+            await createdRole.setPosition(Math.max(1, anchorRole.position - 1)).catch(() => {});
+
+            if (!Array.isArray(responsibilities[respName].roles)) {
+              responsibilities[respName].roles = [];
+            }
+            responsibilities[respName].roles.push(createdRole.id);
+            createdRoles.push({ respName, roleId: createdRole.id, roleName: createdRole.name });
+          }
+
+          const saved = await saveResponsibilities();
+          if (!saved) {
+            throw new Error('SAVE_FAILED');
+          }
+
+          currentSession.selectedResponsibilities = [];
+          currentSession.roleNamesByResponsibility = {};
+          responsibilityRolesSession.set(interaction.user.id, currentSession);
+
+          await safeReply(interaction, `**✅ تم إنشاء ${createdRoles.length} رول وربطها بالمسؤوليات بنجاح.**`);
+          await openResponsibilityRolesCenter(interaction);
+        } catch (error) {
+          console.error('خطأ في إنشاء رولات المسؤوليات:', error);
+          return await safeReply(interaction, '**حدث خطأ أثناء إنشاء الرولات.**');
+        }
       }
     } catch (error) {
       console.error('خطأ في معالج المودال:', error);
