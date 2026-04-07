@@ -292,6 +292,15 @@ async function execute(message, args, { responsibilities, client, scheduleSave, 
   }
 
   async function finalizeResponsibilityRolesCreation(interaction, { allowPartial = false } = {}) {
+    if (!interaction.deferred && !interaction.replied) {
+      try {
+        await interaction.deferReply({ ephemeral: true });
+        await interaction.editReply({ content: '**Waiting... جاري إنشاء الرولات وربطها، انتظر قليلاً**' });
+      } catch (deferError) {
+        console.error('تعذر عمل defer لعملية إنشاء رولات المسؤوليات:', deferError);
+      }
+    }
+
     const currentSession = responsibilityRolesSession.get(interaction.user.id);
     if (!currentSession || !currentSession.anchorRoleId || !Array.isArray(currentSession.selectedResponsibilities) || currentSession.selectedResponsibilities.length === 0) {
       await safeReply(interaction, '**انتهت جلسة إنشاء الرولات. أعد المحاولة من القائمة.**');
@@ -356,7 +365,7 @@ async function execute(message, args, { responsibilities, client, scheduleSave, 
 
     const createdRoles = [];
     try {
-      const targetPosition = Math.max(1, anchorRole.position - 1);
+      const targetPosition = Math.max(1, anchorRole.position);
       for (const { respName, roleName } of fillable) {
         const createdRole = await interaction.guild.roles.create({
           name: roleName,
