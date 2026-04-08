@@ -4913,6 +4913,19 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     return;
   }
   const closeAliases = ['tclose', 'اغلاق', 'قفل', 'اقفال'];
+  const ticketOnlyAliases = new Set([
+    ...closeAliases,
+    'tadd', 'اضافه', 'اضافة', 'إضافة',
+    'tremove', 'ازاله', 'ازالة', 'إزالة',
+    'tchange', 'تغيير', 'تحويل',
+    'tname', 'اسم', 'تسميه', 'تسمية',
+    'remind', 'تنبيه', 'استدعاء'
+  ].map((alias) => alias.toLowerCase()));
+  const isTicketChannel = resolveTicketAliasContext(message, { requireOpen: false }).ok;
+  const isTicketOnlyAliasInvocation = [...ticketOnlyAliases].some((alias) => invokedToken.endsWith(alias));
+  if (!isTicketChannel && isTicketOnlyAliasInvocation) {
+    return;
+  }
   const isCloseAliasInvocation = closeAliases.some((alias) => invokedToken.endsWith(alias));
   if (isCloseAliasInvocation) {
     const ok = await handleCloseAliasMessage(message);
