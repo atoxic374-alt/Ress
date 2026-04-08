@@ -1636,6 +1636,41 @@ function setGuildData(guildId, config, tickets, pendingRequests = {}, panelId = 
   saveStore(store);
 }
 
+function incrementReceivedTicketsCounter(guildId, userId, amount = 1) {
+  const normalizedUserId = String(userId || '').trim();
+  if (!/^\d{16,20}$/.test(normalizedUserId)) return;
+  const delta = Number(amount);
+  if (!Number.isFinite(delta) || delta <= 0) return;
+
+  const store = loadStore();
+  const existing = store[guildId] || {};
+  const stats = existing.stats && typeof existing.stats === 'object' ? existing.stats : {};
+  const receivedTickets = stats.receivedTickets && typeof stats.receivedTickets === 'object' ? stats.receivedTickets : {};
+  receivedTickets[normalizedUserId] = Math.max(0, Number(receivedTickets[normalizedUserId] || 0) + Math.floor(delta));
+
+  store[guildId] = {
+    ...existing,
+    stats: {
+      ...stats,
+      receivedTickets
+    }
+  };
+  saveStore(store);
+}
+
+function getReceivedTicketsCounter(guildData, userId) {
+  const normalizedUserId = String(userId || '').trim();
+  if (!/^\d{16,20}$/.test(normalizedUserId)) return 0;
+  const stored = Number(guildData?.stats?.receivedTickets?.[normalizedUserId] || 0);
+
+  // fallback legacy: احتساب التذاكر الحالية المستلمة حتى لا ينخفض المؤشر بعد التحديث.
+  let live = 0;
+  for (const panel of Object.values(guildData?.panels || {})) {
+    live += Object.values(panel?.tickets || {}).filter((ticket) => ticket?.claimedBy === normalizedUserId).length;
+  }
+  return Math.max(0, Math.max(stored, live));
+}
+
 function getPanelData(guildId, panelId = 'default') {
   const { guild } = getGuildData(guildId);
   const panel = guild.panels[panelId] || { config: baseConfig(), tickets: {}, pendingRequests: {} };
@@ -2721,6 +2756,10 @@ async function createTicketChannel({
     lastActivityAt: Date.now()
   };
 
+  if (claimedByOnCreate) {
+    incrementReceivedTicketsCounter(guild.id, claimedByOnCreate);
+  }
+
   const syncLogPromise = syncTicketLogMessage({
     guild,
     config,
@@ -2965,6 +3004,7 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
 
   ticket.claimedBy = interaction.user.id;
   ticket.pointsReceiverId = interaction.user.id;
+  incrementReceivedTicketsCounter(guildId, interaction.user.id);
   touchTicketActivity(ticket);
   recordClaimPointIfNeeded(ticket, {
     guildId,
@@ -4058,10 +4098,7 @@ function buildMemberPointsEmbed({ requester, targetUser, targetId, guildId, targ
   const managerPoints = getManagerPointCount(points, targetId);
   const managerClosedTickets = getManagerEvaluationCount(points, targetId);
   const { guild: guildData } = getGuildData(guildId);
-  let claimedTickets = 0;
-  for (const panel of Object.values(guildData?.panels || {})) {
-    claimedTickets += Object.values(panel?.tickets || {}).filter((ticket) => ticket?.claimedBy === targetId).length;
-  }
+  const claimedTickets = getReceivedTicketsCounter(guildData, targetId);
 
   const guildIcon = guild?.iconURL?.({ forceStatic: false, size: 128 }) || null;
   const userAvatar = targetUser?.displayAvatarURL?.({ forceStatic: false, size: 128 }) || null;
@@ -4783,6 +4820,7 @@ async function handleReassignClaim(interaction, guildId, panelId, channelId) {
 
   ticket.claimedBy = interaction.user.id;
   ticket.pointsReceiverId = interaction.user.id;
+  incrementReceivedTicketsCounter(guildId, interaction.user.id);
   delete ticket.reassignPendingAt;
   touchTicketActivity(ticket);
   await ticketChannel.permissionOverwrites.edit(interaction.user.id, {
@@ -4875,6 +4913,19 @@ async function execute(message, args, { BOT_OWNERS = [], ADMIN_ROLES = [] }) {
     return;
   }
   const closeAliases = ['tclose', 'اغلاق', 'قفل', 'اقفال'];
+  const ticketOnlyAliases = new Set([
+    ...closeAliases,
+    'tadd', 'اضافه', 'اضافة', 'إضافة',
+    'tremove', 'ازاله', 'ازالة', 'إزالة',
+    'tchange', 'تغيير', 'تحويل',
+    'tname', 'اسم', 'تسميه', 'تسمية',
+    'remind', 'تنبيه', 'استدعاء'
+  ].map((alias) => alias.toLowerCase()));
+  const isTicketChannel = resolveTicketAliasContext(message, { requireOpen: false }).ok;
+  const isTicketOnlyAliasInvocation = [...ticketOnlyAliases].some((alias) => invokedToken.endsWith(alias));
+  if (!isTicketChannel && isTicketOnlyAliasInvocation) {
+    return;
+  }
   const isCloseAliasInvocation = closeAliases.some((alias) => invokedToken.endsWith(alias));
   if (isCloseAliasInvocation) {
     const ok = await handleCloseAliasMessage(message);
