@@ -25,7 +25,7 @@ const { getResponsibilitiesSnapshot } = require('../utils/responsibilitiesStore'
 const { ensureCairoFontsRegistered } = require('../utils/cairoFont');
 
 const name = 'ticket';
-const aliases = ['تكت', 'tclose', 'اغلاق', 'قفل', 'اقفال', 'myticket', 'نقاطي', 'tadd', 'اضافه', 'اضافة', 'إضافة', 'tremove', 'ازاله', 'ازالة', 'إزالة', 'tchange', 'تغيير', 'تحويل', 'ttop', 'نقاط', 'tname', 'اسم', 'تسميه', 'تسمية', 'remind', 'تنبيه', 'استدعاء', 'points', 'tm', 'treset', 'tmreset', 'tblock'];
+const aliases = ['تكت', 'tclose', 'اغلاق', 'اقفال', 'myticket', 'نقاطي', 'tadd', 'اضافه', 'اضافة', 'إضافة', 'tremove', 'ازاله', 'ازالة', 'إزالة', 'tchange', 'تغيير', 'تحويل', 'ttop', 'نقاط', 'tname', 'اسم', 'تسميه', 'تسمية', 'remind', 'تنبيه', 'استدعاء', 'points', 'tm', 'treset', 'tmreset', 'tblock'];
 const dataPath = path.join(__dirname, '..', 'data', 'ticketConfig.json');
 const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
 const ticketImagesDir = path.join(__dirname, '..', 'data', 'ticket_images');
