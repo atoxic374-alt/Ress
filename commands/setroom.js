@@ -56,11 +56,50 @@ function extractTargetUserId(forWho = '') {
     return null;
 }
 
+function normalizeComparableText(value = '') {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/<@!?\d+>/g, '')
+        .replace(/[^\p{L}\p{N}]+/gu, '')
+        .trim();
+}
+
+function normalizeComparableWhen(value = '') {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function hasConflictingRoomRequest(requests = [], guildId, forWho, when, excludeRequestId = null) {
+    const targetUserId = extractTargetUserId(forWho);
+    const normalizedWhen = normalizeComparableWhen(when);
+    const normalizedForWho = normalizeComparableText(forWho);
+
+    return requests.some(request => {
+        if (!request || request.guildId !== guildId) return false;
+        if (excludeRequestId && request.id === excludeRequestId) return false;
+        if (!['pending', 'accepted'].includes(request.status)) return false;
+
+        const sameWhen = normalizeComparableWhen(request.when) === normalizedWhen;
+        if (!sameWhen) return false;
+
+        const requestTargetId = extractTargetUserId(request.forWho);
+        if (targetUserId && requestTargetId) return targetUserId === requestTargetId;
+
+        const requestForWhoNormalized = normalizeComparableText(request.forWho);
+        if (!normalizedForWho || !requestForWhoNormalized) return false;
+        return normalizedForWho === requestForWhoNormalized;
+    });
+}
+
 // مسار ملف إعدادات الغرف
 const roomConfigPath = path.join(__dirname, '..', 'data', 'roomConfig.json');
 const roomRequestsPath = path.join(__dirname, '..', 'data', 'roomRequests.json');
 const setupEmbedMessagesPath = path.join(__dirname, '..', 'data', 'setupEmbedMessages.json');
 const setupImagesPath = path.join(__dirname, '..', 'data', 'setup_images');
+const localEmojiAssetsPath = path.join(__dirname, '..', 'data', 'setroom_emoji_assets');
+const setroomRequestsUiState = new Map();
 
 // تخزين الجدولات النشطة
 const activeSchedules = new Map();
@@ -184,6 +223,56 @@ async function saveImageLocally(imageUrl, guildId) {
         return imagePath;
     } catch (error) {
         console.error('❌ فشل في حفظ الصورة محلياً:', error);
+        return null;
+    }
+}
+
+function ensureEmojiAssetsDir() {
+    if (!fs.existsSync(localEmojiAssetsPath)) {
+        fs.mkdirSync(localEmojiAssetsPath, { recursive: true });
+    }
+}
+
+async function saveEmojiLocally(emojiUrl, guildId, sourceEmojiId, animated = false) {
+    try {
+        ensureEmojiAssetsDir();
+        const response = await fetch(emojiUrl);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const extension = animated ? 'gif' : 'png';
+        const filePath = path.join(localEmojiAssetsPath, `emoji_${guildId}_${sourceEmojiId}.${extension}`);
+        fs.writeFileSync(filePath, buffer);
+        return filePath;
+    } catch (error) {
+        console.error('❌ فشل حفظ الإيموجي محلياً:', error.message);
+        return null;
+    }
+}
+
+async function cloneExternalEmojiToGuild(guild, emojiToken) {
+    const match = String(emojiToken || '').match(/^<(?<animated>a?):(?<name>[a-zA-Z0-9_]{2,32}):(?<id>\d{16,20})>$/);
+    if (!match) return null;
+    const { animated, name, id } = match.groups;
+
+    const existing = guild.emojis.cache.find(e => e.name === `sr_${name}_${id}` || e.name === `sr_${id}`);
+    if (existing) {
+        return `<${existing.animated ? 'a' : ''}:${existing.name}:${existing.id}>`;
+    }
+
+    const emojiUrl = `https://cdn.discordapp.com/emojis/${id}.${animated ? 'gif' : 'png'}?size=128&quality=lossless`;
+    const localPath = await saveEmojiLocally(emojiUrl, guild.id, id, animated === 'a');
+    if (!localPath) return null;
+
+    try {
+        const created = await guild.emojis.create({
+            attachment: localPath,
+            name: `sr_${name}_${id}`.slice(0, 32),
+            reason: 'SetRoom: حفظ إيموجي خارجي محلياً للاستخدام في الطلبات'
+        });
+        return `<${created.animated ? 'a' : ''}:${created.name}:${created.id}>`;
+    } catch (error) {
+        console.error('❌ فشل رفع الإيموجي للسيرفر:', error.message);
         return null;
     }
 }
@@ -1188,6 +1277,50 @@ async function formatUserMention(input, guild) {
     return cleaned;
 }
 
+function extractEmojisFromText(rawText = '') {
+    const text = String(rawText || '').trim();
+    if (!text) return { emojis: [], disableEmojis: false };
+    if (text === '0') return { emojis: [], disableEmojis: true };
+
+    const customEmojiRegex = /<a?:\w+:\d+>/g;
+    const customEmojis = text.match(customEmojiRegex) || [];
+    const uniqueCustom = [...new Set(customEmojis)];
+
+    let cleaned = text;
+    for (const custom of uniqueCustom) {
+        cleaned = cleaned.replaceAll(custom, ' ');
+    }
+
+    const unicodeEmojiRegex = /(\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?)*)/gu;
+    const unicodeEmojis = cleaned.match(unicodeEmojiRegex) || [];
+    const uniqueUnicode = [...new Set(unicodeEmojis.map(e => e.trim()).filter(Boolean))];
+
+    return { emojis: [...uniqueCustom, ...uniqueUnicode], disableEmojis: false };
+}
+
+async function normalizeRequestedEmojis(guild, emojis = []) {
+    const normalized = [];
+    for (const emoji of emojis) {
+        if (!emoji) continue;
+        const customMatch = String(emoji).match(/^<(?<animated>a?):(?<name>[a-zA-Z0-9_]{2,32}):(?<id>\d{16,20})>$/);
+        if (!customMatch) {
+            normalized.push(emoji);
+            continue;
+        }
+
+        const { id } = customMatch.groups;
+        const existingGuildEmoji = guild.emojis.cache.get(id);
+        if (existingGuildEmoji) {
+            normalized.push(`<${existingGuildEmoji.animated ? 'a' : ''}:${existingGuildEmoji.name}:${existingGuildEmoji.id}>`);
+            continue;
+        }
+
+        const cloned = await cloneExternalEmojiToGuild(guild, emoji);
+        normalized.push(cloned || emoji);
+    }
+    return normalized;
+}
+
 // معالجة طلبات الغرف (المنيو)
 async function handleRoomRequestMenu(interaction, client) {
     const roomTypeEn = interaction.values[0]; // 'condolence' أو 'birthday'
@@ -1309,8 +1442,8 @@ async function handleRoomModalSubmit(interaction, client) {
     // إذا كان هناك أخطاء، أرسلها
     if (validationErrors.length > 0) {
         const errorEmbed = colorManager.createEmbed()
-            .setTitle('**أخطاء في الإدخال**')
-            .setDescription(validationErrors.join('\n'))
+            .setTitle('**Input Validation Errors**')
+            .setDescription(`**${validationErrors.join('\n')}**`)
             .setColor('#ff0000');
 
         await interaction.reply({ embeds: [errorEmbed], flags: 64 });
@@ -1352,10 +1485,15 @@ async function handleRoomModalSubmit(interaction, client) {
         }
     }
 
+    if (hasConflictingRoomRequest(requests, interaction.guild.id, forWho, when)) {
+        await interaction.reply({ content: '❌ **يوجد بالفعل طلب معلّق/مقبول لنفس الشخص بنفس الوقت. يُسمح بروم واحد فقط لهذا الموعد.**', flags: 64 });
+        return;
+    }
+
     // طلب الإيموجي من المستخدم
     const emojiPrompt = colorManager.createEmbed()
-        .setTitle('**خطوة أخيرة**')
-        .setDescription('**الرجاء إرسال الإيموجيات التي تريد إضافتها للروم**\n\nأرسل الإيموجيات (لازم من السيرفر)')
+        .setTitle('**Last Step**')
+        .setDescription('**الرجاء إرسال الإيموجيات التي تريد إضافتها للروم**\n\nأرسل إيموجي واحد أو أكثر (يدعم المسافات). اكتب `0` إذا لا تريد إيموجي.')
         .setFooter({ text: 'لديك 60 ثانية للرد' });
 
     await interaction.reply({ embeds: [emojiPrompt], flags: 64 });
@@ -1392,37 +1530,11 @@ async function handleEmojiMessage(message, client) {
     const requestData = awaitingEmojis.get(userId);
     awaitingEmojis.delete(userId);
 
-    // استخراج الإيموجيات المخصصة (عادية ومتحركة)
-    const customEmojiRegex = /<a?:\w+:\d+>/g;
-    const customEmojis = message.content.match(customEmojiRegex) || [];
+    const parsedEmojiInput = extractEmojisFromText(message.content);
+    const disableEmojis = parsedEmojiInput.disableEmojis;
+    let emojis = parsedEmojiInput.emojis;
 
-    // استخراج الإيموجيات Unicode
-    const unicodeEmojiRegex = /(\p{Emoji_Presentation}|\p{Emoji}\uFE0F|\p{Emoji})/gu;
-    const unicodeEmojis = [];
-
-    // إزالة الإيموجيات المخصصة من النص للحصول على Unicode فقط
-    let cleanContent = message.content;
-    for (const customEmoji of customEmojis) {
-        cleanContent = cleanContent.replace(customEmoji, '');
-    }
-
-    // استخراج Unicode
-    const unicodeMatches = cleanContent.match(unicodeEmojiRegex) || [];
-    for (const emoji of unicodeMatches) {
-        if (emoji.trim()) {
-            unicodeEmojis.push(emoji);
-        }
-    }
-
-    // دمج جميع الإيموجيات
-    const emojis = [...customEmojis, ...unicodeEmojis];
-
-    if (emojis.length === 0) {
-        await message.reply('❌ **لم يتم العثور على إيموجيات. تم إلغاء الطلب**').then(msg => {
-            setTimeout(() => msg.delete().catch(() => {}), 5000);
-        });
-        return;
-    }
+    if (!disableEmojis && emojis.length === 0) emojis = [];
 
     // فحص عدد الإيموجيات
     if (emojis.length > 20) {
@@ -1435,6 +1547,10 @@ async function handleEmojiMessage(message, client) {
     const config = loadRoomConfig();
     const guildConfig = getGuildConfigWithDefaults(config, requestData.guildId);
     const texts = getSetroomTexts(guildConfig);
+
+    if (!disableEmojis && emojis.length > 0) {
+        emojis = await normalizeRequestedEmojis(message.guild, emojis);
+    }
 
     const existingRequests = loadRoomRequests();
     if (getUserPendingRequest(existingRequests, requestData.guildId, userId)) {
@@ -1566,8 +1682,9 @@ async function handleRoomRequestAction(interaction, client) {
 
     const config = loadRoomConfig();
     const guildConfig = ensureGuildRoomConfig(config, interaction.guild.id);
+    const { BOT_OWNERS = [] } = interaction.client || {};
 
-    if (!canReviewRoomRequest(interaction.member, guildConfig, action, interaction.user.id, [])) {
+    if (!canReviewRoomRequest(interaction.member, guildConfig, action, interaction.user.id, BOT_OWNERS)) {
         await interaction.reply({ content: '❌ **ليس لديك صلاحية لهذا الإجراء**', flags: 64 });
         return;
     }
@@ -2298,6 +2415,278 @@ function canReviewRoomRequest(member, guildConfig, action, userId, botOwners = [
     return memberHasAnyRole(member, roleIds);
 }
 
+function getRoomRequestStatusLabel(status = 'pending') {
+    if (status === 'accepted') return '✅ مقبول';
+    if (status === 'rejected') return '❌ مرفوض';
+    return '🕒 معلّق';
+}
+
+function buildRequestFieldValue(request) {
+    const messagePreview = (request.message || 'بدون').length > 180 ? `${request.message.slice(0, 180)}...` : (request.message || 'بدون');
+    return [
+        `**Status :** ${getRoomRequestStatusLabel(request.status)}`,
+        `**Type :** ${request.roomType || 'غير محدد'}`,
+        `**For :** ${request.forWho || 'غير محدد'}`,
+        `**When :** ${request.when || 'غير محدد'}`,
+        `**By :** <@${request.userId}>`,
+        `**Message :** ${messagePreview}`,
+        `**Emojis :** ${Array.isArray(request.emojis) && request.emojis.length ? request.emojis.join(' ') : 'None'}`
+    ].join('\n');
+}
+
+function getSetroomRequestsManagerData(guildId) {
+    const allRequests = loadRoomRequests()
+        .filter(r => r.guildId === guildId)
+        .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    const pendingRequests = allRequests.filter(r => r.status === 'pending');
+    return { allRequests, pendingRequests };
+}
+
+function buildSetroomRequestsManagerPayload(guildId, token, state = null) {
+    const { allRequests, pendingRequests } = getSetroomRequestsManagerData(guildId);
+    const acceptedCount = allRequests.filter(r => r.status === 'accepted').length;
+    const rejectedCount = allRequests.filter(r => r.status === 'rejected').length;
+    const latest = allRequests.slice(0, 6);
+    const selectedDeleteCount = state?.selectedDeleteIds?.length || 0;
+    const selectedEditId = state?.selectedEditId || null;
+
+    const embed = colorManager.createEmbed()
+        .setTitle('🧭 SetRoom Requests')
+        .setDescription([
+            `**Total : ${allRequests.length}**`,
+            `**Pending : ${pendingRequests.length}**`,
+            `**Accepted : ${acceptedCount}**`,
+            `**Rejected : ${rejectedCount}**`,
+            '',
+            `**Selected for delete : ${selectedDeleteCount}**`,
+            `**Selected for edit : ${selectedEditId ? `\`${selectedEditId}\`` : 'None'}**`,
+            '',
+            '**Use the selectors below, then run Delete or Edit.**'
+        ].join('\n'))
+        .setFooter({ text: 'SetRoom Requests Control' })
+        .setTimestamp();
+
+    if (!latest.length) {
+        embed.addFields([{ name: 'No Requests', value: '**There are no requests in this server right now.**', inline: false }]);
+    } else {
+        for (const request of latest) {
+            embed.addFields([{ name: `Request #${request.id}`, value: buildRequestFieldValue(request), inline: false }]);
+        }
+    }
+
+    const pendingOptions = pendingRequests.slice(0, 25).map(req => ({
+        label: `${req.roomType || 'روم'} • ${String(req.forWho || 'غير محدد').slice(0, 70)}`.slice(0, 100),
+        description: `ID: ${req.id}`.slice(0, 100),
+        value: req.id
+    }));
+    const allOptions = allRequests.slice(0, 25).map(req => ({
+        label: `${getRoomRequestStatusLabel(req.status)} • ${String(req.forWho || 'غير محدد').slice(0, 60)}`.slice(0, 100),
+        description: `ID: ${req.id}`.slice(0, 100),
+        value: req.id
+    }));
+
+    const deleteSelect = new StringSelectMenuBuilder()
+        .setCustomId(`setroom_requests_delete_select_${token}`)
+        .setPlaceholder('اختر طلبات معلّقة للحذف (متعدد)')
+        .setMinValues(pendingOptions.length ? 1 : 0)
+        .setMaxValues(Math.max(1, Math.min(25, pendingOptions.length || 1)))
+        .setDisabled(!pendingOptions.length)
+        .addOptions(pendingOptions.length ? pendingOptions : [{ label: 'لا توجد طلبات معلقة', value: 'none', description: 'لا يوجد شيء للحذف حالياً' }]);
+
+    const editSelect = new StringSelectMenuBuilder()
+        .setCustomId(`setroom_requests_edit_select_${token}`)
+        .setPlaceholder('اختر طلبًا واحدًا للتعديل')
+        .setMinValues(allOptions.length ? 1 : 0)
+        .setMaxValues(1)
+        .setDisabled(!allOptions.length)
+        .addOptions(allOptions.length ? allOptions : [{ label: 'لا توجد طلبات', value: 'none', description: 'لا يوجد شيء للتعديل حالياً' }]);
+
+    return {
+        embeds: [embed],
+        components: [
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`setroom_requests_delete_${token}`).setLabel('Delete Pending').setStyle(ButtonStyle.Danger).setDisabled(!pendingOptions.length),
+                new ButtonBuilder().setCustomId(`setroom_requests_edit_${token}`).setLabel('Edit Selected').setStyle(ButtonStyle.Primary).setDisabled(!allOptions.length),
+                new ButtonBuilder().setCustomId(`setroom_requests_close_${token}`).setLabel('Close').setStyle(ButtonStyle.Secondary)
+            ),
+            new ActionRowBuilder().addComponents(deleteSelect),
+            new ActionRowBuilder().addComponents(editSelect)
+        ]
+    };
+}
+
+async function openSetroomRequestsManager(message) {
+    const token = `${message.author.id}_${Date.now().toString(36)}`;
+    const state = {
+        guildId: message.guild.id,
+        ownerId: message.author.id,
+        selectedDeleteIds: [],
+        selectedEditId: null,
+        createdAt: Date.now()
+    };
+    const payload = buildSetroomRequestsManagerPayload(message.guild.id, token, state);
+    const panelMessage = await message.reply(payload);
+    state.panelChannelId = panelMessage.channel.id;
+    state.panelMessageId = panelMessage.id;
+    setroomRequestsUiState.set(token, state);
+    setTimeout(() => setroomRequestsUiState.delete(token), 15 * 60 * 1000);
+}
+
+async function handleSetroomListRequests(message, guildConfig) {
+    const allRequests = loadRoomRequests().filter(r => r.guildId === message.guild.id).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    if (allRequests.length === 0) {
+        await message.reply({ embeds: [colorManager.createEmbed().setTitle('📭 قائمة الطلبات').setDescription('لا توجد طلبات حالياً في هذا السيرفر.')] });
+        return;
+    }
+
+    const pendingCount = allRequests.filter(r => r.status === 'pending').length;
+    const acceptedCount = allRequests.filter(r => r.status === 'accepted').length;
+    const rejectedCount = allRequests.filter(r => r.status === 'rejected').length;
+    const latest = allRequests.slice(0, 8);
+
+    const embed = colorManager.createEmbed()
+        .setTitle('📋 قائمة طلبات SetRoom')
+        .setDescription(`إجمالي الطلبات: **${allRequests.length}**\nمعلّق: **${pendingCount}** | مقبول: **${acceptedCount}** | مرفوض: **${rejectedCount}**`)
+        .setFooter({ text: 'استخدم setroom delete لإزالة الطلبات المعلّقة أو setroom edit <id> للتعديل.' })
+        .setTimestamp();
+
+    for (const request of latest) {
+        embed.addFields([{ name: `طلب #${request.id}`, value: buildRequestFieldValue(request), inline: false }]);
+    }
+
+    await message.reply({ embeds: [embed] });
+}
+
+async function handleSetroomDeleteRequests(message) {
+    const requests = loadRoomRequests();
+    const pending = requests.filter(r => r.guildId === message.guild.id && r.status === 'pending');
+    if (!pending.length) {
+        await message.reply('✅ لا توجد طلبات معلّقة للحذف.');
+        return;
+    }
+
+    const options = pending.slice(0, 25).map(req => ({
+        label: `${req.roomType} • ${req.forWho}`.slice(0, 100),
+        description: `ID: ${req.id}`.slice(0, 100),
+        value: req.id
+    }));
+
+    const select = new StringSelectMenuBuilder()
+        .setCustomId(`setroom_delete_requests_${message.id}`)
+        .setPlaceholder('اختر الطلبات المعلقة المطلوب حذفها')
+        .setMinValues(1)
+        .setMaxValues(Math.min(options.length, 25))
+        .addOptions(options);
+
+    const confirmBtn = new ButtonBuilder()
+        .setCustomId(`setroom_delete_confirm_${message.id}`)
+        .setLabel('Delete Selected')
+        .setStyle(ButtonStyle.Danger);
+
+    const cancelBtn = new ButtonBuilder()
+        .setCustomId(`setroom_delete_cancel_${message.id}`)
+        .setLabel('Cancel')
+        .setStyle(ButtonStyle.Secondary);
+
+    const payload = await message.reply({
+        embeds: [colorManager.createEmbed().setTitle('🗑️ حذف طلبات معلّقة').setDescription('اختر طلباً واحداً أو أكثر، ثم اضغط زر الحذف.')],
+        components: [
+            new ActionRowBuilder().addComponents(select),
+            new ActionRowBuilder().addComponents(confirmBtn, cancelBtn)
+        ]
+    });
+
+    const selected = new Set();
+    const collector = payload.createMessageComponentCollector({ time: 120000 });
+
+    collector.on('collect', async interaction => {
+        if (interaction.user.id !== message.author.id) {
+            await interaction.reply({ content: '❌ هذه الواجهة لصاحب الأمر فقط.', flags: 64 });
+            return;
+        }
+
+        if (interaction.customId === `setroom_delete_requests_${message.id}`) {
+            selected.clear();
+            interaction.values.forEach(v => selected.add(v));
+            await interaction.reply({ content: `✅ تم تحديد ${selected.size} طلب للحذف.`, flags: 64 });
+            return;
+        }
+
+        if (interaction.customId === `setroom_delete_cancel_${message.id}`) {
+            collector.stop('cancelled');
+            await interaction.update({ content: 'تم إلغاء عملية الحذف.', embeds: [], components: [] });
+            return;
+        }
+
+        if (interaction.customId === `setroom_delete_confirm_${message.id}`) {
+            if (!selected.size) {
+                await interaction.reply({ content: '❌ اختر طلباً واحداً على الأقل قبل الحذف.', flags: 64 });
+                return;
+            }
+            const latestRequests = loadRoomRequests();
+            const selectedIds = [...selected];
+            const toDelete = latestRequests.filter(r => r.guildId === message.guild.id && r.status === 'pending' && selectedIds.includes(r.id));
+            const updated = latestRequests.filter(r => !toDelete.some(d => d.id === r.id));
+            saveRoomRequests(updated);
+            collector.stop('done');
+            await interaction.update({ content: `✅ تم حذف ${toDelete.length} طلب/طلبات معلّقة من الانتظار.`, embeds: [], components: [] });
+        }
+    });
+
+    collector.on('end', async (_, reason) => {
+        if (reason === 'time') {
+            await payload.edit({ content: '⏳ انتهى وقت اختيار الطلبات.', embeds: [], components: [] }).catch(() => null);
+        }
+    });
+}
+
+async function handleSetroomEditRequest(message, requestId, guildConfig) {
+    if (!requestId) {
+        await message.reply('❌ استخدم: `setroom edit <requestId>`');
+        return;
+    }
+
+    const requests = loadRoomRequests();
+    const requestIndex = requests.findIndex(r => r.id === requestId && r.guildId === message.guild.id);
+    if (requestIndex === -1) {
+        await message.reply('❌ لم يتم العثور على الطلب بهذا المعرّف.');
+        return;
+    }
+
+    const request = requests[requestIndex];
+    const { BOT_OWNERS = [] } = message.client || {};
+    const canEditAccepted = canReviewRoomRequest(message.member, guildConfig, 'accept', message.author.id, BOT_OWNERS);
+    const canEditRejected = canReviewRoomRequest(message.member, guildConfig, 'reject', message.author.id, BOT_OWNERS);
+    if (!canEditAccepted && !canEditRejected) {
+        await message.reply('❌ ليس لديك صلاحية تعديل الطلبات.');
+        return;
+    }
+
+    const modal = new ModalBuilder()
+        .setCustomId(`setroom_edit_modal_${request.id}_${message.author.id}`)
+        .setTitle('تعديل طلب SetRoom');
+    modal.addComponents(
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('for_who').setLabel('الطلب لمن؟').setStyle(TextInputStyle.Short).setRequired(true).setValue(String(request.forWho || '').slice(0, 100))),
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('when').setLabel('موعد الإنشاء').setStyle(TextInputStyle.Short).setRequired(true).setValue(String(request.when || '').slice(0, 100))),
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('message').setLabel('الرسالة').setStyle(TextInputStyle.Paragraph).setRequired(true).setValue(String(request.message || '').slice(0, 1000))),
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('image_url').setLabel('رابط الصورة (اختياري - 0 للإزالة)').setStyle(TextInputStyle.Short).setRequired(false).setValue(String(request.imageUrl || '').slice(0, 200))),
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('emojis').setLabel('الإيموجيات (0 = بدون)').setStyle(TextInputStyle.Short).setRequired(false).setValue(Array.isArray(request.emojis) && request.emojis.length ? request.emojis.join(' ') : '0').setMaxLength(200))
+    );
+
+    await message.reply({ content: 'ℹ️ افتح نافذة التعديل من الزر التالي.', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`setroom_edit_open_${request.id}_${message.author.id}`).setLabel('Edit Request').setStyle(ButtonStyle.Primary))] });
+
+    const channelCollector = message.channel.createMessageComponentCollector({ time: 60000 });
+    channelCollector.on('collect', async interaction => {
+        if (interaction.customId !== `setroom_edit_open_${request.id}_${message.author.id}`) return;
+        if (interaction.user.id !== message.author.id) {
+            await interaction.reply({ content: '❌ هذا الزر لصاحب الأمر فقط.', flags: 64 });
+            return;
+        }
+        channelCollector.stop('opened');
+        await interaction.showModal(modal);
+    });
+}
+
 async function buildSetroomPanelPayload(guild, guildConfig, actor, extra = {}) {
     const embed = getSetroomSummaryEmbed(guild, guildConfig, actor);
     const components = extra.preview ? createSetroomPreviewRows(guildConfig) : createSetroomMainRows();
@@ -2385,8 +2774,114 @@ function registerHandlers(client) {
             const config = loadRoomConfig();
             const guildConfig = getGuildConfigWithDefaults(config, interaction.guild.id);
 
+            if (interaction.isStringSelectMenu() && interaction.customId.startsWith('setroom_requests_')) {
+                const token = interaction.customId.split('_').slice(-2).join('_');
+                const state = setroomRequestsUiState.get(token);
+                if (!state || state.guildId !== interaction.guild.id) {
+                    await interaction.reply({ content: '❌ **انتهت صلاحية واجهة الطلبات. نفذ الأمر مرة أخرى.**', flags: 64 });
+                    return;
+                }
+                if (interaction.user.id !== state.ownerId) {
+                    await interaction.reply({ content: '❌ **واجهة الطلبات هذه مخصصة لصاحب الأمر فقط.**', flags: 64 });
+                    return;
+                }
+
+                if (interaction.customId.startsWith('setroom_requests_delete_select_')) {
+                    state.selectedDeleteIds = interaction.values.filter(v => v !== 'none');
+                    setroomRequestsUiState.set(token, state);
+                    await interaction.update(buildSetroomRequestsManagerPayload(interaction.guild.id, token, state));
+                    await interaction.followUp({ content: `✅ **تم تحديث الاختيار : ${state.selectedDeleteIds.length} طلب/طلبات للحذف.**`, flags: 64 });
+                    return;
+                }
+
+                if (interaction.customId.startsWith('setroom_requests_edit_select_')) {
+                    state.selectedEditId = interaction.values[0] === 'none' ? null : interaction.values[0];
+                    setroomRequestsUiState.set(token, state);
+                    await interaction.update(buildSetroomRequestsManagerPayload(interaction.guild.id, token, state));
+                    await interaction.followUp({ content: state.selectedEditId ? `✅ **تم اختيار الطلب \`${state.selectedEditId}\` للتعديل.**` : 'ℹ️ **لا يوجد طلب محدد للتعديل.**', flags: 64 });
+                    return;
+                }
+            }
+
             if (interaction.isButton()) {
                 const customId = interaction.customId;
+
+                if (customId.startsWith('setroom_requests_')) {
+                    const token = customId.split('_').slice(-2).join('_');
+                    const state = setroomRequestsUiState.get(token);
+                    if (!state || state.guildId !== interaction.guild.id) {
+                        await interaction.reply({ content: '❌ **انتهت صلاحية واجهة الطلبات. نفذ الأمر مرة أخرى.**', flags: 64 });
+                        return;
+                    }
+                    if (interaction.user.id !== state.ownerId) {
+                        await interaction.reply({ content: '❌ **واجهة الطلبات هذه مخصصة لصاحب الأمر فقط.**', flags: 64 });
+                        return;
+                    }
+
+                    if (customId.startsWith('setroom_requests_delete_')) {
+                        if (!state.selectedDeleteIds.length) {
+                            await interaction.reply({ content: '❌ **اختر الطلبات المعلّقة أولًا من قائمة الحذف.**', flags: 64 });
+                            return;
+                        }
+
+                        const latestRequests = loadRoomRequests();
+                        const toDelete = latestRequests.filter(r => r.guildId === interaction.guild.id && r.status === 'pending' && state.selectedDeleteIds.includes(r.id));
+                        if (!toDelete.length) {
+                            state.selectedDeleteIds = [];
+                            setroomRequestsUiState.set(token, state);
+                            await interaction.update(buildSetroomRequestsManagerPayload(interaction.guild.id, token, state));
+                            await interaction.followUp({ content: '⚠️ **لم يتم حذف أي طلب لأن العناصر المحددة لم تعد معلّقة أو غير موجودة.**', flags: 64 });
+                            return;
+                        }
+                        const updated = latestRequests.filter(r => !toDelete.some(d => d.id === r.id));
+                        const saved = saveRoomRequests(updated);
+                        if (!saved) {
+                            await interaction.reply({ content: '❌ **فشل حفظ التغييرات أثناء الحذف. حاول مرة أخرى.**', flags: 64 });
+                            return;
+                        }
+                        state.selectedDeleteIds = [];
+                        setroomRequestsUiState.set(token, state);
+
+                        await interaction.update(buildSetroomRequestsManagerPayload(interaction.guild.id, token, state));
+                        await interaction.followUp({ content: `✅ **تم حذف ${toDelete.length} طلب/طلبات معلّقة من الانتظار بنجاح.**`, flags: 64 });
+                        return;
+                    }
+
+                    if (customId.startsWith('setroom_requests_edit_')) {
+                        if (!state.selectedEditId) {
+                            await interaction.reply({ content: '❌ **اختر الطلب المطلوب تعديله أولًا من قائمة التعديل.**', flags: 64 });
+                            return;
+                        }
+                        const requests = loadRoomRequests();
+                        const request = requests.find(r => r.id === state.selectedEditId && r.guildId === interaction.guild.id);
+                        if (!request) {
+                            await interaction.reply({ content: '❌ **الطلب المختار غير موجود.**', flags: 64 });
+                            return;
+                        }
+
+                        const modal = new ModalBuilder()
+                            .setCustomId(`setroom_edit_modal_${request.id}_${interaction.user.id}`)
+                            .setTitle('تعديل طلب SetRoom');
+                        modal.addComponents(
+                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('for_who').setLabel('الطلب لمن؟').setStyle(TextInputStyle.Short).setRequired(true).setValue(String(request.forWho || '').slice(0, 100))),
+                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('when').setLabel('موعد الإنشاء').setStyle(TextInputStyle.Short).setRequired(true).setValue(String(request.when || '').slice(0, 100))),
+                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('message').setLabel('الرسالة').setStyle(TextInputStyle.Paragraph).setRequired(true).setValue(String(request.message || '').slice(0, 1000))),
+                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('image_url').setLabel('رابط الصورة (اختياري - 0 للإزالة)').setStyle(TextInputStyle.Short).setRequired(false).setValue(String(request.imageUrl || '').slice(0, 200))),
+                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('emojis').setLabel('الإيموجيات (0 = بدون)').setStyle(TextInputStyle.Short).setRequired(false).setValue(Array.isArray(request.emojis) && request.emojis.length ? request.emojis.join(' ') : '0').setMaxLength(200))
+                        );
+                        await interaction.showModal(modal);
+                        return;
+                    }
+
+                    if (customId.startsWith('setroom_requests_close_')) {
+                        setroomRequestsUiState.delete(token);
+                        await interaction.update({
+                            embeds: [colorManager.createEmbed().setTitle('✅ SetRoom Requests Closed').setDescription('**The requests manager has been closed. Run `setroom requests` to open it again.**')],
+                            components: []
+                        });
+                        return;
+                    }
+                }
 
                 if (customId === 'setroom_panel_channels') {
                     const rows = [
@@ -2581,6 +3076,96 @@ function registerHandlers(client) {
             }
 
             if (interaction.isModalSubmit()) {
+                if (interaction.customId.startsWith('setroom_edit_modal_')) {
+                    const match = interaction.customId.match(/^setroom_edit_modal_(.+)_(\d{16,20})$/);
+                    if (!match) {
+                        await interaction.reply({ content: '❌ معرف تعديل الطلب غير صالح.', flags: 64 });
+                        return;
+                    }
+
+                    const requestId = match[1];
+                    const ownerId = match[2];
+                    if (interaction.user.id !== ownerId) {
+                        await interaction.reply({ content: '❌ هذا النموذج ليس لك.', flags: 64 });
+                        return;
+                    }
+
+                    const requests = loadRoomRequests();
+                    const requestIndex = requests.findIndex(r => r.id === requestId && r.guildId === interaction.guild.id);
+                    if (requestIndex === -1) {
+                        await interaction.reply({ content: '❌ الطلب غير موجود أو تم حذفه.', flags: 64 });
+                        return;
+                    }
+
+                    const editedForWho = interaction.fields.getTextInputValue('for_who').trim();
+                    const editedWhen = interaction.fields.getTextInputValue('when').trim();
+                    const editedMessage = interaction.fields.getTextInputValue('message').trim();
+                    const editedImageUrlInput = interaction.fields.getTextInputValue('image_url').trim();
+                    const editedEmojisInput = interaction.fields.getTextInputValue('emojis').trim();
+                    const shouldClearImage = ['0', 'remove', 'none', 'null'].includes(editedImageUrlInput.toLowerCase());
+                    const finalImageUrl = shouldClearImage ? '' : editedImageUrlInput;
+
+                    const errors = [];
+                    if (editedForWho.length < 2 || editedForWho.length > 50) errors.push('حقل "لمن" يجب أن يكون بين 2 و 50 حرف.');
+                    if (editedWhen.length < 2 || editedWhen.length > 100) errors.push('حقل "الوقت" يجب أن يكون بين 2 و 100 حرف.');
+                    if (editedMessage.length < 5 || editedMessage.length > 1000) errors.push('حقل "الرسالة" يجب أن يكون بين 5 و 1000 حرف.');
+                    if (finalImageUrl) {
+                        const imageUrlPattern = /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|bmp)/i;
+                        if (!imageUrlPattern.test(finalImageUrl)) errors.push('رابط الصورة غير صالح.');
+                    }
+
+                    const parsed = extractEmojisFromText(editedEmojisInput || '0');
+                    if (!parsed.disableEmojis && parsed.emojis.length > 20) errors.push('الحد الأقصى للإيموجيات هو 20.');
+
+                    if (errors.length) {
+                        await interaction.reply({ content: `❌ **Unable to save edit :**\n**- ${errors.join('\n- ')}**`, flags: 64 });
+                        return;
+                    }
+
+                    const normalizedMention = await formatUserMention(editedForWho, interaction.guild);
+                    if (hasConflictingRoomRequest(requests, interaction.guild.id, normalizedMention, editedWhen, requestId)) {
+                        await interaction.reply({ content: '❌ **يوجد طلب معلّق/مقبول بنفس الشخص ونفس الوقت. عدّل الوقت أو الشخص أولاً.**', flags: 64 });
+                        return;
+                    }
+                    const normalizedEmojis = parsed.disableEmojis ? [] : await normalizeRequestedEmojis(interaction.guild, parsed.emojis);
+                    requests[requestIndex] = {
+                        ...requests[requestIndex],
+                        forWho: normalizedMention,
+                        when: editedWhen,
+                        message: editedMessage,
+                        imageUrl: finalImageUrl || null,
+                        emojis: normalizedEmojis,
+                        updatedAt: Date.now(),
+                        updatedBy: interaction.user.id
+                    };
+                    const saved = saveRoomRequests(requests);
+                    if (!saved) {
+                        await interaction.reply({ content: '❌ **فشل حفظ التعديل في قاعدة الطلبات. حاول مرة أخرى.**', flags: 64 });
+                        return;
+                    }
+
+                    const matchingStateEntry = [...setroomRequestsUiState.entries()].find(([, value]) =>
+                        value.guildId === interaction.guild.id &&
+                        value.ownerId === interaction.user.id
+                    );
+                    if (matchingStateEntry) {
+                        const [token, state] = matchingStateEntry;
+                        state.selectedEditId = requestId;
+                        setroomRequestsUiState.set(token, state);
+                        if (state.panelChannelId && state.panelMessageId) {
+                            const panelChannel = await interaction.client.channels.fetch(state.panelChannelId).catch(() => null);
+                            if (panelChannel?.messages?.fetch) {
+                                const panelMessage = await panelChannel.messages.fetch(state.panelMessageId).catch(() => null);
+                                if (panelMessage) {
+                                    await panelMessage.edit(buildSetroomRequestsManagerPayload(interaction.guild.id, token, state)).catch(() => null);
+                                }
+                            }
+                        }
+                    }
+                    await interaction.reply({ content: `✅ **تم تحديث الطلب \`${requestId}\` بنجاح.**`, flags: 64 });
+                    return;
+                }
+
                 if (interaction.customId === 'setroom_modal_image') {
                     const imageUrl = interaction.fields.getTextInputValue('image_url').trim();
                     guildConfig.imageUrl = imageUrl;
@@ -2742,6 +3327,16 @@ async function execute(message, args, { BOT_OWNERS, client }) {
     const config = loadRoomConfig();
     const guildConfig = getGuildConfigWithDefaults(config, message.guild.id);
     saveRoomConfig(config);
+
+    const subCommand = String(args[0] || '').toLowerCase();
+    if (subCommand === 'requests' || subCommand === 'request' || subCommand === 'طلبات') {
+        await openSetroomRequestsManager(message);
+        return;
+    }
+    if (subCommand === 'list' || subCommand === 'delete' || subCommand === 'edit') {
+        await message.reply('ℹ️ تم توحيد إدارة الطلبات. استخدم: **setroom requests**');
+        return;
+    }
 
     const statusEmbed = getSetroomSummaryEmbed(message.guild, guildConfig, message.author);
     await message.reply({ embeds: [statusEmbed], components: createSetroomMainRows() });
