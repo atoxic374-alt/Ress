@@ -457,12 +457,118 @@ function registerMassDelete(guildId, executorId, baselineCount) {
 function schedulePostRestoreValidation(guild, snapshot, types, options = {}) {
   setTimeout(async () => {
     try {
-      if (types.includes("channels")) await resolveChannelConflicts(guild, snapshot, options.targetId);
-      await applyBackup(guild, snapshot, types, { ...options, isPasteMode: false });
+      await runSmartValidation(guild, snapshot, types, options);
     } catch (err) {
       console.error(`Post-restore validation failed for guild ${guild.id}:`, err);
     }
   }, POST_RESTORE_VALIDATION_DELAY);
+}
+
+async function runSmartValidation(guild, snapshot, types, options = {}) {
+  const targetId = options.targetId || null;
+
+  if (types.includes("settings")) {
+    const s = snapshot.settings;
+    const needsSettingsFix =
+      guild.name !== s.name ||
+      guild.verificationLevel !== s.verificationLevel ||
+      guild.explicitContentFilter !== s.explicitContentFilter ||
+      guild.defaultMessageNotifications !== s.defaultMessageNotifications ||
+      guild.afkTimeout !== s.afkTimeout;
+
+    if (needsSettingsFix) {
+      await withDiscordRetry(() => guild.edit({
+        name: s.name,
+        verificationLevel: s.verificationLevel,
+        explicitContentFilter: s.explicitContentFilter,
+        defaultMessageNotifications: s.defaultMessageNotifications,
+        afkTimeout: s.afkTimeout,
+      })).catch(() => null);
+    }
+  }
+
+  if (types.includes("roles")) {
+    const rolesToValidate = targetId ? snapshot.roles.filter((r) => r.id === targetId) : snapshot.roles;
+    for (const sr of rolesToValidate) {
+      let role = guild.roles.cache.find((r) => !r.managed && r.name === sr.name);
+      if (!role) {
+        await withDiscordRetry(() => guild.roles.create({
+          name: sr.name,
+          color: sr.color,
+          hoist: sr.hoist,
+          permissions: BigInt(sr.permissions),
+          mentionable: sr.mentionable,
+        })).catch(() => null);
+        continue;
+      }
+
+      const needsRoleFix =
+        role.color !== sr.color ||
+        role.hoist !== sr.hoist ||
+        role.mentionable !== sr.mentionable ||
+        !role.permissions.equals(BigInt(sr.permissions));
+
+      if (needsRoleFix) {
+        await withDiscordRetry(() => role.edit({
+          color: sr.color,
+          hoist: sr.hoist,
+          permissions: BigInt(sr.permissions),
+          mentionable: sr.mentionable,
+        })).catch(() => null);
+      }
+    }
+  }
+
+  if (types.includes("channels")) {
+    await resolveChannelConflicts(guild, snapshot, targetId);
+
+    const channelsToValidate = (targetId ? snapshot.channels.filter((c) => c.id === targetId) : snapshot.channels);
+    const categoryMap = new Map();
+
+    for (const sc of channelsToValidate.filter((c) => c.type === ChannelType.GuildCategory)) {
+      let cat = guild.channels.cache.find((c) => c.type === ChannelType.GuildCategory && c.name === sc.name);
+      if (!cat) {
+        cat = await withDiscordRetry(() => guild.channels.create({
+          name: sc.name,
+          type: ChannelType.GuildCategory,
+          position: sc.position,
+        })).catch(() => null);
+      }
+      if (cat) categoryMap.set(sc.id, cat.id);
+    }
+
+    for (const sc of channelsToValidate.filter((c) => c.type !== ChannelType.GuildCategory)) {
+      const parentId = sc.parentId ? categoryMap.get(sc.parentId) || null : null;
+      let ch = findBestChannelMatch(guild, sc, parentId);
+
+      if (!ch) {
+        await withDiscordRetry(() => guild.channels.create({
+          name: sc.name,
+          type: sc.type,
+          parent: parentId,
+          position: sc.position,
+          topic: sc.topic || undefined,
+          nsfw: sc.nsfw,
+        })).catch(() => null);
+        continue;
+      }
+
+      const needsChannelFix =
+        ch.parentId !== parentId ||
+        ch.rawPosition !== sc.position ||
+        (ch.topic || null) !== (sc.topic || null) ||
+        Boolean(ch.nsfw) !== Boolean(sc.nsfw);
+
+      if (needsChannelFix) {
+        await withDiscordRetry(() => ch.edit({
+          parent: parentId,
+          position: sc.position,
+          topic: sc.topic || undefined,
+          nsfw: sc.nsfw,
+        })).catch(() => null);
+      }
+    }
+  }
 }
 
 async function resolveChannelConflicts(guild, snapshot, targetId = null) {
