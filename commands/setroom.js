@@ -1840,6 +1840,14 @@ async function createRoom(request, client, guildConfig) {
 
         console.log(`✅ تم إنشاء القناة: ${channel.name} (${channel.id})`);
 
+        const latestRequests = loadRoomRequests();
+        const requestIndex = latestRequests.findIndex(r => r.id === request.id && r.guildId === request.guildId);
+        if (requestIndex !== -1) {
+            latestRequests[requestIndex].roomCreatedAt = Date.now();
+            latestRequests[requestIndex].roomChannelId = channel.id;
+            saveRoomRequests(latestRequests);
+        }
+
         const texts = getSetroomTexts(guildConfig);
         const prefix = (texts.roomContentPrefix || '@here').trim();
         const toLabel = (texts.roomToLabel || 'لـ').trim();
@@ -2421,17 +2429,35 @@ function getRoomRequestStatusLabel(status = 'pending') {
     return '🕒 معلّق';
 }
 
+function clampEmbedText(text, maxLength = 1024) {
+    const value = String(text || '');
+    if (value.length <= maxLength) return value;
+    if (maxLength <= 1) return '…';
+    return `${value.slice(0, maxLength - 1)}…`;
+}
+
+function isRequestRoomCreated(request) {
+    if (!request) return false;
+    if (request.roomCreatedAt || request.roomChannelId) return true;
+    for (const roomData of activeRooms.values()) {
+        if (roomData?.requestId === request.id) return true;
+    }
+    return false;
+}
+
 function buildRequestFieldValue(request) {
-    const messagePreview = (request.message || 'بدون').length > 180 ? `${request.message.slice(0, 180)}...` : (request.message || 'بدون');
-    return [
+    const messagePreviewRaw = (request.message || 'بدون').length > 180 ? `${request.message.slice(0, 180)}...` : (request.message || 'بدون');
+    const emojisPreviewRaw = Array.isArray(request.emojis) && request.emojis.length ? request.emojis.join(' ') : 'None';
+    const lines = [
         `**Status :** ${getRoomRequestStatusLabel(request.status)}`,
-        `**Type :** ${request.roomType || 'غير محدد'}`,
-        `**For :** ${request.forWho || 'غير محدد'}`,
-        `**When :** ${request.when || 'غير محدد'}`,
+        `**Type :** ${String(request.roomType || 'غير محدد')}`,
+        `**For :** ${String(request.forWho || 'غير محدد')}`,
+        `**When :** ${String(request.when || 'غير محدد')}`,
         `**By :** <@${request.userId}>`,
-        `**Message :** ${messagePreview}`,
-        `**Emojis :** ${Array.isArray(request.emojis) && request.emojis.length ? request.emojis.join(' ') : 'None'}`
-    ].join('\n');
+        `**Message :** ${messagePreviewRaw}`,
+        `**Emojis :** ${emojisPreviewRaw}`
+    ];
+    return clampEmbedText(lines.join('\n'), 1024);
 }
 
 function getSetroomRequestsManagerData(guildId) {
@@ -2444,6 +2470,7 @@ function getSetroomRequestsManagerData(guildId) {
 
 function buildSetroomRequestsManagerPayload(guildId, token, state = null) {
     const { allRequests, pendingRequests } = getSetroomRequestsManagerData(guildId);
+    const deletableRequests = allRequests.filter(r => ['pending', 'accepted'].includes(r.status) && !isRequestRoomCreated(r));
     const acceptedCount = allRequests.filter(r => r.status === 'accepted').length;
     const rejectedCount = allRequests.filter(r => r.status === 'rejected').length;
     const latest = allRequests.slice(0, 6);
@@ -2452,17 +2479,18 @@ function buildSetroomRequestsManagerPayload(guildId, token, state = null) {
 
     const embed = colorManager.createEmbed()
         .setTitle('🧭 SetRoom Requests')
-        .setDescription([
+        .setDescription(clampEmbedText([
             `**Total : ${allRequests.length}**`,
             `**Pending : ${pendingRequests.length}**`,
             `**Accepted : ${acceptedCount}**`,
             `**Rejected : ${rejectedCount}**`,
             '',
+            `**Can Delete : ${deletableRequests.length}**`,
             `**Selected for delete : ${selectedDeleteCount}**`,
             `**Selected for edit : ${selectedEditId ? `\`${selectedEditId}\`` : 'None'}**`,
             '',
             '**Use the selectors below, then run Delete or Edit.**'
-        ].join('\n'))
+        ].join('\n'), 4096))
         .setFooter({ text: 'SetRoom Requests Control' })
         .setTimestamp();
 
@@ -2474,8 +2502,8 @@ function buildSetroomRequestsManagerPayload(guildId, token, state = null) {
         }
     }
 
-    const pendingOptions = pendingRequests.slice(0, 25).map(req => ({
-        label: `${req.roomType || 'روم'} • ${String(req.forWho || 'غير محدد').slice(0, 70)}`.slice(0, 100),
+    const deletableOptions = deletableRequests.slice(0, 25).map(req => ({
+        label: clampEmbedText(`${req.roomType || 'روم'} • ${String(req.forWho || 'غير محدد').slice(0, 70)}`, 100),
         description: `ID: ${req.id}`.slice(0, 100),
         value: req.id
     }));
@@ -2487,11 +2515,11 @@ function buildSetroomRequestsManagerPayload(guildId, token, state = null) {
 
     const deleteSelect = new StringSelectMenuBuilder()
         .setCustomId(`setroom_requests_delete_select_${token}`)
-        .setPlaceholder('اختر طلبات معلّقة للحذف (متعدد)')
-        .setMinValues(pendingOptions.length ? 1 : 0)
-        .setMaxValues(Math.max(1, Math.min(25, pendingOptions.length || 1)))
-        .setDisabled(!pendingOptions.length)
-        .addOptions(pendingOptions.length ? pendingOptions : [{ label: 'لا توجد طلبات معلقة', value: 'none', description: 'لا يوجد شيء للحذف حالياً' }]);
+        .setPlaceholder('اختر طلبات (معلّقة/مقبولة غير منشأة) للحذف')
+        .setMinValues(deletableOptions.length ? 1 : 0)
+        .setMaxValues(Math.max(1, Math.min(25, deletableOptions.length || 1)))
+        .setDisabled(!deletableOptions.length)
+        .addOptions(deletableOptions.length ? deletableOptions : [{ label: 'لا توجد طلبات قابلة للحذف', value: 'none', description: 'المعلّق أو المقبول غير المنشأ فقط' }]);
 
     const editSelect = new StringSelectMenuBuilder()
         .setCustomId(`setroom_requests_edit_select_${token}`)
@@ -2505,7 +2533,7 @@ function buildSetroomRequestsManagerPayload(guildId, token, state = null) {
         embeds: [embed],
         components: [
             new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`setroom_requests_delete_${token}`).setLabel('Delete Pending').setStyle(ButtonStyle.Danger).setDisabled(!pendingOptions.length),
+                new ButtonBuilder().setCustomId(`setroom_requests_delete_${token}`).setLabel('Delete Selected').setStyle(ButtonStyle.Danger).setDisabled(!deletableOptions.length),
                 new ButtonBuilder().setCustomId(`setroom_requests_edit_${token}`).setLabel('Edit Selected').setStyle(ButtonStyle.Primary).setDisabled(!allOptions.length),
                 new ButtonBuilder().setCustomId(`setroom_requests_close_${token}`).setLabel('Close').setStyle(ButtonStyle.Secondary)
             ),
@@ -2546,7 +2574,7 @@ async function handleSetroomListRequests(message, guildConfig) {
 
     const embed = colorManager.createEmbed()
         .setTitle('📋 قائمة طلبات SetRoom')
-        .setDescription(`إجمالي الطلبات: **${allRequests.length}**\nمعلّق: **${pendingCount}** | مقبول: **${acceptedCount}** | مرفوض: **${rejectedCount}**`)
+        .setDescription(clampEmbedText(`إجمالي الطلبات: **${allRequests.length}**\nمعلّق: **${pendingCount}** | مقبول: **${acceptedCount}** | مرفوض: **${rejectedCount}**`, 4096))
         .setFooter({ text: 'استخدم setroom delete لإزالة الطلبات المعلّقة أو setroom edit <id> للتعديل.' })
         .setTimestamp();
 
@@ -2559,21 +2587,21 @@ async function handleSetroomListRequests(message, guildConfig) {
 
 async function handleSetroomDeleteRequests(message) {
     const requests = loadRoomRequests();
-    const pending = requests.filter(r => r.guildId === message.guild.id && r.status === 'pending');
-    if (!pending.length) {
-        await message.reply('✅ لا توجد طلبات معلّقة للحذف.');
+    const deletable = requests.filter(r => r.guildId === message.guild.id && ['pending', 'accepted'].includes(r.status) && !isRequestRoomCreated(r));
+    if (!deletable.length) {
+        await message.reply('✅ لا توجد طلبات قابلة للحذف حالياً (المتاح: معلّق أو مقبول غير منشأ).');
         return;
     }
 
-    const options = pending.slice(0, 25).map(req => ({
-        label: `${req.roomType} • ${req.forWho}`.slice(0, 100),
+    const options = deletable.slice(0, 25).map(req => ({
+        label: clampEmbedText(`${req.roomType} • ${req.forWho}`, 100),
         description: `ID: ${req.id}`.slice(0, 100),
         value: req.id
     }));
 
     const select = new StringSelectMenuBuilder()
         .setCustomId(`setroom_delete_requests_${message.id}`)
-        .setPlaceholder('اختر الطلبات المعلقة المطلوب حذفها')
+        .setPlaceholder('اختر الطلبات المطلوب حذفها')
         .setMinValues(1)
         .setMaxValues(Math.min(options.length, 25))
         .addOptions(options);
@@ -2589,7 +2617,7 @@ async function handleSetroomDeleteRequests(message) {
         .setStyle(ButtonStyle.Secondary);
 
     const payload = await message.reply({
-        embeds: [colorManager.createEmbed().setTitle('🗑️ حذف طلبات معلّقة').setDescription('اختر طلباً واحداً أو أكثر، ثم اضغط زر الحذف.')],
+        embeds: [colorManager.createEmbed().setTitle('🗑️ حذف طلبات').setDescription('يمكنك حذف الطلبات المعلّقة أو المقبولة غير المنشأة فقط.')],
         components: [
             new ActionRowBuilder().addComponents(select),
             new ActionRowBuilder().addComponents(confirmBtn, cancelBtn)
@@ -2625,11 +2653,11 @@ async function handleSetroomDeleteRequests(message) {
             }
             const latestRequests = loadRoomRequests();
             const selectedIds = [...selected];
-            const toDelete = latestRequests.filter(r => r.guildId === message.guild.id && r.status === 'pending' && selectedIds.includes(r.id));
+            const toDelete = latestRequests.filter(r => r.guildId === message.guild.id && ['pending', 'accepted'].includes(r.status) && !isRequestRoomCreated(r) && selectedIds.includes(r.id));
             const updated = latestRequests.filter(r => !toDelete.some(d => d.id === r.id));
             saveRoomRequests(updated);
             collector.stop('done');
-            await interaction.update({ content: `✅ تم حذف ${toDelete.length} طلب/طلبات معلّقة من الانتظار.`, embeds: [], components: [] });
+            await interaction.update({ content: `✅ تم حذف ${toDelete.length} طلب/طلبات بنجاح.`, embeds: [], components: [] });
         }
     });
 
@@ -2825,12 +2853,12 @@ function registerHandlers(client) {
                         }
 
                         const latestRequests = loadRoomRequests();
-                        const toDelete = latestRequests.filter(r => r.guildId === interaction.guild.id && r.status === 'pending' && state.selectedDeleteIds.includes(r.id));
+                        const toDelete = latestRequests.filter(r => r.guildId === interaction.guild.id && ['pending', 'accepted'].includes(r.status) && !isRequestRoomCreated(r) && state.selectedDeleteIds.includes(r.id));
                         if (!toDelete.length) {
                             state.selectedDeleteIds = [];
                             setroomRequestsUiState.set(token, state);
                             await interaction.update(buildSetroomRequestsManagerPayload(interaction.guild.id, token, state));
-                            await interaction.followUp({ content: '⚠️ **لم يتم حذف أي طلب لأن العناصر المحددة لم تعد معلّقة أو غير موجودة.**', flags: 64 });
+                            await interaction.followUp({ content: '⚠️ **لم يتم حذف أي طلب لأن العناصر المحددة لم تعد قابلة للحذف أو غير موجودة.**', flags: 64 });
                             return;
                         }
                         const updated = latestRequests.filter(r => !toDelete.some(d => d.id === r.id));
@@ -2843,7 +2871,7 @@ function registerHandlers(client) {
                         setroomRequestsUiState.set(token, state);
 
                         await interaction.update(buildSetroomRequestsManagerPayload(interaction.guild.id, token, state));
-                        await interaction.followUp({ content: `✅ **تم حذف ${toDelete.length} طلب/طلبات معلّقة من الانتظار بنجاح.**`, flags: 64 });
+                        await interaction.followUp({ content: `✅ **تم حذف ${toDelete.length} طلب/طلبات بنجاح.**`, flags: 64 });
                         return;
                     }
 
