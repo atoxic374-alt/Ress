@@ -33,6 +33,7 @@ const PERIODIC_SNAPSHOT_INTERVAL = 1000 * 60 * 60 * 3;
 const MASS_DELETE_WINDOW_MS = 1000 * 60;
 const MASS_DELETE_THRESHOLD_RATIO = 0.5;
 const massDeleteTracker = new Map();
+const POST_RESTORE_VALIDATION_DELAY = 1000 * 60;
 
 // --- HELPER FUNCTIONS ---
 function createLimiter(concurrency = DEFAULT_CONCURRENCY) {
@@ -332,6 +333,13 @@ async function scheduleProtectionCheck(guild, type, event, affectedElement = nul
   try {
     const cfg = await getConfig(guild.id);
     if (!cfg.enabled || !cfg.toggles[type === "channel" ? "channels" : type === "role" ? "roles" : "settings"]) return;
+
+    const isImmediateRestoreEvent = (event === AuditLogEvent.ChannelDelete || event === AuditLogEvent.RoleDelete) && cfg.snapshot && targetId;
+    if (isImmediateRestoreEvent) {
+      await applyBackup(guild, cfg.snapshot, [type === "channel" ? "channels" : "roles"], { targetId, isPasteMode: false });
+      schedulePostRestoreValidation(guild, cfg.snapshot, [type === "channel" ? "channels" : "roles"], { targetId });
+    }
+
     const entry = await fetchAuditLogWithRetry(guild, event, targetId);
     const isOwner = guild.client.config?.owners?.includes(entry?.executorId) || entry?.executorId === guild.ownerId;
     const isTrusted = await isTrustedExecutor(guild, cfg, entry?.executorId);
@@ -347,6 +355,7 @@ async function scheduleProtectionCheck(guild, type, event, affectedElement = nul
         const reachedMassDelete = registerMassDelete(guild.id, entry.executorId, baselineCount);
         if (reachedMassDelete) {
           await applyBackup(guild, cfg.snapshot, ["channels"], { isPasteMode: false });
+          schedulePostRestoreValidation(guild, cfg.snapshot, ["channels"]);
           return;
         }
       }
@@ -362,7 +371,9 @@ async function scheduleProtectionCheck(guild, type, event, affectedElement = nul
 
     if (!entry) {
       if (cfg.snapshot) {
-        await applyBackup(guild, cfg.snapshot, [type === "channel" ? "channels" : type === "role" ? "roles" : "settings"], { targetId, isPasteMode: false });
+        const scope = [type === "channel" ? "channels" : type === "role" ? "roles" : "settings"];
+        await applyBackup(guild, cfg.snapshot, scope, { targetId, isPasteMode: false });
+        schedulePostRestoreValidation(guild, cfg.snapshot, scope, { targetId });
       }
       return;
     }
@@ -385,7 +396,11 @@ async function scheduleProtectionCheck(guild, type, event, affectedElement = nul
         canDelete ? affectedElement.delete().catch(() => null) : neutralizeRole,
       ]);
     } else {
-      Promise.all([punishUser(guild, entry.executorId, `Unauthorized ${type} action`), applyBackup(guild, cfg.snapshot, [type === "channel" ? "channels" : type === "role" ? "roles" : "settings"], { targetId, isPasteMode: false })]);
+      const scope = [type === "channel" ? "channels" : type === "role" ? "roles" : "settings"];
+      Promise.all([
+        punishUser(guild, entry.executorId, `Unauthorized ${type} action`),
+        applyBackup(guild, cfg.snapshot, scope, { targetId, isPasteMode: false }),
+      ]).finally(() => schedulePostRestoreValidation(guild, cfg.snapshot, scope, { targetId }));
     }
   } catch (error) { console.error("Protection check failed:", error); }
 }
@@ -435,6 +450,48 @@ function registerMassDelete(guildId, executorId, baselineCount) {
   massDeleteTracker.set(key, filtered);
   const threshold = Math.max(1, Math.ceil(baselineCount * MASS_DELETE_THRESHOLD_RATIO));
   return filtered.length >= threshold;
+}
+
+
+
+function schedulePostRestoreValidation(guild, snapshot, types, options = {}) {
+  setTimeout(async () => {
+    try {
+      if (types.includes("channels")) await resolveChannelConflicts(guild, snapshot, options.targetId);
+      await applyBackup(guild, snapshot, types, { ...options, isPasteMode: false });
+    } catch (err) {
+      console.error(`Post-restore validation failed for guild ${guild.id}:`, err);
+    }
+  }, POST_RESTORE_VALIDATION_DELAY);
+}
+
+async function resolveChannelConflicts(guild, snapshot, targetId = null) {
+  const targetChannels = (targetId ? snapshot.channels.filter((c) => c.id === targetId) : snapshot.channels)
+    .filter((c) => c.type !== ChannelType.GuildCategory);
+
+  for (const sc of targetChannels) {
+    const parentSnapshot = sc.parentId ? snapshot.channels.find((x) => x.id === sc.parentId) : null;
+    const expectedParentId = parentSnapshot
+      ? guild.channels.cache.find((c) => c.type === ChannelType.GuildCategory && c.name === parentSnapshot.name)?.id || null
+      : null;
+
+    const exactMatches = guild.channels.cache
+      .filter((c) => c.type === sc.type && c.name === sc.name && c.parentId === expectedParentId)
+      .sort((a, b) => a.rawPosition - b.rawPosition);
+
+    if (exactMatches.size <= 1) continue;
+
+    let i = 1;
+    for (const duplicate of exactMatches.values()) {
+      if (i === 1) {
+        i += 1;
+        continue;
+      }
+      const safeName = `${sc.name}-dup-${i - 1}`.slice(0, 100);
+      await duplicate.edit({ name: safeName }).catch(() => null);
+      i += 1;
+    }
+  }
 }
 
 // --- MODULE EXPORT ---
