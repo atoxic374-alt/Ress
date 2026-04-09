@@ -156,6 +156,21 @@ async function captureSnapshot(guild, options = {}) {
   return { guildId: guild.id, guildName: guild.name, createdAt: Date.now(), settings: { name: guild.name, verificationLevel: guild.verificationLevel, explicitContentFilter: guild.explicitContentFilter, defaultMessageNotifications: guild.defaultMessageNotifications, afkTimeout: guild.afkTimeout }, roles, channels, members: includeMembers ? guild.members.cache.map((m) => ({ id: m.id, roles: m.roles.cache.filter((r) => r.id !== guild.id).map((r) => r.id) })) : [], bans: [...bans.values()].map((b) => ({ id: b.user.id, reason: b.reason || null })), emojis: [...emojis.values()].map((e) => ({ name: e.name, url: e.url })), stickers: [...stickers.values()].map((s) => ({ name: s.name, url: s.url, description: s.description, tags: s.tags })) };
 }
 
+
+
+function findBestChannelMatch(guild, snapshotChannel, expectedParentId = null) {
+  const sameType = guild.channels.cache.filter((c) => c.type === snapshotChannel.type && c.name === snapshotChannel.name);
+  if (!sameType.size) return null;
+
+  if (expectedParentId) {
+    const exactParent = sameType.find((c) => c.parentId === expectedParentId);
+    if (exactParent) return exactParent;
+  }
+
+  if (sameType.size === 1) return sameType.first();
+  return null;
+}
+
 async function applyBackup(guild, snapshot, types, options = {}) {
   const start = Date.now();
   const limit = createLimiter(DEFAULT_CONCURRENCY);
@@ -202,14 +217,13 @@ async function applyBackup(guild, snapshot, types, options = {}) {
     await Promise.all(cats.map((sc) => limit(async () => {
       let cat = guild.channels.cache.find((c) => c.name === sc.name && c.type === ChannelType.GuildCategory);
       if (!cat) cat = await withDiscordRetry(() => guild.channels.create({ name: sc.name, type: ChannelType.GuildCategory, position: sc.position })).catch(() => null);
-      if (cat) categoryMap.set(sc.name, cat.id);
+      if (cat) categoryMap.set(sc.id, cat.id);
     })));
 
     const others = channelsToProcess.filter((c) => c.type !== ChannelType.GuildCategory);
     await Promise.all(others.map((sc) => limit(async () => {
-      const parentName = snapshot.channels.find((x) => x.id === sc.parentId)?.name;
-      const parentId = parentName ? categoryMap.get(parentName) : null;
-      let ch = guild.channels.cache.find((c) => c.name === sc.name && c.type === sc.type);
+      const parentId = sc.parentId ? categoryMap.get(sc.parentId) || null : null;
+      let ch = findBestChannelMatch(guild, sc, parentId);
       let wasCreated = false;
       if (!ch) {
         ch = await withDiscordRetry(() => guild.channels.create({ name: sc.name, type: sc.type, parent: parentId, position: sc.position, topic: sc.topic || undefined, nsfw: sc.nsfw })).catch(() => null);
@@ -332,10 +346,7 @@ async function scheduleProtectionCheck(guild, type, event, affectedElement = nul
         const baselineCount = cfg.snapshot.channels.filter((c) => c.type !== ChannelType.GuildCategory).length;
         const reachedMassDelete = registerMassDelete(guild.id, entry.executorId, baselineCount);
         if (reachedMassDelete) {
-          await Promise.all([
-            punishUser(guild, entry.executorId, "Trusted user mass channel deletion"),
-            applyBackup(guild, cfg.snapshot, ["channels"], { isPasteMode: false }),
-          ]);
+          await applyBackup(guild, cfg.snapshot, ["channels"], { isPasteMode: false });
           return;
         }
       }
