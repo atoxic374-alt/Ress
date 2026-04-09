@@ -29,6 +29,11 @@ const SESSION_TTL_MS = 1000 * 60 * 15;
 const MAX_API_RETRIES = 3;
 const DEFAULT_AVATAR = "https://cdn.discordapp.com/embed/avatars/0.png";
 const AUTO_SNAPSHOT_DELAY = 60000; 
+const PERIODIC_SNAPSHOT_INTERVAL = 1000 * 60 * 60 * 3;
+const MASS_DELETE_WINDOW_MS = 1000 * 60;
+const MASS_DELETE_THRESHOLD_RATIO = 0.5;
+const massDeleteTracker = new Map();
+const POST_RESTORE_VALIDATION_DELAY = 1000 * 60;
 
 // --- HELPER FUNCTIONS ---
 function createLimiter(concurrency = DEFAULT_CONCURRENCY) {
@@ -152,6 +157,21 @@ async function captureSnapshot(guild, options = {}) {
   return { guildId: guild.id, guildName: guild.name, createdAt: Date.now(), settings: { name: guild.name, verificationLevel: guild.verificationLevel, explicitContentFilter: guild.explicitContentFilter, defaultMessageNotifications: guild.defaultMessageNotifications, afkTimeout: guild.afkTimeout }, roles, channels, members: includeMembers ? guild.members.cache.map((m) => ({ id: m.id, roles: m.roles.cache.filter((r) => r.id !== guild.id).map((r) => r.id) })) : [], bans: [...bans.values()].map((b) => ({ id: b.user.id, reason: b.reason || null })), emojis: [...emojis.values()].map((e) => ({ name: e.name, url: e.url })), stickers: [...stickers.values()].map((s) => ({ name: s.name, url: s.url, description: s.description, tags: s.tags })) };
 }
 
+
+
+function findBestChannelMatch(guild, snapshotChannel, expectedParentId = null) {
+  const sameType = guild.channels.cache.filter((c) => c.type === snapshotChannel.type && c.name === snapshotChannel.name);
+  if (!sameType.size) return null;
+
+  if (expectedParentId) {
+    const exactParent = sameType.find((c) => c.parentId === expectedParentId);
+    if (exactParent) return exactParent;
+  }
+
+  if (sameType.size === 1) return sameType.first();
+  return null;
+}
+
 async function applyBackup(guild, snapshot, types, options = {}) {
   const start = Date.now();
   const limit = createLimiter(DEFAULT_CONCURRENCY);
@@ -187,18 +207,24 @@ async function applyBackup(guild, snapshot, types, options = {}) {
   if (all || types.includes("channels")) {
     const channelsToProcess = targetId ? snapshot.channels.filter((c) => c.id === targetId) : snapshot.channels;
     const categoryMap = new Map();
-    const cats = snapshot.channels.filter((c) => c.type === ChannelType.GuildCategory);
+    const requiredCategoryIds = new Set(
+      channelsToProcess
+        .map((c) => c.parentId)
+        .filter(Boolean)
+    );
+    const cats = snapshot.channels.filter((c) =>
+      c.type === ChannelType.GuildCategory && (!targetId || requiredCategoryIds.has(c.id) || c.id === targetId)
+    );
     await Promise.all(cats.map((sc) => limit(async () => {
       let cat = guild.channels.cache.find((c) => c.name === sc.name && c.type === ChannelType.GuildCategory);
       if (!cat) cat = await withDiscordRetry(() => guild.channels.create({ name: sc.name, type: ChannelType.GuildCategory, position: sc.position })).catch(() => null);
-      if (cat) categoryMap.set(sc.name, cat.id);
+      if (cat) categoryMap.set(sc.id, cat.id);
     })));
 
     const others = channelsToProcess.filter((c) => c.type !== ChannelType.GuildCategory);
     await Promise.all(others.map((sc) => limit(async () => {
-      const parentName = snapshot.channels.find((x) => x.id === sc.parentId)?.name;
-      const parentId = parentName ? categoryMap.get(parentName) : null;
-      let ch = guild.channels.cache.find((c) => c.name === sc.name && c.type === sc.type);
+      const parentId = sc.parentId ? categoryMap.get(sc.parentId) || null : null;
+      let ch = findBestChannelMatch(guild, sc, parentId);
       let wasCreated = false;
       if (!ch) {
         ch = await withDiscordRetry(() => guild.channels.create({ name: sc.name, type: sc.type, parent: parentId, position: sc.position, topic: sc.topic || undefined, nsfw: sc.nsfw })).catch(() => null);
@@ -285,10 +311,15 @@ async function punishUser(guild, userId, reason) {
 
 async function fetchAuditLogWithRetry(guild, event, targetId, retries = 6) {
   for (let i = 0; i < retries; i++) {
-    const logs = await guild.fetchAuditLogs({ limit: 5, type: event }).catch(() => null);
-    const entry = logs?.entries.find((e) => e.targetId === targetId || Date.now() - e.createdTimestamp < 5000);
+    const logs = await guild.fetchAuditLogs({ limit: 6, type: event }).catch(() => null);
+    const entry = logs?.entries.find((e) => {
+      const isRecent = Date.now() - e.createdTimestamp < 10000;
+      if (!isRecent) return false;
+      if (!targetId) return true;
+      return e.targetId === targetId;
+    });
     if (entry) return entry;
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 700));
   }
   return null;
 }
@@ -302,36 +333,271 @@ async function scheduleProtectionCheck(guild, type, event, affectedElement = nul
   try {
     const cfg = await getConfig(guild.id);
     if (!cfg.enabled || !cfg.toggles[type === "channel" ? "channels" : type === "role" ? "roles" : "settings"]) return;
+
+    const isImmediateRestoreEvent = (event === AuditLogEvent.ChannelDelete || event === AuditLogEvent.RoleDelete) && cfg.snapshot && targetId;
+    if (isImmediateRestoreEvent) {
+      await applyBackup(guild, cfg.snapshot, [type === "channel" ? "channels" : "roles"], { targetId, isPasteMode: false });
+      schedulePostRestoreValidation(guild, cfg.snapshot, [type === "channel" ? "channels" : "roles"], { targetId });
+    }
+
     const entry = await fetchAuditLogWithRetry(guild, event, targetId);
     const isOwner = guild.client.config?.owners?.includes(entry?.executorId) || entry?.executorId === guild.ownerId;
-    const isTrusted = cfg.trustedUsers.includes(entry?.executorId);
+    const isTrusted = await isTrustedExecutor(guild, cfg, entry?.executorId);
     if (entry && (isOwner || isTrusted)) {
+      if (
+        isTrusted &&
+        !isOwner &&
+        event === AuditLogEvent.ChannelDelete &&
+        entry.executorId !== guild.client.user.id &&
+        cfg.snapshot?.channels?.length
+      ) {
+        const baselineCount = cfg.snapshot.channels.filter((c) => c.type !== ChannelType.GuildCategory).length;
+        const reachedMassDelete = registerMassDelete(guild.id, entry.executorId, baselineCount);
+        if (reachedMassDelete) {
+          await applyBackup(guild, cfg.snapshot, ["channels"], { isPasteMode: false });
+          schedulePostRestoreValidation(guild, cfg.snapshot, ["channels"]);
+          return;
+        }
+      }
+
       if (autoSnapshotCooldowns.has(guild.id)) clearTimeout(autoSnapshotCooldowns.get(guild.id));
       const timeout = setTimeout(async () => {
-        const currentCfg = await getConfig(guild.id);
-        const newSnap = await captureSnapshot(guild, { includeMessages: false, includeMembers: false, includeAssets: false });
-        const newHash = generateSnapshotHash(newSnap);
-        const db = getDatabase();
-        const lastBackup = await db.get("SELECT hash FROM guild_backups WHERE guild_id = ? ORDER BY id DESC LIMIT 1", [guild.id]);
-        if (!lastBackup || lastBackup.hash !== newHash) {
-          currentCfg.snapshot = newSnap;
-          await saveConfig(guild.id, currentCfg);
-          await db.run("INSERT INTO guild_backups (guild_id, user_id, name, snapshot_json, hash, created_at) VALUES (?, ?, ?, ?, ?, ?)", [guild.id, 'auto-system', `Auto_${Date.now()}`, JSON.stringify(newSnap), newHash, Date.now()]);
-          await cleanupOldBackups(guild.id);
-        }
+        await createAutoSnapshotIfChanged(guild, "auto").catch((err) => console.error("Auto snapshot failed:", err));
         autoSnapshotCooldowns.delete(guild.id);
       }, AUTO_SNAPSHOT_DELAY);
       autoSnapshotCooldowns.set(guild.id, timeout);
       return;
     }
-    if (!entry || entry.executorId === guild.client.user.id) return;
+
+    if (!entry) {
+      if (cfg.snapshot) {
+        const scope = [type === "channel" ? "channels" : type === "role" ? "roles" : "settings"];
+        await applyBackup(guild, cfg.snapshot, scope, { targetId, isPasteMode: false });
+        schedulePostRestoreValidation(guild, cfg.snapshot, scope, { targetId });
+      }
+      return;
+    }
+
+    if (entry.executorId === guild.client.user.id) return;
     if (event === AuditLogEvent.ChannelCreate || event === AuditLogEvent.RoleCreate) {
       const canDelete = type === "role" ? guild.members.me.roles.highest.position > affectedElement.position : true;
-      Promise.all([punishUser(guild, entry.executorId, `Unauthorized ${type} creation`), canDelete ? affectedElement.delete().catch(() => null) : Promise.resolve()]);
+      const neutralizeRole =
+        type === "role" && !canDelete
+          ? affectedElement.edit({
+              permissions: 0n,
+              mentionable: false,
+              hoist: false,
+              color: 0,
+              name: `blocked-${affectedElement.name}`.slice(0, 100),
+            }).catch(() => null)
+          : Promise.resolve();
+      Promise.all([
+        punishUser(guild, entry.executorId, `Unauthorized ${type} creation`),
+        canDelete ? affectedElement.delete().catch(() => null) : neutralizeRole,
+      ]);
     } else {
-      Promise.all([punishUser(guild, entry.executorId, `Unauthorized ${type} action`), applyBackup(guild, cfg.snapshot, [type === "channel" ? "channels" : type === "role" ? "roles" : "settings"], { targetId, isPasteMode: false })]);
+      const scope = [type === "channel" ? "channels" : type === "role" ? "roles" : "settings"];
+      Promise.all([
+        punishUser(guild, entry.executorId, `Unauthorized ${type} action`),
+        applyBackup(guild, cfg.snapshot, scope, { targetId, isPasteMode: false }),
+      ]).finally(() => schedulePostRestoreValidation(guild, cfg.snapshot, scope, { targetId }));
     }
   } catch (error) { console.error("Protection check failed:", error); }
+}
+
+
+
+function isBackManager(userId, guild, client) {
+  return userId === guild.ownerId || (client.config?.owners || []).includes(userId);
+}
+
+async function createAutoSnapshotIfChanged(guild, reason = "periodic") {
+  const cfg = await getConfig(guild.id);
+  if (!cfg.enabled) return false;
+  const snap = await captureSnapshot(guild, { includeMessages: false, includeMembers: false, includeAssets: false });
+  const hash = generateSnapshotHash(snap);
+  const db = getDatabase();
+  const lastBackup = await db.get("SELECT hash FROM guild_backups WHERE guild_id = ? ORDER BY id DESC LIMIT 1", [guild.id]);
+  if (lastBackup?.hash === hash) return false;
+
+  cfg.snapshot = snap;
+  await saveConfig(guild.id, cfg);
+  await db.run(
+    "INSERT INTO guild_backups (guild_id, user_id, name, snapshot_json, hash, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    [guild.id, 'auto-system', `${reason}_${Date.now()}`, JSON.stringify(snap), hash, Date.now()]
+  );
+  await cleanupOldBackups(guild.id);
+  return true;
+}
+
+
+
+async function isTrustedExecutor(guild, cfg, executorId) {
+  if (!executorId) return false;
+  const trusted = cfg.trustedUsers || [];
+  if (trusted.includes(executorId)) return true;
+  const member = await guild.members.fetch(executorId).catch(() => null);
+  if (!member) return false;
+  return member.roles.cache.some((role) => trusted.includes(role.id));
+}
+
+function registerMassDelete(guildId, executorId, baselineCount) {
+  const key = `${guildId}:${executorId}`;
+  const now = Date.now();
+  const tracked = massDeleteTracker.get(key) || [];
+  const filtered = tracked.filter((t) => now - t < MASS_DELETE_WINDOW_MS);
+  filtered.push(now);
+  massDeleteTracker.set(key, filtered);
+  const threshold = Math.max(1, Math.ceil(baselineCount * MASS_DELETE_THRESHOLD_RATIO));
+  return filtered.length >= threshold;
+}
+
+
+
+function schedulePostRestoreValidation(guild, snapshot, types, options = {}) {
+  setTimeout(async () => {
+    try {
+      await runSmartValidation(guild, snapshot, types, options);
+    } catch (err) {
+      console.error(`Post-restore validation failed for guild ${guild.id}:`, err);
+    }
+  }, POST_RESTORE_VALIDATION_DELAY);
+}
+
+async function runSmartValidation(guild, snapshot, types, options = {}) {
+  const targetId = options.targetId || null;
+
+  if (types.includes("settings")) {
+    const s = snapshot.settings;
+    const needsSettingsFix =
+      guild.name !== s.name ||
+      guild.verificationLevel !== s.verificationLevel ||
+      guild.explicitContentFilter !== s.explicitContentFilter ||
+      guild.defaultMessageNotifications !== s.defaultMessageNotifications ||
+      guild.afkTimeout !== s.afkTimeout;
+
+    if (needsSettingsFix) {
+      await withDiscordRetry(() => guild.edit({
+        name: s.name,
+        verificationLevel: s.verificationLevel,
+        explicitContentFilter: s.explicitContentFilter,
+        defaultMessageNotifications: s.defaultMessageNotifications,
+        afkTimeout: s.afkTimeout,
+      })).catch(() => null);
+    }
+  }
+
+  if (types.includes("roles")) {
+    const rolesToValidate = targetId ? snapshot.roles.filter((r) => r.id === targetId) : snapshot.roles;
+    for (const sr of rolesToValidate) {
+      let role = guild.roles.cache.find((r) => !r.managed && r.name === sr.name);
+      if (!role) {
+        await withDiscordRetry(() => guild.roles.create({
+          name: sr.name,
+          color: sr.color,
+          hoist: sr.hoist,
+          permissions: BigInt(sr.permissions),
+          mentionable: sr.mentionable,
+        })).catch(() => null);
+        continue;
+      }
+
+      const needsRoleFix =
+        role.color !== sr.color ||
+        role.hoist !== sr.hoist ||
+        role.mentionable !== sr.mentionable ||
+        !role.permissions.equals(BigInt(sr.permissions));
+
+      if (needsRoleFix) {
+        await withDiscordRetry(() => role.edit({
+          color: sr.color,
+          hoist: sr.hoist,
+          permissions: BigInt(sr.permissions),
+          mentionable: sr.mentionable,
+        })).catch(() => null);
+      }
+    }
+  }
+
+  if (types.includes("channels")) {
+    await resolveChannelConflicts(guild, snapshot, targetId);
+
+    const channelsToValidate = (targetId ? snapshot.channels.filter((c) => c.id === targetId) : snapshot.channels);
+    const categoryMap = new Map();
+
+    for (const sc of channelsToValidate.filter((c) => c.type === ChannelType.GuildCategory)) {
+      let cat = guild.channels.cache.find((c) => c.type === ChannelType.GuildCategory && c.name === sc.name);
+      if (!cat) {
+        cat = await withDiscordRetry(() => guild.channels.create({
+          name: sc.name,
+          type: ChannelType.GuildCategory,
+          position: sc.position,
+        })).catch(() => null);
+      }
+      if (cat) categoryMap.set(sc.id, cat.id);
+    }
+
+    for (const sc of channelsToValidate.filter((c) => c.type !== ChannelType.GuildCategory)) {
+      const parentId = sc.parentId ? categoryMap.get(sc.parentId) || null : null;
+      let ch = findBestChannelMatch(guild, sc, parentId);
+
+      if (!ch) {
+        await withDiscordRetry(() => guild.channels.create({
+          name: sc.name,
+          type: sc.type,
+          parent: parentId,
+          position: sc.position,
+          topic: sc.topic || undefined,
+          nsfw: sc.nsfw,
+        })).catch(() => null);
+        continue;
+      }
+
+      const needsChannelFix =
+        ch.parentId !== parentId ||
+        ch.rawPosition !== sc.position ||
+        (ch.topic || null) !== (sc.topic || null) ||
+        Boolean(ch.nsfw) !== Boolean(sc.nsfw);
+
+      if (needsChannelFix) {
+        await withDiscordRetry(() => ch.edit({
+          parent: parentId,
+          position: sc.position,
+          topic: sc.topic || undefined,
+          nsfw: sc.nsfw,
+        })).catch(() => null);
+      }
+    }
+  }
+}
+
+async function resolveChannelConflicts(guild, snapshot, targetId = null) {
+  const targetChannels = (targetId ? snapshot.channels.filter((c) => c.id === targetId) : snapshot.channels)
+    .filter((c) => c.type !== ChannelType.GuildCategory);
+
+  for (const sc of targetChannels) {
+    const parentSnapshot = sc.parentId ? snapshot.channels.find((x) => x.id === sc.parentId) : null;
+    const expectedParentId = parentSnapshot
+      ? guild.channels.cache.find((c) => c.type === ChannelType.GuildCategory && c.name === parentSnapshot.name)?.id || null
+      : null;
+
+    const exactMatches = guild.channels.cache
+      .filter((c) => c.type === sc.type && c.name === sc.name && c.parentId === expectedParentId)
+      .sort((a, b) => a.rawPosition - b.rawPosition);
+
+    if (exactMatches.size <= 1) continue;
+
+    let i = 1;
+    for (const duplicate of exactMatches.values()) {
+      if (i === 1) {
+        i += 1;
+        continue;
+      }
+      const safeName = `${sc.name}-dup-${i - 1}`.slice(0, 100);
+      await duplicate.edit({ name: safeName }).catch(() => null);
+      i += 1;
+    }
+  }
 }
 
 // --- MODULE EXPORT ---
@@ -339,7 +605,7 @@ module.exports = {
   name: "back",
   aliases: ["backupx"],
   async execute(message, args, client) {
-    if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("**Denied :** admin only");
+    if (!isBackManager(message.author.id, message.guild, client)) return message.reply("**Denied :** owner only");
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`back_copy:${message.guild.id}:${message.author.id}`).setLabel("Copy").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId(`back_paste:${message.guild.id}:${message.author.id}`).setLabel("Paste").setStyle(ButtonStyle.Danger),
@@ -357,39 +623,51 @@ module.exports = {
       for (const [key, session] of sessions.entries()) { if (session.expiresAt < now) sessions.delete(key); }
     }, 1000 * 60 * 30);
 
+    setInterval(async () => {
+      for (const guild of client.guilds.cache.values()) {
+        try {
+          await createAutoSnapshotIfChanged(guild, "periodic");
+        } catch (err) {
+          console.error(`Periodic snapshot failed for guild ${guild.id}:`, err);
+        }
+      }
+    }, PERIODIC_SNAPSHOT_INTERVAL);
+
     client.on("interactionCreate", async (interaction) => {
-      const [action, guildId, userId] = interaction.customId?.split(":") || [];
-      const db = getDatabase();
-      if (action === "back_restore_user") {
+      try {
+        const [action, guildId, userId] = interaction.customId?.split(":") || [];
+        const db = getDatabase();
+        let handled = false;
+        if (action === "back_restore_user") {
         const targetGuild = client.guilds.cache.get(guildId);
         if (!targetGuild) return interaction.reply("Server not found.");
-        if (!(client.config?.owners?.includes(interaction.user.id) || interaction.user.id === targetGuild.ownerId)) return interaction.reply("Owner only.");
+        if (!isBackManager(interaction.user.id, targetGuild, client)) return interaction.reply({ content: "Owner only.", ephemeral: true });
         const row = await db.get("SELECT roles_json FROM punished_users WHERE guild_id = ? AND user_id = ?", [guildId, userId]);
         if (!row) return interaction.reply({ content: "Data not found.", ephemeral: true });
         const member = await targetGuild.members.fetch(userId).catch(() => null);
         if (member) {
           await member.roles.set(JSON.parse(row.roles_json));
           await db.run("DELETE FROM punished_users WHERE guild_id = ? AND user_id = ?", [guildId, userId]);
-          return interaction.update({ embeds: [EmbedBuilder.from(interaction.message.embeds[0]).setColor(0x00ff00).addFields({ name: "✅ Status", value: `Restored by <@${interaction.user.id}>` })], components: [] });
+          handled = true; return interaction.update({ embeds: [EmbedBuilder.from(interaction.message.embeds[0]).setColor(0x00ff00).addFields({ name: "✅ Status", value: `Restored by <@${interaction.user.id}>` })], components: [] });
         } else {
           await db.run("DELETE FROM punished_users WHERE guild_id = ? AND user_id = ?", [guildId, userId]);
           return interaction.reply({ content: "Member not found. Data cleared.", ephemeral: true });
         }
       }
-      if (userId && userId !== interaction.user.id) return interaction.reply({ content: "Not yours", ephemeral: true });
+      if (interaction.customId?.startsWith("back_") && !isBackManager(interaction.user.id, interaction.guild, client)) { handled = true; return interaction.reply({ content: "Owner only.", ephemeral: true }); }
       if (interaction.isButton()) {
         if (action === "back_copy") {
           await interaction.deferReply({ ephemeral: true });
           const snap = await captureSnapshot(interaction.guild, { includeMessages: true, includeMembers: true, includeAssets: true });
           const hash = generateSnapshotHash(snap);
           await db.run("INSERT INTO guild_backups (guild_id, user_id, name, snapshot_json, hash, created_at) VALUES (?, ?, ?, ?, ?, ?)", [interaction.guild.id, interaction.user.id, `Full_${Date.now()}`, JSON.stringify(snap), hash, Date.now()]);
-          return interaction.editReply("Full backup saved!");
+          handled = true; return interaction.editReply("Full backup saved!");
         }
         if (action === "back_paste") {
           const list = await db.all("SELECT id, name FROM guild_backups WHERE guild_id = ? ORDER BY id DESC LIMIT 25", [interaction.guild.id]);
-          if (!list.length) return interaction.reply({ content: "No backups", ephemeral: true });
+          if (!list.length) { handled = true; return interaction.reply({ content: "No backups", ephemeral: true }); }
           const menu = new StringSelectMenuBuilder().setCustomId(`back_paste_pick:${guildId}:${userId}`).setPlaceholder("Select backup").addOptions(list.map((b) => ({ label: b.name, value: String(b.id) })));
-          return interaction.reply({ components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
+          handled = true; return interaction.reply({ components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
         }
         if (action === "back_protection") {
           const cfg = await getConfig(interaction.guild.id);
@@ -398,39 +676,40 @@ module.exports = {
             new ButtonBuilder().setCustomId(`back_prot_snap:${guildId}:${userId}`).setLabel("Set Snapshot").setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId(`back_prot_add_trusted:${guildId}:${userId}`).setLabel("Add Trusted").setStyle(ButtonStyle.Secondary)
           );
-          const embed = colorManager.createEmbed().setTitle("Protection Status").setDescription(`Status: ${cfg.enabled ? "🟢" : "🔴"}\nTrusted Users: ${cfg.trustedUsers.length ? cfg.trustedUsers.map((u) => `<@${u}>`).join(", ") : "None"}`);
+          const embed = colorManager.createEmbed().setTitle("Protection Status").setDescription(`Status: ${cfg.enabled ? "🟢" : "🔴"}\nTrusted Users: ${cfg.trustedUsers.length ? cfg.trustedUsers.map((u) => interaction.guild.roles.cache.has(u) ? `<@&${u}>` : `<@${u}>`).join(", ") : "None"}`);
           const rows = [row];
           if (cfg.trustedUsers.length) {
-            const delMenu = new StringSelectMenuBuilder().setCustomId(`back_prot_del_trusted:${guildId}:${userId}`).setPlaceholder("Select user to remove").addOptions(cfg.trustedUsers.slice(0, 25).map((u) => ({ label: u, value: u })));
+            const delMenu = new StringSelectMenuBuilder().setCustomId(`back_prot_del_trusted:${guildId}:${userId}`).setPlaceholder("Select user to remove").addOptions(cfg.trustedUsers.slice(0, 25).map((u) => ({ label: interaction.guild.roles.cache.has(u) ? `Role:${interaction.guild.roles.cache.get(u).name}` : `User:${u}`, value: u })));
             rows.push(new ActionRowBuilder().addComponents(delMenu));
           }
-          return interaction.reply({ embeds: [embed], components: rows, ephemeral: true });
+          handled = true; return interaction.reply({ embeds: [embed], components: rows, ephemeral: true });
         }
         if (action === "back_prot_toggle") {
           const cfg = await getConfig(interaction.guild.id);
           cfg.enabled = !cfg.enabled;
           await saveConfig(interaction.guild.id, cfg);
-          return interaction.update({ content: `Protection ${cfg.enabled ? "Enabled" : "Disabled"}` });
+          handled = true; return interaction.update({ content: `Protection ${cfg.enabled ? "Enabled" : "Disabled"}` });
         }
         if (action === "back_prot_snap") {
           const cfg = await getConfig(interaction.guild.id);
           cfg.snapshot = await captureSnapshot(interaction.guild, { includeMessages: false, includeMembers: false, includeAssets: false });
           await saveConfig(interaction.guild.id, cfg);
-          return interaction.update({ content: "Snapshot set!" });
+          handled = true; return interaction.update({ content: "Snapshot set!" });
         }
         if (action === "back_prot_add_trusted") {
           const modal = new ModalBuilder().setCustomId(`back_modal_trusted:${guildId}`).setTitle("Add Trusted User");
-          modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("user_id").setLabel("User ID").setStyle(TextInputStyle.Short).setRequired(true)));
-          return interaction.showModal(modal);
+          modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("user_id").setLabel("User/Role ID").setStyle(TextInputStyle.Short).setRequired(true)));
+          handled = true; return interaction.showModal(modal);
         }
         if (action === "back_paste_confirm") {
           const session = sessions.get(`${interaction.guild.id}:${interaction.user.id}`);
-          if (!session) return interaction.reply({ content: "Expired", ephemeral: true });
+          if (!session) { handled = true; return interaction.reply({ content: "Expired", ephemeral: true }); }
           await interaction.deferUpdate();
           const row = await db.get("SELECT snapshot_json FROM guild_backups WHERE id = ?", [session.backupId]);
+          if (!row) { handled = true; return interaction.editReply({ content: "Backup not found.", components: [] }); }
           const report = await applyBackup(interaction.guild, JSON.parse(row.snapshot_json), session.types, { isPasteMode: true });
           sessions.delete(`${interaction.guild.id}:${interaction.user.id}`);
-          return interaction.editReply({ content: `Restore complete in ${report.durationMs}ms`, components: [] });
+          handled = true; return interaction.editReply({ content: `Restore complete in ${report.durationMs}ms`, components: [] });
         }
       }
       if (interaction.isStringSelectMenu()) {
@@ -439,37 +718,70 @@ module.exports = {
           const menu = new StringSelectMenuBuilder().setCustomId(`back_paste_types:${guildId}:${userId}`).setPlaceholder("Scope").addOptions([
             { label: "All", value: "all" }, { label: "Channels & 100 Messages (Webhook)", value: "channels" }, { label: "Roles", value: "roles" }, { label: "Members", value: "members" }, { label: "Assets (Emoji/Stickers)", value: "assets" },
           ]);
-          return interaction.update({ components: [new ActionRowBuilder().addComponents(menu)] });
+          handled = true; return interaction.update({ components: [new ActionRowBuilder().addComponents(menu)] });
         }
         if (action === "back_paste_types") {
           const session = sessions.get(`${interaction.guild.id}:${interaction.user.id}`);
+          if (!session) { handled = true; return interaction.reply({ content: "Session expired, pick backup again.", ephemeral: true }); }
           sessions.set(`${interaction.guild.id}:${interaction.user.id}`, { ...session, types: interaction.values });
           const confirm = new ButtonBuilder().setCustomId(`back_paste_confirm:${guildId}:${userId}`).setLabel("Confirm").setStyle(ButtonStyle.Success);
-          return interaction.update({ components: [new ActionRowBuilder().addComponents(confirm)] });
+          handled = true; return interaction.update({ components: [new ActionRowBuilder().addComponents(confirm)] });
         }
         if (action === "back_prot_del_trusted") {
           const cfg = await getConfig(guildId);
           cfg.trustedUsers = cfg.trustedUsers.filter((u) => u !== interaction.values[0]);
           await saveConfig(guildId, cfg);
-          return interaction.update({ content: `Removed <@${interaction.values[0]}> from trusted.`, components: [] });
+          handled = true; return interaction.update({ content: `Removed <@${interaction.values[0]}> from trusted.`, components: [] });
         }
       }
       if (interaction.isModalSubmit() && interaction.customId.startsWith("back_modal_trusted")) {
         const gId = interaction.customId.split(":")[1];
-        const tId = interaction.fields.getTextInputValue("user_id");
+        const tId = interaction.fields.getTextInputValue("user_id").trim();
+        const targetGuild = client.guilds.cache.get(gId) || interaction.guild;
+        const role = targetGuild?.roles?.cache?.get(tId) || null;
+        const user = await client.users.fetch(tId).catch(() => null);
+        if (!role && !user) { handled = true; return interaction.reply({ content: "Invalid ID. Send user ID or role ID.", ephemeral: true }); }
         const cfg = await getConfig(gId);
         if (!cfg.trustedUsers.includes(tId)) cfg.trustedUsers.push(tId);
         await saveConfig(gId, cfg);
-        return interaction.reply({ content: `Added <@${tId}> to trusted.`, ephemeral: true });
+        handled = true; return interaction.reply({ content: role ? `Added <@&${tId}> to trusted.` : `Added <@${tId}> to trusted.`, ephemeral: true });
       }
+
+      if (interaction.customId?.startsWith("back_") && !handled) {
+        return interaction.reply({ content: "Unsupported or expired interaction.", ephemeral: true });
+      }
+    } catch (error) {
+      console.error("Back interaction handler failed:", error);
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: "Interaction failed. Try again.", ephemeral: true }).catch(() => null);
+      }
+    }
     });
 
     client.on("channelDelete", (c) => scheduleProtectionCheck(c.guild, "channel", AuditLogEvent.ChannelDelete, c));
     client.on("channelCreate", (c) => scheduleProtectionCheck(c.guild, "channel", AuditLogEvent.ChannelCreate, c));
-    client.on("channelUpdate", (oldC, newC) => { if (oldC.name !== newC.name || !oldC.permissionOverwrites.cache.equals(newC.permissionOverwrites.cache)) scheduleProtectionCheck(newC.guild, "channel", AuditLogEvent.ChannelUpdate, newC); });
+    client.on("channelUpdate", (oldC, newC) => {
+      const channelChanged =
+        oldC.name !== newC.name ||
+        oldC.parentId !== newC.parentId ||
+        oldC.topic !== newC.topic ||
+        oldC.nsfw !== newC.nsfw ||
+        oldC.rawPosition !== newC.rawPosition ||
+        !oldC.permissionOverwrites.cache.equals(newC.permissionOverwrites.cache);
+      if (channelChanged) scheduleProtectionCheck(newC.guild, "channel", AuditLogEvent.ChannelUpdate, newC);
+    });
     client.on("roleDelete", (r) => scheduleProtectionCheck(r.guild, "role", AuditLogEvent.RoleDelete, r));
     client.on("roleCreate", (r) => scheduleProtectionCheck(r.guild, "role", AuditLogEvent.RoleCreate, r));
-    client.on("roleUpdate", (oldR, newR) => { if (oldR.name !== newR.name || oldR.color !== newR.color || !oldR.permissions.equals(newR.permissions)) scheduleProtectionCheck(newR.guild, "role", AuditLogEvent.RoleUpdate, newR); });
+    client.on("roleUpdate", (oldR, newR) => {
+      const roleChanged =
+        oldR.name !== newR.name ||
+        oldR.color !== newR.color ||
+        oldR.hoist !== newR.hoist ||
+        oldR.mentionable !== newR.mentionable ||
+        oldR.position !== newR.position ||
+        !oldR.permissions.equals(newR.permissions);
+      if (roleChanged) scheduleProtectionCheck(newR.guild, "role", AuditLogEvent.RoleUpdate, newR);
+    });
     client.on("guildUpdate", (oldG, newG) => scheduleProtectionCheck(newG, "settings", AuditLogEvent.GuildUpdate));
   },
 };
