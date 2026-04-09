@@ -614,6 +614,10 @@ module.exports = {
     await message.channel.send({ embeds: [colorManager.createEmbed().setTitle("**Back :** Control Panel")], components: [row] });
   },
 
+  registerInteractionHandler(client) {
+    return this.init(client);
+  },
+
   async init(client) {
     if (listenersReady) return;
     listenersReady = true;
