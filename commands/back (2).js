@@ -20,7 +20,6 @@ const { getDatabase } = require("../utils/database");
 const backupsDir = path.join(__dirname, "..", "backups", "json-fallback");
 const sessions = new Map();
 const protectionDebounce = new Map();
-const autoSnapshotCooldowns = new Map();
 let listenersReady = false;
 
 // PERFORMANCE CONFIGURATION (Optimized for stability)
@@ -28,12 +27,12 @@ const DEFAULT_CONCURRENCY = 20;
 const SESSION_TTL_MS = 1000 * 60 * 15;
 const MAX_API_RETRIES = 3;
 const DEFAULT_AVATAR = "https://cdn.discordapp.com/embed/avatars/0.png";
-const AUTO_SNAPSHOT_DELAY = 60000; 
-const PERIODIC_SNAPSHOT_INTERVAL = 1000 * 60 * 60 * 3;
+const PERIODIC_SNAPSHOT_INTERVAL = 1000 * 60 * 60;
 const MASS_DELETE_WINDOW_MS = 1000 * 60;
 const MASS_DELETE_THRESHOLD_RATIO = 0.5;
 const massDeleteTracker = new Map();
 const POST_RESTORE_VALIDATION_DELAY = 1000 * 60;
+const activeRestoreOperations = new Map();
 
 // --- HELPER FUNCTIONS ---
 function createLimiter(concurrency = DEFAULT_CONCURRENCY) {
@@ -202,6 +201,15 @@ async function applyBackup(guild, snapshot, types, options = {}) {
         if (sortedPositions.length > 0) await withDiscordRetry(() => guild.roles.setPositions(sortedPositions)).catch(() => null);
       } catch (e) { console.error("Role position restore failed:", e); }
     }
+
+    if (!targetId) {
+      const snapshotRoleNames = new Set(snapshot.roles.map((r) => r.name));
+      await Promise.all(
+        guild.roles.cache
+          .filter((r) => !r.managed && r.id !== guild.id && !snapshotRoleNames.has(r.name))
+          .map((r) => limit(() => r.delete("Strict snapshot reconcile: extra role").catch(() => null)))
+      );
+    }
   }
 
   if (all || types.includes("channels")) {
@@ -218,6 +226,7 @@ async function applyBackup(guild, snapshot, types, options = {}) {
     await Promise.all(cats.map((sc) => limit(async () => {
       let cat = guild.channels.cache.find((c) => c.name === sc.name && c.type === ChannelType.GuildCategory);
       if (!cat) cat = await withDiscordRetry(() => guild.channels.create({ name: sc.name, type: ChannelType.GuildCategory, position: sc.position })).catch(() => null);
+      else await withDiscordRetry(() => cat.edit({ position: sc.position })).catch(() => null);
       if (cat) categoryMap.set(sc.id, cat.id);
     })));
 
@@ -232,14 +241,7 @@ async function applyBackup(guild, snapshot, types, options = {}) {
       } else await withDiscordRetry(() => ch.edit({ parent: parentId, position: sc.position, topic: sc.topic || undefined, nsfw: sc.nsfw })).catch(() => null);
 
       if (ch && sc.permissionOverwrites) {
-        const filteredOverwrites = [];
-        for (const ow of sc.permissionOverwrites) {
-          if (ow.type === 0) { if (guild.roles.cache.has(ow.id)) filteredOverwrites.push(ow); }
-          else if (ow.type === 1) {
-            const memberExists = await guild.members.fetch(ow.id).catch(() => null);
-            if (memberExists) filteredOverwrites.push(ow);
-          }
-        }
+        const filteredOverwrites = sc.permissionOverwrites.filter((ow) => ow.type === 0 ? guild.roles.cache.has(ow.id) : true);
         await withDiscordRetry(() => ch.permissionOverwrites.set(filteredOverwrites.map((ow) => ({ id: ow.id, type: ow.type, allow: BigInt(ow.allow), deny: BigInt(ow.deny) })))).catch(() => null);
       }
 
@@ -255,6 +257,22 @@ async function applyBackup(guild, snapshot, types, options = {}) {
         } catch (e) { console.error("Webhook operation failed:", e); }
       }
     })));
+
+    if (!targetId) {
+      const snapshotChannelSignatures = new Set(
+        channelsToProcess.map((c) => `${c.type}:${c.name}:${c.parentId || "root"}`)
+      );
+      await Promise.all(
+        guild.channels.cache
+          .filter((c) => !c.isThread())
+          .map((c) => limit(async () => {
+            const signature = `${c.type}:${c.name}:${c.parentId || "root"}`;
+            if (!snapshotChannelSignatures.has(signature)) {
+              await c.delete("Strict snapshot reconcile: extra channel").catch(() => null);
+            }
+          }))
+      );
+    }
   }
 
   if (all || types.includes("assets")) {
@@ -272,7 +290,7 @@ async function applyBackup(guild, snapshot, types, options = {}) {
           const roleName = snapRolesMap.get(rId);
           return guild.roles.cache.find((r) => r.name === roleName);
         }).filter((r) => r && r.id !== guild.id && !r.managed);
-        await member.roles.add(roles).catch(() => null);
+        await member.roles.set(roles).catch(() => null);
       }
     })));
   }
@@ -281,12 +299,33 @@ async function applyBackup(guild, snapshot, types, options = {}) {
   return { durationMs: Date.now() - start };
 }
 
+function markRestoreOperation(guildId, userId) {
+  const key = `${guildId}:${userId}`;
+  activeRestoreOperations.set(key, Date.now() + 120000);
+  return key;
+}
+
+function isRestoreOperationActive(guildId, userId) {
+  const key = `${guildId}:${userId}`;
+  const exp = activeRestoreOperations.get(key);
+  if (!exp) return false;
+  if (Date.now() > exp) {
+    activeRestoreOperations.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function clearRestoreOperation(key) {
+  if (key) activeRestoreOperations.delete(key);
+}
+
 // --- PROTECTION FUNCTIONS (Restored) ---
 async function cleanupOldBackups(guildId) {
   const db = getDatabase();
   const backups = await db.all("SELECT id FROM guild_backups WHERE guild_id = ? AND user_id = ? ORDER BY id DESC", [guildId, 'auto-system']);
-  if (backups.length > 10) {
-    const toDelete = backups.slice(10).map(b => b.id);
+  if (backups.length > 1) {
+    const toDelete = backups.slice(1).map(b => b.id);
     await db.run(`DELETE FROM guild_backups WHERE id IN (${toDelete.join(',')})`);
   }
 }
@@ -341,6 +380,7 @@ async function scheduleProtectionCheck(guild, type, event, affectedElement = nul
     }
 
     const entry = await fetchAuditLogWithRetry(guild, event, targetId);
+    if (entry?.executorId && isRestoreOperationActive(guild.id, entry.executorId)) return;
     const isOwner = guild.client.config?.owners?.includes(entry?.executorId) || entry?.executorId === guild.ownerId;
     const isTrusted = await isTrustedExecutor(guild, cfg, entry?.executorId);
     if (entry && (isOwner || isTrusted)) {
@@ -360,12 +400,9 @@ async function scheduleProtectionCheck(guild, type, event, affectedElement = nul
         }
       }
 
-      if (autoSnapshotCooldowns.has(guild.id)) clearTimeout(autoSnapshotCooldowns.get(guild.id));
-      const timeout = setTimeout(async () => {
-        await createAutoSnapshotIfChanged(guild, "auto").catch((err) => console.error("Auto snapshot failed:", err));
-        autoSnapshotCooldowns.delete(guild.id);
-      }, AUTO_SNAPSHOT_DELAY);
-      autoSnapshotCooldowns.set(guild.id, timeout);
+      if (isTrusted && entry.executorId !== guild.client.user.id) {
+        await createAutoSnapshotIfChanged(guild, "trusted-change").catch(() => null);
+      }
       return;
     }
 
@@ -417,7 +454,7 @@ async function createAutoSnapshotIfChanged(guild, reason = "periodic") {
   const snap = await captureSnapshot(guild, { includeMessages: false, includeMembers: false, includeAssets: false });
   const hash = generateSnapshotHash(snap);
   const db = getDatabase();
-  const lastBackup = await db.get("SELECT hash FROM guild_backups WHERE guild_id = ? ORDER BY id DESC LIMIT 1", [guild.id]);
+  const lastBackup = await db.get("SELECT hash FROM guild_backups WHERE guild_id = ? AND user_id = ? ORDER BY id DESC LIMIT 1", [guild.id, 'auto-system']);
   if (lastBackup?.hash === hash) return false;
 
   cfg.snapshot = snap;
@@ -434,6 +471,7 @@ async function createAutoSnapshotIfChanged(guild, reason = "periodic") {
 
 async function isTrustedExecutor(guild, cfg, executorId) {
   if (!executorId) return false;
+  if (executorId === guild.client.user.id) return false;
   const trusted = cfg.trustedUsers || [];
   if (trusted.includes(executorId)) return true;
   const member = await guild.members.fetch(executorId).catch(() => null);
@@ -466,6 +504,7 @@ function schedulePostRestoreValidation(guild, snapshot, types, options = {}) {
 
 async function runSmartValidation(guild, snapshot, types, options = {}) {
   const targetId = options.targetId || null;
+  const limit = createLimiter(DEFAULT_CONCURRENCY);
 
   if (types.includes("settings")) {
     const s = snapshot.settings;
@@ -489,7 +528,7 @@ async function runSmartValidation(guild, snapshot, types, options = {}) {
 
   if (types.includes("roles")) {
     const rolesToValidate = targetId ? snapshot.roles.filter((r) => r.id === targetId) : snapshot.roles;
-    for (const sr of rolesToValidate) {
+    await Promise.all(rolesToValidate.map((sr) => limit(async () => {
       let role = guild.roles.cache.find((r) => !r.managed && r.name === sr.name);
       if (!role) {
         await withDiscordRetry(() => guild.roles.create({
@@ -499,7 +538,7 @@ async function runSmartValidation(guild, snapshot, types, options = {}) {
           permissions: BigInt(sr.permissions),
           mentionable: sr.mentionable,
         })).catch(() => null);
-        continue;
+        return;
       }
 
       const needsRoleFix =
@@ -516,7 +555,7 @@ async function runSmartValidation(guild, snapshot, types, options = {}) {
           mentionable: sr.mentionable,
         })).catch(() => null);
       }
-    }
+    })));
   }
 
   if (types.includes("channels")) {
@@ -525,7 +564,7 @@ async function runSmartValidation(guild, snapshot, types, options = {}) {
     const channelsToValidate = (targetId ? snapshot.channels.filter((c) => c.id === targetId) : snapshot.channels);
     const categoryMap = new Map();
 
-    for (const sc of channelsToValidate.filter((c) => c.type === ChannelType.GuildCategory)) {
+    await Promise.all(channelsToValidate.filter((c) => c.type === ChannelType.GuildCategory).map((sc) => limit(async () => {
       let cat = guild.channels.cache.find((c) => c.type === ChannelType.GuildCategory && c.name === sc.name);
       if (!cat) {
         cat = await withDiscordRetry(() => guild.channels.create({
@@ -534,10 +573,13 @@ async function runSmartValidation(guild, snapshot, types, options = {}) {
           position: sc.position,
         })).catch(() => null);
       }
+      else {
+        await withDiscordRetry(() => cat.edit({ position: sc.position })).catch(() => null);
+      }
       if (cat) categoryMap.set(sc.id, cat.id);
-    }
+    })));
 
-    for (const sc of channelsToValidate.filter((c) => c.type !== ChannelType.GuildCategory)) {
+    await Promise.all(channelsToValidate.filter((c) => c.type !== ChannelType.GuildCategory).map((sc) => limit(async () => {
       const parentId = sc.parentId ? categoryMap.get(sc.parentId) || null : null;
       let ch = findBestChannelMatch(guild, sc, parentId);
 
@@ -550,7 +592,7 @@ async function runSmartValidation(guild, snapshot, types, options = {}) {
           topic: sc.topic || undefined,
           nsfw: sc.nsfw,
         })).catch(() => null);
-        continue;
+        return;
       }
 
       const needsChannelFix =
@@ -567,7 +609,7 @@ async function runSmartValidation(guild, snapshot, types, options = {}) {
           nsfw: sc.nsfw,
         })).catch(() => null);
       }
-    }
+    })));
   }
 }
 
@@ -609,9 +651,17 @@ module.exports = {
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`back_copy:${message.guild.id}:${message.author.id}`).setLabel("Copy").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId(`back_paste:${message.guild.id}:${message.author.id}`).setLabel("Paste").setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId(`back_protection:${message.guild.id}:${message.author.id}`).setLabel("Protection").setStyle(ButtonStyle.Primary)
+      new ButtonBuilder().setCustomId(`back_protection:${message.guild.id}:${message.author.id}`).setLabel("Protection").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`back_list:${message.guild.id}:${message.author.id}`).setLabel("List").setStyle(ButtonStyle.Secondary)
     );
-    await message.channel.send({ embeds: [colorManager.createEmbed().setTitle("**Back :** Control Panel")], components: [row] });
+    await message.channel.send({
+      embeds: [colorManager.createEmbed().setTitle("**Back :** Control Panel").addFields(
+        { name: "Status", value: "جاهز", inline: true },
+        { name: "Snapshot", value: "غير محدد", inline: true },
+        { name: "Last Action", value: "لا يوجد", inline: false },
+      )],
+      components: [row]
+    });
   },
 
   registerInteractionHandler(client) {
@@ -661,11 +711,13 @@ module.exports = {
       if (interaction.customId?.startsWith("back_") && !isBackManager(interaction.user.id, interaction.guild, client)) { handled = true; return interaction.reply({ content: "Owner only.", ephemeral: true }); }
       if (interaction.isButton()) {
         if (action === "back_copy") {
-          await interaction.deferReply({ ephemeral: true });
-          const snap = await captureSnapshot(interaction.guild, { includeMessages: true, includeMembers: true, includeAssets: true });
-          const hash = generateSnapshotHash(snap);
-          await db.run("INSERT INTO guild_backups (guild_id, user_id, name, snapshot_json, hash, created_at) VALUES (?, ?, ?, ?, ?, ?)", [interaction.guild.id, interaction.user.id, `Full_${Date.now()}`, JSON.stringify(snap), hash, Date.now()]);
-          handled = true; return interaction.editReply("Full backup saved!");
+          const modal = new ModalBuilder().setCustomId(`back_modal_copy:${guildId}:${userId}`).setTitle("اسم النسخة");
+          modal.addComponents(
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder().setCustomId("backup_name").setLabel("اسم النسخة").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(80)
+            )
+          );
+          handled = true; return interaction.showModal(modal);
         }
         if (action === "back_paste") {
           const list = await db.all("SELECT id, name FROM guild_backups WHERE guild_id = ? ORDER BY id DESC LIMIT 25", [interaction.guild.id]);
@@ -695,10 +747,18 @@ module.exports = {
           handled = true; return interaction.update({ content: `Protection ${cfg.enabled ? "Enabled" : "Disabled"}` });
         }
         if (action === "back_prot_snap") {
-          const cfg = await getConfig(interaction.guild.id);
-          cfg.snapshot = await captureSnapshot(interaction.guild, { includeMessages: false, includeMembers: false, includeAssets: false });
-          await saveConfig(interaction.guild.id, cfg);
-          handled = true; return interaction.update({ content: "Snapshot set!" });
+          const list = await db.all("SELECT id, name FROM guild_backups WHERE guild_id = ? ORDER BY id DESC LIMIT 25", [interaction.guild.id]);
+          if (!list.length) {
+            const cfg = await getConfig(interaction.guild.id);
+            cfg.snapshot = await captureSnapshot(interaction.guild, { includeMessages: false, includeMembers: false, includeAssets: false });
+            await saveConfig(interaction.guild.id, cfg);
+            handled = true; return interaction.update({ content: "No copy found, created live snapshot as baseline.", components: [] });
+          }
+          const menu = new StringSelectMenuBuilder()
+            .setCustomId(`back_prot_pick_snapshot:${guildId}:${userId}`)
+            .setPlaceholder("اختر النسخة الأساسية للحماية")
+            .addOptions(list.map((b) => ({ label: b.name, value: String(b.id) })));
+          handled = true; return interaction.update({ content: "اختر النسخة:", components: [new ActionRowBuilder().addComponents(menu)] });
         }
         if (action === "back_prot_add_trusted") {
           const modal = new ModalBuilder().setCustomId(`back_modal_trusted:${guildId}`).setTitle("Add Trusted User");
@@ -711,9 +771,17 @@ module.exports = {
           await interaction.deferUpdate();
           const row = await db.get("SELECT snapshot_json FROM guild_backups WHERE id = ?", [session.backupId]);
           if (!row) { handled = true; return interaction.editReply({ content: "Backup not found.", components: [] }); }
+          const operationKey = markRestoreOperation(interaction.guild.id, interaction.user.id);
           const report = await applyBackup(interaction.guild, JSON.parse(row.snapshot_json), session.types, { isPasteMode: true });
+          clearRestoreOperation(operationKey);
           sessions.delete(`${interaction.guild.id}:${interaction.user.id}`);
           handled = true; return interaction.editReply({ content: `Restore complete in ${report.durationMs}ms`, components: [] });
+        }
+        if (action === "back_list") {
+          const list = await db.all("SELECT id, name, created_at FROM guild_backups WHERE guild_id = ? ORDER BY id DESC LIMIT 25", [interaction.guild.id]);
+          if (!list.length) { handled = true; return interaction.reply({ content: "لا توجد نسخ محفوظة.", ephemeral: true }); }
+          const menu = new StringSelectMenuBuilder().setCustomId(`back_list_pick:${guildId}:${userId}`).setPlaceholder("اختر نسخة لعرض التفاصيل").addOptions(list.map((b) => ({ label: b.name.slice(0, 100), value: String(b.id), description: new Date(b.created_at).toLocaleString("ar-SA") })));
+          handled = true; return interaction.reply({ components: [new ActionRowBuilder().addComponents(menu)], ephemeral: true });
         }
       }
       if (interaction.isStringSelectMenu()) {
@@ -737,6 +805,30 @@ module.exports = {
           await saveConfig(guildId, cfg);
           handled = true; return interaction.update({ content: `Removed <@${interaction.values[0]}> from trusted.`, components: [] });
         }
+        if (action === "back_prot_pick_snapshot") {
+          const row = await db.get("SELECT snapshot_json, name, created_at FROM guild_backups WHERE id = ? AND guild_id = ?", [interaction.values[0], guildId]);
+          if (!row) { handled = true; return interaction.update({ content: "النسخة غير موجودة.", components: [] }); }
+          const cfg = await getConfig(guildId);
+          cfg.snapshot = JSON.parse(row.snapshot_json);
+          await saveConfig(guildId, cfg);
+          handled = true; return interaction.update({ content: `تم اعتماد النسخة الأساسية: ${row.name}`, components: [] });
+        }
+        if (action === "back_list_pick") {
+          const row = await db.get("SELECT snapshot_json, name, created_at FROM guild_backups WHERE id = ? AND guild_id = ?", [interaction.values[0], guildId]);
+          if (!row) { handled = true; return interaction.update({ content: "النسخة غير موجودة.", components: [] }); }
+          const snap = JSON.parse(row.snapshot_json);
+          const embed = colorManager.createEmbed()
+            .setTitle(`تفاصيل النسخة: ${row.name}`)
+            .addFields(
+              { name: "التاريخ", value: new Date(row.created_at).toLocaleString("ar-SA"), inline: true },
+              { name: "الرومات", value: String(snap.channels?.length || 0), inline: true },
+              { name: "الرولات", value: String(snap.roles?.length || 0), inline: true },
+              { name: "الأعضاء المخزنين", value: String(snap.members?.length || 0), inline: true },
+              { name: "الإيموجي", value: String(snap.emojis?.length || 0), inline: true },
+              { name: "الستيكرز", value: String(snap.stickers?.length || 0), inline: true }
+            );
+          handled = true; return interaction.update({ embeds: [embed], components: [] });
+        }
       }
       if (interaction.isModalSubmit() && interaction.customId.startsWith("back_modal_trusted")) {
         const gId = interaction.customId.split(":")[1];
@@ -749,6 +841,16 @@ module.exports = {
         if (!cfg.trustedUsers.includes(tId)) cfg.trustedUsers.push(tId);
         await saveConfig(gId, cfg);
         handled = true; return interaction.reply({ content: role ? `Added <@&${tId}> to trusted.` : `Added <@${tId}> to trusted.`, ephemeral: true });
+      }
+      if (interaction.isModalSubmit() && interaction.customId.startsWith("back_modal_copy")) {
+        const [_, gId] = interaction.customId.split(":");
+        await interaction.deferReply({ ephemeral: true });
+        const customName = interaction.fields.getTextInputValue("backup_name").trim();
+        const snap = await captureSnapshot(interaction.guild, { includeMessages: true, includeMembers: true, includeAssets: true });
+        const hash = generateSnapshotHash(snap);
+        const dateLabel = new Date().toISOString();
+        await db.run("INSERT INTO guild_backups (guild_id, user_id, name, snapshot_json, hash, created_at) VALUES (?, ?, ?, ?, ?, ?)", [interaction.guild.id, interaction.user.id, customName, JSON.stringify(snap), hash, Date.now()]);
+        handled = true; return interaction.editReply(`تم حفظ النسخة **${customName}**\nالوصف: ${dateLabel}`);
       }
 
       if (interaction.customId?.startsWith("back_") && !handled) {
