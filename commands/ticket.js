@@ -4732,9 +4732,12 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId, o
     return false;
   }
 
-  // عند إلغاء الاستلام، تصبح التذكرة غير مستلمة، لذا يجب مسح pointsReceiverId.
-  // سيتم تعيين pointsReceiverId للمستلم الجديد عند استلام التذكرة لاحقاً.
-  ticket.pointsReceiverId = null;
+  // عند تغيير الإداري: نحرر الاستلام الحالي فوراً، لكن نحتفظ بآخر مستلم
+  // داخل pointsReceiverId كنسخة احتياطية للنقاط/السجل إذا أُغلق التكت
+  // قبل استلام إداري جديد.
+  if (!ticket.pointsReceiverId && previousClaimer) {
+    ticket.pointsReceiverId = previousClaimer;
+  }
   ticket.claimedBy = null;
   ticket.reassignPendingAt = Date.now();
   ticket.reassignPreviousClaimer = previousClaimer || interaction.user.id;
