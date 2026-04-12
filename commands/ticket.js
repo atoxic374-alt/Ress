@@ -1779,10 +1779,14 @@ function findPendingRequestContext(guildId, reqId, preferredPanelId = 'default')
 }
 
 function touchTicketActivity(ticket, timestamp = Date.now()) {
-  if (!ticket || ticket.status !== 'open') return false;
+  if (!isTicketOpenForFlow(ticket)) return false;
   ticket.lastActivityAt = timestamp;
   delete ticket.autoCloseWarningSentAt;
   return true;
+}
+
+function isTicketOpenForFlow(ticket) {
+  return Boolean(ticket && ticket.status === 'open' && !ticket.closedAt);
 }
 
 function getTicketAutoCloseMs(config) {
@@ -2035,13 +2039,13 @@ function getAdminRoles(config, reasonKey = null) {
 }
 
 function countOpenMemberTickets(tickets, userId) {
-  return Object.values(tickets).filter((t) => t.status === 'open' && t.memberId === userId).length;
+  return Object.values(tickets).filter((t) => isTicketOpenForFlow(t) && t.memberId === userId).length;
 }
 
 async function countOpenMemberTicketsSafe(guild, tickets, userId) {
   let changed = false;
   for (const [channelId, ticket] of Object.entries(tickets || {})) {
-    if (!ticket || ticket.status !== 'open' || ticket.memberId !== userId) continue;
+    if (!isTicketOpenForFlow(ticket) || ticket.memberId !== userId) continue;
     const cached = guild?.channels?.cache?.get(channelId);
     if (cached) continue;
     const fetched = guild ? await withTimeout(guild.channels.fetch(channelId).catch(() => null), 1200) : null;
@@ -2060,13 +2064,13 @@ function countPendingMemberRequests(pendingRequests, userId) {
 }
 
 function countClaimedByAdmin(tickets, adminId) {
-  return Object.values(tickets).filter((t) => t.status === 'open' && t.claimedBy === adminId).length;
+  return Object.values(tickets).filter((t) => isTicketOpenForFlow(t) && t.claimedBy === adminId).length;
 }
 
 async function countClaimedByAdminSafe(guild, tickets, adminId) {
   let changed = false;
   for (const [channelId, ticket] of Object.entries(tickets || {})) {
-    if (!ticket || ticket.status !== 'open' || ticket.claimedBy !== adminId) continue;
+    if (!isTicketOpenForFlow(ticket) || ticket.claimedBy !== adminId) continue;
     const cached = guild?.channels?.cache?.get(channelId);
     if (cached) continue;
     const fetched = guild ? await withTimeout(guild.channels.fetch(channelId).catch(() => null), 1200) : null;
@@ -2972,7 +2976,7 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
   ticketClaimLocks.add(lockKey);
   try {
   const { panelId: resolvedPanelId, config, tickets, pendingRequests, ticket, actionChannelId } = getTicketContextFromInteraction(guildId, interaction, channelId, panelId || 'default');
-  if (!ticket || ticket.status !== 'open' || interaction.channelId !== actionChannelId) {
+  if (!ticket || !isTicketOpenForFlow(ticket) || interaction.channelId !== actionChannelId) {
     await interaction.editReply(buildTicketMessagePayload('Alert', '**هذا التكت غير متاح.**', { user: interaction.user }));
     return;
   }
@@ -3844,7 +3848,7 @@ async function closeTicketCore({
       'Closed Ticket',
       [
         `**تم إقفال التكت${autoClose ? ' تلقائيًا' : ''}.**`,
-        `**Amdin :** ${ticket.claimedBy ? `<@${ticket.claimedBy}>` : 'غير محدد'}`,
+        `**Amdin :** ${(ticket.claimedBy || ticket.pointsReceiverId) ? `<@${ticket.claimedBy || ticket.pointsReceiverId}>` : 'غير محدد'}`,
         `**Closer :** ${closedByLabel || (autoClose ? 'خمول التكت' : 'غير محدد')}`,
         `**Member :** ${ticket.memberId ? `<@${ticket.memberId}>` : 'غير محدد'}`
       ].join('\n')
@@ -3965,7 +3969,7 @@ function resolveTicketMessageContext(message) {
 function resolveTicketAliasContext(message, { requireOpen = true } = {}) {
   const ctx = resolveTicketMessageContext(message);
   if (ctx.error) return { ok: false, ctx: null };
-  if (requireOpen && ctx.ticket?.status !== 'open') return { ok: false, ctx: null };
+  if (requireOpen && !isTicketOpenForFlow(ctx.ticket)) return { ok: false, ctx: null };
   return { ok: true, ctx };
 }
 
@@ -4662,7 +4666,7 @@ async function handleReassignRequest(interaction, guildId, panelId, channelId, o
     await reply(buildTicketMessagePayload('No perms', '**ليس لديك صلاحية تغيير المستلم.**', { ephemeral: true }));
     return false;
   }
-  if (ticket.status !== 'open') {
+  if (!isTicketOpenForFlow(ticket)) {
     await reply(buildTicketMessagePayload('Alert', '**تغيير المستلم متاح فقط قبل إغلاق التكت.**', { ephemeral: true }));
     return false;
   }
@@ -6489,11 +6493,13 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     ? ticket.transferredUserIds.map((id) => String(id || '').trim()).filter((id) => /^\d{16,20}$/.test(id))
     : [];
 
-  // بعد التحويل نبقي المستلم الحالي ومسار النقاط كما هو
-  // حتى يظهر اسم المستلم عند الإغلاق وتُحسب النقاط له.
+  // بعد التحويل إلى مسؤولية: نحرر خانة الاستلام من الإداري السابق فوراً
+  // حتى لا يبقى محسوباً ضمن حد الاستلام، لكن نحافظ على pointsReceiverId
+  // لاحتساب النقاط عند الإغلاق لنفس المستلم السابق.
   if (!ticket.pointsReceiverId && previousClaimer) {
     ticket.pointsReceiverId = previousClaimer;
   }
+  ticket.claimedBy = null;
   ticket.transferredTo = respName;
 
   const targetRoles = (selected.roles || [])
@@ -6744,7 +6750,7 @@ function registerTicketMessageActivityTracker(client) {
       return;
     }
 
-    if (ticket.status !== 'open') return;
+    if (!isTicketOpenForFlow(ticket)) return;
     if (touchTicketActivity(ticket, message.createdTimestamp || Date.now())) {
       setGuildData(guildId, config, tickets, pendingRequests, panelId);
     }
@@ -6806,7 +6812,7 @@ function startTicketAutoCloseWatcher(client) {
           changed = true;
         }
         for (const [channelId, ticket] of Object.entries(tickets || {})) {
-          if (!ticket || ticket.status !== 'open') continue;
+          if (!ticket || !isTicketOpenForFlow(ticket)) continue;
           const dueAt = getTicketDueAt(ticket, config);
           if (!dueAt) continue;
 
@@ -7329,7 +7335,7 @@ function registerHandlers(client) {
             await interaction.reply(buildTicketMessagePayload('Perms', '**ليس لديك صلاحية الاستدعاء.**', { ephemeral: true }));
             return;
           }
-          if (ticket.status !== 'open') {
+          if (!isTicketOpenForFlow(ticket)) {
             await interaction.reply(buildTicketMessagePayload('Alert', '**لا يمكن الاستدعاء بعد إقفال التكت.**', { ephemeral: true }));
             return;
           }
