@@ -165,6 +165,128 @@ function scheduleRoleGrantHistorySave() {
 
 }
 
+async function resolveActorIdFromReason(guild, reasonText = '', fallbackTargetId = null) {
+    if (!guild || typeof reasonText !== 'string' || !reasonText.trim()) return null;
+
+    const arabicDigitsMap = { '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4', '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9' };
+    const toAsciiDigits = (value = '') => String(value).replace(/[٠-٩]/g, d => arabicDigitsMap[d] || d);
+    const normalize = (value = '') => toAsciiDigits(value)
+        .normalize('NFKC')
+        .replace(/[\u064B-\u065F\u0670]/g, '')
+        .replace(/[^\p{L}\p{N}#@._\-\s]/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+
+    const rawText = toAsciiDigits(reasonText);
+    const normalizedText = normalize(rawText);
+    if (!normalizedText) return null;
+
+    const idCandidates = new Set();
+    const nameCandidates = new Set();
+
+    const addIdCandidate = (candidate) => {
+        if (!candidate) return;
+        const id = String(candidate).replace(/\D/g, '');
+        if (!/^\d{15,21}$/.test(id)) return;
+        if (fallbackTargetId && id === String(fallbackTargetId)) return;
+        idCandidates.add(id);
+    };
+
+    const addNameCandidate = (candidate) => {
+        if (!candidate) return;
+        const cleaned = normalize(String(candidate));
+        if (!cleaned || /^\d{15,21}$/.test(cleaned)) return;
+        if (cleaned.length < 2) return;
+        nameCandidates.add(cleaned);
+    };
+
+    for (const match of rawText.matchAll(/<@!?(\d{15,21})>/g)) addIdCandidate(match[1]);
+    for (const match of rawText.matchAll(/\b(\d{15,21})\b/g)) addIdCandidate(match[1]);
+
+    const actorKeys = [
+        'by', 'actor', 'executor', 'user', 'member', 'admin', 'moderator', 'mod', 'staff',
+        'بواسطة', 'بواسطه', 'منفذ', 'المنفذ', 'منفذها', 'فاعل', 'المسؤول', 'المشرف', 'ادمن', 'الإدمن', 'الادمن', 'يوزر', 'عضو'
+    ];
+    const keyPattern = actorKeys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    const keyedRegex = new RegExp(`(?:^|\\s)(?:${keyPattern})\\s*[:=\\-]\\s*([^\\n\\r|,;]+)`, 'giu');
+    for (const match of rawText.matchAll(keyedRegex)) {
+        const value = (match[1] || '').trim();
+        addIdCandidate(value);
+        addNameCandidate(value);
+    }
+
+    for (const match of rawText.matchAll(/["'“”‘’`]\s*([^"'“”‘’`]{2,64})\s*["'“”‘’`]/g)) {
+        addNameCandidate(match[1]);
+    }
+
+    const commonStopWords = new Set([
+        'system', 'bot', 'unknown', 'none', 'null',
+        'النظام', 'بوت', 'غير معروف', 'مجهول', 'لا يوجد'
+    ]);
+
+    const matchMemberByName = (candidate) => {
+        const probe = normalize(candidate);
+        if (!probe || commonStopWords.has(probe)) return null;
+        for (const member of guild.members.cache.values()) {
+            const values = [
+                member.user?.username,
+                member.user?.globalName,
+                member.displayName,
+                member.nickname,
+                member.user?.tag
+            ];
+            for (const value of values) {
+                const normalizedValue = normalize(value || '');
+                if (!normalizedValue) continue;
+                if (normalizedValue === probe) return member.id;
+                if (probe.length >= 3 && normalizedValue.includes(probe)) return member.id;
+            }
+        }
+        return null;
+    };
+
+    for (const candidate of idCandidates) {
+        if (guild.members.cache.has(candidate) || guild.client.users.cache.has(candidate)) {
+            return candidate;
+        }
+        const fetchedUser = await guild.client.users.fetch(candidate).catch(() => null);
+        if (fetchedUser) return candidate;
+    }
+
+    for (const candidate of nameCandidates) {
+        const fromCache = matchMemberByName(candidate);
+        if (fromCache) return fromCache;
+
+        const query = candidate.replace(/\s+/g, ' ').trim();
+        if (query.length >= 2) {
+            const fetchedMembers = await guild.members.fetch({ query, limit: 10 }).catch(() => null);
+            if (fetchedMembers?.size) {
+                for (const member of fetchedMembers.values()) {
+                    const nameChecks = [
+                        member.user?.username,
+                        member.user?.globalName,
+                        member.displayName,
+                        member.nickname,
+                        member.user?.tag
+                    ];
+                    if (nameChecks.some(value => normalize(value || '') === normalize(candidate))) {
+                        if (!fallbackTargetId || String(member.id) !== String(fallbackTargetId)) {
+                            return member.id;
+                        }
+                    }
+                }
+                const first = fetchedMembers.first();
+                if (first && (!fallbackTargetId || String(first.id) !== String(fallbackTargetId))) {
+                    return first.id;
+                }
+            }
+        }
+    }
+
+    return null;
+}
+
 async function getRecentRoleUpdateExecutor(guild, targetUserId, roleId, actionType = 'add') {
     if (!guild || !targetUserId || !roleId) return null;
     try {
@@ -172,17 +294,32 @@ async function getRecentRoleUpdateExecutor(guild, targetUserId, roleId, actionTy
         if (!logs) return null;
         const now = Date.now();
         const changeKey = actionType === 'remove' ? '$remove' : '$add';
+        let bestMatch = null;
+
         for (const entry of logs.entries.values()) {
             if (!entry?.target || String(entry.target.id) !== String(targetUserId)) continue;
-            if ((now - (entry.createdTimestamp || 0)) > 15000) continue;
+            const createdTimestamp = entry.createdTimestamp || 0;
+            if ((now - createdTimestamp) > 15000) continue;
+
             const hasRole = (entry.changes || []).some(change => (
                 change?.key === changeKey &&
-                Array.isArray(change.new) &&
-                change.new.some(item => String(item?.id) === String(roleId))
+                (
+                    (Array.isArray(change.new) && change.new.some(item => String(item?.id) === String(roleId))) ||
+                    (Array.isArray(change.old) && change.old.some(item => String(item?.id) === String(roleId)))
+                )
             ));
             if (!hasRole) continue;
-            return entry.executor || null;
+
+            const currentMatch = {
+                executor: entry.executor || null,
+                reason: entry.reason || '',
+                createdTimestamp
+            };
+            if (!bestMatch || currentMatch.createdTimestamp > bestMatch.createdTimestamp) {
+                bestMatch = currentMatch;
+            }
         }
+        if (bestMatch) return bestMatch;
     } catch (error) {
         console.error('❌ خطأ في قراءة Audit Logs لتغييرات الرولات الخاصة:', error?.message || error);
     }
@@ -2749,23 +2886,28 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
             for (const change of specialRoleChanges) {
                 const auditInfo = change.auditInfo || await getRecentRoleUpdateExecutor(newMember.guild, newMember.id, change.roleId, change.action);
                 let executor = auditInfo?.executor || null;
-                let assignedById = change.assignmentMeta?.assignedBy || null;
-                if (!assignedById) {
-                    assignedById = await resolveActorIdFromReason(newMember.guild, auditInfo?.reason || '', newMember.id);
                 const actorIdFromReason = await resolveActorIdFromReason(newMember.guild, auditInfo?.reason || '', newMember.id);
                 let assignedById = null;
 
-                if (change.action === 'remove') {
-                    // في الإزالة لا نستخدم assignedBy القديم (صاحب الإضافة)،
-                    // ونفضل الفاعل الموجود في reason مثل by:user
-                    assignedById = actorIdFromReason || null;
-                } else {
-                    assignedById = change.assignmentMeta?.assignedBy || actorIdFromReason || null;
-                }
+                // نفس الأولوية في الإضافة والإزالة:
+                // 1) الفاعل المستخرج من reason
+                // 2) assignedBy القديم (إن وجد)
+                assignedById = actorIdFromReason || change.assignmentMeta?.assignedBy || null;
 
                 if ((!executor || executor.bot) && assignedById && String(assignedById) !== String(executor?.id || '')) {
                     executor = await newMember.client.users.fetch(assignedById).catch(() => executor);
                 }
+
+                if (change.action === 'add' && change.roleEntry?.memberMeta?.[userId]) {
+                    const finalActorId = assignedById || executor?.id || null;
+                    if (finalActorId) {
+                        change.roleEntry.memberMeta[userId].assignedBy = finalActorId;
+                        change.roleEntry.memberMeta[userId].assignedByIsBot = Boolean(executor?.bot);
+                        change.roleEntry.updatedAt = Date.now();
+                        addRoleEntry(change.roleId, change.roleEntry);
+                    }
+                }
+
                 await notifyPrivateRoleMemberChange({
                     member: newMember,
                     role: change.role,
@@ -2775,9 +2917,6 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
                 });
             }
         }
-                
-            }
-      
 
         // مزامنة نظام map open عند التعديل اليدوي للرولات
         if (addedRoles.size > 0 || removedRoles.size > 0) {
