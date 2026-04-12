@@ -1779,10 +1779,14 @@ function findPendingRequestContext(guildId, reqId, preferredPanelId = 'default')
 }
 
 function touchTicketActivity(ticket, timestamp = Date.now()) {
-  if (!ticket || ticket.status !== 'open') return false;
+  if (!isTicketOpenForFlow(ticket)) return false;
   ticket.lastActivityAt = timestamp;
   delete ticket.autoCloseWarningSentAt;
   return true;
+}
+
+function isTicketOpenForFlow(ticket) {
+  return Boolean(ticket && ticket.status === 'open' && !ticket.closedAt);
 }
 
 function getTicketAutoCloseMs(config) {
@@ -2035,13 +2039,13 @@ function getAdminRoles(config, reasonKey = null) {
 }
 
 function countOpenMemberTickets(tickets, userId) {
-  return Object.values(tickets).filter((t) => t.status === 'open' && t.memberId === userId).length;
+  return Object.values(tickets).filter((t) => isTicketOpenForFlow(t) && t.memberId === userId).length;
 }
 
 async function countOpenMemberTicketsSafe(guild, tickets, userId) {
   let changed = false;
   for (const [channelId, ticket] of Object.entries(tickets || {})) {
-    if (!ticket || ticket.status !== 'open' || ticket.memberId !== userId) continue;
+    if (!isTicketOpenForFlow(ticket) || ticket.memberId !== userId) continue;
     const cached = guild?.channels?.cache?.get(channelId);
     if (cached) continue;
     const fetched = guild ? await withTimeout(guild.channels.fetch(channelId).catch(() => null), 1200) : null;
@@ -2060,13 +2064,13 @@ function countPendingMemberRequests(pendingRequests, userId) {
 }
 
 function countClaimedByAdmin(tickets, adminId) {
-  return Object.values(tickets).filter((t) => t.status === 'open' && t.claimedBy === adminId).length;
+  return Object.values(tickets).filter((t) => isTicketOpenForFlow(t) && t.claimedBy === adminId).length;
 }
 
 async function countClaimedByAdminSafe(guild, tickets, adminId) {
   let changed = false;
   for (const [channelId, ticket] of Object.entries(tickets || {})) {
-    if (!ticket || ticket.status !== 'open' || ticket.claimedBy !== adminId) continue;
+    if (!isTicketOpenForFlow(ticket) || ticket.claimedBy !== adminId) continue;
     const cached = guild?.channels?.cache?.get(channelId);
     if (cached) continue;
     const fetched = guild ? await withTimeout(guild.channels.fetch(channelId).catch(() => null), 1200) : null;
@@ -3965,7 +3969,7 @@ function resolveTicketMessageContext(message) {
 function resolveTicketAliasContext(message, { requireOpen = true } = {}) {
   const ctx = resolveTicketMessageContext(message);
   if (ctx.error) return { ok: false, ctx: null };
-  if (requireOpen && ctx.ticket?.status !== 'open') return { ok: false, ctx: null };
+  if (requireOpen && !isTicketOpenForFlow(ctx.ticket)) return { ok: false, ctx: null };
   return { ok: true, ctx };
 }
 
