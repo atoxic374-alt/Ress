@@ -165,97 +165,6 @@ function scheduleRoleGrantHistorySave() {
 
 }
 
-function extractActorIdFromReason(reasonText, targetUserId = null) {
-    if (!reasonText || typeof reasonText !== 'string') return null;
-    const reason = reasonText.trim();
-    if (!reason) return null;
-
-    const keywordPatterns = [
-        /(?:\bby\b|بواسطة|من\s*قبل|المنفذ|executor|actor)\s*[:=\-]?\s*<?@?!?(\d{17,19})>?/i,
-        /(?:\bby\b|بواسطة|من\s*قبل|المنفذ|executor|actor)\s*[:=\-]?\s*(\d{17,19})/i
-    ];
-
-    for (const pattern of keywordPatterns) {
-        const match = reason.match(pattern);
-        if (match?.[1] && String(match[1]) !== String(targetUserId || '')) {
-            return match[1];
-        }
-    }
-
-    const mentionMatch = reason.match(/<@!?(\d{17,19})>/);
-    if (mentionMatch?.[1] && String(mentionMatch[1]) !== String(targetUserId || '')) {
-        return mentionMatch[1];
-    }
-
-    const ids = reason.match(/\d{17,19}/g) || [];
-    const fallback = ids.find(id => String(id) !== String(targetUserId || ''));
-    return fallback || null;
-}
-
-function extractActorTokenFromReason(reasonText = '') {
-    if (!reasonText || typeof reasonText !== 'string') return null;
-    const reason = reasonText.trim();
-    if (!reason) return null;
-
-    const tokenPatterns = [
-        /(?:\bby\b|بواسطة|من\s*قبل|المنفذ|executor|actor)\s*[:=\-]?\s*([^\s,|;]+)/i,
-        /\bby([a-z0-9_.-]{2,})\b/i
-    ];
-
-    for (const pattern of tokenPatterns) {
-        const match = reason.match(pattern);
-        if (match?.[1]) {
-            return match[1].replace(/[<@!>#]/g, '').trim();
-        }
-    }
-    return null;
-}
-
-function normalizeActorName(value = '') {
-    return String(value || '')
-        .toLowerCase()
-        .replace(/[\s_\-\.]+/g, '')
-        .trim();
-}
-
-async function resolveActorIdFromReason(guild, reasonText, targetUserId = null) {
-    const directId = extractActorIdFromReason(reasonText, targetUserId);
-    if (directId) return directId;
-
-    const token = extractActorTokenFromReason(reasonText);
-    if (!token || !guild) return null;
-
-    const normalizedToken = normalizeActorName(token);
-    if (!normalizedToken) return null;
-
-    const matchFromCache = guild.members.cache.find(member => {
-        const values = [
-            member.user?.username,
-            member.user?.globalName,
-            member.displayName,
-            member.user?.tag
-        ].filter(Boolean).map(normalizeActorName);
-        return values.includes(normalizedToken);
-    });
-    if (matchFromCache) return matchFromCache.id;
-
-    const searchedMembers = await guild.members.search({ query: token, limit: 10 }).catch(() => null);
-    if (searchedMembers?.size) {
-        const exact = searchedMembers.find(member => {
-            const values = [
-                member.user?.username,
-                member.user?.globalName,
-                member.displayName,
-                member.user?.tag
-            ].filter(Boolean).map(normalizeActorName);
-            return values.includes(normalizedToken);
-        }) || searchedMembers.first();
-        if (exact?.id) return exact.id;
-    }
-
-    return null;
-}
-
 async function getRecentRoleUpdateExecutor(guild, targetUserId, roleId, actionType = 'add') {
     if (!guild || !targetUserId || !roleId) return null;
     try {
@@ -272,11 +181,7 @@ async function getRecentRoleUpdateExecutor(guild, targetUserId, roleId, actionTy
                 change.new.some(item => String(item?.id) === String(roleId))
             ));
             if (!hasRole) continue;
-            return {
-                executor: entry.executor || null,
-                reason: entry.reason || '',
-                entry
-            };
+            return entry.executor || null;
         }
     } catch (error) {
         console.error('❌ خطأ في قراءة Audit Logs لتغييرات الرولات الخاصة:', error?.message || error);
@@ -298,8 +203,8 @@ async function notifyPrivateRoleMemberChange({ member, role, roleEntry, executor
         .setDescription(
             `${actionText}\n` +
             `**By :** ${byText}\n` +
-            `**Role Owner :** ${ownerText}\n` +
-            `*Time* : ${timeText}`
+            `**ROLE OWNER :** ${ownerText}\n` +
+            `TIME : ${timeText}`
         )
         .setColor(colorManager.getColor ? colorManager.getColor() : (action === 'remove' ? '#e74c3c' : '#2ecc71'))
         .setTimestamp();
@@ -374,26 +279,6 @@ async function updateResponsibilitiesEmbedForGuild(guildId) {
     }
 }
 
-function parseResponsibilityLeaveEntry(entry) {
-    if (!entry) return { leftAt: 0, responsibilities: [] };
-
-    if (typeof entry === 'number' || typeof entry === 'string') {
-        return {
-            leftAt: Number(entry) || 0,
-            responsibilities: []
-        };
-    }
-
-    if (typeof entry === 'object') {
-        return {
-            leftAt: Number(entry.leftAt) || 0,
-            responsibilities: Array.isArray(entry.responsibilities) ? entry.responsibilities : []
-        };
-    }
-
-    return { leftAt: 0, responsibilities: [] };
-}
-
 async function removeInactiveResponsiblesForGuild(guild, now = Date.now()) {
     if (!guild) return false;
     const guildId = guild.id;
@@ -403,13 +288,20 @@ async function removeInactiveResponsiblesForGuild(guild, now = Date.now()) {
     guildTracker.leftAtByUser = guildTracker.leftAtByUser || {};
     guildTracker.removedByUser = guildTracker.removedByUser || {};
 
+    const responsibilities = readJSONFile(DATA_FILES.responsibilities, {});
     let changed = false;
 
-    for (const [userId, leaveEntry] of Object.entries(guildTracker.leftAtByUser)) {
-        const { leftAt, responsibilities: trackedResponsibilities } = parseResponsibilityLeaveEntry(leaveEntry);
+    for (const [userId, leftAtRaw] of Object.entries(guildTracker.leftAtByUser)) {
+        const leftAt = Number(leftAtRaw || 0);
         if (!leftAt || (now - leftAt) < RESPONSIBILITY_LEAVE_LIMIT_MS) continue;
 
-        const removedFrom = Array.isArray(trackedResponsibilities) ? [...trackedResponsibilities] : [];
+        const removedFrom = [];
+        for (const [respName, respData] of Object.entries(responsibilities)) {
+            if (!Array.isArray(respData?.responsibles) || !respData.responsibles.includes(userId)) continue;
+            respData.responsibles = respData.responsibles.filter((id) => String(id) !== String(userId));
+            removedFrom.push(respName);
+            changed = true;
+        }
 
         if (removedFrom.length > 0) {
             guildTracker.removedByUser[userId] = {
@@ -420,7 +312,13 @@ async function removeInactiveResponsiblesForGuild(guild, now = Date.now()) {
             console.log(`🧹 تمت إزالة ${userId} من المسؤوليات بعد 6h خارج السيرفر (${guildId})`);
         }
         delete guildTracker.leftAtByUser[userId];
-        changed = true;
+    }
+
+    if (changed) {
+        writeJSONFile(DATA_FILES.responsibilities, responsibilities);
+        global.responsibilities = responsibilities;
+        await updateResponsibilitiesEmbedForGuild(guildId);
+        client.emit('responsibilityUpdate');
     }
 
     saveResponsibilityLeaveTracker(tracker);
@@ -2820,38 +2718,18 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
                 continue;
             }
 
-            const auditInfo = await getRecentRoleUpdateExecutor(newMember.guild, newMember.id, roleId, 'add');
             if (!roleEntry.memberMeta) roleEntry.memberMeta = {};
-            const previousMeta = roleEntry.memberMeta[userId] || {};
-            let assignedBy = previousMeta.assignedBy || null;
-            let assignedByIsBot = Boolean(previousMeta.assignedByIsBot);
-
-            if (!assignedBy) {
-                if (auditInfo?.executor && !auditInfo.executor.bot) {
-                    assignedBy = auditInfo.executor.id;
-                    assignedByIsBot = false;
-                } else {
-                    const actorIdFromReason = await resolveActorIdFromReason(newMember.guild, auditInfo?.reason || '', newMember.id);
-                    if (actorIdFromReason) {
-                        assignedBy = actorIdFromReason;
-                        assignedByIsBot = false;
-                    } else if (auditInfo?.executor) {
-                        assignedBy = auditInfo.executor.id;
-                        assignedByIsBot = Boolean(auditInfo.executor.bot);
-                    }
-                }
-            }
-
             roleEntry.memberMeta[userId] = {
-                assignedAt: previousMeta.assignedAt || Date.now(),
-                assignedBy,
-                assignedByIsBot
+                assignedAt: Date.now(),
+                assignedBy: null,
+                assignedByIsBot: false
             };
             roleEntry.updatedAt = Date.now();
             addRoleEntry(roleId, roleEntry);
-            specialRoleChanges.push({ action: 'add', roleId, role, roleEntry, assignmentMeta: roleEntry.memberMeta[userId], auditInfo });
+            specialRoleChanges.push({ action: 'add', roleId, role, roleEntry });
         }
 
+        
         for (const [roleId, role] of removedRoles) {
             const roleEntry = getRoleEntry(roleId);
             if (!roleEntry || roleEntry.guildId !== newMember.guild.id) continue;
@@ -2874,7 +2752,17 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
                 let assignedById = change.assignmentMeta?.assignedBy || null;
                 if (!assignedById) {
                     assignedById = await resolveActorIdFromReason(newMember.guild, auditInfo?.reason || '', newMember.id);
+                const actorIdFromReason = await resolveActorIdFromReason(newMember.guild, auditInfo?.reason || '', newMember.id);
+                let assignedById = null;
+
+                if (change.action === 'remove') {
+                    // في الإزالة لا نستخدم assignedBy القديم (صاحب الإضافة)،
+                    // ونفضل الفاعل الموجود في reason مثل by:user
+                    assignedById = actorIdFromReason || null;
+                } else {
+                    assignedById = change.assignmentMeta?.assignedBy || actorIdFromReason || null;
                 }
+
                 if ((!executor || executor.bot) && assignedById && String(assignedById) !== String(executor?.id || '')) {
                     executor = await newMember.client.users.fetch(assignedById).catch(() => executor);
                 }
@@ -2887,6 +2775,9 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
                 });
             }
         }
+                
+            }
+      
 
         // مزامنة نظام map open عند التعديل اليدوي للرولات
         if (addedRoles.size > 0 || removedRoles.size > 0) {
@@ -3490,29 +3381,7 @@ client.on('guildMemberRemove', async (member) => {
         const tracker = getResponsibilityLeaveTracker();
         if (!tracker.guilds[member.guild.id]) tracker.guilds[member.guild.id] = { leftAtByUser: {}, removedByUser: {} };
         tracker.guilds[member.guild.id].leftAtByUser = tracker.guilds[member.guild.id].leftAtByUser || {};
-        tracker.guilds[member.guild.id].removedByUser = tracker.guilds[member.guild.id].removedByUser || {};
-
-        const responsibilities = readJSONFile(DATA_FILES.responsibilities, {});
-        const removedFromResponsibilities = [];
-
-        for (const [respName, respData] of Object.entries(responsibilities)) {
-            if (!Array.isArray(respData?.responsibles) || !respData.responsibles.includes(member.id)) continue;
-            respData.responsibles = respData.responsibles.filter((id) => String(id) !== String(member.id));
-            removedFromResponsibilities.push(respName);
-        }
-
-        tracker.guilds[member.guild.id].leftAtByUser[member.id] = {
-            leftAt: Date.now(),
-            responsibilities: removedFromResponsibilities
-        };
-
-        if (removedFromResponsibilities.length > 0) {
-            writeJSONFile(DATA_FILES.responsibilities, responsibilities);
-            global.responsibilities = responsibilities;
-            await updateResponsibilitiesEmbedForGuild(member.guild.id);
-            client.emit('responsibilityUpdate');
-        }
-
+        tracker.guilds[member.guild.id].leftAtByUser[member.id] = Date.now();
         saveResponsibilityLeaveTracker(tracker);
         await removeInactiveResponsiblesForGuild(member.guild);
 
@@ -3558,34 +3427,11 @@ client.on('guildMemberAdd', async (member) => {
 
         const tracker = getResponsibilityLeaveTracker();
         const guildTracker = tracker.guilds?.[member.guild.id];
-        const leaveEntryRaw = guildTracker?.leftAtByUser?.[member.id];
-        const leaveEntry = parseResponsibilityLeaveEntry(leaveEntryRaw);
-        const leftRecently = leaveEntry.leftAt && (Date.now() - leaveEntry.leftAt) < RESPONSIBILITY_LEAVE_LIMIT_MS;
         const removalInfo = guildTracker?.removedByUser?.[member.id] || null;
-        if (leaveEntryRaw) {
+        if (guildTracker?.leftAtByUser?.[member.id]) {
             delete guildTracker.leftAtByUser[member.id];
         }
-        if (leftRecently && leaveEntry.responsibilities.length > 0) {
-            const responsibilities = readJSONFile(DATA_FILES.responsibilities, {});
-            let restoredAny = false;
-
-            for (const respName of leaveEntry.responsibilities) {
-                if (!responsibilities[respName]) continue;
-                if (!Array.isArray(responsibilities[respName].responsibles)) responsibilities[respName].responsibles = [];
-                if (!responsibilities[respName].responsibles.includes(member.id)) {
-                    responsibilities[respName].responsibles.push(member.id);
-                    restoredAny = true;
-                }
-            }
-
-            if (restoredAny) {
-                writeJSONFile(DATA_FILES.responsibilities, responsibilities);
-                global.responsibilities = responsibilities;
-                await updateResponsibilitiesEmbedForGuild(member.guild.id);
-                client.emit('responsibilityUpdate');
-            }
-            saveResponsibilityLeaveTracker(tracker);
-        } else if (removalInfo) {
+        if (removalInfo) {
             delete guildTracker.removedByUser[member.id];
             saveResponsibilityLeaveTracker(tracker);
             const removedList = Array.isArray(removalInfo.responsibilities) && removalInfo.responsibilities.length
