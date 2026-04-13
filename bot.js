@@ -287,6 +287,255 @@ async function resolveActorIdFromReason(guild, reasonText = '', fallbackTargetId
     return null;
 }
 
+function hasRoleLinkIndicators(role) {
+    if (!role || !role.tags) return false;
+    const tags = role.tags;
+    return Boolean(
+        tags.guildConnections !== null && tags.guildConnections !== undefined ||
+        tags.integrationId ||
+        tags.botId ||
+        tags.subscriptionListingId ||
+        tags.availableForPurchase !== undefined ||
+        tags.premiumSubscriberRole !== undefined
+    );
+}
+
+function getRoleSecurityDiff(oldRole, newRole) {
+    if (!oldRole || !newRole) return null;
+    const oldLinked = hasRoleLinkIndicators(oldRole);
+    const newLinked = hasRoleLinkIndicators(newRole);
+    if (!newLinked || oldLinked === newLinked) return null;
+    return {
+        oldLinked,
+        newLinked,
+        hadGuildConnections: Boolean(oldRole?.tags?.guildConnections !== undefined && oldRole?.tags?.guildConnections !== null),
+        hasGuildConnections: Boolean(newRole?.tags?.guildConnections !== undefined && newRole?.tags?.guildConnections !== null)
+    };
+}
+
+async function findRoleLinkExecutor(guild, roleId) {
+    if (!guild || !roleId) return null;
+    const now = Date.now();
+    const candidates = [];
+    const pushCandidate = (entry, source, strictRoleTarget = false) => {
+        if (!entry?.executor) return;
+        const createdAt = entry.createdTimestamp || 0;
+        const delta = Math.abs(now - createdAt);
+        if (delta > 30_000) return;
+        if (strictRoleTarget && String(entry?.target?.id || '') !== String(roleId)) return;
+        candidates.push({ entry, source, delta });
+    };
+
+    try {
+        const roleUpdateLogs = await guild.fetchAuditLogs({ type: AuditLogEvent.RoleUpdate, limit: 10 }).catch(() => null);
+        for (const entry of roleUpdateLogs?.entries?.values?.() || []) {
+            pushCandidate(entry, 'RoleUpdate', true);
+        }
+    } catch (_) {}
+
+    try {
+        const roleCreateLogs = await guild.fetchAuditLogs({ type: AuditLogEvent.RoleCreate, limit: 10 }).catch(() => null);
+        for (const entry of roleCreateLogs?.entries?.values?.() || []) {
+            pushCandidate(entry, 'RoleCreate', true);
+        }
+    } catch (_) {}
+
+    try {
+        const integrationLogs = await guild.fetchAuditLogs({ type: AuditLogEvent.IntegrationCreate, limit: 10 }).catch(() => null);
+        for (const entry of integrationLogs?.entries?.values?.() || []) {
+            pushCandidate(entry, 'IntegrationCreate', false);
+        }
+    } catch (_) {}
+
+    try {
+        const integrationUpdateLogs = await guild.fetchAuditLogs({ type: AuditLogEvent.IntegrationUpdate, limit: 10 }).catch(() => null);
+        for (const entry of integrationUpdateLogs?.entries?.values?.() || []) {
+            pushCandidate(entry, 'IntegrationUpdate', false);
+        }
+    } catch (_) {}
+
+    try {
+        const webhooksLogs = await guild.fetchAuditLogs({ type: AuditLogEvent.WebhookCreate, limit: 10 }).catch(() => null);
+        for (const entry of webhooksLogs?.entries?.values?.() || []) {
+            pushCandidate(entry, 'WebhookCreate', false);
+        }
+    } catch (_) {}
+
+    if (!candidates.length) return null;
+
+    candidates.sort((a, b) => a.delta - b.delta);
+    const best = candidates[0];
+    if (best?.entry?.executor) {
+        return { user: best.entry.executor, source: best.source, deltaMs: best.delta };
+    }
+    return null;
+}
+
+async function resolveRoleLinkExecutorWithRetry(guild, roleId, maxAttempts = 7, waitMs = 1100) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const candidate = await findRoleLinkExecutor(guild, roleId).catch(() => null);
+        if (candidate?.user) return candidate;
+        if (attempt < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, waitMs));
+        }
+    }
+    return null;
+}
+
+async function notifyGuildOwnerAboutRoleLinkIncident(guild, role, executor, connectionName = 'غير معروف', actionStatus = 'لم يحدث شي', incidentDetails = 'تم تنفيذ الحماية.') {
+    if (!guild || !role) return;
+    try {
+        const guildOwner = await guild.fetchOwner().catch(() => null);
+        const botOwners = Array.isArray(global.BOT_OWNERS) ? global.BOT_OWNERS : [];
+        const recipients = new Map();
+
+        if (guildOwner?.user?.id) {
+            recipients.set(guildOwner.user.id, guildOwner.user);
+        }
+
+        for (const ownerId of botOwners) {
+            if (!ownerId) continue;
+            if (recipients.has(ownerId)) continue;
+            const ownerUser = await guild.client.users.fetch(ownerId).catch(() => null);
+            if (ownerUser) recipients.set(ownerId, ownerUser);
+        }
+
+        if (!recipients.size) return;
+
+        const adminText = executor ? `${executor.tag} (${executor.id})` : 'غير معروف';
+        const embed = new EmbedBuilder()
+            .setColor('#ff3b30')
+            .setTitle('🚨 تنبيه حماية الرولات')
+            .setThumbnail(guild.iconURL({ dynamic: true, size: 256 }))
+            .setDescription('تم ربط رول بمنصة')
+            .addFields(
+                { name: 'Role', value: `${role.name} (${role.id})`, inline: false },
+                { name: 'Connections', value: connectionName || 'غير معروف', inline: true },
+                { name: 'Admin', value: adminText, inline: true },
+                { name: 'ACTION', value: actionStatus, inline: false },
+                { name: 'Details', value: incidentDetails || 'تم تنفيذ الحماية.', inline: false }
+            )
+            .setTimestamp();
+
+        for (const user of recipients.values()) {
+            await user.send({ embeds: [embed] }).catch(() => null);
+        }
+    } catch (error) {
+        console.error('❌ فشل إرسال تنبيه ربط الرول إلى أونر السيرفر:', error);
+    }
+}
+
+async function restoreRoleAfterUnauthorizedLink(oldRole, newRole) {
+    if (!oldRole || !newRole || !newRole.guild) return false;
+    try {
+        await newRole.edit({
+            name: oldRole.name,
+            color: oldRole.color,
+            hoist: oldRole.hoist,
+            permissions: oldRole.permissions,
+            mentionable: oldRole.mentionable,
+            icon: oldRole.icon ?? null,
+            unicodeEmoji: oldRole.unicodeEmoji ?? null
+        }, 'Protection: revert unauthorized role link/tags change');
+        return true;
+    } catch (error) {
+        console.error(`❌ فشل استرجاع خصائص الرول بعد محاولة ربط غير مصرح (${newRole.id}):`, error);
+        return false;
+    }
+}
+
+async function hardRecoverRoleFromLink(oldRole, newRole) {
+    if (!oldRole || !newRole || !newRole.guild) return null;
+    const guild = newRole.guild;
+    const compromisedRoleId = newRole.id;
+    try {
+        const roleMembers = guild.members.cache.filter(member => member.roles.cache.has(compromisedRoleId));
+        const desiredPosition = oldRole.rawPosition;
+        const restoredRole = await guild.roles.create({
+            name: oldRole.name,
+            color: oldRole.color,
+            hoist: oldRole.hoist,
+            permissions: oldRole.permissions?.bitfield ?? oldRole.permissions,
+            mentionable: oldRole.mentionable,
+            icon: oldRole.icon ?? null,
+            unicodeEmoji: oldRole.unicodeEmoji ?? null,
+            reason: 'Protection hard-recovery: replace linked/managed role'
+        }).catch(() => null);
+
+        if (!restoredRole) return null;
+
+        await Promise.allSettled(roleMembers.map(async (member) => {
+            await member.roles.add(restoredRole, 'Protection hard-recovery: restore unlinked role').catch(() => null);
+            await member.roles.remove(compromisedRoleId, 'Protection hard-recovery: remove linked role').catch(() => null);
+        }));
+
+        await newRole.delete('Protection hard-recovery: delete compromised linked role').catch(() => null);
+        await restoredRole.setPosition(desiredPosition).catch(() => null);
+        return restoredRole;
+    } catch (error) {
+        console.error(`❌ فشل الاسترجاع الصارم للرول بعد الربط (${newRole.id}):`, error);
+        return null;
+    }
+}
+
+async function handleUnauthorizedRoleLink(oldRole, newRole) {
+    const diff = getRoleSecurityDiff(oldRole, newRole);
+    if (!diff) return;
+
+    console.log(`🚨 تم رصد محاولة ربط رول مشبوهة: ${newRole.name} (${newRole.id})`);
+    const executorPromise = resolveRoleLinkExecutorWithRetry(newRole.guild, newRole.id);
+    const restored = await restoreRoleAfterUnauthorizedLink(oldRole, newRole);
+    const refreshedRole = await newRole.guild.roles.fetch(newRole.id).catch(() => null);
+    const stillLinked = hasRoleLinkIndicators(refreshedRole || newRole);
+
+    if (stillLinked) {
+        console.warn(`⚠️ الرول ${newRole.name} لا يزال يحتوي مؤشرات ربط بعد الاسترجاع.`);
+    } else if (restored) {
+        console.log(`✅ تم استرجاع الرول ${newRole.name} إلى حالته السابقة وإزالة الربط.`);
+    }
+
+    const connectionName = diff.hasGuildConnections ? 'guildConnections' : 'غير معروف';
+    let activeRole = refreshedRole || newRole;
+    const incidentSteps = [];
+    incidentSteps.push(`تم اكتشاف ربط مشبوه على الرول ${newRole.name} (${newRole.id}).`);
+
+    if (stillLinked) {
+        const replacedRole = await hardRecoverRoleFromLink(oldRole, newRole);
+        if (replacedRole) {
+            activeRole = replacedRole;
+            incidentSteps.push(`تم حذف الرول المخترق وإنشاء رول بديل: ${replacedRole.name} (${replacedRole.id}) بنفس الترتيب ${replacedRole.rawPosition}.`);
+            console.log(`✅ تم تنفيذ استرجاع صارم وإنشاء رول بديل آمن: ${replacedRole.name} (${replacedRole.id})`);
+        } else {
+            incidentSteps.push('تعذر تنفيذ الاسترجاع الصارم للرول.');
+        }
+    } else {
+        incidentSteps.push('تمت إعادة خصائص الرول مباشرة بدون الحاجة للحذف.');
+    }
+
+    const executorInfo = await executorPromise;
+    const executor = executorInfo?.user || null;
+    if (!executor || executor.id === newRole.client.user.id) {
+        console.warn(`⚠️ تعذر تحديد منفذ الربط للرول ${newRole.name} (${newRole.id}) من سجلات التدقيق.`);
+        incidentSteps.push('تعذر تحديد الفاعل من سجلات التدقيق.');
+        await notifyGuildOwnerAboutRoleLinkIncident(newRole.guild, activeRole, null, connectionName, 'لم يحدث شي', incidentSteps.join('\n'));
+        return;
+    }
+
+    const member = await newRole.guild.members.fetch(executor.id).catch(() => null);
+    if (!member || !member.kickable) {
+        console.warn(`⚠️ تعذر طرد منفذ الربط ${executor.tag} (${executor.id}) لعدم وجود صلاحيات كافية.`);
+        incidentSteps.push(`تم تحديد الفاعل: ${executor.tag} (${executor.id}) ولكن تعذر طرده بسبب الصلاحيات.`);
+        await notifyGuildOwnerAboutRoleLinkIncident(newRole.guild, activeRole, executor, connectionName, 'لم يحدث شي', incidentSteps.join('\n'));
+        return;
+    }
+
+    await member.kick(`Unauthorized role link/tags update on role ${newRole.name} (${newRole.id})`).catch((error) => {
+        console.error(`❌ فشل طرد منفذ الربط ${executor.tag} (${executor.id}):`, error);
+    });
+    incidentSteps.push(`تم تحديد الفاعل: ${executor.tag} (${executor.id}) وتم طرده.`);
+    await notifyGuildOwnerAboutRoleLinkIncident(newRole.guild, activeRole, executor, connectionName, 'طرد', incidentSteps.join('\n'));
+}
+
 async function getRecentRoleUpdateExecutor(guild, targetUserId, roleId, actionType = 'add') {
     if (!guild || !targetUserId || !roleId) return null;
     try {
@@ -1898,6 +2147,7 @@ client.on('roleUpdate', async (oldRole, newRole) => {
     try {
         const { handleRoleUpdate } = require('./commands/setroom.js');
         await handleRoleUpdate(oldRole, newRole, client);
+        await handleUnauthorizedRoleLink(oldRole, newRole);
     } catch (error) {
         console.error('❌ خطأ في معالجة تحديث الرول:', error);
     }
