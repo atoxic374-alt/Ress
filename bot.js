@@ -331,9 +331,9 @@ async function notifyPrivateRoleMemberChange({ member, role, roleEntry, executor
     const actionText = action === 'remove' ? '**تم ازالتك من رول خاص**' : '**تم اضافتك لرول خاص**';
     const ownerText = roleEntry.ownerId ? `<@${roleEntry.ownerId}>` : '**غير معروف**';
     const byText = executor ? `<@${executor.id}>` : '**غير معروف**';
-    const roleName = role?.name || roleEntry?.name || roleEntry?.roleName || `Role (${roleEntry.roleId || role?.id || 'N/A'})`;
+        const roleName = role?.name || roleEntry?.name || roleEntry?.roleName || `Role (${roleEntry.roleId || role?.id || 'N/A'})`;
     const roleMention = role?.id ? `<@&${role.id}>` : (roleEntry?.roleId ? `<@&${roleEntry.roleId}>` : null);
-    const roleText = roleMention ? `${roleMention} (**${roleName}**)` : `**${roleName}**`;
+    const roleText = roleMention ? `**${roleName}**` : `**${roleName}**`;
     const unixTime = Math.floor(Date.now() / 1000);
     const timeText = `**<t:${unixTime}:F> • <t:${unixTime}:R>**`;
     const avatar = executor?.displayAvatarURL?.({ size: 256 }) || member.guild.members.me?.displayAvatarURL?.({ size: 256 }) || null;
@@ -342,10 +342,10 @@ async function notifyPrivateRoleMemberChange({ member, role, roleEntry, executor
         .setTitle('Private Role')
         .setDescription(
             `${actionText}\n` +
-            `**ROLE :** ${roleText}\n` +
-            `**By :** ${byText}\n` +
-            `**ROLE OWNER :** ${ownerText}\n` +
-            `TIME : ${timeText}`
+            `*By :* ${byText}\n` +
+            `*Role* : ${roleText}\n` +
+            `*Role Owner :* ${ownerText}\n` +
+            `*Time* : ${timeText}`
         )
         .setColor(colorManager.getColor ? colorManager.getColor() : (action === 'remove' ? '#e74c3c' : '#2ecc71'))
         .setTimestamp();
