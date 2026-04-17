@@ -1564,6 +1564,7 @@ function baseConfig() {
     feedback: {
       enabled: false,
       channelId: null,
+      clientRoleIds: [],
       triggerWord: 'يرجى وضع تقييمك لخدماتنا',
       promptText: 'يرجى تقييم خدماتنا ونكون شاكرين لك',
       triggerScope: 'dm',
@@ -1854,6 +1855,96 @@ function normalizeResponsibilityInput(input) {
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
+}
+
+function normalizeRoleSearchInput(input) {
+  return String(input || '')
+    .replace(/[\u0640]/g, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function resolveRoleIdFromQuery(query, guild) {
+  if (!guild) return null;
+  const trimmed = String(query || '').trim();
+  if (!trimmed) return null;
+  const directId = normalizeId(trimmed);
+  if (directId && guild.roles.cache.has(directId)) return directId;
+
+  const normalizedQuery = normalizeRoleSearchInput(trimmed);
+  if (!normalizedQuery) return null;
+  const roles = [...guild.roles.cache.values()].filter((role) => role.id !== guild.roles.everyone.id);
+  const exact = roles.find((role) => normalizeRoleSearchInput(role.name) === normalizedQuery);
+  if (exact) return exact.id;
+  const startsWith = roles.find((role) => normalizeRoleSearchInput(role.name).startsWith(normalizedQuery));
+  if (startsWith) return startsWith.id;
+  const includes = roles.find((role) => normalizeRoleSearchInput(role.name).includes(normalizedQuery));
+  return includes?.id || null;
+}
+
+function parseFeedbackClientRoleInput(rawInput, guild, currentRoleIds = []) {
+  const input = String(rawInput || '').trim();
+  if (!input) return { roleIds: currentRoleIds, mode: 'noop' };
+  if (input === '0') return { roleIds: [], mode: 'reset' };
+
+  const tokens = input
+    .split(/[\n|,،]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  const hasOps = tokens.some((token) => token.startsWith('+') || token.startsWith('-'));
+  const nextSet = new Set(hasOps ? currentRoleIds.map((id) => String(id)) : []);
+  const unresolved = [];
+
+  for (const token of tokens) {
+    const op = token.startsWith('+') ? 'add' : token.startsWith('-') ? 'remove' : (hasOps ? 'add' : 'set');
+    const pureToken = token.replace(/^[+-]/, '').trim();
+    if (!pureToken) continue;
+
+    const mentions = [...pureToken.matchAll(/<@&(\d{16,20})>/g)].map((m) => m[1]);
+    const candidates = mentions.length ? mentions : [pureToken];
+    let resolvedAny = false;
+    for (const candidate of candidates) {
+      const roleId = resolveRoleIdFromQuery(candidate, guild);
+      if (!roleId) continue;
+      resolvedAny = true;
+      if (op === 'remove') nextSet.delete(roleId);
+      else nextSet.add(roleId);
+    }
+    if (!resolvedAny) unresolved.push(pureToken);
+  }
+
+  const validRoleIds = [...nextSet]
+    .map((id) => String(id || '').trim())
+    .filter((id) => /^\d{16,20}$/.test(id) && guild?.roles?.cache?.has(id));
+  return { roleIds: validRoleIds, mode: hasOps ? 'patch' : 'set', unresolved };
+}
+
+async function assignFeedbackClientRoles(guild, userId, feedbackCfg = {}) {
+  const targetRoleIds = [...new Set((feedbackCfg?.clientRoleIds || []).map((id) => String(id || '').trim()))]
+    .filter((id) => /^\d{16,20}$/.test(id) && guild?.roles?.cache?.has(id));
+  if (!targetRoleIds.length) return { applied: false, reason: 'no_roles' };
+
+  const member = await resolveGuildMember(guild, userId);
+  if (!member) return { applied: false, reason: 'member_not_found' };
+
+  const manageableRoleIds = targetRoleIds.filter((roleId) => {
+    const role = guild.roles.cache.get(roleId);
+    return role && role.editable && !member.roles.cache.has(roleId);
+  });
+  if (!manageableRoleIds.length) return { applied: false, reason: 'no_manageable_roles' };
+
+  const appliedRoleIds = [];
+  for (const roleId of manageableRoleIds) {
+    const role = guild.roles.cache.get(roleId);
+    if (!role) continue;
+    await member.roles.add(roleId, 'Ticket feedback completed').then(() => {
+      appliedRoleIds.push(roleId);
+    }).catch((error) => logSilentError('feedback.client-role.assign', error));
+  }
+  return { applied: appliedRoleIds.length > 0, roleIds: appliedRoleIds };
 }
 
 function extractResponsibilityNameFromInput(input) {
@@ -5930,6 +6021,7 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
           { name: 'الحالة', value: feedbackCfg.enabled ? 'مفعل ✅' : 'مقفل ❌', inline: true },
           { name: 'روم التقييم', value: feedbackCfg.channelId ? `<#${feedbackCfg.channelId}>` : 'غير معين', inline: true },
           { name: 'مكان زر التقييم', value: feedbackCfg.triggerScope === 'ticket' ? 'داخل التكت' : 'الخاص', inline: true },
+          { name: 'رول العميل بعد التقييم', value: (feedbackCfg.clientRoleIds || []).map((id) => `<@&${id}>`).join(' ') || 'غير معين', inline: false },
           { name: 'كلمة التقييم', value: formatSettingValue(feedbackCfg.triggerWord), inline: false },
           { name: 'نص ايمبد التقييم', value: formatSettingValue(feedbackCfg.promptText), inline: false },
           { name: 'الفاصل', value: feedbackCfg.separatorEnabled ? `مفعل • نص: ${formatSettingValue(feedbackCfg.separatorText)}\nصورة: ${formatSettingValue(feedbackCfg.separatorImage)}` : 'مقفل', inline: false },
@@ -5945,6 +6037,7 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
             .addOptions([
               { label: 'تفعيل/ايقاف', value: 'toggle' },
               { label: 'روم التقييم', value: 'channel' },
+              { label: 'رول العميل بعد التقييم', value: 'client_roles' },
               { label: 'كلمة التقييم', value: 'word' },
               { label: 'نص ايمبد التقييم', value: 'prompt_text' },
               { label: 'مكان الطلب (خاص/تكت)', value: 'scope' },
@@ -5971,6 +6064,23 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
         const raw = await ask('**ارسل منشن/ايدي روم التقييم (0 لاعادة التعيين)**');
         if (raw === '0') feedbackCfg.channelId = null;
         else feedbackCfg.channelId = normalizeId(raw);
+      }
+      if (c === 'client_roles') {
+        const currentRolesText = (feedbackCfg.clientRoleIds || []).map((id) => `<@&${id}>`).join(' ') || 'لا يوجد';
+        const raw = await ask(
+          '**ارسل منشن/ايدي/اسم رول العميل.**\n' +
+          '**- تقدر تحط اكثر من رول (افصل بينهم بـ | أو ,)**\n' +
+          '**- للإضافة/الإزالة بدون استبدال استخدم + و - (مثال: +VIP | -OldRole)**\n' +
+          '**- 0 = حذف كل رولات العميل**\n' +
+          `**الرولات الحالية:** ${currentRolesText}`
+        );
+        const parsed = parseFeedbackClientRoleInput(raw, message.guild, feedbackCfg.clientRoleIds || []);
+        feedbackCfg.clientRoleIds = parsed.roleIds;
+        if (parsed.unresolved?.length) {
+          await message.channel.send(`**⚠️ لم أجد هذه الأدوار:** ${parsed.unresolved.map((x) => `\`${x}\``).join('، ')}`)
+            .then((m) => setTimeout(() => m.delete().catch(() => {}), 9000))
+            .catch(() => {});
+        }
       }
       if (c === 'word') {
         const raw = await ask('**اكتب كلمة التقييم (Trigger) داخل التكت لعرض الايمبد فقط (0 لاعادة التعيين)**');
@@ -6713,6 +6823,7 @@ function registerTicketMessageActivityTracker(client) {
         const image = await buildFeedbackCardImage({ guild: message.guild, member, stars, comment, style: feedbackCfg.style || {} });
         const attachment = new AttachmentBuilder(image, { name: `feedback_${message.author.id}_${Date.now()}.png` });
         await message.channel.send({ files: [attachment] }).catch((error) => logSilentError('suppressed', error));
+        await assignFeedbackClientRoles(message.guild, message.author.id, feedbackCfg);
         await sendFeedbackSeparator(message.channel, feedbackCfg);
         return;
       }
@@ -7467,6 +7578,7 @@ function registerHandlers(client) {
           const image = await buildFeedbackCardImage({ guild, member, stars, comment: review, style: feedbackCfg.style || {} });
           const attachment = new AttachmentBuilder(image, { name: `feedback_${interaction.user.id}_${Date.now()}.png` });
           await feedbackChannel.send({ files: [attachment] }).catch((error) => logSilentError('suppressed', error));
+          const roleGrant = await assignFeedbackClientRoles(guild, interaction.user.id, feedbackCfg);
           await sendFeedbackSeparator(feedbackChannel, feedbackCfg);
           session.submittedAt = Date.now();
           ticketFeedbackSessions.set(token, session);
@@ -7488,10 +7600,13 @@ function registerHandlers(client) {
           }
           ticketFeedbackSessions.delete(token);
           deleteRuntimeSession('ticket-feedback', token);
+          const successText = roleGrant?.applied
+            ? '**شكراً لك، تم إرسال تقييمك واعطائك رول العملاء بنجاح**'
+            : '**شكراً لك، تم إرسال تقييمك بنجاح.**';
           if (interaction.deferred || interaction.replied) {
-            await interaction.editReply(buildTicketMessagePayload('التقييم', '**شكراً لك، تم إرسال تقييمك بنجاح.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+            await interaction.editReply(buildTicketMessagePayload('التقييم', successText, { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
           } else {
-            await interaction.reply(buildTicketMessagePayload('التقييم', '**شكراً لك، تم إرسال تقييمك بنجاح.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+            await interaction.reply(buildTicketMessagePayload('التقييم', successText, { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
           }
           return;
         }
