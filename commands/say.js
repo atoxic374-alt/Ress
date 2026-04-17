@@ -62,9 +62,9 @@ function buildDetailsEmbed(session, statusText = null) {
 function buildMainComponents(sessionId) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`say_text_${sessionId}`).setLabel('الكلام').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId(`say_rooms_${sessionId}`).setLabel('الروم').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId(`say_type_${sessionId}`).setLabel('النوع').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`say_text_${sessionId}`).setLabel('الكلام').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`say_rooms_${sessionId}`).setLabel('الروم').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`say_type_${sessionId}`).setLabel('النوع').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`say_image_${sessionId}`).setLabel('صورة الايمبد').setStyle(ButtonStyle.Secondary)
     ),
     new ActionRowBuilder().addComponents(
@@ -103,6 +103,27 @@ async function execute(message, args, { BOT_OWNERS = [] }) {
   session.panelMessageId = panelMessage.id;
 }
 
+function extractSessionId(customId) {
+  const knownPrefixes = [
+    'say_text_modal_',
+    'say_image_modal_',
+    'say_type_select_',
+    'say_image_select_',
+    'say_rooms_select_',
+    'say_text_',
+    'say_rooms_',
+    'say_type_',
+    'say_image_',
+    'say_send_'
+  ];
+
+  for (const prefix of knownPrefixes) {
+    if (customId.startsWith(prefix)) return customId.slice(prefix.length);
+  }
+
+  return null;
+}
+
 function registerInteractionHandler(client) {
   if (client.__sayHandlersRegistered) return;
   client.__sayHandlersRegistered = true;
@@ -114,9 +135,11 @@ function registerInteractionHandler(client) {
       const customId = interaction.customId || '';
       if (!customId.startsWith('say_')) return;
 
+      const sessionId = extractSessionId(customId);
+      if (!sessionId) return;
+
       const parts = customId.split('_');
       const action = parts[1];
-      const sessionId = parts.slice(2).join('_');
 
       const session = getSession(sessionId);
       if (!session) {
