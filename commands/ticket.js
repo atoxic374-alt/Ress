@@ -1923,28 +1923,58 @@ function parseFeedbackClientRoleInput(rawInput, guild, currentRoleIds = []) {
 }
 
 async function assignFeedbackClientRoles(guild, userId, feedbackCfg = {}) {
-  const targetRoleIds = [...new Set((feedbackCfg?.clientRoleIds || []).map((id) => String(id || '').trim()))]
-    .filter((id) => /^\d{16,20}$/.test(id) && guild?.roles?.cache?.has(id));
-  if (!targetRoleIds.length) return { applied: false, reason: 'no_roles' };
+  const configuredRoleIds = [...new Set((feedbackCfg?.clientRoleIds || []).map((id) => String(id || '').trim()))]
+    .filter((id) => /^\d{16,20}$/.test(id));
+  if (!configuredRoleIds.length) return { applied: false, reason: 'no_roles' };
+
+  // Refresh role cache so deleted/renamed roles are detected correctly.
+  await guild?.roles?.fetch?.().catch(() => null);
+
+  const existingRoleIds = [];
+  const missingRoleIds = [];
+  for (const roleId of configuredRoleIds) {
+    const role = guild?.roles?.cache?.get(roleId) || await guild?.roles?.fetch?.(roleId).catch(() => null);
+    if (role) existingRoleIds.push(roleId);
+    else missingRoleIds.push(roleId);
+  }
+  if (!existingRoleIds.length) {
+    return { applied: false, reason: 'roles_missing', missingRoleIds };
+  }
 
   const member = await resolveGuildMember(guild, userId);
   if (!member) return { applied: false, reason: 'member_not_found' };
 
-  const manageableRoleIds = targetRoleIds.filter((roleId) => {
+  const manageableRoleIds = existingRoleIds.filter((roleId) => {
     const role = guild.roles.cache.get(roleId);
     return role && role.editable && !member.roles.cache.has(roleId);
   });
-  if (!manageableRoleIds.length) return { applied: false, reason: 'no_manageable_roles' };
+  if (!manageableRoleIds.length) {
+    const alreadyHasAll = existingRoleIds.every((roleId) => member.roles.cache.has(roleId));
+    return {
+      applied: false,
+      reason: alreadyHasAll ? 'already_has_roles' : 'no_manageable_roles',
+      missingRoleIds
+    };
+  }
 
   const appliedRoleIds = [];
+  const failedRoleIds = [];
   for (const roleId of manageableRoleIds) {
     const role = guild.roles.cache.get(roleId);
     if (!role) continue;
     await member.roles.add(roleId, 'Ticket feedback completed').then(() => {
       appliedRoleIds.push(roleId);
-    }).catch((error) => logSilentError('feedback.client-role.assign', error));
+    }).catch((error) => {
+      failedRoleIds.push(roleId);
+      logSilentError('feedback.client-role.assign', error);
+    });
   }
-  return { applied: appliedRoleIds.length > 0, roleIds: appliedRoleIds };
+  return {
+    applied: appliedRoleIds.length > 0,
+    roleIds: appliedRoleIds,
+    missingRoleIds,
+    failedRoleIds
+  };
 }
 
 function extractResponsibilityNameFromInput(input) {
@@ -3335,8 +3365,8 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   const radius = 58;
 
   const cardGrad = ctx.createLinearGradient(cardX, cardY, cardX + cardW, cardY + cardH);
-  cardGrad.addColorStop(0, normalizeHexColor(style.cardStart, '#46357f'));
-  cardGrad.addColorStop(1, normalizeHexColor(style.cardEnd, '#6652a3'));
+  cardGrad.addColorStop(0, normalizeHexColor(style.cardStart, '#5d4e5c'));
+  cardGrad.addColorStop(1, normalizeHexColor(style.cardEnd, '#4a4048'));
   // Multi-pass outer shadow for heavy 3D look
   ctx.save();
   ctx.shadowColor = normalizeHexColor(style.shadow, '#000000');
@@ -3364,15 +3394,15 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   drawRoundedRectPath(ctx, cardX, cardY, cardW, cardH, radius);
   ctx.fill();
   ctx.globalAlpha = 1;
-  ctx.strokeStyle = normalizeHexColor(style.border, '#9c88ff');
-  ctx.lineWidth = 4;
+  ctx.strokeStyle = normalizeHexColor(style.border, '#8a7d8b');
+  ctx.lineWidth = 3;
   drawRoundedRectPath(ctx, cardX, cardY, cardW, cardH, radius);
   ctx.stroke();
 
   // Inner motifs on card (left + right) to match reference
   ctx.save();
-  ctx.globalAlpha = 0.09;
-  ctx.strokeStyle = '#b6a9f0';
+  ctx.globalAlpha = 0.05;
+  ctx.strokeStyle = '#c8bcc6';
   ctx.lineWidth = 1.25;
   for (let i = 0; i < 6; i += 1) {
     const lx = cardX + 82 + (i * 58);
@@ -3385,7 +3415,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
     ctx.closePath();
     ctx.stroke();
   }
-  ctx.globalAlpha = 0.085;
+  ctx.globalAlpha = 0.045;
   for (let i = 0; i < 6; i += 1) {
     const rx = cardX + cardW - 330 + ((i % 2) * 72);
     const ry = cardY + 118 + (i * 56);
@@ -3399,15 +3429,15 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   }
   ctx.restore();
 
-  const textColor = normalizeHexColor(style.text, '#000000');
-  const accentColor = normalizeHexColor(style.accent, '#11121a');
-  const quoteColor = normalizeHexColor(style.quote, '#060608');
-  const starColor = normalizeHexColor(style.star, '#7d68d8');
-  const nameColor = normalizeHexColor(style.name, '#0f0f16');
+  const textColor = normalizeHexColor(style.text, '#f8f4fa');
+  const accentColor = normalizeHexColor(style.accent, '#0c0b10');
+  const quoteColor = normalizeHexColor(style.quote, '#ffffff');
+  const starColor = normalizeHexColor(style.star, '#dfd4e4');
+  const nameColor = normalizeHexColor(style.name, '#ffffff');
   const finalComment = String(comment || 'بدون تعليق').trim();
   // Decorative mark (replaces quotes)
   ctx.fillStyle = quoteColor;
-  ctx.font = 'bold 104px Cairo';
+  ctx.font = 'bold 96px Cairo';
   ctx.fillText('❝', cardX + 62, cardY + 118);
 
   // Star capsule
@@ -3436,7 +3466,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
     const cx = pillX + 44 + (i * 62);
     const cy = pillY + 43;
     const active = i < stars;
-    ctx.fillStyle = active ? starColor : '#5a5480';
+    ctx.fillStyle = active ? starColor : '#6a646e';
     ctx.strokeStyle = active ? '#ffffff88' : '#ffffff22';
     drawStarPath(ctx, cx, cy, 20, 9, 5);
     ctx.fill();
@@ -3448,7 +3478,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   ctx.font = 'bold 46px Cairo';
   ctx.textAlign = 'right';
   ctx.direction = 'rtl';
-  ctx.shadowColor = '#00000020';
+  ctx.shadowColor = '#00000035';
   ctx.shadowBlur = 2;
   ctx.shadowOffsetY = 1;
   const wrapped = finalComment.slice(0, 220);
@@ -3486,8 +3516,8 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
       // Avatar frame: cleaner and less black, with subtle glass effect
       ctx.save();
       const avatarFrame = ctx.createLinearGradient(avX - 24, avY - 24, avX + avSize + 24, avY + avSize + 24);
-      avatarFrame.addColorStop(0, normalizeHexColor(style.cardStart, '#725ad0'));
-      avatarFrame.addColorStop(1, normalizeHexColor(style.cardEnd, '#8d78df'));
+      avatarFrame.addColorStop(0, normalizeHexColor(style.cardStart, '#6a5a69'));
+      avatarFrame.addColorStop(1, normalizeHexColor(style.cardEnd, '#514751'));
       ctx.fillStyle = avatarFrame;
       ctx.shadowColor = '#00000055';
       ctx.shadowBlur = 14;
@@ -3501,7 +3531,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
       ctx.stroke();
 
       // Transparent inner plate like reference
-      ctx.fillStyle = '#ffffff18';
+      ctx.fillStyle = '#ffffff1d';
       drawRoundedRectPath(ctx, avX - 10, avY - 10, avSize + 20, avSize + 20, 52);
       ctx.fill();
 
@@ -3637,20 +3667,76 @@ async function extractAverageHexFromImageUrl(url) {
   }
 }
 
+async function extractColorFlowFromImageUrl(url) {
+  if (!url) return null;
+  try {
+    const img = await loadImage(url);
+    const w = 42;
+    const h = 24;
+    const sample = createCanvas(w, h);
+    const sctx = sample.getContext('2d');
+    sctx.drawImage(img, 0, 0, w, h);
+    const data = sctx.getImageData(0, 0, w, h).data;
+    const accumulators = {
+      left: { r: 0, g: 0, b: 0, c: 0 },
+      right: { r: 0, g: 0, b: 0, c: 0 },
+      center: { r: 0, g: 0, b: 0, c: 0 }
+    };
+
+    for (let y = 0; y < h; y += 1) {
+      for (let x = 0; x < w; x += 1) {
+        const idx = ((y * w) + x) * 4;
+        const alpha = data[idx + 3];
+        if (alpha < 24) continue;
+        const r = data[idx];
+        const g = data[idx + 1];
+        const b = data[idx + 2];
+        const bucket = x < (w / 3) ? 'left' : (x >= ((w * 2) / 3) ? 'right' : 'center');
+        accumulators[bucket].r += r;
+        accumulators[bucket].g += g;
+        accumulators[bucket].b += b;
+        accumulators[bucket].c += 1;
+      }
+    }
+
+    const toHex = (bucket, fallback) => {
+      const v = accumulators[bucket];
+      if (!v.c) return fallback;
+      return rgbToHex(v.r / v.c, v.g / v.c, v.b / v.c);
+    };
+
+    const left = toHex('left', null);
+    const right = toHex('right', left);
+    const center = toHex('center', left || right);
+    if (!left && !right && !center) return null;
+    return { left, right, center };
+  } catch (error) {
+    logSilentError('feedback.auto-style.flow', error);
+    return null;
+  }
+}
+
 async function generateAutoFeedbackStyle(guild, currentStyle = {}) {
   const iconUrl = guild?.iconURL?.({ extension: 'png', size: 256 }) || null;
   const bannerUrl = guild?.bannerURL?.({ extension: 'png', size: 512 }) || null;
+  const bannerFlow = await extractColorFlowFromImageUrl(bannerUrl);
+  const iconFlow = await extractColorFlowFromImageUrl(iconUrl);
   const fromBanner = await extractAverageHexFromImageUrl(bannerUrl);
   const fromIcon = await extractAverageHexFromImageUrl(iconUrl);
-  const base = fromBanner || fromIcon || '#7b69d4';
+  const base = fromBanner || fromIcon || '#6f5e6c';
+  const targetTone = '#5b4d59';
 
-  // Keep final scene background navy as requested, while matching the card to guild assets.
-  const background = '#040a1d';
-  const cardStart = shadeHex(base, 0.56);
-  const cardEnd = mixHex(base, '#ffffff', 0.2);
-  const border = mixHex(base, '#ffffff', 0.34);
-  const star = mixHex(base, '#ffffff', 0.28);
-  const textBase = getLuminance(cardEnd) > 0.46 ? '#101116' : '#f0eefb';
+  // Keep scene background dark, but preserve gradient flow from server assets as much as possible.
+  const background = '#050913';
+  const flowStart = bannerFlow?.left || iconFlow?.left || base;
+  const flowEnd = bannerFlow?.right || iconFlow?.right || flowStart;
+  const flowCenter = bannerFlow?.center || iconFlow?.center || mixHex(flowStart, flowEnd, 0.5);
+  const cardStart = mixHex(shadeHex(flowStart, 0.7), targetTone, 0.45);
+  const cardEnd = mixHex(shadeHex(flowEnd, 0.56), '#3f343d', 0.5);
+  const border = mixHex(cardStart, '#c7b7c5', 0.35);
+  const star = mixHex('#f0e7f3', flowCenter, 0.24);
+  const textBase = getLuminance(cardEnd) > 0.43 ? '#16131a' : '#f8f3fa';
+  const accent = mixHex(shadeHex(flowCenter, 0.2), '#0b0a0f', 0.6);
 
   return {
     ...currentStyle,
@@ -3661,7 +3747,7 @@ async function generateAutoFeedbackStyle(guild, currentStyle = {}) {
     text: textBase,
     name: textBase,
     quote: textBase,
-    accent: shadeHex(base, 0.2),
+    accent,
     border,
     star,
     shadow: '#000000'
@@ -7603,9 +7689,14 @@ function registerHandlers(client) {
           }
           ticketFeedbackSessions.delete(token);
           deleteRuntimeSession('ticket-feedback', token);
-          const successText = roleGrant?.applied
-            ? '**شكراً لك، تم إرسال تقييمك واعطائك رول العملاء بنجاح**'
-            : '**شكراً لك، تم إرسال تقييمك بنجاح.**';
+          let successText = roleGrant?.applied
+            ? '**شكرًا لك على تقييمنا، وتم إعطاؤك رول العملاء بنجاح ✨**'
+            : '**شكرًا لك على تقييمنا، تم إرسال تقييمك بنجاح ✨**';
+          if (!roleGrant?.applied && roleGrant?.reason === 'roles_missing') {
+            successText += '\n**ملاحظة:** رول العملاء غير متوفر حالياً (قد يكون محذوفًا) وتم تجاوزه تلقائيًا.';
+          } else if (!roleGrant?.applied && roleGrant?.reason === 'no_manageable_roles') {
+            successText += '\n**ملاحظة:** تعذر منح رول العملاء بسبب صلاحيات البوت أو ترتيب الرولات.';
+          }
           if (interaction.deferred || interaction.replied) {
             await interaction.editReply(buildTicketMessagePayload('التقييم', successText, { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
           } else {
