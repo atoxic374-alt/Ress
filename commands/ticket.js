@@ -6842,22 +6842,25 @@ function registerTicketMessageActivityTracker(client) {
     const feedbackConfig = config?.feedback || baseConfig().feedback;
     const triggerWord = String(feedbackConfig.triggerWord || '').trim();
     if (feedbackConfig.enabled && triggerWord && String(message.content || '').trim().toLowerCase() === triggerWord.toLowerCase()) {
-      const isTicketOpener = ticket?.memberId === message.author.id;
-      if (!isTicketOpener) {
-        await message.delete().catch((error) => logSilentError('suppressed', error));
-        return;
-      }
+      const openerId = String(ticket?.memberId || '').trim();
+      const isTicketOpener = openerId && openerId === message.author.id;
+      const isTicketClaimer = ticket?.claimedBy && ticket.claimedBy === message.author.id;
+      const isResponsible = hasResponsibleTicketAccess(message.member, config, message.guild, ticket);
+      const canTriggerPrompt = Boolean(isTicketOpener || isTicketClaimer || isResponsible);
+
       await message.delete().catch((error) => logSilentError('suppressed', error));
+      if (!canTriggerPrompt || !openerId) return;
+
       await sendFeedbackPrompt({
         guild: message.guild,
         channel: message.channel,
-        ticket: { memberId: message.author.id },
+        ticket: { memberId: openerId },
         config: { ...config, feedback: feedbackConfig },
         panelId,
         channelId
       });
       if (feedbackConfig.triggerScope === 'dm') {
-        await message.channel.send(buildTicketMessagePayload('التقييم', `**تم إرسال رسالة التقييم بالخاص لـ <@${message.author.id}>.**`))
+        await message.channel.send(buildTicketMessagePayload('التقييم', `**تم إرسال رسالة التقييم بالخاص لـ <@${openerId}>.**`))
           .then((m) => setTimeout(() => m.delete().catch((error) => logSilentError('suppressed', error)), 12000))
           .catch((error) => logSilentError('suppressed', error));
       }
