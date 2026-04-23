@@ -48,11 +48,16 @@ function buildDetailsEmbed(session, statusText = null) {
     else if (session.imageMode === 'user_avatar') imageText = '**صورة افتارك**';
     else if (session.imageMode === 'custom') imageText = session.customImageUrl ? `**مخصص :** ${session.customImageUrl}` : '**مخصص :** **غير محدد**';
 
+    let thumbnailText = '**افتار السيرفر**';
+    if (session.thumbnailMode === 'none') thumbnailText = '**لا يوجد**';
+    else if (session.thumbnailMode === 'user_avatar') thumbnailText = '**افتارك**';
+    else if (session.thumbnailMode === 'custom') thumbnailText = session.customThumbnailUrl ? `**مخصص :** ${session.customThumbnailUrl}` : '**مخصص :** **غير محدد**';
+
     embedDetailsText =
       '\n\n**اعدادات الايمبد :**\n' +
-      `**العنوان :** **${session.guildName || 'اسم السيرفر'}**\n` +
-      '**الثمنيل :** **افتار السيرفر**\n' +
-      `**الفوتر :** **${session.guildName || 'اسم السيرفر'}**\n` +
+      `**العنوان :** **${session.embedTitle || session.guildName || 'اسم السيرفر'}**\n` +
+      `**الثمنيل :** ${thumbnailText}\n` +
+      `**الفوتر :** **${session.embedFooter || session.guildName || 'اسم السيرفر'}**\n` +
       '**صورة الايمبد :**\n' +
       `${imageText}`;
   }
@@ -78,18 +83,38 @@ function buildDetailsEmbed(session, statusText = null) {
 }
 
 function buildMainComponents(sessionId) {
+  const session = getSession(sessionId);
+  const isEmbed = session?.type === 'embed';
+
+  const firstRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`say_text_${sessionId}`).setLabel('الكلام').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`say_rooms_${sessionId}`).setLabel('الروم').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`say_dm_${sessionId}`).setLabel('للخاص').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`say_type_${sessionId}`).setLabel('النوع').setStyle(ButtonStyle.Secondary)
+  );
+
+  const secondRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`say_send_${sessionId}`).setLabel('انهاء وارسال').setStyle(ButtonStyle.Success)
+  );
+
+  if (isEmbed) {
+    secondRow.addComponents(
+      new ButtonBuilder().setCustomId(`say_embed_edit_${sessionId}`).setLabel('تعديل الايمبد').setStyle(ButtonStyle.Secondary)
+    );
+  }
+
   return [
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`say_text_${sessionId}`).setLabel('الكلام').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`say_rooms_${sessionId}`).setLabel('الروم').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`say_dm_${sessionId}`).setLabel('للخاص').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`say_type_${sessionId}`).setLabel('النوع').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`say_image_${sessionId}`).setLabel('صورة الايمبد').setStyle(ButtonStyle.Secondary)
-    ),
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`say_send_${sessionId}`).setLabel('انهاء وارسال').setStyle(ButtonStyle.Success)
-    )
+    firstRow,
+    secondRow
   ];
+}
+
+function buildProgressBar(current, total, size = 12) {
+  const safeTotal = total > 0 ? total : 1;
+  const ratio = Math.min(1, Math.max(0, current / safeTotal));
+  const filled = Math.round(size * ratio);
+  const bar = `${'█'.repeat(filled)}${'░'.repeat(Math.max(0, size - filled))}`;
+  return `\`${bar}\` **${current}/${total}**`;
 }
 
 async function execute(message, args, { BOT_OWNERS = [] }) {
@@ -108,6 +133,10 @@ async function execute(message, args, { BOT_OWNERS = [] }) {
     type: 'normal',
     imageMode: 'none',
     customImageUrl: '',
+    embedTitle: message.guild.name,
+    embedFooter: message.guild.name,
+    thumbnailMode: 'guild_avatar',
+    customThumbnailUrl: '',
     channelIds: [message.channel.id],
     dmUserIds: [],
     guildName: message.guild.name,
@@ -127,16 +156,15 @@ async function execute(message, args, { BOT_OWNERS = [] }) {
 function extractSessionId(customId) {
   const knownPrefixes = [
     'say_text_modal_',
-    'say_image_modal_',
+    'say_embed_modal_',
     'say_type_select_',
-    'say_image_select_',
     'say_rooms_select_',
     'say_dm_select_',
     'say_text_',
     'say_rooms_',
     'say_dm_',
     'say_type_',
-    'say_image_',
+    'say_embed_edit_',
     'say_send_'
   ];
 
@@ -240,24 +268,53 @@ function registerInteractionHandler(client) {
           return;
         }
 
-        if (action === 'image') {
+        if (action === 'embed' && parts[2] === 'edit') {
           if (session.type !== 'embed') {
-            await interaction.reply({ content: '⚠️ صورة الايمبد متاحة فقط عندما نوع الرسالة **ايمبد**.', ephemeral: true });
+            await interaction.reply({ content: '**هذا الخيار متاح فقط عند اختيار نوع ايمبد.**', ephemeral: true });
             return;
           }
 
-          const row = new ActionRowBuilder().addComponents(
-            new StringSelectMenuBuilder()
-              .setCustomId(`say_image_select_${sessionId}`)
-              .setPlaceholder('اختر مصدر الصورة')
-              .addOptions([
-                { label: 'افتار السيرفر', value: 'guild_avatar', description: 'استخدام أيقونة السيرفر' },
-                { label: 'افتارك', value: 'user_avatar', description: 'استخدام صورتك الشخصية' },
-                { label: 'صورة مخصصة', value: 'custom', description: 'إدخال رابط صورة' },
-                { label: 'بدون صورة', value: 'none', description: 'إزالة صورة الايمبد' }
-              ])
+          const modal = new ModalBuilder().setCustomId(`say_embed_modal_${sessionId}`).setTitle('تعديل اعدادات الايمبد');
+          const titleInput = new TextInputBuilder()
+            .setCustomId('say_embed_title')
+            .setLabel('العنوان (0 للحذف)')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false)
+            .setMaxLength(256)
+            .setValue(session.embedTitle || '');
+          const thumbInput = new TextInputBuilder()
+            .setCustomId('say_embed_thumbnail')
+            .setLabel('الثمنيل: guild / user / رابط / 0')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false)
+            .setPlaceholder('guild أو user أو https://... أو 0')
+            .setValue(
+              session.thumbnailMode === 'custom'
+                ? (session.customThumbnailUrl || '')
+                : (session.thumbnailMode === 'user_avatar' ? 'user' : (session.thumbnailMode === 'none' ? '0' : 'guild'))
+            );
+          const footerInput = new TextInputBuilder()
+            .setCustomId('say_embed_footer')
+            .setLabel('الفوتر (0 للحذف)')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false)
+            .setMaxLength(2048)
+            .setValue(session.embedFooter || '');
+          const imageInput = new TextInputBuilder()
+            .setCustomId('say_embed_image')
+            .setLabel('الصورة: guild / user / رابط / 0')
+            .setStyle(TextInputStyle.Short)
+            .setRequired(false)
+            .setPlaceholder('guild أو user أو https://... أو 0')
+            .setValue(session.imageMode === 'custom' ? (session.customImageUrl || '') : (session.imageMode === 'user_avatar' ? 'user' : (session.imageMode === 'guild_avatar' ? 'guild' : '0')));
+
+          modal.addComponents(
+            new ActionRowBuilder().addComponents(titleInput),
+            new ActionRowBuilder().addComponents(thumbInput),
+            new ActionRowBuilder().addComponents(footerInput),
+            new ActionRowBuilder().addComponents(imageInput)
           );
-          await interaction.reply({ content: '**حدد صورة الايمبد :**', components: [row], ephemeral: true });
+          await interaction.showModal(modal);
           return;
         }
 
@@ -267,10 +324,18 @@ function registerInteractionHandler(client) {
             return;
           }
 
+          await interaction.deferUpdate();
+
           const sendAsDM = session.dmUserIds.length > 0;
           const targets = sendAsDM ? session.dmUserIds : (session.channelIds.length ? session.channelIds : [session.panelChannelId]);
           let success = 0;
           let failed = 0;
+          let processed = 0;
+
+          await interaction.message.edit({
+            embeds: [buildDetailsEmbed(session, `**جاري الإرسال...**\n${buildProgressBar(processed, targets.length)}`)],
+            components: []
+          }).catch(() => {});
 
           for (const targetId of targets) {
             try {
@@ -284,10 +349,12 @@ function registerInteractionHandler(client) {
                 if (session.type === 'embed') {
                   const guildIcon = interaction.guild.iconURL({ extension: 'png', size: 512 }) || interaction.guild.iconURL({ size: 512 });
                   const outEmbed = colorManager.createEmbed()
-                    .setTitle(session.guildName || interaction.guild.name)
+                    .setTitle(session.embedTitle || session.guildName || interaction.guild.name)
                     .setDescription(`**${session.text}**`)
-                    .setFooter({ text: session.guildName || interaction.guild.name, iconURL: guildIcon || undefined });
-                  if (guildIcon) outEmbed.setThumbnail(guildIcon);
+                    .setFooter({ text: session.embedFooter || session.guildName || interaction.guild.name, iconURL: guildIcon || undefined });
+                  if (session.thumbnailMode === 'guild_avatar' && guildIcon) outEmbed.setThumbnail(guildIcon);
+                  if (session.thumbnailMode === 'user_avatar') outEmbed.setThumbnail(interaction.user.displayAvatarURL({ extension: 'png', size: 512 }));
+                  if (session.thumbnailMode === 'custom' && session.customThumbnailUrl) outEmbed.setThumbnail(session.customThumbnailUrl);
 
                   if (session.imageMode === 'guild_avatar') {
                     if (guildIcon) outEmbed.setImage(guildIcon);
@@ -311,10 +378,12 @@ function registerInteractionHandler(client) {
                 if (session.type === 'embed') {
                   const guildIcon = interaction.guild.iconURL({ extension: 'png', size: 512 }) || interaction.guild.iconURL({ size: 512 });
                   const outEmbed = colorManager.createEmbed()
-                    .setTitle(session.guildName || interaction.guild.name)
+                    .setTitle(session.embedTitle || session.guildName || interaction.guild.name)
                     .setDescription(`**${session.text}**`)
-                    .setFooter({ text: session.guildName || interaction.guild.name, iconURL: guildIcon || undefined });
-                  if (guildIcon) outEmbed.setThumbnail(guildIcon);
+                    .setFooter({ text: session.embedFooter || session.guildName || interaction.guild.name, iconURL: guildIcon || undefined });
+                  if (session.thumbnailMode === 'guild_avatar' && guildIcon) outEmbed.setThumbnail(guildIcon);
+                  if (session.thumbnailMode === 'user_avatar') outEmbed.setThumbnail(interaction.user.displayAvatarURL({ extension: 'png', size: 512 }));
+                  if (session.thumbnailMode === 'custom' && session.customThumbnailUrl) outEmbed.setThumbnail(session.customThumbnailUrl);
 
                   if (session.imageMode === 'guild_avatar') {
                     if (guildIcon) outEmbed.setImage(guildIcon);
@@ -333,15 +402,22 @@ function registerInteractionHandler(client) {
             } catch {
               failed += 1;
             }
+            processed += 1;
+            if (processed === targets.length || processed % 2 === 0) {
+              await interaction.message.edit({
+                embeds: [buildDetailsEmbed(session, `**جاري الإرسال...**\n${buildProgressBar(processed, targets.length)}`)],
+                components: []
+              }).catch(() => {});
+            }
           }
 
-          const status = `تم الإرسال بنجاح : ${success} | فشل : ${failed}`;
+          const status = `**اكتمل الإرسال.**\n${buildProgressBar(targets.length, targets.length)}\n**نجاح:** ${success} | **فشل:** ${failed}`;
           saySessions.delete(session.id);
 
-          await interaction.update({
+          await interaction.message.edit({
             embeds: [buildDetailsEmbed(session, status)],
             components: []
-          });
+          }).catch(() => {});
           return;
         }
       }
@@ -354,7 +430,7 @@ function registerInteractionHandler(client) {
             session.customImageUrl = '';
           }
 
-          await interaction.update({ content: `✅ تم تحديد النوع : **${session.type === 'embed' ? 'ايمبد' : 'رسالة عادية'}**`, components: [] });
+          await interaction.update({ content: `**تم تحديد النوع: ${session.type === 'embed' ? 'ايمبد' : 'رسالة عادية'}.**`, components: [] });
 
           const panelChannel = await interaction.guild.channels.fetch(session.panelChannelId).catch(() => null);
           if (panelChannel) {
@@ -364,34 +440,6 @@ function registerInteractionHandler(client) {
           return;
         }
 
-        if (customId.startsWith('say_image_select_')) {
-          const selected = interaction.values[0];
-
-          if (selected === 'custom') {
-            const modal = new ModalBuilder().setCustomId(`say_image_modal_${sessionId}`).setTitle('رابط صورة الايمبد');
-            const input = new TextInputBuilder()
-              .setCustomId('say_image_url')
-              .setLabel('رابط الصورة')
-              .setStyle(TextInputStyle.Short)
-              .setRequired(true)
-              .setPlaceholder('https://example.com/image.png');
-            modal.addComponents(new ActionRowBuilder().addComponents(input));
-            await interaction.showModal(modal);
-            return;
-          }
-
-          session.imageMode = selected;
-          if (selected !== 'custom') session.customImageUrl = '';
-
-          await interaction.update({ content: '✅ تم تحديث صورة الايمبد.', components: [] });
-
-          const panelChannel = await interaction.guild.channels.fetch(session.panelChannelId).catch(() => null);
-          if (panelChannel) {
-            const panelMsg = await panelChannel.messages.fetch(session.panelMessageId).catch(() => null);
-            if (panelMsg) await panelMsg.edit({ embeds: [buildDetailsEmbed(session)], components: buildMainComponents(session.id) }).catch(() => {});
-          }
-          return;
-        }
       }
 
       if (interaction.isChannelSelectMenu() && customId.startsWith('say_rooms_select_')) {
@@ -401,8 +449,8 @@ function registerInteractionHandler(client) {
         if (session.dmUserIds.length > 0) session.dmUserIds = [];
 
         const roomUpdateMsg = hadDmTargets
-          ? '✅ تم تحديث الرومات المحددة. تم إلغاء وضع الخاص لأن النظام لا يسمح بالاثنين معاً.'
-          : '✅ تم تحديث الرومات المحددة.';
+          ? '**تم تحديث الرومات المحددة، وتم إلغاء وضع الخاص.**'
+          : '**تم تحديث الرومات المحددة.**';
         await interaction.update({ content: roomUpdateMsg, components: [] });
 
         const panelChannel = await interaction.guild.channels.fetch(session.panelChannelId).catch(() => null);
@@ -417,7 +465,7 @@ function registerInteractionHandler(client) {
         session.dmUserIds = interaction.values.slice(0, 5);
         session.channelIds = [];
 
-        await interaction.update({ content: '✅ تم تحديد مستلمي الخاص. وتم إلغاء اختيار الرومات لأن النظام لا يسمح بالاثنين معاً.', components: [] });
+        await interaction.update({ content: '**تم تحديد مستلمي الخاص، وتم إلغاء اختيار الرومات.**', components: [] });
 
         const panelChannel = await interaction.guild.channels.fetch(session.panelChannelId).catch(() => null);
         if (panelChannel) {
@@ -436,7 +484,7 @@ function registerInteractionHandler(client) {
           }
 
           session.text = text;
-          await interaction.reply({ content: '✅ تم حفظ الكلام.', ephemeral: true });
+          await interaction.reply({ content: '**تم حفظ الكلام.**', ephemeral: true });
 
           const panelChannel = await interaction.guild.channels.fetch(session.panelChannelId).catch(() => null);
           if (panelChannel) {
@@ -446,22 +494,59 @@ function registerInteractionHandler(client) {
           return;
         }
 
-        if (customId.startsWith('say_image_modal_')) {
+        if (customId.startsWith('say_embed_modal_')) {
           if (session.type !== 'embed') {
-            await interaction.reply({ content: '❌ لازم يكون نوع الرسالة ايمبد أولاً.', ephemeral: true });
+            await interaction.reply({ content: '**لازم يكون نوع الرسالة ايمبد أولاً.**', ephemeral: true });
             return;
           }
 
-          const url = interaction.fields.getTextInputValue('say_image_url').trim();
-          if (!/^https?:\/\//i.test(url)) {
-            await interaction.reply({ content: '❌ رابط الصورة غير صالح.', ephemeral: true });
-            return;
+          const titleRaw = interaction.fields.getTextInputValue('say_embed_title').trim();
+          const thumbRaw = interaction.fields.getTextInputValue('say_embed_thumbnail').trim().toLowerCase();
+          const footerRaw = interaction.fields.getTextInputValue('say_embed_footer').trim();
+          const imageRaw = interaction.fields.getTextInputValue('say_embed_image').trim().toLowerCase();
+
+          if (titleRaw === '0') session.embedTitle = '';
+          else if (titleRaw.length) session.embedTitle = titleRaw;
+
+          if (footerRaw === '0') session.embedFooter = '';
+          else if (footerRaw.length) session.embedFooter = footerRaw;
+
+          if (thumbRaw === '0' || thumbRaw === 'none') {
+            session.thumbnailMode = 'none';
+            session.customThumbnailUrl = '';
+          } else if (thumbRaw === 'guild') {
+            session.thumbnailMode = 'guild_avatar';
+            session.customThumbnailUrl = '';
+          } else if (thumbRaw === 'user') {
+            session.thumbnailMode = 'user_avatar';
+            session.customThumbnailUrl = '';
+          } else if (thumbRaw) {
+            if (!/^https?:\/\//i.test(thumbRaw)) {
+              await interaction.reply({ content: '**رابط الثمنيل غير صالح.**', ephemeral: true });
+              return;
+            }
+            session.thumbnailMode = 'custom';
+            session.customThumbnailUrl = thumbRaw;
           }
 
-          session.imageMode = 'custom';
-          session.customImageUrl = url;
-
-          await interaction.reply({ content: '✅ تم حفظ صورة الايمبد المخصصة.', ephemeral: true });
+          if (imageRaw === '0' || imageRaw === 'none') {
+            session.imageMode = 'none';
+            session.customImageUrl = '';
+          } else if (imageRaw === 'guild') {
+            session.imageMode = 'guild_avatar';
+            session.customImageUrl = '';
+          } else if (imageRaw === 'user') {
+            session.imageMode = 'user_avatar';
+            session.customImageUrl = '';
+          } else if (imageRaw) {
+            if (!/^https?:\/\//i.test(imageRaw)) {
+              await interaction.reply({ content: '**رابط الصورة غير صالح.**', ephemeral: true });
+              return;
+            }
+            session.imageMode = 'custom';
+            session.customImageUrl = imageRaw;
+          }
+          await interaction.reply({ content: '**تم تحديث إعدادات الايمبد.**', ephemeral: true });
 
           const panelChannel = await interaction.guild.channels.fetch(session.panelChannelId).catch(() => null);
           if (panelChannel) {
