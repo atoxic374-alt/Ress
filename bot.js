@@ -4487,15 +4487,11 @@ if ((interaction.isButton() || interaction.isModalSubmit()) && customId.startsWi
                 const [, configKey, idxRaw] = editBtnMatch;
                 const idx = parseInt(idxRaw, 10);
                 const label = interaction.fields.getTextInputValue('btn_label');
-                const emoji = interaction.fields.getTextInputValue('btn_emoji');
                 const description = interaction.fields.getTextInputValue('btn_desc');
                 const roleId = interaction.fields.getTextInputValue('btn_role');
-                const linksText = interaction.fields.getTextInputValue('btn_links');
-
-                const links = linksText.split('\n').filter(line => line.includes(',')).map(line => {
-                    const [lLabel, lUrl] = line.split(',').map(s => s.trim());
-                    return { label: lLabel, url: lUrl };
-                });
+                const embedRaw = (interaction.fields.getTextInputValue('btn_embed') || '').trim().toLowerCase();
+                const imagesRaw = (interaction.fields.getTextInputValue('btn_images') || '').trim().toLowerCase();
+                const useEmbed = embedRaw === 'yes';
 
                 const configPath = path.join(__dirname, 'data', 'serverMapConfig.json');
                 let allConfigs = {};
@@ -4512,14 +4508,50 @@ if ((interaction.isButton() || interaction.isModalSubmit()) && customId.startsWi
                 allConfigs[configKey].buttons[idx] = {
                     ...allConfigs[configKey].buttons[idx],
                     label,
-                    emoji: emoji || null,
                     description,
                     roleId: roleId || null,
-                    links
+                    useEmbed
                 };
                 
                 fs.writeFileSync(configPath, JSON.stringify(allConfigs, null, 2));
-                return await interaction.reply({ content: `✅ تم تحديث بيانات الزر **${label}** بنجاح.`, ephemeral: true });
+                await interaction.reply({ content: `✅ تم تحديث بيانات الزر **${label}** بنجاح.`, ephemeral: true });
+
+                if (imagesRaw === 'yes' || imagesRaw === 'نعم') {
+                    await interaction.followUp({
+                        content: '📩 **رسالة مخفية:** ارسل الصور الآن في رسالة واحدة (مرفقات متعددة مسموحة) وسيتم حفظها دفعة واحدة مع الزر.\n⚠️ الحد الأقصى **10 صور** فقط.',
+                        ephemeral: true
+                    });
+
+                    const imagesCollected = await interaction.channel.awaitMessages({
+                        filter: msg => msg.author.id === interaction.user.id && msg.channel.id === interaction.channel.id && msg.attachments.size > 0,
+                        max: 1,
+                        time: 120000
+                    }).catch(() => null);
+
+                    const imageMessage = imagesCollected?.first();
+                    if (imageMessage) {
+                        const allImageUrls = [...imageMessage.attachments.values()].map(att => att.url).filter(Boolean);
+                        const imageUrls = allImageUrls.slice(0, 10);
+                        if (imageUrls.length > 0) {
+                            let refreshedConfigs = {};
+                            try {
+                                if (fs.existsSync(configPath)) {
+                                    refreshedConfigs = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                                }
+                            } catch (e) {}
+
+                            if (refreshedConfigs[configKey]?.buttons?.[idx]) {
+                                refreshedConfigs[configKey].buttons[idx].images = imageUrls;
+                                fs.writeFileSync(configPath, JSON.stringify(refreshedConfigs, null, 2));
+                                const warning = allImageUrls.length > 10 ? '\n⚠️ تم تجاهل الصور الزائدة بعد أول 10 صور.' : '';
+                                await interaction.followUp({ content: `✅ تم حفظ ${imageUrls.length} صورة للزر.${warning}`, ephemeral: true });
+                            }
+                        }
+                    } else {
+                        await interaction.followUp({ content: '⌛ انتهى الوقت، لم يتم حفظ صور للزر.', ephemeral: true });
+                    }
+                }
+                return;
             }
 
             if (interaction.customId.startsWith('apply_resp_modal_') && typeof respCommand.handleApplyRespModal === 'function') {
@@ -4630,11 +4662,37 @@ if ((interaction.isButton() || interaction.isModalSubmit()) && customId.startsWi
             rows.push(currentRow);
         }
 
+        const descriptionText = (btn.description || 'لا يوجد شرح متاح.') + roleStatus;
+        const imageFiles = Array.isArray(btn.images)
+            ? btn.images.filter(img => typeof img === 'string' && /^https?:\/\//i.test(img)).slice(0, 10)
+            : [];
+
         const replyPayload = {
-            content: (btn.description || 'لا يوجد شرح متاح.') + roleStatus,
             components: rows,
             ephemeral: true
         };
+
+        if (btn.useEmbed === true) {
+            const guildName = interaction.guild?.name || 'Server';
+            const guildIcon = interaction.guild?.iconURL({ dynamic: true });
+            const embed = new EmbedBuilder()
+                .setTitle(guildName)
+                .setDescription(descriptionText)
+                .setColor('#2f3136');
+            if (guildIcon) {
+                embed.setThumbnail(guildIcon);
+                embed.setFooter({ text: guildName, iconURL: guildIcon });
+            } else {
+                embed.setFooter({ text: guildName });
+            }
+            replyPayload.embeds = [embed];
+        } else {
+            replyPayload.content = descriptionText;
+        }
+
+        if (imageFiles.length > 0) {
+            replyPayload.files = imageFiles;
+        }
 
         if (interaction.deferred || interaction.replied) {
             await interaction.editReply(replyPayload).catch(err => console.error('Error in editReply:', err));

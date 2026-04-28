@@ -721,8 +721,7 @@ module.exports = {
                         
                         const modal = new ModalBuilder().setCustomId(`modal_edit_btn_${configKey}_${idx}`).setTitle(`تعديل زر: ${btn.label}`);
                         const labelInput = new TextInputBuilder().setCustomId('btn_label').setLabel('اسم الزر').setStyle(TextInputStyle.Short).setMaxLength(80).setValue(btn.label || '').setRequired(true);
-                        const emojiInput = new TextInputBuilder().setCustomId('btn_emoji').setLabel('إيموجي الزر (اختياري)').setStyle(TextInputStyle.Short).setValue(btn.emoji || '').setPlaceholder('مثال: 📍 أو :emoji_name:').setRequired(false);
-                        const descInput = new TextInputBuilder().setCustomId('btn_desc').setLabel('شرح الزر (يظهر عند الضغط)').setStyle(TextInputStyle.Paragraph).setValue(btn.description || '').setRequired(true);
+                                                const descInput = new TextInputBuilder().setCustomId('btn_desc').setLabel('شرح الزر (يظهر عند الضغط)').setStyle(TextInputStyle.Paragraph).setValue(btn.description || '').setRequired(true);
                         const roleInput = new TextInputBuilder().setCustomId('btn_role').setLabel('ID الرول (اختياري)').setStyle(TextInputStyle.Short).setValue(btn.roleId || '').setRequired(false);
                         
                         // معالجة الروابط لتحويلها من array إلى string للعرض في المودال
@@ -730,14 +729,15 @@ module.exports = {
                         if (btn.links && Array.isArray(btn.links)) {
                             linksStr = btn.links.map(l => `${l.label},${l.url}`).join('\n');
                         }
-                        const linksInput = new TextInputBuilder().setCustomId('btn_links').setLabel('الروابط (اسم1,رابط1 | اسم2,رابط2)').setStyle(TextInputStyle.Paragraph).setValue(linksStr).setPlaceholder('مثال:\nروم الفعاليات,https://...\nروم القوانين,https://...').setRequired(false);
+                        const embedInput = new TextInputBuilder().setCustomId('btn_embed').setLabel('Embed? (yes/no) اختياري').setStyle(TextInputStyle.Short).setValue(btn.useEmbed ? 'yes' : 'no').setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
+                        const imagesInput = new TextInputBuilder().setCustomId('btn_images').setLabel('صور؟ (yes/no) اختياري').setStyle(TextInputStyle.Short).setValue(Array.isArray(btn.images) && btn.images.length > 0 ? 'yes' : 'no').setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
                         
                         modal.addComponents(
                             new ActionRowBuilder().addComponents(labelInput),
-                            new ActionRowBuilder().addComponents(emojiInput),
                             new ActionRowBuilder().addComponents(descInput),
                             new ActionRowBuilder().addComponents(roleInput),
-                            new ActionRowBuilder().addComponents(linksInput)
+                            new ActionRowBuilder().addComponents(embedInput),
+                            new ActionRowBuilder().addComponents(imagesInput)
                         );
                         await i.showModal(modal);
                     } else if (i.customId === 'edit_button') {
@@ -767,22 +767,22 @@ module.exports = {
                         
                         const modal = new ModalBuilder().setCustomId(`modal_edit_btn_${configKey}_${idx}`).setTitle(`تعديل زر: ${btn.label}`);
                         const labelInput = new TextInputBuilder().setCustomId('btn_label').setLabel('اسم الزر').setStyle(TextInputStyle.Short).setMaxLength(80).setValue(btn.label || '').setRequired(true);
-                        const emojiInput = new TextInputBuilder().setCustomId('btn_emoji').setLabel('إيموجي الزر (اختياري)').setStyle(TextInputStyle.Short).setValue(btn.emoji || '').setPlaceholder('مثال: 📍 أو :emoji_name:').setRequired(false);
-                        const descInput = new TextInputBuilder().setCustomId('btn_desc').setLabel('شرح الزر (يظهر عند الضغط)').setStyle(TextInputStyle.Paragraph).setValue(btn.description || '').setRequired(true);
+                                                const descInput = new TextInputBuilder().setCustomId('btn_desc').setLabel('شرح الزر (يظهر عند الضغط)').setStyle(TextInputStyle.Paragraph).setValue(btn.description || '').setRequired(true);
                         const roleInput = new TextInputBuilder().setCustomId('btn_role').setLabel('ID الرول (اختياري)').setStyle(TextInputStyle.Short).setValue(btn.roleId || '').setRequired(false);
                         
                         let linksStr = '';
                         if (btn.links && Array.isArray(btn.links)) {
                             linksStr = btn.links.map(l => `${l.label},${l.url}`).join('\n');
                         }
-                        const linksInput = new TextInputBuilder().setCustomId('btn_links').setLabel('الروابط (اسم1,رابط1 | اسم2,رابط2)').setStyle(TextInputStyle.Paragraph).setValue(linksStr).setPlaceholder('مثال:\nروم الفعاليات,https://...\nروم القوانين,https://...').setRequired(false);
+                        const embedInput = new TextInputBuilder().setCustomId('btn_embed').setLabel('Embed? (yes/no) اختياري').setStyle(TextInputStyle.Short).setValue(btn.useEmbed ? 'yes' : 'no').setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
+                        const imagesInput = new TextInputBuilder().setCustomId('btn_images').setLabel('صور؟ (yes/no) اختياري').setStyle(TextInputStyle.Short).setValue(Array.isArray(btn.images) && btn.images.length > 0 ? 'yes' : 'no').setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
                         
                         modal.addComponents(
                             new ActionRowBuilder().addComponents(labelInput),
-                            new ActionRowBuilder().addComponents(emojiInput),
                             new ActionRowBuilder().addComponents(descInput),
                             new ActionRowBuilder().addComponents(roleInput),
-                            new ActionRowBuilder().addComponents(linksInput)
+                            new ActionRowBuilder().addComponents(embedInput),
+                            new ActionRowBuilder().addComponents(imagesInput)
                         );
                         await i.showModal(modal);
                     } else if (i.customId === 'edit_image') {
@@ -798,17 +798,17 @@ module.exports = {
                     } else if (i.customId === 'add_button') {
                         const modal = new ModalBuilder().setCustomId(`modal_add_btn_${configKey}`).setTitle('إضافة زر جديد');
                         const labelInput = new TextInputBuilder().setCustomId('btn_label').setLabel('اسم الزر').setStyle(TextInputStyle.Short).setMaxLength(80).setRequired(true);
-                        const emojiInput = new TextInputBuilder().setCustomId('btn_emoji').setLabel('إيموجي الزر (اختياري)').setStyle(TextInputStyle.Short).setPlaceholder('مثال: 📍 أو :emoji_name:').setRequired(false);
-                        const descInput = new TextInputBuilder().setCustomId('btn_desc').setLabel('شرح الزر (يظهر عند الضغط)').setStyle(TextInputStyle.Paragraph).setRequired(true);
+                                                const descInput = new TextInputBuilder().setCustomId('btn_desc').setLabel('شرح الزر (يظهر عند الضغط)').setStyle(TextInputStyle.Paragraph).setRequired(true);
                         const roleInput = new TextInputBuilder().setCustomId('btn_role').setLabel('ID الرول (اختياري - للإعطاء/الإزالة)').setStyle(TextInputStyle.Short).setRequired(false);
-                        const linksInput = new TextInputBuilder().setCustomId('btn_links').setLabel('الروابط (اسم1,رابط1 | اسم2,رابط2)').setStyle(TextInputStyle.Paragraph).setPlaceholder('مثال:\nروم الفعاليات,https://...\nروم القوانين,https://...').setRequired(false);
+                        const embedInput = new TextInputBuilder().setCustomId('btn_embed').setLabel('Embed? (yes/no) اختياري').setStyle(TextInputStyle.Short).setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
+                        const imagesInput = new TextInputBuilder().setCustomId('btn_images').setLabel('صور؟ (yes/no) اختياري').setStyle(TextInputStyle.Short).setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
                         
                         modal.addComponents(
                             new ActionRowBuilder().addComponents(labelInput),
-                            new ActionRowBuilder().addComponents(emojiInput),
                             new ActionRowBuilder().addComponents(descInput),
                             new ActionRowBuilder().addComponents(roleInput),
-                            new ActionRowBuilder().addComponents(linksInput)
+                            new ActionRowBuilder().addComponents(embedInput),
+                            new ActionRowBuilder().addComponents(imagesInput)
                         );
                         await i.showModal(modal);
                     } else if (i.customId === 'edit_button') {
@@ -838,8 +838,7 @@ module.exports = {
                         
                         const modal = new ModalBuilder().setCustomId(`modal_edit_btn_${configKey}_${idx}`).setTitle(`تعديل زر: ${btn.label}`);
                         const labelInput = new TextInputBuilder().setCustomId('btn_label').setLabel('اسم الزر').setStyle(TextInputStyle.Short).setMaxLength(80).setValue(btn.label || '').setRequired(true);
-                        const emojiInput = new TextInputBuilder().setCustomId('btn_emoji').setLabel('إيموجي الزر (اختياري)').setStyle(TextInputStyle.Short).setValue(btn.emoji || '').setPlaceholder('مثال: 📍 أو :emoji_name:').setRequired(false);
-                        const descInput = new TextInputBuilder().setCustomId('btn_desc').setLabel('شرح الزر (يظهر عند الضغط)').setStyle(TextInputStyle.Paragraph).setValue(btn.description || '').setRequired(true);
+                                                const descInput = new TextInputBuilder().setCustomId('btn_desc').setLabel('شرح الزر (يظهر عند الضغط)').setStyle(TextInputStyle.Paragraph).setValue(btn.description || '').setRequired(true);
                         const roleInput = new TextInputBuilder().setCustomId('btn_role').setLabel('ID الرول (اختياري)').setStyle(TextInputStyle.Short).setValue(btn.roleId || '').setRequired(false);
                         
                         // معالجة الروابط لتحويلها من array إلى string للعرض في المودال
@@ -847,14 +846,15 @@ module.exports = {
                         if (btn.links && Array.isArray(btn.links)) {
                             linksStr = btn.links.map(l => `${l.label},${l.url}`).join('\n');
                         }
-                        const linksInput = new TextInputBuilder().setCustomId('btn_links').setLabel('الروابط (اسم1,رابط1 | اسم2,رابط2)').setStyle(TextInputStyle.Paragraph).setValue(linksStr).setPlaceholder('مثال:\nروم الفعاليات,https://...\nروم القوانين,https://...').setRequired(false);
+                        const embedInput = new TextInputBuilder().setCustomId('btn_embed').setLabel('Embed? (yes/no) اختياري').setStyle(TextInputStyle.Short).setValue(btn.useEmbed ? 'yes' : 'no').setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
+                        const imagesInput = new TextInputBuilder().setCustomId('btn_images').setLabel('صور؟ (yes/no) اختياري').setStyle(TextInputStyle.Short).setValue(Array.isArray(btn.images) && btn.images.length > 0 ? 'yes' : 'no').setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
                         
                         modal.addComponents(
                             new ActionRowBuilder().addComponents(labelInput),
-                            new ActionRowBuilder().addComponents(emojiInput),
                             new ActionRowBuilder().addComponents(descInput),
                             new ActionRowBuilder().addComponents(roleInput),
-                            new ActionRowBuilder().addComponents(linksInput)
+                            new ActionRowBuilder().addComponents(embedInput),
+                            new ActionRowBuilder().addComponents(imagesInput)
                         );
                         await i.showModal(modal);
                     } else if (i.customId === 'edit_button') {
@@ -884,22 +884,22 @@ module.exports = {
                         
                         const modal = new ModalBuilder().setCustomId(`modal_edit_btn_${configKey}_${idx}`).setTitle(`تعديل زر: ${btn.label}`);
                         const labelInput = new TextInputBuilder().setCustomId('btn_label').setLabel('اسم الزر').setStyle(TextInputStyle.Short).setMaxLength(80).setValue(btn.label || '').setRequired(true);
-                        const emojiInput = new TextInputBuilder().setCustomId('btn_emoji').setLabel('إيموجي الزر (اختياري)').setStyle(TextInputStyle.Short).setValue(btn.emoji || '').setPlaceholder('مثال: 📍 أو :emoji_name:').setRequired(false);
-                        const descInput = new TextInputBuilder().setCustomId('btn_desc').setLabel('شرح الزر (يظهر عند الضغط)').setStyle(TextInputStyle.Paragraph).setValue(btn.description || '').setRequired(true);
+                                                const descInput = new TextInputBuilder().setCustomId('btn_desc').setLabel('شرح الزر (يظهر عند الضغط)').setStyle(TextInputStyle.Paragraph).setValue(btn.description || '').setRequired(true);
                         const roleInput = new TextInputBuilder().setCustomId('btn_role').setLabel('ID الرول (اختياري)').setStyle(TextInputStyle.Short).setValue(btn.roleId || '').setRequired(false);
                         
                         let linksStr = '';
                         if (btn.links && Array.isArray(btn.links)) {
                             linksStr = btn.links.map(l => `${l.label},${l.url}`).join('\n');
                         }
-                        const linksInput = new TextInputBuilder().setCustomId('btn_links').setLabel('الروابط (اسم1,رابط1 | اسم2,رابط2)').setStyle(TextInputStyle.Paragraph).setValue(linksStr).setPlaceholder('مثال:\nروم الفعاليات,https://...\nروم القوانين,https://...').setRequired(false);
+                        const embedInput = new TextInputBuilder().setCustomId('btn_embed').setLabel('Embed? (yes/no) اختياري').setStyle(TextInputStyle.Short).setValue(btn.useEmbed ? 'yes' : 'no').setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
+                        const imagesInput = new TextInputBuilder().setCustomId('btn_images').setLabel('صور؟ (yes/no) اختياري').setStyle(TextInputStyle.Short).setValue(Array.isArray(btn.images) && btn.images.length > 0 ? 'yes' : 'no').setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
                         
                         modal.addComponents(
                             new ActionRowBuilder().addComponents(labelInput),
-                            new ActionRowBuilder().addComponents(emojiInput),
                             new ActionRowBuilder().addComponents(descInput),
                             new ActionRowBuilder().addComponents(roleInput),
-                            new ActionRowBuilder().addComponents(linksInput)
+                            new ActionRowBuilder().addComponents(embedInput),
+                            new ActionRowBuilder().addComponents(imagesInput)
                         );
                         await i.showModal(modal);
                     } else if (i.customId === 'edit_button') {
@@ -929,22 +929,22 @@ module.exports = {
                         
                         const modal = new ModalBuilder().setCustomId(`modal_edit_btn_${configKey}_${idx}`).setTitle(`تعديل زر: ${btn.label}`);
                         const labelInput = new TextInputBuilder().setCustomId('btn_label').setLabel('اسم الزر').setStyle(TextInputStyle.Short).setMaxLength(80).setValue(btn.label || '').setRequired(true);
-                        const emojiInput = new TextInputBuilder().setCustomId('btn_emoji').setLabel('إيموجي الزر (اختياري)').setStyle(TextInputStyle.Short).setValue(btn.emoji || '').setPlaceholder('مثال: 📍 أو :emoji_name:').setRequired(false);
-                        const descInput = new TextInputBuilder().setCustomId('btn_desc').setLabel('شرح الزر (يظهر عند الضغط)').setStyle(TextInputStyle.Paragraph).setValue(btn.description || '').setRequired(true);
+                                                const descInput = new TextInputBuilder().setCustomId('btn_desc').setLabel('شرح الزر (يظهر عند الضغط)').setStyle(TextInputStyle.Paragraph).setValue(btn.description || '').setRequired(true);
                         const roleInput = new TextInputBuilder().setCustomId('btn_role').setLabel('ID الرول (اختياري)').setStyle(TextInputStyle.Short).setValue(btn.roleId || '').setRequired(false);
                         
                         let linksStr = '';
                         if (btn.links && Array.isArray(btn.links)) {
                             linksStr = btn.links.map(l => `${l.label},${l.url}`).join('\n');
                         }
-                        const linksInput = new TextInputBuilder().setCustomId('btn_links').setLabel('الروابط (اسم1,رابط1 | اسم2,رابط2)').setStyle(TextInputStyle.Paragraph).setValue(linksStr).setPlaceholder('مثال:\nروم الفعاليات,https://...\nروم القوانين,https://...').setRequired(false);
+                        const embedInput = new TextInputBuilder().setCustomId('btn_embed').setLabel('Embed? (yes/no) اختياري').setStyle(TextInputStyle.Short).setValue(btn.useEmbed ? 'yes' : 'no').setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
+                        const imagesInput = new TextInputBuilder().setCustomId('btn_images').setLabel('صور؟ (yes/no) اختياري').setStyle(TextInputStyle.Short).setValue(Array.isArray(btn.images) && btn.images.length > 0 ? 'yes' : 'no').setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
                         
                         modal.addComponents(
                             new ActionRowBuilder().addComponents(labelInput),
-                            new ActionRowBuilder().addComponents(emojiInput),
                             new ActionRowBuilder().addComponents(descInput),
                             new ActionRowBuilder().addComponents(roleInput),
-                            new ActionRowBuilder().addComponents(linksInput)
+                            new ActionRowBuilder().addComponents(embedInput),
+                            new ActionRowBuilder().addComponents(imagesInput)
                         );
                         await i.showModal(modal);
                     } else if (i.customId === 'manage_emojis') {
@@ -1336,10 +1336,10 @@ module.exports = {
                         }
                     } else if (mi.customId === 'modal_add_btn' || (addBtnModalMatch && addBtnModalMatch[1] === configKey)) {
                         const label = mi.fields.getTextInputValue('btn_label').trim();
-                        const emoji = mi.fields.getTextInputValue('btn_emoji').trim();
                         const description = mi.fields.getTextInputValue('btn_desc').trim();
                         const roleId = mi.fields.getTextInputValue('btn_role').trim();
-                        const linksRaw = mi.fields.getTextInputValue('btn_links').trim();
+                        const embedRaw = (mi.fields.getTextInputValue('btn_embed') || '').trim().toLowerCase();
+                        const imagesRaw = (mi.fields.getTextInputValue('btn_images') || '').trim().toLowerCase();
                         
                         // فحص المدخلات الأساسية
                         if (label.length < 1) return await mi.reply({ content: '❌ اسم الزر مطلوب.', ephemeral: true });
@@ -1357,35 +1357,50 @@ module.exports = {
                             return await mi.reply({ content: '❌ ID الرول غير صالح. يجب أن يكون رقماً مكوناً من 17-19 خانة.', ephemeral: true });
                         }
 
-                        const links = [];
-                        if (linksRaw) {
-                            const lines = linksRaw.split(/[\n|]/);
-                            for (let line of lines) {
-                                const parts = line.split(',');
-                                if (parts.length >= 2) {
-                                    const l = parts[0].trim();
-                                    const url = parts.slice(1).join(',').trim();
-                                    if (url.startsWith('http')) {
-                                        links.push({ label: l, url });
-                                    }
-                                }
-                            }
-                        }
 
-                        config.buttons.push({
+                        const useEmbed = embedRaw === 'yes';
+                        const newButton = {
                             label: label,
-                            emoji: emoji !== '' ? emoji : null,
-                            description: description,
+                                                        description: description,
                             roleId: roleId !== '' ? roleId : null,
-                            links: links.length > 0 ? links : null
-                        });
+                            useEmbed,
+                            images: []
+                        };
+                        config.buttons.push(newButton);
                         
                         currentAll[configKey] = config;
                         if (saveAllConfigs(currentAll)) {
                             await sendMainEmbed(mi);
-                            const feedback = { content: `✅ تم إضافة الزر "${label}" بنجاح.`, ephemeral: true };
-                            if (mi.replied || mi.deferred) await mi.followUp(feedback).catch(() => {});
-                            else await mi.reply(feedback).catch(() => {});
+                            await mi.reply({ content: `✅ تم إضافة الزر "${label}" بنجاح.`, ephemeral: true });
+
+                            if (imagesRaw === 'yes' || imagesRaw === 'نعم') {
+                                await mi.followUp({ content: '📩 **رسالة مخفية:** ارسل الصور الآن في رسالة واحدة (مرفقات متعددة مسموحة) وسيتم حفظها دفعة واحدة مع الزر.\n⚠️ الحد الأقصى **10 صور** فقط.', ephemeral: true });
+                                const imagesCollected = await mi.channel.awaitMessages({
+                                    filter: msg => msg.author.id === mi.user.id && msg.channel.id === mi.channel.id && msg.attachments.size > 0,
+                                    max: 1,
+                                    time: 120000
+                                }).catch(() => null);
+
+                                const imageMessage = imagesCollected?.first();
+                                if (imageMessage) {
+                                    const allImageUrls = [...imageMessage.attachments.values()].map(att => att.url).filter(Boolean);
+                                    const imageUrls = allImageUrls.slice(0, 10);
+                                    if (imageUrls.length > 0) {
+                                        const latest = loadAllConfigs();
+                                        const latestConfig = latest[configKey] || config;
+                                        const latestButton = latestConfig.buttons?.[latestConfig.buttons.length - 1];
+                                        if (latestButton) {
+                                            latestButton.images = imageUrls;
+                                            latest[configKey] = latestConfig;
+                                            saveAllConfigs(latest);
+                                            const warning = allImageUrls.length > 10 ? '\n⚠️ تم تجاهل الصور الزائدة بعد أول 10 صور.' : '';
+                                            await mi.followUp({ content: `✅ تم حفظ ${imageUrls.length} صورة للزر دفعة واحدة.${warning}`, ephemeral: true });
+                                        }
+                                    }
+                                } else {
+                                    await mi.followUp({ content: '⌛ انتهى الوقت، لم يتم حفظ صور للزر.', ephemeral: true });
+                                }
+                            }
                         } else {
                             await mi.reply({ content: '❌ فشل في حفظ البيانات.', ephemeral: true });
                         }
