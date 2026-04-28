@@ -730,14 +730,14 @@ module.exports = {
                         if (btn.links && Array.isArray(btn.links)) {
                             linksStr = btn.links.map(l => `${l.label},${l.url}`).join('\n');
                         }
-                        const linksInput = new TextInputBuilder().setCustomId('btn_links').setLabel('الروابط (اسم1,رابط1 | اسم2,رابط2)').setStyle(TextInputStyle.Paragraph).setValue(linksStr).setPlaceholder('مثال:\nروم الفعاليات,https://...\nروم القوانين,https://...').setRequired(false);
+                        const embedInput = new TextInputBuilder().setCustomId('btn_embed').setLabel('Embed? (yes/no) اختياري').setStyle(TextInputStyle.Short).setValue(btn.useEmbed ? 'yes' : 'no').setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
                         
                         modal.addComponents(
                             new ActionRowBuilder().addComponents(labelInput),
                             new ActionRowBuilder().addComponents(emojiInput),
                             new ActionRowBuilder().addComponents(descInput),
                             new ActionRowBuilder().addComponents(roleInput),
-                            new ActionRowBuilder().addComponents(linksInput)
+                            new ActionRowBuilder().addComponents(embedInput)
                         );
                         await i.showModal(modal);
                     } else if (i.customId === 'edit_button') {
@@ -775,14 +775,14 @@ module.exports = {
                         if (btn.links && Array.isArray(btn.links)) {
                             linksStr = btn.links.map(l => `${l.label},${l.url}`).join('\n');
                         }
-                        const linksInput = new TextInputBuilder().setCustomId('btn_links').setLabel('الروابط (اسم1,رابط1 | اسم2,رابط2)').setStyle(TextInputStyle.Paragraph).setValue(linksStr).setPlaceholder('مثال:\nروم الفعاليات,https://...\nروم القوانين,https://...').setRequired(false);
+                        const embedInput = new TextInputBuilder().setCustomId('btn_embed').setLabel('Embed? (yes/no) اختياري').setStyle(TextInputStyle.Short).setValue(btn.useEmbed ? 'yes' : 'no').setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
                         
                         modal.addComponents(
                             new ActionRowBuilder().addComponents(labelInput),
                             new ActionRowBuilder().addComponents(emojiInput),
                             new ActionRowBuilder().addComponents(descInput),
                             new ActionRowBuilder().addComponents(roleInput),
-                            new ActionRowBuilder().addComponents(linksInput)
+                            new ActionRowBuilder().addComponents(embedInput)
                         );
                         await i.showModal(modal);
                     } else if (i.customId === 'edit_image') {
@@ -801,14 +801,14 @@ module.exports = {
                         const emojiInput = new TextInputBuilder().setCustomId('btn_emoji').setLabel('إيموجي الزر (اختياري)').setStyle(TextInputStyle.Short).setPlaceholder('مثال: 📍 أو :emoji_name:').setRequired(false);
                         const descInput = new TextInputBuilder().setCustomId('btn_desc').setLabel('شرح الزر (يظهر عند الضغط)').setStyle(TextInputStyle.Paragraph).setRequired(true);
                         const roleInput = new TextInputBuilder().setCustomId('btn_role').setLabel('ID الرول (اختياري - للإعطاء/الإزالة)').setStyle(TextInputStyle.Short).setRequired(false);
-                        const linksInput = new TextInputBuilder().setCustomId('btn_links').setLabel('الروابط (اسم1,رابط1 | اسم2,رابط2)').setStyle(TextInputStyle.Paragraph).setPlaceholder('مثال:\nروم الفعاليات,https://...\nروم القوانين,https://...').setRequired(false);
+                        const embedInput = new TextInputBuilder().setCustomId('btn_embed').setLabel('Embed? (yes/no) اختياري').setStyle(TextInputStyle.Short).setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
                         
                         modal.addComponents(
                             new ActionRowBuilder().addComponents(labelInput),
                             new ActionRowBuilder().addComponents(emojiInput),
                             new ActionRowBuilder().addComponents(descInput),
                             new ActionRowBuilder().addComponents(roleInput),
-                            new ActionRowBuilder().addComponents(linksInput)
+                            new ActionRowBuilder().addComponents(embedInput)
                         );
                         await i.showModal(modal);
                     } else if (i.customId === 'edit_button') {
@@ -847,14 +847,14 @@ module.exports = {
                         if (btn.links && Array.isArray(btn.links)) {
                             linksStr = btn.links.map(l => `${l.label},${l.url}`).join('\n');
                         }
-                        const linksInput = new TextInputBuilder().setCustomId('btn_links').setLabel('الروابط (اسم1,رابط1 | اسم2,رابط2)').setStyle(TextInputStyle.Paragraph).setValue(linksStr).setPlaceholder('مثال:\nروم الفعاليات,https://...\nروم القوانين,https://...').setRequired(false);
+                        const embedInput = new TextInputBuilder().setCustomId('btn_embed').setLabel('Embed? (yes/no) اختياري').setStyle(TextInputStyle.Short).setValue(btn.useEmbed ? 'yes' : 'no').setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
                         
                         modal.addComponents(
                             new ActionRowBuilder().addComponents(labelInput),
                             new ActionRowBuilder().addComponents(emojiInput),
                             new ActionRowBuilder().addComponents(descInput),
                             new ActionRowBuilder().addComponents(roleInput),
-                            new ActionRowBuilder().addComponents(linksInput)
+                            new ActionRowBuilder().addComponents(embedInput)
                         );
                         await i.showModal(modal);
                     } else if (i.customId === 'edit_button') {
@@ -892,14 +892,14 @@ module.exports = {
                         if (btn.links && Array.isArray(btn.links)) {
                             linksStr = btn.links.map(l => `${l.label},${l.url}`).join('\n');
                         }
-                        const linksInput = new TextInputBuilder().setCustomId('btn_links').setLabel('الروابط (اسم1,رابط1 | اسم2,رابط2)').setStyle(TextInputStyle.Paragraph).setValue(linksStr).setPlaceholder('مثال:\nروم الفعاليات,https://...\nروم القوانين,https://...').setRequired(false);
+                        const embedInput = new TextInputBuilder().setCustomId('btn_embed').setLabel('Embed? (yes/no) اختياري').setStyle(TextInputStyle.Short).setValue(btn.useEmbed ? 'yes' : 'no').setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
                         
                         modal.addComponents(
                             new ActionRowBuilder().addComponents(labelInput),
                             new ActionRowBuilder().addComponents(emojiInput),
                             new ActionRowBuilder().addComponents(descInput),
                             new ActionRowBuilder().addComponents(roleInput),
-                            new ActionRowBuilder().addComponents(linksInput)
+                            new ActionRowBuilder().addComponents(embedInput)
                         );
                         await i.showModal(modal);
                     } else if (i.customId === 'edit_button') {
@@ -937,14 +937,14 @@ module.exports = {
                         if (btn.links && Array.isArray(btn.links)) {
                             linksStr = btn.links.map(l => `${l.label},${l.url}`).join('\n');
                         }
-                        const linksInput = new TextInputBuilder().setCustomId('btn_links').setLabel('الروابط (اسم1,رابط1 | اسم2,رابط2)').setStyle(TextInputStyle.Paragraph).setValue(linksStr).setPlaceholder('مثال:\nروم الفعاليات,https://...\nروم القوانين,https://...').setRequired(false);
+                        const embedInput = new TextInputBuilder().setCustomId('btn_embed').setLabel('Embed? (yes/no) اختياري').setStyle(TextInputStyle.Short).setValue(btn.useEmbed ? 'yes' : 'no').setPlaceholder('yes أو no (الافتراضي no)').setRequired(false);
                         
                         modal.addComponents(
                             new ActionRowBuilder().addComponents(labelInput),
                             new ActionRowBuilder().addComponents(emojiInput),
                             new ActionRowBuilder().addComponents(descInput),
                             new ActionRowBuilder().addComponents(roleInput),
-                            new ActionRowBuilder().addComponents(linksInput)
+                            new ActionRowBuilder().addComponents(embedInput)
                         );
                         await i.showModal(modal);
                     } else if (i.customId === 'manage_emojis') {
@@ -1339,7 +1339,7 @@ module.exports = {
                         const emoji = mi.fields.getTextInputValue('btn_emoji').trim();
                         const description = mi.fields.getTextInputValue('btn_desc').trim();
                         const roleId = mi.fields.getTextInputValue('btn_role').trim();
-                        const linksRaw = mi.fields.getTextInputValue('btn_links').trim();
+                        const embedRaw = (mi.fields.getTextInputValue('btn_embed') || '').trim().toLowerCase();
                         
                         // فحص المدخلات الأساسية
                         if (label.length < 1) return await mi.reply({ content: '❌ اسم الزر مطلوب.', ephemeral: true });
@@ -1357,35 +1357,54 @@ module.exports = {
                             return await mi.reply({ content: '❌ ID الرول غير صالح. يجب أن يكون رقماً مكوناً من 17-19 خانة.', ephemeral: true });
                         }
 
-                        const links = [];
-                        if (linksRaw) {
-                            const lines = linksRaw.split(/[\n|]/);
-                            for (let line of lines) {
-                                const parts = line.split(',');
-                                if (parts.length >= 2) {
-                                    const l = parts[0].trim();
-                                    const url = parts.slice(1).join(',').trim();
-                                    if (url.startsWith('http')) {
-                                        links.push({ label: l, url });
-                                    }
-                                }
-                            }
-                        }
 
-                        config.buttons.push({
+                        const useEmbed = embedRaw === 'yes';
+                        const newButton = {
                             label: label,
                             emoji: emoji !== '' ? emoji : null,
                             description: description,
                             roleId: roleId !== '' ? roleId : null,
-                            links: links.length > 0 ? links : null
-                        });
+                            useEmbed,
+                            images: []
+                        };
+                        config.buttons.push(newButton);
                         
                         currentAll[configKey] = config;
                         if (saveAllConfigs(currentAll)) {
                             await sendMainEmbed(mi);
-                            const feedback = { content: `✅ تم إضافة الزر "${label}" بنجاح.`, ephemeral: true };
-                            if (mi.replied || mi.deferred) await mi.followUp(feedback).catch(() => {});
-                            else await mi.reply(feedback).catch(() => {});
+                            await mi.reply({ content: `✅ تم إضافة الزر "${label}" بنجاح.
+هل تريد صور للزر؟ اكتب **yes** خلال 60 ثانية وسيتم طلب الصور.`, ephemeral: true });
+
+                            const answerFilter = m => m.author.id === mi.user.id && m.channel.id === mi.channel.id;
+                            const answerCollected = await mi.channel.awaitMessages({ filter: answerFilter, max: 1, time: 60000 }).catch(() => null);
+                            const answer = answerCollected?.first()?.content?.trim()?.toLowerCase();
+
+                            if (answer === 'yes' || answer === 'نعم') {
+                                await mi.followUp({ content: '📩 **رسالة مخفية:** ارسل الصور الآن في رسالة واحدة (مرفقات متعددة مسموحة) وسيتم حفظها دفعة واحدة مع الزر.', ephemeral: true });
+                                const imagesCollected = await mi.channel.awaitMessages({
+                                    filter: msg => msg.author.id === mi.user.id && msg.channel.id === mi.channel.id && msg.attachments.size > 0,
+                                    max: 1,
+                                    time: 120000
+                                }).catch(() => null);
+
+                                const imageMessage = imagesCollected?.first();
+                                if (imageMessage) {
+                                    const imageUrls = [...imageMessage.attachments.values()].map(att => att.url).filter(Boolean).slice(0, 10);
+                                    if (imageUrls.length > 0) {
+                                        const latest = loadAllConfigs();
+                                        const latestConfig = latest[configKey] || config;
+                                        const latestButton = latestConfig.buttons?.[latestConfig.buttons.length - 1];
+                                        if (latestButton) {
+                                            latestButton.images = imageUrls;
+                                            latest[configKey] = latestConfig;
+                                            saveAllConfigs(latest);
+                                            await mi.followUp({ content: `✅ تم حفظ ${imageUrls.length} صورة للزر دفعة واحدة.`, ephemeral: true });
+                                        }
+                                    }
+                                } else {
+                                    await mi.followUp({ content: '⌛ انتهى الوقت، لم يتم حفظ صور للزر.', ephemeral: true });
+                                }
+                            }
                         } else {
                             await mi.reply({ content: '❌ فشل في حفظ البيانات.', ephemeral: true });
                         }

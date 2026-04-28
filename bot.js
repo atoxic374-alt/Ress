@@ -4490,12 +4490,8 @@ if ((interaction.isButton() || interaction.isModalSubmit()) && customId.startsWi
                 const emoji = interaction.fields.getTextInputValue('btn_emoji');
                 const description = interaction.fields.getTextInputValue('btn_desc');
                 const roleId = interaction.fields.getTextInputValue('btn_role');
-                const linksText = interaction.fields.getTextInputValue('btn_links');
-
-                const links = linksText.split('\n').filter(line => line.includes(',')).map(line => {
-                    const [lLabel, lUrl] = line.split(',').map(s => s.trim());
-                    return { label: lLabel, url: lUrl };
-                });
+                const embedRaw = (interaction.fields.getTextInputValue('btn_embed') || '').trim().toLowerCase();
+                const useEmbed = embedRaw === 'yes';
 
                 const configPath = path.join(__dirname, 'data', 'serverMapConfig.json');
                 let allConfigs = {};
@@ -4515,7 +4511,7 @@ if ((interaction.isButton() || interaction.isModalSubmit()) && customId.startsWi
                     emoji: emoji || null,
                     description,
                     roleId: roleId || null,
-                    links
+                    useEmbed
                 };
                 
                 fs.writeFileSync(configPath, JSON.stringify(allConfigs, null, 2));
@@ -4630,11 +4626,28 @@ if ((interaction.isButton() || interaction.isModalSubmit()) && customId.startsWi
             rows.push(currentRow);
         }
 
+        const descriptionText = (btn.description || 'لا يوجد شرح متاح.') + roleStatus;
+        const imageFiles = Array.isArray(btn.images)
+            ? btn.images.filter(img => typeof img === 'string' && /^https?:\/\//i.test(img)).slice(0, 10)
+            : [];
+
         const replyPayload = {
-            content: (btn.description || 'لا يوجد شرح متاح.') + roleStatus,
             components: rows,
             ephemeral: true
         };
+
+        if (btn.useEmbed === true) {
+            const embed = new EmbedBuilder()
+                .setDescription(descriptionText)
+                .setColor('#2f3136');
+            replyPayload.embeds = [embed];
+        } else {
+            replyPayload.content = descriptionText;
+        }
+
+        if (imageFiles.length > 0) {
+            replyPayload.files = imageFiles;
+        }
 
         if (interaction.deferred || interaction.replied) {
             await interaction.editReply(replyPayload).catch(err => console.error('Error in editReply:', err));
