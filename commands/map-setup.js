@@ -620,14 +620,9 @@ module.exports = {
                     // إذا كان لدينا تفاعل (Interaction)
                     if (msgOrInteraction.isRepliable && msgOrInteraction.isRepliable()) {
                         if (msgOrInteraction.replied || msgOrInteraction.deferred) {
-                            return await msgOrInteraction.editReply(options);
+                            return await msgOrInteraction.editReply(options).catch(() => null);
                         } else {
-                            return await msgOrInteraction.update(options).catch(async () => {
-                                if (msgOrInteraction.replied || msgOrInteraction.deferred) {
-                                    return await msgOrInteraction.editReply(options).catch(() => null);
-                                }
-                                return await msgOrInteraction.reply(options).catch(() => null);
-                            });
+                            return await msgOrInteraction.update(options).catch(() => null);
                         }
                     } 
                     
@@ -639,7 +634,8 @@ module.exports = {
                     // كخيار أخير: إرسال رسالة جديدة (فقط في المرة الأولى)
                     return await message.channel.send(options);
                 } catch (err) {
-                    if (!String(err.message || '').includes('already been sent or deferred')) {
+                    const msg = String(err.message || '');
+                    if (!msg.includes('already been sent or deferred') && !msg.includes('Unknown interaction')) {
                         console.error('Error updating setup menu:', err.message);
                     }
                 }
@@ -1276,7 +1272,10 @@ module.exports = {
                         await sendMainEmbed(i);
                     }
                 } catch (err) {
-                    console.error('Collector interaction error:', err.message);
+                    const msg = String(err.message || '');
+                    if (!msg.includes('Unknown interaction')) {
+                        console.error('Collector interaction error:', err.message);
+                    }
                 }
             });
 
@@ -1451,10 +1450,13 @@ module.exports = {
                         }
                     }
                 } catch (err) {
-                    console.error('Modal submission error:', err.message);
+                    const msg = String(err.message || '');
+                    if (!msg.includes('Unknown interaction')) {
+                        console.error('Modal submission error:', err.message);
+                    }
                     try {
-                        if (!mi.replied && !mi.deferred) await mi.reply({ content: '❌ حدث خطأ غير متوقع أثناء معالجة البيانات.', ephemeral: true });
-                        else await mi.followUp({ content: '❌ حدث خطأ غير متوقع أثناء معالجة البيانات.', ephemeral: true });
+                        if (!mi.replied && !mi.deferred) await mi.reply({ content: '❌ حدث خطأ غير متوقع أثناء معالجة البيانات.', ephemeral: true }).catch(() => {});
+                        else await mi.followUp({ content: '❌ حدث خطأ غير متوقع أثناء معالجة البيانات.', ephemeral: true }).catch(() => {});
                     } catch (e) {}
                 }
             };
