@@ -1,5 +1,5 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } = require('discord.js');
-const { createCanvas, loadImage } = require('canvas');
+const { createCanvas } = require('canvas');
 const fs = require('fs');
 const path = require('path');
 const { loadMapConfigsSync, writeMapConfigsQueued } = require('../utils/mapConfigStore');
@@ -265,39 +265,37 @@ module.exports = {
                 return console.log(`🚫 نقص في الصلاحيات لإرسال الخريطة في قناة: ${message.channel.name}`);
             }
 
-            const canvas = createCanvas(1280, 720);
-            const ctx = canvas.getContext('2d');
-
-            try {
-                let bg;
-                if (config.localImagePath) {
-                    const localPath = path.join(__dirname, '..', 'attached_assets', 'map_images', config.localImagePath);
-                    if (fs.existsSync(localPath)) {
-                        bg = await loadImage(localPath);
-                    }
+            let mapFile = null;
+            if (config.localImagePath) {
+                const localPath = path.join(__dirname, '..', 'attached_assets', 'map_images', config.localImagePath);
+                if (fs.existsSync(localPath)) {
+                    mapFile = localPath;
                 }
+            }
 
-                if (!bg) {
-                    bg = await loadImage(config.imageUrl || 'https://i.ibb.co/pP9GzD7/default-map.png');
-                }
+            if (!mapFile && config.imageUrl && /^https?:\/\//i.test(config.imageUrl)) {
+                mapFile = config.imageUrl;
+            }
 
-                ctx.drawImage(bg, 0, 0, 1280, 720);
-            } catch (e) {
-                console.error('Error drawing map image:', e.message);
+            // fallback فقط عند تعذر وجود صورة أصلية
+            let fallbackAttachment = null;
+            if (!mapFile) {
+                const canvas = createCanvas(1280, 720);
+                const ctx = canvas.getContext('2d');
                 ctx.fillStyle = '#23272a';
                 ctx.fillRect(0, 0, 1280, 720);
                 ctx.font = 'bold 60px Arial';
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'center';
-                ctx.fillText(message.guild.name, 640, 360);
+                ctx.fillText(message.guild?.name || 'Server', 640, 360);
+                fallbackAttachment = new AttachmentBuilder(canvas.toBuffer(), { name: 'server-map.png' });
             }
 
-            const attachment = new AttachmentBuilder(canvas.toBuffer(), { name: 'server-map.png' });
             const rows = buildClassicRows(config, configKey);
 
             const sendOptions = {
                 content: (config.welcomeMessage && config.welcomeMessage.trim() !== '') ? config.welcomeMessage : null,
-                files: [attachment],
+                files: mapFile ? [mapFile] : [fallbackAttachment],
                 components: rows
             };
 
