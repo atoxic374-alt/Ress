@@ -5,10 +5,14 @@ const axios = require('axios');
 const { loadMapConfigsSync, writeMapConfigsQueued } = require('../utils/mapConfigStore');
 
 const imagesDir = path.join(__dirname, '..', 'attached_assets', 'map_images');
+const buttonImagesDir = path.join(__dirname, '..', 'attached_assets', 'map_button_images');
 
 // التأكد من وجود مجلد الصور
 if (!fs.existsSync(imagesDir)) {
     fs.mkdirSync(imagesDir, { recursive: true });
+}
+if (!fs.existsSync(buttonImagesDir)) {
+    fs.mkdirSync(buttonImagesDir, { recursive: true });
 }
 
 async function downloadImage(url, filename) {
@@ -27,6 +31,26 @@ async function downloadImage(url, filename) {
         });
     } catch (e) {
         console.error('Error downloading image:', e.message);
+        return null;
+    }
+}
+
+async function downloadButtonImage(url, filename) {
+    try {
+        const response = await axios({
+            url,
+            method: 'GET',
+            responseType: 'stream'
+        });
+        const filePath = path.join(buttonImagesDir, filename);
+        const writer = fs.createWriteStream(filePath);
+        response.data.pipe(writer);
+        return new Promise((resolve, reject) => {
+            writer.on('finish', () => resolve(filePath));
+            writer.on('error', reject);
+        });
+    } catch (e) {
+        console.error('Error downloading button image:', e.message);
         return null;
     }
 }
@@ -599,7 +623,10 @@ module.exports = {
                             return await msgOrInteraction.editReply(options);
                         } else {
                             return await msgOrInteraction.update(options).catch(async () => {
-                                return await msgOrInteraction.reply(options);
+                                if (msgOrInteraction.replied || msgOrInteraction.deferred) {
+                                    return await msgOrInteraction.editReply(options).catch(() => null);
+                                }
+                                return await msgOrInteraction.reply(options).catch(() => null);
                             });
                         }
                     } 
@@ -612,7 +639,9 @@ module.exports = {
                     // كخيار أخير: إرسال رسالة جديدة (فقط في المرة الأولى)
                     return await message.channel.send(options);
                 } catch (err) {
-                    console.error('Error updating setup menu:', err.message);
+                    if (!String(err.message || '').includes('already been sent or deferred')) {
+                        console.error('Error updating setup menu:', err.message);
+                    }
                 }
             };
 
@@ -1390,18 +1419,26 @@ module.exports = {
 
                                 const imageMessage = imagesCollected?.first();
                                 if (imageMessage) {
-                                    const allImageUrls = [...imageMessage.attachments.values()].map(att => att.url).filter(Boolean);
-                                    const imageUrls = allImageUrls.slice(0, 10);
-                                    if (imageUrls.length > 0) {
+                                    const allAttachments = [...imageMessage.attachments.values()];
+                                    const selectedAttachments = allAttachments.slice(0, 10);
+                                    const downloadedImages = await Promise.all(selectedAttachments.map(async (att, idx) => {
+                                        const ext = (att.name && att.name.split('.').pop()) ? att.name.split('.').pop() : 'png';
+                                        const filename = `${configKey}_${Date.now()}_${idx}.${ext}`;
+                                        const localPath = await downloadButtonImage(att.url, filename);
+                                        if (!localPath) return null;
+                                        return { imageUrl: att.url, localImagePath: filename };
+                                    }));
+                                    const imageItems = downloadedImages.filter(Boolean);
+                                    if (imageItems.length > 0) {
                                         const latest = loadAllConfigs();
                                         const latestConfig = latest[configKey] || config;
                                         const latestButton = latestConfig.buttons?.[latestConfig.buttons.length - 1];
                                         if (latestButton) {
-                                            latestButton.images = imageUrls;
+                                            latestButton.images = imageItems;
                                             latest[configKey] = latestConfig;
                                             saveAllConfigs(latest);
-                                            const warning = allImageUrls.length > 10 ? '\n⚠️ تم تجاهل الصور الزائدة بعد أول 10 صور.' : '';
-                                            await safeEphemeral(`✅ تم حفظ ${imageUrls.length} صورة للزر دفعة واحدة.${warning}`);
+                                            const warning = allAttachments.length > 10 ? '\n⚠️ تم تجاهل الصور الزائدة بعد أول 10 صور.' : '';
+                                            await safeEphemeral(`✅ تم حفظ ${imageItems.length} صورة للزر دفعة واحدة.${warning}`);
                                         }
                                     }
                                 } else {

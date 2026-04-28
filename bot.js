@@ -65,6 +65,25 @@ wordTriggers: path.join(dataDir, 'wordTriggers.json'),
     
 };
 
+const MAP_BUTTON_IMAGES_DIR = path.join(__dirname, 'attached_assets', 'map_button_images');
+if (!fs.existsSync(MAP_BUTTON_IMAGES_DIR)) {
+    fs.mkdirSync(MAP_BUTTON_IMAGES_DIR, { recursive: true });
+}
+
+async function downloadMapButtonImage(url, filename) {
+    try {
+        const response = await fetch(url);
+        if (!response.ok) return null;
+        const buffer = Buffer.from(await response.arrayBuffer());
+        const filePath = path.join(MAP_BUTTON_IMAGES_DIR, filename);
+        await fs.promises.writeFile(filePath, buffer);
+        return filePath;
+    } catch (e) {
+        console.error('Error downloading map button image:', e.message);
+        return null;
+    }
+}
+
 // نظام التحقق التلقائي من ملفات البيانات
 function ensureDataFiles() {
     
@@ -4530,9 +4549,17 @@ if ((interaction.isButton() || interaction.isModalSubmit()) && customId.startsWi
 
                     const imageMessage = imagesCollected?.first();
                     if (imageMessage) {
-                        const allImageUrls = [...imageMessage.attachments.values()].map(att => att.url).filter(Boolean);
-                        const imageUrls = allImageUrls.slice(0, 10);
-                        if (imageUrls.length > 0) {
+                        const allAttachments = [...imageMessage.attachments.values()];
+                        const selectedAttachments = allAttachments.slice(0, 10);
+                        const downloadedImages = await Promise.all(selectedAttachments.map(async (att, idx2) => {
+                            const ext = (att.name && att.name.split('.').pop()) ? att.name.split('.').pop() : 'png';
+                            const filename = `${configKey}_${Date.now()}_${idx2}.${ext}`;
+                            const localPath = await downloadMapButtonImage(att.url, filename);
+                            if (!localPath) return null;
+                            return { imageUrl: att.url, localImagePath: filename };
+                        }));
+                        const imageItems = downloadedImages.filter(Boolean);
+                        if (imageItems.length > 0) {
                             let refreshedConfigs = {};
                             try {
                                 if (fs.existsSync(configPath)) {
@@ -4541,10 +4568,10 @@ if ((interaction.isButton() || interaction.isModalSubmit()) && customId.startsWi
                             } catch (e) {}
 
                             if (refreshedConfigs[configKey]?.buttons?.[idx]) {
-                                refreshedConfigs[configKey].buttons[idx].images = imageUrls;
+                                refreshedConfigs[configKey].buttons[idx].images = imageItems;
                                 fs.writeFileSync(configPath, JSON.stringify(refreshedConfigs, null, 2));
-                                const warning = allImageUrls.length > 10 ? '\n⚠️ تم تجاهل الصور الزائدة بعد أول 10 صور.' : '';
-                                await interaction.followUp({ content: `✅ تم حفظ ${imageUrls.length} صورة للزر.${warning}`, ephemeral: true });
+                                const warning = allAttachments.length > 10 ? '\n⚠️ تم تجاهل الصور الزائدة بعد أول 10 صور.' : '';
+                                await interaction.followUp({ content: `✅ تم حفظ ${imageItems.length} صورة للزر.${warning}`, ephemeral: true });
                             }
                         }
                     } else {
@@ -4664,7 +4691,24 @@ if ((interaction.isButton() || interaction.isModalSubmit()) && customId.startsWi
 
         const descriptionText = (btn.description || 'لا يوجد شرح متاح.') + roleStatus;
         const imageFiles = Array.isArray(btn.images)
-            ? btn.images.filter(img => typeof img === 'string' && /^https?:\/\//i.test(img)).slice(0, 10)
+            ? btn.images
+                .slice(0, 10)
+                .map((img) => {
+                    if (typeof img === 'string' && /^https?:\/\//i.test(img)) {
+                        return img;
+                    }
+                    if (img && typeof img === 'object') {
+                        if (img.localImagePath) {
+                            const localPath = path.join(MAP_BUTTON_IMAGES_DIR, img.localImagePath);
+                            if (fs.existsSync(localPath)) return localPath;
+                        }
+                        if (img.imageUrl && /^https?:\/\//i.test(img.imageUrl)) {
+                            return img.imageUrl;
+                        }
+                    }
+                    return null;
+                })
+                .filter(Boolean)
             : [];
 
         const replyPayload = {
@@ -4678,7 +4722,7 @@ if ((interaction.isButton() || interaction.isModalSubmit()) && customId.startsWi
             const embed = new EmbedBuilder()
                 .setTitle(guildName)
                 .setDescription(descriptionText)
-                .setColor('#2f3136');
+                .setColor('#FFFFFF');
             if (guildIcon) {
                 embed.setThumbnail(guildIcon);
                 embed.setFooter({ text: guildName, iconURL: guildIcon });
