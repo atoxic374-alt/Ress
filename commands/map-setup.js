@@ -1371,10 +1371,17 @@ module.exports = {
                         currentAll[configKey] = config;
                         if (saveAllConfigs(currentAll)) {
                             await sendMainEmbed(mi);
-                            await mi.reply({ content: `✅ تم إضافة الزر "${label}" بنجاح.`, ephemeral: true });
+                            const safeEphemeral = async (content) => {
+                                if (mi.replied || mi.deferred) {
+                                    return mi.followUp({ content, ephemeral: true }).catch(() => {});
+                                }
+                                return mi.reply({ content, ephemeral: true }).catch(() => {});
+                            };
+
+                            await safeEphemeral(`✅ تم إضافة الزر "${label}" بنجاح.`);
 
                             if (imagesRaw === 'yes' || imagesRaw === 'نعم') {
-                                await mi.followUp({ content: '📩 **رسالة مخفية:** ارسل الصور الآن في رسالة واحدة (مرفقات متعددة مسموحة) وسيتم حفظها دفعة واحدة مع الزر.\n⚠️ الحد الأقصى **10 صور** فقط.', ephemeral: true });
+                                await safeEphemeral('📩 **رسالة مخفية:** ارسل الصور الآن في رسالة واحدة (مرفقات متعددة مسموحة) وسيتم حفظها دفعة واحدة مع الزر.\n⚠️ الحد الأقصى **10 صور** فقط.');
                                 const imagesCollected = await mi.channel.awaitMessages({
                                     filter: msg => msg.author.id === mi.user.id && msg.channel.id === mi.channel.id && msg.attachments.size > 0,
                                     max: 1,
@@ -1394,15 +1401,16 @@ module.exports = {
                                             latest[configKey] = latestConfig;
                                             saveAllConfigs(latest);
                                             const warning = allImageUrls.length > 10 ? '\n⚠️ تم تجاهل الصور الزائدة بعد أول 10 صور.' : '';
-                                            await mi.followUp({ content: `✅ تم حفظ ${imageUrls.length} صورة للزر دفعة واحدة.${warning}`, ephemeral: true });
+                                            await safeEphemeral(`✅ تم حفظ ${imageUrls.length} صورة للزر دفعة واحدة.${warning}`);
                                         }
                                     }
                                 } else {
-                                    await mi.followUp({ content: '⌛ انتهى الوقت، لم يتم حفظ صور للزر.', ephemeral: true });
+                                    await safeEphemeral('⌛ انتهى الوقت، لم يتم حفظ صور للزر.');
                                 }
                             }
                         } else {
-                            await mi.reply({ content: '❌ فشل في حفظ البيانات.', ephemeral: true });
+                            if (mi.replied || mi.deferred) await mi.followUp({ content: '❌ فشل في حفظ البيانات.', ephemeral: true }).catch(() => {});
+                            else await mi.reply({ content: '❌ فشل في حفظ البيانات.', ephemeral: true }).catch(() => {});
                         }
                     }
                 } catch (err) {
