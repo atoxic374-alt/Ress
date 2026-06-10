@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
+const { getDataDir } = require('./storagePaths');
 
-const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
+const responsibilitiesPath = path.join(getDataDir(), 'responsibilities.json');
 
 function normalizeResponsiblesList(value) {
   if (!Array.isArray(value)) return [];

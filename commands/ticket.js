@@ -20,16 +20,18 @@ const path = require('path');
 const { createCanvas, loadImage } = require('canvas');
 const { registerTicketInteractionRouter } = require('../utils/ticketInteractionRouter');
 const colorManager = require('../utils/colorManager');
-const { getDatabase } = require('../utils/database');
+const { getDatabase, dbManager } = require('../utils/database');
+const { getDataDir, ensureDirSync } = require('../utils/storagePaths');
 const { getResponsibilitiesSnapshot } = require('../utils/responsibilitiesStore');
 const { ensureCairoFontsRegistered } = require('../utils/cairoFont');
 
 const name = 'ticket';
 const aliases = ['تكت', 'tclose', 'اغلاق', 'اقفال', 'myticket', 'نقاطي', 'tadd', 'اضافه', 'اضافة', 'إضافة', 'tremove', 'ازاله', 'ازالة', 'إزالة', 'tchange', 'تغيير', 'تحويل', 'ttop', 'نقاط', 'tname', 'اسم', 'تسميه', 'تسمية', 'remind', 'تنبيه', 'استدعاء', 'points', 'tm', 'treset', 'tmreset', 'tblock'];
-const dataPath = path.join(__dirname, '..', 'data', 'ticketConfig.json');
-const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
-const ticketImagesDir = path.join(__dirname, '..', 'data', 'ticket_images');
-const pointsPath = path.join(__dirname, '..', 'data', 'points.json');
+const dataDir = getDataDir();
+const dataPath = path.join(dataDir, 'ticketConfig.json');
+const responsibilitiesPath = path.join(dataDir, 'responsibilities.json');
+const ticketImagesDir = ensureDirSync(path.join(dataDir, 'ticket_images'));
+const pointsPath = path.join(dataDir, 'points.json');
 const ticketSearchSessions = new Map();
 const pointsAdjustSessions = new Map();
 const memberFetchInFlight = new Map();
@@ -63,6 +65,8 @@ const storeCache = {
   [STATE_KEY_POINTS]: null,
   [STATE_KEY_RESPONSIBILITIES]: null
 };
+const runtimeSessionFallback = new Map();
+let ticketDbAvailable = true;
 
 /**
  * Queues a state write operation to ensure sequential processing and prevent race conditions.
@@ -88,36 +92,60 @@ function queueStateWrite(key, task) {
 }
 
 function getTicketDb() {
-  return getDatabase();
+  try {
+    if (!dbManager.isInitialized) {
+      ticketDbAvailable = false;
+      return null;
+    }
+    const db = getDatabase();
+    ticketDbAvailable = Boolean(db?.db);
+    return db;
+  } catch (error) {
+    ticketDbAvailable = false;
+    logSilentError('ticket.db.unavailable', error);
+    return null;
+  }
 }
 
 async function ensureTicketStateTables() {
   const db = getTicketDb();
+  if (!db?.db) {
+    ticketDbAvailable = false;
+    return null;
+  }
   if (db[TICKET_STATE_TABLES_READY]) return db;
-  await db.run(`CREATE TABLE IF NOT EXISTS ticket_state (
-    state_key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_at INTEGER NOT NULL
-  )`).catch((error) => logSilentError('ticket.state.table', error));
-  await db.run(`CREATE TABLE IF NOT EXISTS ticket_runtime_session (
-    session_type TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    payload TEXT NOT NULL,
-    expires_at INTEGER,
-    updated_at INTEGER NOT NULL,
-    PRIMARY KEY (session_type, session_id)
-  )`).catch((error) => logSilentError('ticket.session.table', error));
-  db[TICKET_STATE_TABLES_READY] = true;
-  return db;
+  try {
+    await db.run(`CREATE TABLE IF NOT EXISTS ticket_state (
+      state_key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`);
+    await db.run(`CREATE TABLE IF NOT EXISTS ticket_runtime_session (
+      session_type TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      expires_at INTEGER,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (session_type, session_id)
+    )`);
+    db[TICKET_STATE_TABLES_READY] = true;
+    ticketDbAvailable = true;
+    return db;
+  } catch (error) {
+    ticketDbAvailable = false;
+    logSilentError('ticket.state.table', error);
+    return null;
+  }
 }
 
 function execTicketDb(dbManager, sql) {
-  return new Promise((resolve, reject) => {
+  if (!dbManager?.db) return Promise.resolve();
+  return dbManager.withBusyRetry(() => new Promise((resolve, reject) => {
     dbManager.db.exec(sql, (error) => {
       if (error) reject(error);
       else resolve();
     });
-  });
+  }), 'ticket.exec');
 }
 
 function parseStoredJson(raw, fallback = {}) {
@@ -150,7 +178,7 @@ function primeStateCache(key, filePath) {
   if (stateInitPromises.has(key)) return stateInitPromises.get(key);
   const pending = ensureTicketStateTables().then(async (db) => {
     // Attempt to load from SQLite first for speed and consistency
-    const row = await db.get("SELECT value FROM ticket_state WHERE state_key = ?", [key]).catch(() => null);
+    const row = db ? await db.get("SELECT value FROM ticket_state WHERE state_key = ?", [key]).catch(() => null) : null;
     const parsedDbValue = parseStoredJson(row?.value, null);
     if (parsedDbValue && typeof parsedDbValue === "object") {
       replaceCachedState(key, parsedDbValue);
@@ -196,7 +224,13 @@ function hydrateStateCache(key, filePath) {
 }
 
 async function persistStateSnapshot(key, filePath, value) {
+  const snapshot = JSON.stringify(value ?? {}, null, 2);
+  await fs.promises.mkdir(path.dirname(filePath), { recursive: true }).catch(() => null);
+  await fs.promises.writeFile(filePath, snapshot).catch((error) => logSilentError(`ticket.json.save.${key}`, error));
+
   const db = await ensureTicketStateTables();
+  if (!db) return;
+
   const now = Date.now();
   await execTicketDb(db, 'BEGIN IMMEDIATE TRANSACTION');
   try {
@@ -239,7 +273,10 @@ function saveCachedState(key, filePath, value) {
 function saveRuntimeSession(sessionType, sessionId, payload, ttlMs = null) {
   const expiresAt = Number.isFinite(ttlMs) ? Date.now() + ttlMs : null;
   queueStateWrite(`${sessionType}:${sessionId}`, async () => {
+    const fallbackKey = `${sessionType}:${sessionId}`;
+    runtimeSessionFallback.set(fallbackKey, { payload, expiresAt });
     const db = await ensureTicketStateTables();
+    if (!db) return;
     await db.run(
       `INSERT INTO ticket_runtime_session (session_type, session_id, payload, expires_at, updated_at)
        VALUES (?, ?, ?, ?, ?)
@@ -260,12 +297,21 @@ function saveRuntimeSession(sessionType, sessionId, payload, ttlMs = null) {
  * @returns {Promise<object|null>} A promise that resolves with the session payload, or null if not found or expired.
  */
 async function loadRuntimeSession(sessionType, sessionId) {
+  const fallbackKey = `${sessionType}:${sessionId}`;
+  const fallback = runtimeSessionFallback.get(fallbackKey);
   const db = await ensureTicketStateTables();
-  const row = await db.get(
+  const row = db ? await db.get(
     "SELECT payload, expires_at FROM ticket_runtime_session WHERE session_type = ? AND session_id = ?",
     [sessionType, sessionId]
-  ).catch(() => null);
-  if (!row) return null;
+  ).catch(() => null) : null;
+  if (!row) {
+    if (!fallback) return null;
+    if (fallback.expiresAt && Number(fallback.expiresAt) <= Date.now()) {
+      runtimeSessionFallback.delete(fallbackKey);
+      return null;
+    }
+    return fallback.payload ?? null;
+  }
   if (row.expires_at && Number(row.expires_at) <= Date.now()) {
     deleteRuntimeSession(sessionType, sessionId);
     return null;
@@ -275,14 +321,21 @@ async function loadRuntimeSession(sessionType, sessionId) {
 
 function deleteRuntimeSession(sessionType, sessionId) {
   queueStateWrite(`${sessionType}:${sessionId}`, async () => {
+    runtimeSessionFallback.delete(`${sessionType}:${sessionId}`);
     const db = await ensureTicketStateTables();
+    if (!db) return;
     await db.run('DELETE FROM ticket_runtime_session WHERE session_type = ? AND session_id = ?', [sessionType, sessionId]);
   }).catch((error) => logSilentError(`ticket.session.delete.${sessionType}`, error));
 }
 
 function pruneRuntimeSessions(sessionType, now = Date.now()) {
   queueStateWrite(`prune:${sessionType || 'all'}`, async () => {
+    for (const [key, session] of runtimeSessionFallback.entries()) {
+      if ((sessionType && !key.startsWith(`${sessionType}:`)) || !session.expiresAt || Number(session.expiresAt) > now) continue;
+      runtimeSessionFallback.delete(key);
+    }
     const db = await ensureTicketStateTables();
+    if (!db) return;
     if (sessionType) {
       await db.run('DELETE FROM ticket_runtime_session WHERE session_type = ? AND expires_at IS NOT NULL AND expires_at <= ?', [sessionType, now]);
       return;
