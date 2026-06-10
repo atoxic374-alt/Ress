@@ -90,8 +90,9 @@ async function sendLevelUpNotification(client, userId, oldVoiceLevel, newVoiceLe
 }
 
 // Database paths
-const mainDbPath = path.join(__dirname, '..', 'database', 'discord_bot.db');
-const streakDbPath = path.join(__dirname, '..', 'database', 'streak.db');
+const { getDatabasePath } = require('../utils/storagePaths');
+const mainDbPath = getDatabasePath('discord_bot.db');
+const streakDbPath = getDatabasePath('streak.db');
 
 ensureCairoFontsRegistered();
 

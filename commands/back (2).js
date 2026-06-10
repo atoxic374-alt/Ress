@@ -17,7 +17,8 @@ const crypto = require("crypto");
 const colorManager = require("../utils/colorManager");
 const { getDatabase } = require("../utils/database");
 
-const backupsDir = path.join(__dirname, "..", "backups", "json-fallback");
+const { getBackupsDir } = require('../utils/storagePaths');
+const backupsDir = getBackupsDir('json-fallback');
 const sessions = new Map();
 const protectionDebounce = new Map();
 let listenersReady = false;

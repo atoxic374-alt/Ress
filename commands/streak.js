@@ -11,7 +11,8 @@ const axios = require('axios');
 
 const name = 'streak';
 
-const dbPath = path.join(__dirname, '..', 'database', 'streak.db');
+const { getDatabasePath } = require('../utils/storagePaths');
+const dbPath = getDatabasePath('streak.db');
 const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
 
 let db = null;

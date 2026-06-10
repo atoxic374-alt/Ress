@@ -5,7 +5,8 @@ const colorManager = require('../utils/colorManager.js');
 const { getAllBackups } = require('./backup.js');
 const { enableProtection } = require('../utils/protectionManager.js');
 
-const backupsDir = path.join(__dirname, '..', 'backups');
+const { getBackupsDir } = require('../utils/storagePaths');
+const backupsDir = getBackupsDir();
 
 function readJSON(filePath, fallback) {
   try {

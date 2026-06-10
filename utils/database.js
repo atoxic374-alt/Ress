@@ -1,5 +1,6 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const { getDatabasePath, getDataDir } = require('./storagePaths');
 const moment = require('moment-timezone');
 
 // ضبط بداية الأسبوع على السبت (حسب التقويم العربي)
@@ -11,16 +12,30 @@ moment.updateLocale('en', {
 });
 
 // إنشاء مجلد قاعدة البيانات
-const dbPath = path.join(__dirname, '..', 'database', 'discord_bot.db');
+const dbPath = getDatabasePath('discord_bot.db');
 
 class DatabaseManager {
     constructor() {
         this.db = null;
         this.isInitialized = false;
+        this.isDegraded = false;
+        this.initializationPromise = null;
+        this.writeQueue = Promise.resolve();
     }
 
     // تهيئة قاعدة البيانات
     async initialize() {
+        if (this.isInitialized) return this;
+        if (this.initializationPromise) return this.initializationPromise;
+
+        this.initializationPromise = this.initializeInternal().finally(() => {
+            this.initializationPromise = null;
+        });
+
+        return this.initializationPromise;
+    }
+
+    async initializeInternal() {
         try {
             // إنشاء مجلد قاعدة البيانات إذا لم يكن موجوداً
             const fs = require('fs');
@@ -29,57 +44,119 @@ class DatabaseManager {
                 fs.mkdirSync(dbDir, { recursive: true });
             }
 
-            this.db = new sqlite3.Database(dbPath);
-
-            // تحسينات PRAGMA الأسطورية (Ultra-Performance Mode)
-            await this.run('PRAGMA journal_mode=WAL');
-            await this.run('PRAGMA synchronous=NORMAL');
-            await this.run('PRAGMA temp_store=MEMORY');
-            await this.run('PRAGMA cache_size=-1048576'); // 1GB كاش مخصص
-            await this.run('PRAGMA mmap_size=4294967296'); // 4GB Memory Map (أقصى سرعة قراءة)
-            await this.run('PRAGMA page_size=65536'); // أقصى حجم صفحة مدعوم لتقليل الـ I/O
-            await this.run('PRAGMA locking_mode=NORMAL');
-            await this.run('PRAGMA busy_timeout=30000');
-            await this.run('PRAGMA threads=16'); // استغلال كافة خيوط المعالجة المتاحة
-            await this.run('PRAGMA cache_spill=OFF');
-            await this.run('PRAGMA secure_delete=OFF');
-            await this.run('PRAGMA auto_vacuum=NONE');
-            await this.run('PRAGMA cell_size_check=OFF');
-            await this.run('PRAGMA automatic_index=ON');
-
-            // تهيئة الجداول
-            await this.createTables();
-
-            // تم إيقاف تصحيح الأرقام التلقائي لضمان بقاء البيانات بالميلي ثانية كما هي
-            // await this.run("UPDATE daily_activity SET voice_time = voice_time / 60000 WHERE voice_time > 1440");
-            // await this.run("UPDATE user_totals SET total_voice_time = total_voice_time / 60000 WHERE total_voice_time > 525600");
-
-            // Check if column exists, if not add it (Migration)
-            try {
-                const tableInfo = await this.all("PRAGMA table_info(responsibilities)");
-                const hasConfig = tableInfo.some(col => col.name === 'config');
-                if (!hasConfig) {
-                    console.log('⚠️ Adding missing "config" column to responsibilities table');
-                    await this.run('ALTER TABLE responsibilities ADD COLUMN config TEXT');
-                }
-                const hasImage = tableInfo.some(col => col.name === 'image');
-                if (!hasImage) {
-                    console.log('⚠️ Adding missing "image" column to responsibilities table');
-                    await this.run('ALTER TABLE responsibilities ADD COLUMN image TEXT');
-                }
-            } catch (migrationError) {
-                console.error('❌ Migration Error:', migrationError);
-            }
-
-            // إنشاء الفهارس للأداء
-            await this.createIndexes();
+            this.db = await this.openDatabaseWithFallback(dbPath);
+            await this.prepareDatabase();
 
             this.isInitialized = true;
-            console.log('✅ تم تهيئة قاعدة البيانات بنجاح مع تحسينات الأداء');
+            console.log(this.isDegraded
+                ? '✅ تم تهيئة قاعدة بيانات مؤقتة في الذاكرة لاستمرار عمل البوت'
+                : '✅ تم تهيئة قاعدة البيانات بنجاح مع تحسينات الأداء');
         } catch (error) {
             console.error('❌ خطأ في تهيئة قاعدة البيانات:', error);
             throw error;
         }
+    }
+
+    openDatabase(filePath) {
+        return new Promise((resolve, reject) => {
+            const db = new sqlite3.Database(filePath, (error) => {
+                if (error) reject(error);
+                else resolve(db);
+            });
+        });
+    }
+
+    async prepareDatabase() {
+        this.db.configure('busyTimeout', Number(process.env.SQLITE_BUSY_TIMEOUT_MS || 60000));
+        this.db.serialize();
+
+        try {
+            await this.applyPragmas();
+            await this.createTables();
+            await this.runResponsibilityMigrations();
+            await this.createIndexes();
+        } catch (error) {
+            if (!this.isDegraded && this.isBusyError(error)) {
+                console.warn('⚠️ ملف SQLite مقفول أثناء التهيئة؛ سيتم التحويل لقاعدة مؤقتة حتى يعمل البوت والتكت.');
+                await this.closeAsync().catch(() => null);
+                this.db = await this.openDatabase(':memory:');
+                this.isDegraded = true;
+                this.writeQueue = Promise.resolve();
+                this.db.configure('busyTimeout', Number(process.env.SQLITE_BUSY_TIMEOUT_MS || 60000));
+                this.db.serialize();
+                await this.applyPragmas();
+                await this.createTables();
+                await this.runResponsibilityMigrations();
+                await this.createIndexes();
+                return;
+            }
+            throw error;
+        }
+    }
+
+    async applyPragmas() {
+        await this.run('PRAGMA journal_mode=WAL');
+        await this.run('PRAGMA synchronous=NORMAL');
+        await this.run('PRAGMA temp_store=MEMORY');
+        await this.run('PRAGMA cache_size=-65536');
+        await this.run('PRAGMA mmap_size=268435456');
+        await this.run('PRAGMA locking_mode=NORMAL');
+        await this.run(`PRAGMA busy_timeout=${Number(process.env.SQLITE_BUSY_TIMEOUT_MS || 60000)}`);
+        await this.run('PRAGMA threads=4');
+        await this.run('PRAGMA wal_autocheckpoint=1000');
+        await this.run('PRAGMA cache_spill=ON');
+        await this.run('PRAGMA secure_delete=OFF');
+        await this.run('PRAGMA auto_vacuum=NONE');
+        await this.run('PRAGMA cell_size_check=OFF');
+        await this.run('PRAGMA automatic_index=ON');
+    }
+
+    async runResponsibilityMigrations() {
+        try {
+            const tableInfo = await this.all("PRAGMA table_info(responsibilities)");
+            const hasConfig = tableInfo.some(col => col.name === 'config');
+            if (!hasConfig) {
+                console.log('⚠️ Adding missing "config" column to responsibilities table');
+                await this.run('ALTER TABLE responsibilities ADD COLUMN config TEXT');
+            }
+            const hasImage = tableInfo.some(col => col.name === 'image');
+            if (!hasImage) {
+                console.log('⚠️ Adding missing "image" column to responsibilities table');
+                await this.run('ALTER TABLE responsibilities ADD COLUMN image TEXT');
+            }
+        } catch (migrationError) {
+            console.error('❌ Migration Error:', migrationError);
+        }
+    }
+
+    closeAsync() {
+        return new Promise((resolve, reject) => {
+            if (!this.db) return resolve();
+            this.db.close((error) => error ? reject(error) : resolve());
+        });
+    }
+
+    async openDatabaseWithFallback(filePath) {
+        const attempts = Number(process.env.SQLITE_OPEN_RETRIES || 5);
+        for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            try {
+                const db = await this.openDatabase(filePath);
+                this.isDegraded = false;
+                return db;
+            } catch (error) {
+                if (!this.isBusyError(error) || attempt === attempts) {
+                    console.error(`❌ تعذر فتح SQLite من ${filePath}:`, error.message);
+                    break;
+                }
+                const delay = Math.min(1000 * attempt, 5000);
+                console.warn(`⚠️ SQLite مشغول أثناء الفتح، إعادة المحاولة ${attempt}/${attempts} بعد ${delay}ms`);
+                await this.delay(delay);
+            }
+        }
+
+        console.warn('⚠️ سيتم تشغيل قاعدة بيانات مؤقتة في الذاكرة حتى يعمل البوت والتكت رغم قفل ملف SQLite.');
+        this.isDegraded = true;
+        return this.openDatabase(':memory:');
     }
 
     async getResponsibilities() {
@@ -104,7 +181,7 @@ class DatabaseManager {
             if (Object.keys(data).length === 0) {
                 const fs = require('fs');
                 const path = require('path');
-                const jsonPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
+                const jsonPath = path.join(getDataDir(), 'responsibilities.json');
                 if (fs.existsSync(jsonPath)) {
                     const jsonData = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
                     if (jsonData && Object.keys(jsonData).length > 0) {
@@ -154,7 +231,7 @@ class DatabaseManager {
             }
             
             // Sync to JSON for redundancy
-            const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
+            const responsibilitiesPath = path.join(getDataDir(), 'responsibilities.json');
             fs.writeFileSync(responsibilitiesPath, JSON.stringify(data, null, 2));
             
             // CRITICAL: Update global object used by all commands
@@ -179,7 +256,7 @@ class DatabaseManager {
             // Sync to JSON
             const fs = require('fs');
             const path = require('path');
-            const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
+            const responsibilitiesPath = path.join(getDataDir(), 'responsibilities.json');
             const allResps = await this.getResponsibilities();
             fs.writeFileSync(responsibilitiesPath, JSON.stringify(allResps, null, 2));
             global.responsibilities = allResps;
@@ -190,7 +267,7 @@ class DatabaseManager {
             }
 
             // Remove from categories
-            const categoriesPath = path.join(__dirname, '..', 'data', 'respCategories.json');
+            const categoriesPath = path.join(getDataDir(), 'respCategories.json');
             if (fs.existsSync(categoriesPath)) {
                 const categories = JSON.parse(fs.readFileSync(categoriesPath, 'utf8'));
                 let changed = false;
@@ -380,9 +457,34 @@ class DatabaseManager {
         }
     }
 
-    // تنفيذ استعلام
+    delay(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    isBusyError(error) {
+        return error && (error.code === 'SQLITE_BUSY' || /database is locked|SQLITE_BUSY/i.test(error.message || ''));
+    }
+
+    async withBusyRetry(operation, label = 'sqlite') {
+        const retries = Number(process.env.SQLITE_BUSY_RETRIES || 8);
+        let lastError = null;
+        for (let attempt = 0; attempt <= retries; attempt += 1) {
+            try {
+                return await operation();
+            } catch (error) {
+                lastError = error;
+                if (!this.isBusyError(error) || attempt === retries) throw error;
+                const delay = Math.min(250 * (attempt + 1), 3000);
+                console.warn(`⚠️ ${label}: SQLite locked, retry ${attempt + 1}/${retries} after ${delay}ms`);
+                await this.delay(delay);
+            }
+        }
+        throw lastError;
+    }
+
+    // تنفيذ استعلام - الكتابات تمر في طابور واحد لتقليل SQLITE_BUSY
     run(sql, params = []) {
-        return new Promise((resolve, reject) => {
+        const task = () => this.withBusyRetry(() => new Promise((resolve, reject) => {
             this.db.run(sql, params, function(err) {
                 if (err) {
                     console.error('خطأ في تنفيذ الاستعلام:', err);
@@ -391,12 +493,16 @@ class DatabaseManager {
                     resolve({ id: this.lastID, changes: this.changes });
                 }
             });
-        });
+        }), 'run');
+
+        const next = this.writeQueue.catch(() => null).then(task);
+        this.writeQueue = next.catch(() => null);
+        return next;
     }
 
     // جلب سجل واحد
     get(sql, params = []) {
-        return new Promise((resolve, reject) => {
+        return this.withBusyRetry(() => new Promise((resolve, reject) => {
             this.db.get(sql, params, (err, row) => {
                 if (err) {
                     console.error('خطأ في جلب السجل:', err);
@@ -405,12 +511,12 @@ class DatabaseManager {
                     resolve(row);
                 }
             });
-        });
+        }), 'get');
     }
 
     // جلب عدة سجلات
     all(sql, params = []) {
-        return new Promise((resolve, reject) => {
+        return this.withBusyRetry(() => new Promise((resolve, reject) => {
             this.db.all(sql, params, (err, rows) => {
                 if (err) {
                     console.error('خطأ في جلب السجلات:', err);
@@ -419,7 +525,7 @@ class DatabaseManager {
                     resolve(rows);
                 }
             });
-        });
+        }), 'all');
     }
 
     // حفظ جلسة صوتية
@@ -1221,17 +1327,21 @@ async function initializeDatabase() {
 
 function getDatabase() {
     if (!dbManager.isInitialized) {
-        console.log('⚠️ قاعدة البيانات غير مهيأة، محاولة التهيئة الآن...');
-        // تهيئة متزامنة للحالات الطارئة
+        if (dbManager.initializationPromise) {
+            throw new Error('Database initialization is still running; use JSON/in-memory fallback for now.');
+        }
+
+        console.log('⚠️ قاعدة البيانات غير مهيأة، تشغيل قاعدة مؤقتة طارئة حتى لا يتوقف البوت...');
         try {
             const sqlite3 = require('sqlite3').verbose();
-            const path = require('path');
-            const dbPath = path.join(__dirname, '..', 'database', 'discord_bot.db');
 
             if (!dbManager.db) {
-                dbManager.db = new sqlite3.Database(dbPath);
+                dbManager.db = new sqlite3.Database(':memory:');
+                dbManager.db.configure('busyTimeout', Number(process.env.SQLITE_BUSY_TIMEOUT_MS || 60000));
+                dbManager.db.serialize();
+                dbManager.isDegraded = true;
                 dbManager.isInitialized = true;
-                console.log('✅ تم تهيئة قاعدة البيانات بشكل طارئ');
+                console.log('✅ تم تهيئة قاعدة بيانات مؤقتة بشكل طارئ');
             }
         } catch (error) {
             console.error('❌ فشل في التهيئة الطارئة:', error);
@@ -1323,7 +1433,7 @@ async function updateLastNotified(userId) {
 
 module.exports = {
     getDatabase: getDatabase,
-    dbManager: getDatabase(),
+    dbManager: dbManager,
     initializeDatabase: initializeDatabase,
     trackUserActivity: trackUserActivity,
     getRealUserStats: getRealUserStats,

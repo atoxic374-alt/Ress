@@ -20,6 +20,7 @@ process.setMaxListeners(0);
 
 const { Client, GatewayIntentBits, Partials, Collection, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, EmbedBuilder, Events, MessageFlags, PermissionsBitField, ChannelType, AuditLogEvent } = require('discord.js');
 const dotenv = require('dotenv');
+dotenv.config();
 const fs = require('fs');
 const path = require('path');
 const { logEvent } = require('./utils/logs_system.js');
@@ -38,11 +39,11 @@ const { handleAdminApplicationInteraction } = require('./commands/admin-apply.js
 const { restoreTopSchedules, restorePanelCleanups, handlePanelMessageDelete } = require('./commands/roles-settings.js');
 const { handleChannelDelete, handleRoleDelete } = require('./utils/protectionManager.js');
 const problemCommand = require('./commands/problem.js');
+const { getDataDir } = require('./utils/storagePaths');
 let interactiveRolesManager;
-dotenv.config();
 
 // مسارات ملفات البيانات
-const dataDir = path.join(__dirname, 'data');
+const dataDir = getDataDir();
 if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
 }
@@ -720,13 +721,31 @@ const { dbManager } = require('./utils/database.js');
 let points = readJSONFile(DATA_FILES.points, {});
 global.responsibilities = {};
 
+
+async function safeInitializeMainDatabase(scope = 'startup', timeoutMs = Number(process.env.DB_INIT_TIMEOUT_MS || 15000)) {
+    if (dbManager.isInitialized) return true;
+
+    const initPromise = dbManager.initialize();
+    initPromise.catch((error) => {
+        console.error(`⚠️ فشل تهيئة قاعدة البيانات لاحقاً (${scope})، سيستمر البوت:`, error.message || error);
+    });
+
+    const result = await Promise.race([
+        initPromise.then(() => true).catch(() => false),
+        new Promise(resolve => setTimeout(() => resolve(false), timeoutMs))
+    ]);
+
+    if (!result) {
+        console.warn(`⚠️ قاعدة البيانات لم تجهز خلال ${timeoutMs}ms في ${scope}. سيكمل البوت التشغيل من JSON/الذاكرة حتى يعمل التكت.`);
+    }
+    return result;
+}
+
 // دالة لتهيئة المسؤوليات من قاعدة البيانات
 async function initializeResponsibilities() {
     try {
-        if (!dbManager.isInitialized) {
-            await dbManager.initialize();
-        }
-        const data = await dbManager.getResponsibilities();
+        const dbReady = await safeInitializeMainDatabase('responsibilities', 10000);
+        const data = dbReady ? await dbManager.getResponsibilities() : {};
         if (data && Object.keys(data).length > 0) {
             global.responsibilities = data;
             console.log(`✅ تم تحميل ${Object.keys(global.responsibilities).length} مسؤولية من قاعدة البيانات`);
@@ -839,8 +858,30 @@ function loadPendingReports() {
   }
 }
 
+function buildGatewayIntents() {
+  const intents = [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMessageReactions,
+  ];
+
+  const disabledPrivileged = String(process.env.DISABLE_PRIVILEGED_INTENTS || '').toLowerCase() === 'true';
+  if (!disabledPrivileged) {
+    intents.push(GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers);
+  }
+
+  const enablePresence = String(process.env.ENABLE_PRESENCE_INTENT || '').toLowerCase() === 'true';
+  if (enablePresence && !disabledPrivileged) {
+    intents.push(GatewayIntentBits.GuildPresences);
+  }
+
+  return intents;
+}
+
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMessageReactions, GatewayIntentBits.GuildPresences],
+  intents: buildGatewayIntents(),
   partials: [Partials.Channel, Partials.Message, Partials.Reaction]
 });
 
@@ -1150,8 +1191,10 @@ async function saveData(force = false) {
         
         // تنفيذ الحفظ بشكل متوازي وغير متزامن
         const dbPromises = [];
-        for (const [name, config] of Object.entries(global.responsibilities)) {
-            dbPromises.push(dbManager.updateResponsibility(name, config));
+        if (dbManager.isInitialized) {
+            for (const [name, config] of Object.entries(global.responsibilities)) {
+                dbPromises.push(dbManager.updateResponsibility(name, config));
+            }
         }
 
         await Promise.all([
@@ -1582,8 +1625,8 @@ client.once(Events.ClientReady, async () => {
         }
     }
 
-    if (!dbManager.isInitialized) await dbManager.initialize();
-    global.responsibilities = await dbManager.getResponsibilities();
+    const dbReady = await safeInitializeMainDatabase('client-ready', 10000);
+    global.responsibilities = dbReady ? await dbManager.getResponsibilities() : readJSONFile(DATA_FILES.responsibilities, {});
     
     // تشغيل المزامنة فور الجاهزية
     await syncAllResponsibilityRoles(client);
@@ -1599,14 +1642,12 @@ client.once(Events.ClientReady, async () => {
 
     // تهيئة قاعدة البيانات أولاً قبل أي شيء آخر
     try {
-        const { initializeDatabase } = require('./utils/database');
-        await initializeDatabase();
-        console.log('✅ تم تهيئة قاعدة البيانات الرئيسية بنجاح');
+        const dbReady = await safeInitializeMainDatabase('ready-main', 10000);
+        if (dbReady) console.log('✅ تم تهيئة قاعدة البيانات الرئيسية بنجاح');
+        else console.warn('⚠️ تم تخطي قاعدة البيانات الرئيسية مؤقتاً وسيستمر البوت.');
     } catch (error) {
         console.error('❌ خطأ في تهيئة قاعدة البيانات:', error);
-        // في حالة فشل تهيئة قاعدة البيانات، نتوقف عن العمل
-        console.error('❌ توقف البوت بسبب فشل تهيئة قاعدة البيانات');
-        return;
+        console.warn('⚠️ سيستمر البوت رغم فشل قاعدة البيانات لأن التكت له fallback JSON/ذاكرة.');
     }
 
 
@@ -6522,18 +6563,22 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 async function startBot() {
-    await dbManager.initialize();
+    await safeInitializeMainDatabase('pre-login', 12000);
     
-    const respPath = path.join(__dirname, 'data', 'responsibilities.json');
+    const respPath = DATA_FILES.responsibilities;
     if (fs.existsSync(respPath) && fs.statSync(respPath).size > 2) {
         try {
             const fileContent = fs.readFileSync(respPath, 'utf8').trim();
             if (fileContent && fileContent !== '{}') {
                 const data = JSON.parse(fileContent);
-                for (const [name, config] of Object.entries(data)) {
-                    await dbManager.updateResponsibility(name, config);
+                if (dbManager.isInitialized) {
+                    for (const [name, config] of Object.entries(data)) {
+                        await dbManager.updateResponsibility(name, config);
+                    }
+                    console.log('✅ Migrated Responsibilities to SQLite');
+                } else {
+                    console.warn('⚠️ تم تخطي مزامنة المسؤوليات إلى SQLite مؤقتاً لأن القاعدة غير جاهزة.');
                 }
-                console.log('✅ Migrated Responsibilities to SQLite');
             }
         } catch (e) { 
             console.error('Migration failed:', e.message); 
