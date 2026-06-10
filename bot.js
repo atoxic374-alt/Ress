@@ -20,6 +20,7 @@ process.setMaxListeners(0);
 
 const { Client, GatewayIntentBits, Partials, Collection, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, EmbedBuilder, Events, MessageFlags, PermissionsBitField, ChannelType, AuditLogEvent } = require('discord.js');
 const dotenv = require('dotenv');
+dotenv.config();
 const fs = require('fs');
 const path = require('path');
 const { logEvent } = require('./utils/logs_system.js');
@@ -38,11 +39,11 @@ const { handleAdminApplicationInteraction } = require('./commands/admin-apply.js
 const { restoreTopSchedules, restorePanelCleanups, handlePanelMessageDelete } = require('./commands/roles-settings.js');
 const { handleChannelDelete, handleRoleDelete } = require('./utils/protectionManager.js');
 const problemCommand = require('./commands/problem.js');
+const { getDataDir } = require('./utils/storagePaths');
 let interactiveRolesManager;
-dotenv.config();
 
 // مسارات ملفات البيانات
-const dataDir = path.join(__dirname, 'data');
+const dataDir = getDataDir();
 if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
 }
@@ -839,8 +840,30 @@ function loadPendingReports() {
   }
 }
 
+function buildGatewayIntents() {
+  const intents = [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMessageReactions,
+  ];
+
+  const disabledPrivileged = String(process.env.DISABLE_PRIVILEGED_INTENTS || '').toLowerCase() === 'true';
+  if (!disabledPrivileged) {
+    intents.push(GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers);
+  }
+
+  const enablePresence = String(process.env.ENABLE_PRESENCE_INTENT || '').toLowerCase() === 'true';
+  if (enablePresence && !disabledPrivileged) {
+    intents.push(GatewayIntentBits.GuildPresences);
+  }
+
+  return intents;
+}
+
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMessageReactions, GatewayIntentBits.GuildPresences],
+  intents: buildGatewayIntents(),
   partials: [Partials.Channel, Partials.Message, Partials.Reaction]
 });
 

@@ -9,7 +9,8 @@ const colorManager = require('../utils/colorManager.js');
 const name = 'myprofile';
 
 // مسار قاعدة البيانات
-const dbPath = path.join(__dirname, '..', 'database', 'discord_bot.db');
+const { getDatabasePath } = require('../utils/storagePaths');
+const dbPath = getDatabasePath('discord_bot.db');
 
 // تهيئة جدول البيانات المخصصة
 function initDatabase() {

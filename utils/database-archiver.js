@@ -1,13 +1,14 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const { getDatabasePath, resolveStoragePath, ensureDirSync } = require('./storagePaths');
 const fs = require('fs');
 const moment = require('moment-timezone');
 const { execSync } = require('child_process');
 
 class DatabaseArchiver {
     constructor() {
-        this.mainDbPath = path.join(__dirname, '..', 'database', 'discord_bot.db');
-        this.archiveDir = path.join(__dirname, '..', 'database', 'archives');
+        this.mainDbPath = getDatabasePath('discord_bot.db');
+        this.archiveDir = ensureDirSync(resolveStoragePath('database', 'archives'));
         this.emergencyThreshold = 90;
         this.warningThreshold = 80;
         

@@ -8,7 +8,8 @@ const { getCustomProfile } = require('./myprofile.js');
 
 const name = 'ستريكي';
 
-const dbPath = path.join(__dirname, '..', 'database', 'streak.db');
+const { getDatabasePath } = require('../utils/storagePaths');
+const dbPath = getDatabasePath('streak.db');
 let db = null;
 const REACTION_SEARCH_HISTORY_LIMIT = 80;
 
