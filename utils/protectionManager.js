@@ -2,9 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const { ChannelType } = require('discord.js');
 
-const dataDir = path.join(__dirname, '..', 'data');
+const { getBackupsDir, getDataDir } = require('./storagePaths');
+const dataDir = getDataDir();
 const protectionPath = path.join(dataDir, 'protection.json');
-const backupsDir = path.join(__dirname, '..', 'backups');
+const backupsDir = getBackupsDir();
 
 const activeRestores = new Set();
 const restoringStates = new Map();

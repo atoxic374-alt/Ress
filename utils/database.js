@@ -1,5 +1,6 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const { getDatabasePath, ensureParentDirSync } = require('./storagePaths');
 const moment = require('moment-timezone');
 
 // ضبط بداية الأسبوع على السبت (حسب التقويم العربي)
@@ -11,7 +12,7 @@ moment.updateLocale('en', {
 });
 
 // إنشاء مجلد قاعدة البيانات
-const dbPath = path.join(__dirname, '..', 'database', 'discord_bot.db');
+const dbPath = getDatabasePath('discord_bot.db');
 
 class DatabaseManager {
     constructor() {
@@ -1226,9 +1227,10 @@ function getDatabase() {
         try {
             const sqlite3 = require('sqlite3').verbose();
             const path = require('path');
-            const dbPath = path.join(__dirname, '..', 'database', 'discord_bot.db');
+            const dbPath = getDatabasePath('discord_bot.db');
 
             if (!dbManager.db) {
+                ensureParentDirSync(dbPath);
                 dbManager.db = new sqlite3.Database(dbPath);
                 dbManager.isInitialized = true;
                 console.log('✅ تم تهيئة قاعدة البيانات بشكل طارئ');
@@ -1323,7 +1325,7 @@ async function updateLastNotified(userId) {
 
 module.exports = {
     getDatabase: getDatabase,
-    dbManager: getDatabase(),
+    dbManager: dbManager,
     initializeDatabase: initializeDatabase,
     trackUserActivity: trackUserActivity,
     getRealUserStats: getRealUserStats,

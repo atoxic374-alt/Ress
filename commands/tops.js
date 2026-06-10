@@ -10,7 +10,8 @@ const fs = require('fs');
 
 const name = 'توب';
 
-const streakDbPath = path.join(__dirname, '..', 'database', 'streak.db');
+const { getDatabasePath } = require('../utils/storagePaths');
+const streakDbPath = getDatabasePath('streak.db');
 let streakDb = null;
 
 function initializeStreakDatabase() {
