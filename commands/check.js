@@ -1,4 +1,4 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, StringSelectMenuBuilder } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require('discord.js');
 const colorManager = require('../utils/colorManager.js');
 const { isUserBlocked } = require('./block.js');
 const moment = require('moment-timezone');
@@ -405,7 +405,6 @@ async function showRoleActivityStats(message, role, client) {
     const filter = i => i.user.id === message.author.id;
     const collector = sentMessage.createMessageComponentCollector({ filter, time: 600000 });
 
-    let warningText = '';
 
     collector.on('collect', async interaction => {
         try {
@@ -424,30 +423,7 @@ async function showRoleActivityStats(message, role, client) {
 
                 await interaction.update({ embeds: [buildEmbed(currentPage)], components: [row1, newRow2] });
             } else if (interaction.customId === 'send_warning') {
-                const modal = new ModalBuilder()
-                    .setCustomId('warning_modal')
-                    .setTitle('Send Alert');
-
-                const warningInput = new TextInputBuilder()
-                    .setCustomId('warning_text')
-                    .setLabel('اكتب التنبيه')
-                    .setStyle(TextInputStyle.Paragraph)
-                    .setRequired(true)
-                    .setMaxLength(1000);
-
-                const actionRow = new ActionRowBuilder().addComponents(warningInput);
-                modal.addComponents(actionRow);
-
-                await interaction.showModal(modal);
-
                 try {
-                    const modalSubmit = await interaction.awaitModalSubmit({ 
-                        time: 300000,
-                        filter: i => i.customId === 'warning_modal' && i.user.id === interaction.user.id
-                    });
-
-                    warningText = modalSubmit.fields.getTextInputValue('warning_text');
-
                     const greenUsers = userStats.filter(stat => stat.color === '<:emoji_11:1429246636936138823>');
                     const yellowUsers = userStats.filter(stat => stat.color === '<:emoji_10:1429246610784653412>');
                     const redUsers = userStats.filter(stat => stat.color === '<:emoji_9:1429246586289918063>');
@@ -479,7 +455,7 @@ async function showRoleActivityStats(message, role, client) {
                     }
 
                     if (colorOptions.length === 0) {
-                        await modalSubmit.reply({ 
+                        await interaction.reply({ 
                             content: '**❌ لا يوجد أعضاء للتنبيه**', 
                             ephemeral: true
                         });
@@ -496,14 +472,14 @@ async function showRoleActivityStats(message, role, client) {
 
                     const selectRow = new ActionRowBuilder().addComponents(selectMenu);
 
-                    await modalSubmit.reply({ 
-                        content: '**ا ختر اللون للأعضاء الذين تريد تنبيههم:**', 
+                    await interaction.reply({ 
+                        content: '**اختر لون الأعضاء الذين تريد إرسال الرسالة لهم:**', 
                         components: [selectRow], 
                         ephemeral: true
                     });
 
                     try {
-                        const selectInteraction = await modalSubmit.channel.awaitMessageComponent({
+                        const selectInteraction = await interaction.channel.awaitMessageComponent({
                             filter: i => i.customId === 'select_warning_recipients' && i.user.id === interaction.user.id,
                             time: 300000
                         });
@@ -522,14 +498,47 @@ async function showRoleActivityStats(message, role, client) {
                         }
                         selectedUserIds = [...new Set(selectedUserIds)];
 
+                        await selectInteraction.update({
+                            content: `**✅ تم اختيار ${selectedUserIds.length} عضو.**\n**الآن ارسل نص الرسالة هنا خلال 5 دقائق.**\n**يمكنك إرفاق صور مع الرسالة (حد دسكورد في الرسالة الواحدة: 10 مرفقات، والنص: 2000 حرف).**`,
+                            components: []
+                        });
+
+                        const collected = await message.channel.awaitMessages({
+                            filter: m => m.author.id === interaction.user.id,
+                            max: 1,
+                            time: 300000,
+                            errors: ['time']
+                        });
+                        const warningMessage = collected.first();
+                        const warningText = (warningMessage.content || '').trim();
+                        const attachments = [...warningMessage.attachments.values()]
+                            .filter(attachment => attachment.contentType?.startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(attachment.name || attachment.url))
+                            .slice(0, 10);
+
+                        if (!warningText && attachments.length === 0) {
+                            await message.channel.send('**❌ يجب إرسال نص أو صورة واحدة على الأقل.**');
+                            return;
+                        }
+
+                        const senderMember = await message.guild.members.fetch(selectInteraction.user.id).catch(() => null);
+                        const senderName = senderMember?.displayName || selectInteraction.user.globalName || selectInteraction.user.username;
+                        const footerText = `By ; ${senderName}`;
+                        const availableTextLength = 2000 - footerText.length - 2;
+                        const trimmedWarningText = warningText.length > availableTextLength
+                            ? warningText.slice(0, Math.max(availableTextLength - 1, 0)) + '…'
+                            : warningText;
+                        const dmContent = `${trimmedWarningText}${trimmedWarningText ? '\n\n' : ''}${footerText}`;
+                        const dmFiles = attachments.map(attachment => ({
+                            attachment: attachment.url,
+                            name: attachment.name || 'image.png'
+                        }));
+
                         collector.stop();
-                        
-                        await selectInteraction.deferUpdate();
 
                         const progressEmbed = colorManager.createEmbed()
-                            .setTitle('**جاري إرسال التنبيه للأعضاء...**')
-                            .setDescription(`**✅  Done to :** 0\n**❌ Failed to:** 0`)
-                            .setFooter({ text: 'By Ahmed.' })
+                            .setTitle('**جاري إرسال الرسالة للأعضاء...**')
+                            .setDescription(`**✅ Done Send :** 0\n**❌ Failed :** 0\n**📨 Total :** ${selectedUserIds.length}`)
+                            .setFooter({ text: footerText })
                             .setTimestamp();
 
                         await sentMessage.edit({ 
@@ -537,110 +546,112 @@ async function showRoleActivityStats(message, role, client) {
                             components: [] 
                         });
 
-                        const sender = selectInteraction.user;
-                        const date = moment().tz('Asia/Riyadh').format('YYYY-MM-DD HH:mm');
                         let successCount = 0;
                         let failCount = 0;
                         let rateLimitedCount = 0;
                         let processedCount = 0;
+                        const MAX_RETRIES = 3;
 
-                        // نظام Batching - معالجة 5 أعضاء في كل دفعة
-                        const BATCH_SIZE = 5;
-                        const BATCH_DELAY = 3000; // 3 ثواني بين كل دفعة
-                        const MESSAGE_DELAY = 1200; // 1.2 ثانية بين كل رسالة
-                        const MAX_RETRIES = 2;
-
-                        // تقسيم الأعضاء إلى دفعات
-                        const batches = [];
-                        for (let i = 0; i < selectedUserIds.length; i += BATCH_SIZE) {
-                            batches.push(selectedUserIds.slice(i, i + BATCH_SIZE));
+                        async function sleep(ms) {
+                            return new Promise(resolve => setTimeout(resolve, ms));
                         }
 
-                        console.log(`📦 تم تقسيم ${selectedUserIds.length} عضو إلى ${batches.length} دفعة`);
-
-                        // دالة لإرسال رسالة مع إعادة محاولة
-                        async function sendDMWithRetry(user, embed, retries = MAX_RETRIES) {
+                        async function sendDMWithRetry(user, payload, retries = MAX_RETRIES) {
                             for (let attempt = 0; attempt <= retries; attempt++) {
                                 try {
-                                    await user.send({ embeds: [embed] });
+                                    await user.send(payload);
                                     return { success: true };
                                 } catch (error) {
-                                    if (error.code === 429) {
-                                        const retryAfter = error.retry_after || 2;
-                                        console.warn(`⏳ Rate limit - انتظار ${retryAfter}s قبل إعادة المحاولة ${attempt + 1}/${retries}`);
+                                    const retryAfter = Number(error.retry_after || error.retryAfter || error.rawError?.retry_after || 0);
+                                    if (error.code === 429 || retryAfter > 0) {
+                                        const waitMs = Math.ceil((retryAfter || (2 + attempt)) * 1000) + 500;
+                                        console.warn(`⏳ Rate limit - انتظار ${waitMs}ms قبل إعادة المحاولة ${attempt + 1}/${retries}`);
+                                        rateLimitedCount++;
+                                        if (error.global) {
+                                            globalBackoffUntil = Math.max(globalBackoffUntil, Date.now() + waitMs);
+                                        }
                                         if (attempt < retries) {
-                                            await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+                                            await sleep(waitMs);
                                             continue;
                                         }
                                         return { success: false, rateLimited: true };
-                                    } else if (error.code === 50007) {
-                                        // Cannot send messages to this user
+                                    }
+                                    if (error.code === 50007 || error.status === 403) {
                                         return { success: false, cannotDM: true };
-                                    } else {
-                                        return { success: false, error: error.message };
                                     }
+                                    if (attempt < retries && ['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN'].includes(error.code)) {
+                                        await sleep(1500 * (attempt + 1));
+                                        continue;
+                                    }
+                                    return { success: false, error: error.message };
                                 }
                             }
-                            return { success: false, rateLimited: true };
+                            return { success: false, error: 'unknown' };
                         }
 
-                        // معالجة كل دفعة
-                        for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-                            const batch = batches[batchIndex];
-                            console.log(`📨 معالجة الدفعة ${batchIndex + 1}/${batches.length} (${batch.length} أعضاء)`);
+                        let progressUpdateQueued = Promise.resolve();
+                        let globalBackoffUntil = 0;
+                        const DM_CONCURRENCY = Math.min(3, Math.max(1, selectedUserIds.length));
 
-                            // تحديث الرسالة كل 3 دفعات
-                            if (batchIndex % 3 === 0) {
-                                const updateEmbed = colorManager.createEmbed()
-                                    .setTitle('**جاري إرسال التنبيه للأعضاء...**')
-                                    .setDescription(`**✅ Done Send :** ${successCount}\n**❌ Failed :** ${failCount}` + 
-                                        (rateLimitedCount > 0 ? `\n**<:emoji_53:1430733925227171980> Rate Limited :** ${rateLimitedCount}` : ''))
-                                    .setFooter({ text: 'By Ahmed.' })
-                                    .setTimestamp();
+                        function queueProgressUpdate(force = false) {
+                            if (!force && processedCount % 5 !== 0 && processedCount !== selectedUserIds.length) return;
 
-                                await sentMessage.edit({ embeds: [updateEmbed] }).catch(() => {});
-                            }
-
-                            for (const userId of batch) {
-                                try {
-                                    const user = await client.users.fetch(userId);
-                                    const warningEmbed = colorManager.createEmbed()
-                                        .setTitle('Alert')
-                                        .setDescription(`**تم تنبيهك بواسطة :** ${sender}\n**بتاريخ :** ${date}\n\n**التنبيه :**\n${warningText}`)
+                            progressUpdateQueued = progressUpdateQueued
+                                .then(async () => {
+                                    const updateEmbed = colorManager.createEmbed()
+                                        .setTitle('**جاري إرسال الرسالة للأعضاء...**')
+                                        .setDescription(`**✅ Done Send :** ${successCount}
+**❌ Failed :** ${failCount}` +
+                                            (rateLimitedCount > 0 ? `
+**<:emoji_53:1430733925227171980> Rate Limited :** ${rateLimitedCount}` : '') +
+                                            `
+**📨 Progress :** ${processedCount}/${selectedUserIds.length}`)
+                                        .setFooter({ text: footerText })
                                         .setTimestamp();
+                                    await sentMessage.edit({ embeds: [updateEmbed] }).catch(() => {});
+                                })
+                                .catch(() => {});
+                        }
 
-                                    const result = await sendDMWithRetry(user, warningEmbed);
-                                    
-                                    if (result.success) {
-                                        successCount++;
-                                        console.log(`✅ تم إرسال تنبيه لـ ${user.tag}`);
-                                    } else if (result.rateLimited) {
-                                        rateLimitedCount++;
-                                        console.warn(`⚠️ Rate limited - ${user.tag}`);
-                                    } else if (result.cannotDM) {
-                                        failCount++;
-                                        console.error(`❌ DMs مغلقة - ${user.tag}`);
-                                    } else {
-                                        failCount++;
-                                        console.error(`❌ فشل الإرسال - ${user.tag}: ${result.error}`);
-                                    }
-
-                                    // تأخير بين كل رسالة
-                                    await new Promise(resolve => setTimeout(resolve, MESSAGE_DELAY));
-                                } catch (error) {
-                                    failCount++;
-                                    console.error(`❌ فشل إرسال رسالة إلى ${userId}:`, error.message);
-                                }
-
-                                processedCount++;
-                            }
-
-                            // تأخير بين الدفعات (ما عدا الدفعة الأخيرة)
-                            if (batchIndex < batches.length - 1) {
-                                console.log(`⏸️ انتظار ${BATCH_DELAY / 1000}s قبل الدفعة التالية...`);
-                                await new Promise(resolve => setTimeout(resolve, BATCH_DELAY));
+                        async function waitForGlobalBackoff() {
+                            const waitMs = globalBackoffUntil - Date.now();
+                            if (waitMs > 0) {
+                                await sleep(waitMs);
                             }
                         }
+
+                        async function deliverToUser(userId) {
+                            try {
+                                await waitForGlobalBackoff();
+                                const user = await client.users.fetch(userId);
+                                const result = await sendDMWithRetry(user, { content: dmContent, files: dmFiles });
+
+                                if (result.success) {
+                                    successCount++;
+                                    console.log(`✅ تم إرسال رسالة لـ ${user.tag}`);
+                                } else {
+                                    failCount++;
+                                    console.error(`❌ فشل الإرسال - ${user.tag}: ${result.cannotDM ? 'DMs closed' : result.error || 'rate limited'}`);
+                                }
+                            } catch (error) {
+                                failCount++;
+                                console.error(`❌ فشل إرسال رسالة إلى ${userId}:`, error.message);
+                            }
+
+                            processedCount++;
+                            queueProgressUpdate();
+                        }
+
+                        async function runWorker(workerId) {
+                            for (let index = workerId; index < selectedUserIds.length; index += DM_CONCURRENCY) {
+                                await deliverToUser(selectedUserIds[index]);
+                            }
+                        }
+
+                        await Promise.all(Array.from({ length: DM_CONCURRENCY }, (_, workerId) => runWorker(workerId)));
+                        queueProgressUpdate(true);
+                        await progressUpdateQueued;
+
 
                         const colorNames = selectedColors.map(c => {
                             if (c === 'green') return 'Green <:emoji_11:1429246636936138823>';
@@ -649,11 +660,11 @@ async function showRoleActivityStats(message, role, client) {
                         }).join(', ');
 
                         const finalEmbed = colorManager.createEmbed()
-                            .setTitle('** Done sended ✅️**')
-                            .setDescription(`**✅  Done to :** ${successCount}\n**❌ Failed :** ${failCount}` +
+                            .setTitle('**Done sended ✅️**')
+                            .setDescription(`**✅ Done to :** ${successCount}\n**❌ Failed :** ${failCount}` +
                                 (rateLimitedCount > 0 ? `\n**<:emoji_53:1430733925227171980> Rate Limited :** ${rateLimitedCount}` : '') +
                                 `\n**Colors :** ${colorNames}\n**<:emoji_51:1430733172710183103> Final :** ${Math.round((successCount / Math.max(selectedUserIds.length, 1)) * 100)}%`)
-                            .setFooter({ text: 'By Ahmed.' })
+                            .setFooter({ text: footerText })
                             .setTimestamp();
 
                         try {
@@ -664,13 +675,13 @@ async function showRoleActivityStats(message, role, client) {
                         }
                     } catch (selectError) {
                         console.error('خطأ في انتظار اختيار المستلمين:', selectError);
-                        await modalSubmit.editReply({ 
+                        await interaction.editReply({ 
                             content: '**❌ انتهت مهلة اختيار المستلمين**', 
                             components: [] 
                         }).catch(() => {});
                     }
                 } catch (error) {
-                    console.error('خطأ في انتظار Modal:', error);
+                    console.error('خطأ في إرسال رسائل check:', error);
                 }
             }
         } catch (error) {
