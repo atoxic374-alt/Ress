@@ -5,11 +5,28 @@ const { registerFont } = require('canvas');
 let cairoFontsRegistered = false;
 let cairoFontNoticeShown = false;
 
-function ensureCairoFontsRegistered() {
-  if (cairoFontsRegistered) return;
+const customRegular = path.join(__dirname, '..', 'assets', 'fonts', 'Cairo-Regular.ttf');
+const customBold = path.join(__dirname, '..', 'assets', 'fonts', 'Cairo-Bold.ttf');
 
-  const customRegular = path.join(__dirname, '..', 'assets', 'fonts', 'Cairo-Regular.ttf');
-  const customBold = path.join(__dirname, '..', 'assets', 'fonts', 'Cairo-Bold.ttf');
+function getCairoFontStatus() {
+  const hasRegular = fs.existsSync(customRegular);
+  const hasBold = fs.existsSync(customBold);
+
+  return {
+    fontsDir: path.dirname(customRegular),
+    regularPath: customRegular,
+    boldPath: customBold,
+    hasRegular,
+    hasBold,
+    ready: hasRegular && hasBold,
+    registered: cairoFontsRegistered
+  };
+}
+
+function ensureCairoFontsRegistered(options = {}) {
+  const force = Boolean(options.force);
+  if (cairoFontsRegistered && !force) return;
+
   const regularPath = fs.existsSync(customRegular) ? customRegular : '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
   const boldPath = fs.existsSync(customBold) ? customBold : '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
 
@@ -28,5 +45,6 @@ function ensureCairoFontsRegistered() {
 }
 
 module.exports = {
-  ensureCairoFontsRegistered
+  ensureCairoFontsRegistered,
+  getCairoFontStatus
 };

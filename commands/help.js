@@ -45,6 +45,12 @@ module.exports = {
         details: '**- يضيف أو يحذف رتب الإدارة المسموح لها لاستخدام أوامر الإدارة**'
       },
       {
+        name: 'cairo',
+        description: '**Cairo Font Setup**',
+        usage: PREFIX === null ? 'cairo [مرفقين/رابطين]' : `${PREFIX}cairo [مرفقين/رابطين]`,
+        details: '**- يرفع ملفي Cairo-Regular.ttf و Cairo-Bold.ttf وينشئ مجلد assets/fonts ويتأكد من تسجيل الخط للأوامر**'
+      },
+      {
         name: 'block',
         description: '**Block System**',
         usage: PREFIX === null ? 'block [منشن/آي دي]' : `${PREFIX}block [منشن/آي دي]`,
