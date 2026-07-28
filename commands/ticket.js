@@ -3490,7 +3490,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   const finalComment = String(comment || 'بدون تعليق').trim();
   // Decorative mark (replaces quotes)
   ctx.fillStyle = quoteColor;
-  ctx.font = 'bold 96px Cairo';
+  ctx.font = '900 96px Cairo';
   ctx.fillText('❝', cardX + 62, cardY + 118);
 
   // Star capsule
@@ -3528,7 +3528,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   }
 
   ctx.fillStyle = textColor;
-  ctx.font = 'bold 46px Cairo';
+  ctx.font = '600 46px Cairo';
   ctx.textAlign = 'right';
   ctx.direction = 'rtl';
   ctx.shadowColor = '#00000035';
@@ -3607,7 +3607,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   }
 
   ctx.fillStyle = nameColor;
-  ctx.font = 'bold 54px Cairo';
+  ctx.font = '800 54px Cairo';
   ctx.fillText(member?.displayName || member?.user?.username || 'Member', cardX + 230, cardY + cardH - 48);
 
   // Server signature bottom-right with real server avatar crop
@@ -3640,7 +3640,7 @@ async function buildFeedbackCardImage({ guild, member, stars, comment, style = {
   ctx.fillStyle = textColor;
   ctx.globalAlpha = 0.92;
   ctx.textAlign = 'right';
-  ctx.font = '32px Cairo';
+  ctx.font = '300 32px Cairo';
   ctx.fillText(serverName, signX - 78, signY);
   ctx.textAlign = 'left';
   ctx.globalAlpha = 1;

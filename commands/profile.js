@@ -309,7 +309,7 @@ function drawStatBox(ctx, x, y, label, value) {
     ctx.shadowBlur = 1;
     ctx.shadowOffsetY = 1;
     ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-    ctx.font = 'bold 12px Cairo';
+    ctx.font = '300 12px Cairo';
     ctx.textAlign = 'center';
     ctx.fillText(label, x + 70, y + 24);
     ctx.restore();
@@ -317,7 +317,7 @@ function drawStatBox(ctx, x, y, label, value) {
     // Value text - SMALLER SIZE
     ctx.save();
     ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
-    ctx.font = 'bold 17px Cairo';
+    ctx.font = '800 17px Cairo';
     ctx.textAlign = 'center';
     ctx.fillText(value, x + 70 + 1, y + 46 + 1);
     

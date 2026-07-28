@@ -5,6 +5,8 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 const { getCustomProfile } = require('./myprofile.js');
+const { ensureCairoFontsRegistered } = require('../utils/cairoFont');
+ensureCairoFontsRegistered();
 
 const name = 'ستريكي';
 
@@ -377,12 +379,12 @@ async function buildStreakCanvas(message, userStreak, settings, targetUser, targ
 
     ctx.textAlign = 'center';
     ctx.fillStyle = '#FFFFFF';
-    ctx.font = '700 24px Arial';
+    ctx.font = '900 24px Cairo';
     ctx.fillText('Streak Sys;', centerX, 38);
 
     ctx.save();
     ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
-    ctx.font = '700 20px Arial';
+    ctx.font = '800 20px Cairo';
     ctx.fillText(nickname, centerX + 1, centerY + 98);
     ctx.fillStyle = '#FFFFFF';
     ctx.shadowColor = 'rgba(255, 255, 255, 0.35)';
@@ -391,7 +393,7 @@ async function buildStreakCanvas(message, userStreak, settings, targetUser, targ
     ctx.restore();
 
     ctx.fillStyle = '#D9DFF7';
-    ctx.font = '600 14px Arial';
+    ctx.font = '300 14px Cairo';
     ctx.fillText(`@${targetUser.username}`, centerX, centerY + 124);
 
     const today = moment().tz('Asia/Riyadh').format('YYYY-MM-DD');
@@ -434,11 +436,11 @@ async function buildStreakCanvas(message, userStreak, settings, targetUser, targ
     }
 
     function calcDynamicWidth(title, value, sub) {
-        ctx.font = '700 18px Arial';
+        ctx.font = '600 18px Cairo';
         const t = Math.min(ctx.measureText(title).width, 200);
-        ctx.font = '700 20px Arial';
+        ctx.font = '800 20px Cairo';
         const v = Math.min(ctx.measureText(value).width, 220);
-        ctx.font = '500 13px Arial';
+        ctx.font = '300 13px Cairo';
         const sb = Math.min(ctx.measureText(sub).width, 240);
         const raw = Math.max(t, v, sb) + 115;
         return Math.max(minCardWidth, Math.min(maxCardWidth, raw));
@@ -517,16 +519,16 @@ async function buildStreakCanvas(message, userStreak, settings, targetUser, targ
 
         ctx.textAlign = 'left';
         ctx.fillStyle = '#F0F4FF';
-        ctx.font = '700 18px Arial';
-        ctx.fillText(fitText(card.title, cardWidth - 90, '700 18px Arial'), x + 88, card.y + 34);
+        ctx.font = '600 18px Cairo';
+        ctx.fillText(fitText(card.title, cardWidth - 90, '600 18px Cairo'), x + 88, card.y + 34);
 
         ctx.fillStyle = '#FFFFFF';
-        ctx.font = '700 24px Arial';
-        ctx.fillText(fitText(card.value, cardWidth - 98, '700 24px Arial'), x + 88, card.y + 66);
+        ctx.font = '800 24px Cairo';
+        ctx.fillText(fitText(card.value, cardWidth - 98, '800 24px Cairo'), x + 88, card.y + 66);
 
         ctx.fillStyle = '#D6DEFF';
-        ctx.font = '500 13px Arial';
-        ctx.fillText(fitText(card.sub, cardWidth - 98, '500 13px Arial'), x + 88, card.y + 90);
+        ctx.font = '300 13px Cairo';
+        ctx.fillText(fitText(card.sub, cardWidth - 98, '300 13px Cairo'), x + 88, card.y + 90);
     }
 
     const layouts = cardData.map((card) => {

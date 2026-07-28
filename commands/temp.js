@@ -2040,8 +2040,8 @@ async function buildGeneralControlCard(guild) {
   ctx.shadowColor = 'rgba(0,0,0,0.26)';
   ctx.shadowBlur = 12;
   const cardTitle = `${guild?.name || 'Servername'} Voice Controller`;
-  const cardTitleSize = fitTextSize(ctx, cardTitle, width - 220, 72, 42, LATIN_FONT_FAMILY);
-  ctx.font = `bold ${cardTitleSize}px ${LATIN_FONT_FAMILY}`;
+  const cardTitleSize = fitTextSize(ctx, cardTitle, width - 220, 72, 42, LATIN_FONT_FAMILY, '900');
+  ctx.font = `900 ${cardTitleSize}px ${LATIN_FONT_FAMILY}`;
   ctx.fillText(cardTitle, width / 2, 168);
   ctx.shadowBlur = 0;
 
@@ -2071,7 +2071,7 @@ async function buildGeneralControlCard(guild) {
 
   let uniformEnglishSize = 34;
   while (uniformEnglishSize > 16) {
-    ctx.font = `bold ${uniformEnglishSize}px ${LATIN_FONT_FAMILY}`;
+    ctx.font = `800 ${uniformEnglishSize}px ${LATIN_FONT_FAMILY}`;
     const widestWidth = Math.max(...visibleKeys.map(key => ctx.measureText(CONTROL_META[key].label).width), 0);
     if (widestWidth <= (englishPanelWidth - 18)) break;
     uniformEnglishSize -= 1;
@@ -2099,7 +2099,7 @@ async function buildGeneralControlCard(guild) {
       ctx.fillStyle = '#ffffff';
       ctx.shadowColor = 'rgba(0,0,0,0.26)';
       ctx.shadowBlur = 10;
-      ctx.font = `bold ${uniformEnglishSize}px ${LATIN_FONT_FAMILY}`;
+      ctx.font = `800 ${uniformEnglishSize}px ${LATIN_FONT_FAMILY}`;
       ctx.fillText(CONTROL_META[key].label, x + englishPanelX + (englishPanelWidth / 2), y + (boxHeight / 2) + 1);
 
       ctx.shadowColor = 'rgba(0,0,0,0.16)';
@@ -2118,8 +2118,8 @@ async function buildGeneralControlCard(guild) {
   const footerBlockWidth = 420;
   const leftFooterX = panelX + footerPadding;
   const rightFooterRightX = panelX + panelWidth - footerPadding;
-  const footerLabelFont = `600 27px ${LATIN_FONT_FAMILY}`;
-  const footerValueFont = `700 30px ${LATIN_FONT_FAMILY}`;
+  const footerLabelFont = `300 27px ${LATIN_FONT_FAMILY}`;
+  const footerValueFont = `800 30px ${LATIN_FONT_FAMILY}`;
   const footerIconCenterX = width / 2;
   const footerIconCenterY = panelY + panelHeight - 94;
   const footerIconSize = 58;
@@ -2138,8 +2138,8 @@ async function buildGeneralControlCard(guild) {
   ctx.fillText(String(roomCount), leftFooterX + allRoomsLabelWidth + 16, footerLineY);
 
   const serverName = guild.name || 'Unknown Server';
-  const serverNameSize = fitTextSize(ctx, serverName, footerBlockWidth, 30, 18, LATIN_FONT_FAMILY, '700');
-  ctx.font = `700 ${serverNameSize}px ${LATIN_FONT_FAMILY}`;
+  const serverNameSize = fitTextSize(ctx, serverName, footerBlockWidth, 30, 18, LATIN_FONT_FAMILY, '800');
+  ctx.font = `800 ${serverNameSize}px ${LATIN_FONT_FAMILY}`;
   const serverNameWidth = ctx.measureText(serverName).width;
   ctx.fillStyle = '#ffffff';
   ctx.textAlign = 'left';
@@ -2154,7 +2154,7 @@ async function buildGeneralControlCard(guild) {
 
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(255,255,255,0.52)';
-  ctx.font = `600 19px ${LATIN_FONT_FAMILY}`;
+  ctx.font = `300 19px ${LATIN_FONT_FAMILY}`;
   ctx.fillText(CONTROL_CARD_SIGNATURE, width / 2, panelY + panelHeight - 30);
 
   ctx.shadowBlur = 0;

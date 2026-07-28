@@ -23,6 +23,9 @@ const dotenv = require('dotenv');
 dotenv.config();
 const fs = require('fs');
 const path = require('path');
+
+// تسجيل خط Cairo بجميع أوزانه عند بدء التشغيل
+require('./utils/cairoFont').ensureCairoFontsRegistered();
 const { logEvent } = require('./utils/logs_system.js');
 const { startReminderSystem } = require('./commands/notifications.js');
 // تعريف downManager في المستوى العلوي للوصول عبر جميع معالجات الأحداث
