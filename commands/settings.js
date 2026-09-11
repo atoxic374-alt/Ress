@@ -60,7 +60,11 @@ async function execute(message, args, { responsibilities, client, scheduleSave, 
     return;
   }
 
-  const isOwner = BOT_OWNERS.includes(message.author.id) || message.guild.ownerId === message.author.id;
+  if (global.reloadBotOwners) {
+    global.reloadBotOwners();
+  }
+  const liveBotOwners = Array.isArray(global.BOT_OWNERS) ? global.BOT_OWNERS : BOT_OWNERS;
+  const isOwner = liveBotOwners.map(String).includes(String(message.author.id)) || message.guild.ownerId === message.author.id;
   if (!isOwner) {
     await message.react('❌');
     return;
@@ -599,7 +603,7 @@ async function execute(message, args, { responsibilities, client, scheduleSave, 
   }
 
   // دالة للعودة إلى صفحة المسؤولية بعد التعديل
-  async function updateResponsibilityView(responsibilityName) {
+  async function updateResponsibilityView(responsibilityName, sourceInteraction = null) {
     try {
       const responsibility = responsibilities[responsibilityName];
       if (!responsibility) {
@@ -695,7 +699,12 @@ const deleteButton = new ButtonBuilder()
         .setTitle(`**تعديل المسؤولية : ${responsibilityName}**`)
         .setDescription(`**المسؤولون :** ${respList}\n**الشرح :** ${desc}\n**الترتيب :** ${currentIndex + 1} من ${orderedKeys.length}`);
 
-      await sentMessage.edit({ embeds: [embedEdit], components });
+      const payload = { embeds: [embedEdit], components };
+      if (sourceInteraction && !sourceInteraction.replied && !sourceInteraction.deferred) {
+        await sourceInteraction.update(payload);
+      } else {
+        await sentMessage.edit(payload);
+      }
     } catch (error) {
       console.error('خطأ في تحديث صفحة المسؤولية:', error);
       await updateMainMenu();
@@ -1357,6 +1366,29 @@ const deleteButton = new ButtonBuilder()
     }
   }
 
+  function getCurrentBotOwners() {
+    const owners = Array.isArray(global.BOT_OWNERS) && global.BOT_OWNERS.length > 0
+      ? global.BOT_OWNERS
+      : BOT_OWNERS;
+    return [...new Set((Array.isArray(owners) ? owners : []).map(String))];
+  }
+
+  function canManageOwners(userId) {
+    return getCurrentBotOwners().includes(String(userId)) || message.guild.ownerId === String(userId);
+  }
+
+  function saveBotOwners(ownerIds) {
+    const botConfigPath = path.join(__dirname, '..', 'data', 'botConfig.json');
+    const currentConfig = fs.existsSync(botConfigPath)
+      ? JSON.parse(fs.readFileSync(botConfigPath, 'utf8'))
+      : {};
+    currentConfig.owners = [...new Set(ownerIds.map(String))];
+    fs.writeFileSync(botConfigPath, JSON.stringify(currentConfig, null, 2));
+    if (global.updateBotOwners) global.updateBotOwners(currentConfig.owners);
+    else global.BOT_OWNERS = currentConfig.owners;
+    return currentConfig.owners;
+  }
+
   collector.on('collect', async interaction => {
     try {
       // معالجة التفاعلات
@@ -1405,6 +1437,15 @@ const deleteButton = new ButtonBuilder()
           roleNamesByResponsibility: {}
         });
         await openResponsibilityRolesCenter(interaction);
+        return;
+      }
+
+      if (interaction.customId === 'settings_responsibility_roles_edit_select' && interaction.isStringSelectMenu()) {
+        const selectedResponsibility = interaction.values[0];
+        if (!responsibilities[selectedResponsibility]) {
+          return await safeReply(interaction, '**المسؤولية غير موجودة!**');
+        }
+        await updateResponsibilityView(selectedResponsibility, interaction);
         return;
       }
 
@@ -1533,6 +1574,62 @@ const deleteButton = new ButtonBuilder()
 
           await interaction.update({ embeds: [embedEdit], components });
         }
+      } else if (interaction.customId === 'settings_owners_list' || interaction.customId === 'settings_owners_add' || interaction.customId === 'settings_owners_remove') {
+        if (!canManageOwners(interaction.user.id)) {
+          return await safeReply(interaction, '**Owners only: لا تملك صلاحية إدارة مالكي البوت.**');
+        }
+
+        const owners = getCurrentBotOwners();
+        if (interaction.customId === 'settings_owners_list') {
+          return await safeReply(interaction, `**مالكو البوت الحاليون:**\n${owners.length ? owners.map((id, index) => `${index + 1}. <@${id}>`).join('\n') : 'لا يوجد'}`);
+        }
+
+        await safeReply(interaction, interaction.customId === 'settings_owners_add'
+          ? '**أرسل منشن أو آيدي المستخدم لإضافته كمالك.**'
+          : '**أرسل رقم المالك من القائمة لحذفه.**');
+        const ownerCollector = interaction.channel.createMessageCollector({
+          filter: msg => msg.author.id === interaction.user.id,
+          time: 60000,
+          max: 1
+        });
+        ownerCollector.on('collect', async msg => {
+          await msg.delete().catch(() => {});
+          const currentOwners = getCurrentBotOwners();
+          if (interaction.customId === 'settings_owners_add') {
+            const userId = msg.mentions.users.first()?.id || msg.content.trim().replace(/[<@!>]/g, '');
+            if (!/^\d{17,19}$/.test(userId)) return interaction.followUp({ content: '**آيدي أو منشن غير صحيح.**', ephemeral: true });
+            if (currentOwners.includes(userId)) return interaction.followUp({ content: '**هذا المستخدم مالك بالفعل.**', ephemeral: true });
+            const user = await client.users.fetch(userId).catch(() => null);
+            if (!user) return interaction.followUp({ content: '**لم يتم العثور على المستخدم.**', ephemeral: true });
+            try {
+              saveBotOwners([...currentOwners, userId]);
+            } catch (error) {
+              console.error('خطأ في حفظ مالكي البوت:', error);
+              return interaction.followUp({ content: '**تعذر حفظ المالك الجديد.**', ephemeral: true });
+            }
+            await interaction.followUp({ content: `**✅ تمت إضافة <@${userId}> كمالك.**`, ephemeral: true });
+          } else {
+            const index = Number.parseInt(msg.content.trim(), 10) - 1;
+            if (!Number.isInteger(index) || index < 0 || index >= currentOwners.length) {
+              return interaction.followUp({ content: '**رقم مالك غير صحيح.**', ephemeral: true });
+            }
+            if (currentOwners[index] === interaction.user.id && currentOwners.length === 1) {
+              return interaction.followUp({ content: '**لا يمكن حذف المالك الوحيد.**', ephemeral: true });
+            }
+            const removed = currentOwners[index];
+            try {
+              saveBotOwners(currentOwners.filter((_, i) => i !== index));
+            } catch (error) {
+              console.error('خطأ في حفظ إزالة مالك البوت:', error);
+              return interaction.followUp({ content: '**تعذر حفظ إزالة المالك.**', ephemeral: true });
+            }
+            await interaction.followUp({ content: `**✅ تمت إزالة <@${removed}> من المالكين.**`, ephemeral: true });
+          }
+        });
+        ownerCollector.on('end', collected => {
+          if (!collected.size) interaction.followUp({ content: '**انتهت مهلة الانتظار.**', ephemeral: true }).catch(() => {});
+        });
+        return;
       } else if (interaction.customId === 'back_to_menu' || interaction.customId === 'settings_owners_back' || interaction.customId.startsWith('back_to_main_')) {
         // إيقاف الـ collector النشط لهذه المسؤولية عند العودة
         const potentialRespName = interaction.customId.replace('back_to_main_', '');
@@ -2070,7 +2167,7 @@ const deleteButton = new ButtonBuilder()
                 await interaction.update({ embeds: [embed], components: [row] });
             } else if (action === 'owners') {
                 // التحقق من أن المستخدم هو مالك السيرفر أو مالك البوت
-                if (!BOT_OWNERS.includes(interaction.user.id) && message.guild.ownerId !== interaction.user.id) {
+                if (!canManageOwners(interaction.user.id)) {
                     await interaction.reply({ content: '**ليس لديك صلاحية للوصول لهذا الخيار!**', ephemeral: true });
                     return;
                 }
