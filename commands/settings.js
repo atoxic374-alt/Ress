@@ -555,7 +555,11 @@ async function execute(message, args, { responsibilities, client, scheduleSave, 
   // Collector with a 5-minute timeout
   // لا تلتقط هذه الجلسة أزرار لوحات settings أخرى أو لوحات أوامر مختلفة
   // حتى لا يرد معالج آخر برسالة صلاحيات غير صحيحة.
-  const filter = i => i.user.id === message.author.id && i.message?.id === sentMessage.id;
+  const filter = i => i.user.id === message.author.id && (
+    i.message?.id === sentMessage.id
+    || i.customId?.startsWith('settings_responsibility_roles_open_modal_')
+    || i.customId === 'settings_responsibility_roles_finish_create'
+  );
   const collector = message.channel.createMessageComponentCollector({ filter, time: 600000 }); // 10 minutes
 
   activeCommandCollectors.set(message.author.id, collector);
