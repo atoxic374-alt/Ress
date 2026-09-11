@@ -110,6 +110,27 @@ async function execute(message, args, { saveData, BOT_OWNERS, client }) {
     }
   }
 
+  function getRolesAtOrAbove(role) {
+    if (!role) return [];
+    return message.guild.roles.cache
+      .filter(candidate => candidate.id !== message.guild.id && candidate.position >= role.position)
+      .sort((a, b) => b.position - a.position)
+      .map(candidate => candidate.id);
+  }
+
+  function createAddModeRow() {
+    return new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('adminroles_add_single')
+        .setLabel('إضافة رول فردي')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId('adminroles_add_hierarchy')
+        .setLabel('إضافة الرول وكل اللي فوقه')
+        .setStyle(ButtonStyle.Success)
+    );
+  }
+
   if (!BOT_OWNERS.includes(message.author.id)) {
     console.log(`❌ المستخدم ${message.author.id} ليس مالك. المالكين الحاليين:`, BOT_OWNERS);
     await message.react('❌');
@@ -165,6 +186,10 @@ async function execute(message, args, { saveData, BOT_OWNERS, client }) {
         return await safeReply(interaction, '**يرجى الانتظار قليلاً قبل المحاولة مرة أخرى**');
       }
 
+      if ((interaction.customId === 'adminroles_add' || interaction.customId === 'adminroles_remove') && !interaction.replied && !interaction.deferred) {
+        await interaction.deferReply({ ephemeral: true });
+      }
+
       await manageConcurrentOperation(operationId, async () => {
         // التحقق من صلاحية التفاعل
         if (!interaction || !interaction.isRepliable()) {
@@ -173,7 +198,7 @@ async function execute(message, args, { saveData, BOT_OWNERS, client }) {
         }
 
         // منع التفاعلات المتكررة
-        if (interaction.replied || interaction.deferred) {
+        if (interaction.replied) {
           console.log('تم تجاهل تفاعل متكرر في adminroles');
           return;
         }
@@ -182,103 +207,95 @@ async function execute(message, args, { saveData, BOT_OWNERS, client }) {
         ADMIN_ROLES = loadAdminRoles();
 
       if (interaction.customId === 'adminroles_add') {
-        // Send message asking for roles with mention or ID
-        await safeReply(interaction, '**منشن الرول او الآي دي **');
-
-        // Create message collector
-        const messageFilter = m => m.author.id === interaction.user.id;
-        const messageCollector = interaction.channel.createMessageCollector({
-          filter: messageFilter,
+        await safeReply(interaction, '**اختر نوع الإضافة:**', { components: [createAddModeRow()] });
+        const addModeMessage = await interaction.fetchReply();
+        const modeCollector = addModeMessage.createMessageComponentCollector({
+          filter: modeInteraction => modeInteraction.user.id === interaction.user.id,
           time: 60000,
           max: 1
         });
 
-        messageCollector.on('collect', async (msg) => {
-          try {
-            await msg.delete().catch(() => {});
+        modeCollector.on('collect', async modeInteraction => {
+          const addHierarchy = modeInteraction.customId === 'adminroles_add_hierarchy';
+          await modeInteraction.update({
+            content: addHierarchy
+              ? '**منشن الرول أو الآي دي، وسيتم إضافة الرول وكل الرولات الأعلى منه هرميًا.**'
+              : '**منشن الرول أو الآي دي لإضافته فقط.**',
+            components: []
+          });
 
-            const rolesInput = msg.content.trim();
-            const roleIds = rolesInput.split(/\s+/).map(role => role.replace(/[<@&>]/g, '')).filter(id => id);
+          const messageCollector = interaction.channel.createMessageCollector({
+            filter: m => m.author.id === interaction.user.id,
+            time: 60000,
+            max: 1
+          });
 
-            if (roleIds.length === 0) {
-              return interaction.followUp({ content: '**لم يتم تحديد أي رولات صحيحة.**', ephemeral: true });
-            }
+          messageCollector.on('collect', async msg => {
+            try {
+              await msg.delete().catch(() => {});
+              const roleIds = msg.content.trim().split(/\s+/)
+                .map(role => role.replace(/[<@&>]/g, '')).filter(id => id);
+              if (roleIds.length === 0) {
+                return interaction.followUp({ content: '**لم يتم تحديد أي رولات صحيحة.**', ephemeral: true });
+              }
 
-            let addedRoles = [];
-            let existingRoles = [];
-            let invalidRoles = [];
-
-            for (const roleId of roleIds) {
-              if (ADMIN_ROLES.includes(roleId)) {
-                existingRoles.push(roleId);
-              } else {
-                try {
-                  const role = await interaction.guild.roles.fetch(roleId);
-                  if (role) {
-                    ADMIN_ROLES.push(roleId);
-                    addedRoles.push(roleId);
-                  } else {
-                    invalidRoles.push(roleId);
-                  }
-                } catch (error) {
+              const requestedIds = [];
+              const invalidRoles = [];
+              for (const roleId of roleIds) {
+                const role = await interaction.guild.roles.fetch(roleId).catch(() => null);
+                if (!role) {
                   invalidRoles.push(roleId);
+                  continue;
+                }
+                const hierarchyIds = addHierarchy ? getRolesAtOrAbove(role) : [role.id];
+                for (const id of hierarchyIds) {
+                  if (!requestedIds.includes(id)) requestedIds.push(id);
                 }
               }
-            }
 
-            // حفظ التغييرات في JSON
-            if (addedRoles.length > 0) {
-              saveAdminRoles(ADMIN_ROLES);
+              const addedRoles = requestedIds.filter(id => !ADMIN_ROLES.includes(id));
+              const existingRoles = requestedIds.filter(id => ADMIN_ROLES.includes(id));
+              ADMIN_ROLES.push(...addedRoles);
 
-              // تحديث الكاش
-              if (global.updateAdminRolesCache) {
-                global.updateAdminRolesCache();
+              if (addedRoles.length > 0) {
+                saveAdminRoles(ADMIN_ROLES);
+                if (global.updateAdminRolesCache) global.updateAdminRolesCache();
+                if (client.logConfig && client.logConfig.logRoles) {
+                  const { updateLogPermissions } = require('./logs.js');
+                  await updateLogPermissions(message.guild, client.logConfig.logRoles);
+                }
+                logEvent(client, message.guild, {
+                  type: 'ADMIN_ACTIONS',
+                  title: 'تمت إضافة رولات اداره',
+                  description: `تم إضافة ${addedRoles.length} رول جديد لقائمة رولات الاداره`,
+                  user: message.author,
+                  fields: [{ name: 'الرولات المضافة', value: addedRoles.map(id => `<@&${id}>`).join('\n'), inline: false }]
+                });
               }
 
-              // تحديث صلاحيات اللوق
-              if (client.logConfig && client.logConfig.logRoles) {
-                const { updateLogPermissions } = require('./logs.js');
-                await updateLogPermissions(message.guild, client.logConfig.logRoles);
-              }
-            }
+              let response = '';
+              if (addedRoles.length > 0) response += `**✅ تمت الإضافة:**\n${addedRoles.map(id => `<@&${id}>`).join('\n')}\n\n`;
+              if (existingRoles.length > 0) response += `**موجودة مسبقاً:**\n${existingRoles.map(id => `<@&${id}>`).join('\n')}\n\n`;
+              if (invalidRoles.length > 0) response += `**❌ رولات غير صحيحة:**\n${invalidRoles.join(', ')}\n\n`;
 
-            // Log the admin role addition
-            if (addedRoles.length > 0) {
-              logEvent(client, message.guild, {
-                type: 'ADMIN_ACTIONS',
-                title: 'تمت إضافة رولات اداره',
-                description: `تم إضافة ${addedRoles.length} رول جديد لقائمة رولات الاداره`,
-                user: message.author,
-                fields: [
-                  { name: 'الرولات المضافة', value: addedRoles.map(id => `<@&${id}>`).join('\n'), inline: false }
-                ]
-              });
+              await interaction.followUp({ content: response || '**لم يتم إجراء أي تغييرات.**', ephemeral: true });
+              await sentMessage.edit({ embeds: [createMainEmbed()], components: [row] });
+            } catch (error) {
+              console.error('Error processing roles:', error);
+              await interaction.followUp({ content: '**حدث خطأ أثناء معالجة الرولات.**', ephemeral: true }).catch(() => {});
             }
+          });
 
-            let response = '';
-            if (addedRoles.length > 0) {
-              response += `**✅ Completely Add :**\n ${addedRoles.map(id => `<@&${id}>`).join('\n')}\n\n`;
+          messageCollector.on('end', collected => {
+            if (collected.size === 0) {
+              interaction.followUp({ content: '**انتهت مهلة الانتظار.**', ephemeral: true }).catch(() => {});
             }
-            if (existingRoles.length > 0) {
-              response += `** already in the list :**\n${existingRoles.map(id => `<@&${id}>`).join('\n')}\n\n`;
-            }
-            if (invalidRoles.length > 0) {
-              response += `**❌ رولات غير صحيحة:**\n${invalidRoles.join(', ')}\n\n`;
-            }
-
-            await interaction.followUp({ content: response || '**لم يتم إجراء أي تغييرات.**', ephemeral: true });
-
-            // تحديث القائمة الرئيسية
-            await sentMessage.edit({ embeds: [createMainEmbed()], components: [row] });
-          } catch (error) {
-            console.error('Error processing roles:', error);
-            await interaction.followUp({ content: '**حدث خطأ أثناء معالجة الرولات.**', ephemeral: true });
-          }
+          });
         });
 
-        messageCollector.on('end', (collected) => {
+        modeCollector.on('end', collected => {
           if (collected.size === 0) {
-            interaction.followUp({ content: '**انتهت مهلة الانتظار.**', ephemeral: true }).catch(() => {});
+            interaction.editReply({ content: '**انتهت مهلة اختيار نوع الإضافة.**', components: [] }).catch(() => {});
           }
         });
 
