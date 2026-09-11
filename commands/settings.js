@@ -553,7 +553,9 @@ async function execute(message, args, { responsibilities, client, scheduleSave, 
   const sentMessage = await sendSettingsMenu();
 
   // Collector with a 5-minute timeout
-  const filter = i => i.user.id === message.author.id;
+  // لا تلتقط هذه الجلسة أزرار لوحات settings أخرى أو لوحات أوامر مختلفة
+  // حتى لا يرد معالج آخر برسالة صلاحيات غير صحيحة.
+  const filter = i => i.user.id === message.author.id && i.message?.id === sentMessage.id;
   const collector = message.channel.createMessageComponentCollector({ filter, time: 600000 }); // 10 minutes
 
   activeCommandCollectors.set(message.author.id, collector);
@@ -1527,7 +1529,7 @@ const deleteButton = new ButtonBuilder()
 
           await interaction.update({ embeds: [embedEdit], components });
         }
-      } else if (interaction.customId === 'back_to_menu' || interaction.customId.startsWith('back_to_main_')) {
+      } else if (interaction.customId === 'back_to_menu' || interaction.customId === 'settings_owners_back' || interaction.customId.startsWith('back_to_main_')) {
         // إيقاف الـ collector النشط لهذه المسؤولية عند العودة
         const potentialRespName = interaction.customId.replace('back_to_main_', '');
         if (potentialRespName !== 'back_to_menu') {
@@ -2086,7 +2088,7 @@ const deleteButton = new ButtonBuilder()
                     .setStyle(ButtonStyle.Primary);
 
                 const backButton = new ButtonBuilder()
-                    .setCustomId('back_to_menu')
+                    .setCustomId('settings_owners_back')
                     .setLabel('رجوع')
                     .setStyle(ButtonStyle.Secondary);
 
