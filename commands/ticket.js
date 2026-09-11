@@ -1508,10 +1508,16 @@ async function storeImageLocally(url, guildId, slotKey, previousValue = null) {
   const response = await fetch(parsed.toString());
   if (!response.ok) throw new Error(`فشل تحميل الصورة (${response.status})`);
 
-  const contentType = (response.headers.get('content-type') || '').toLowerCase();
-  if (!contentType.startsWith('image/')) throw new Error('الرابط لا يشير إلى صورة');
-
   ensureTicketImagesDir();
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.length) throw new Error('الملف فارغ');
+  try {
+    await loadImage(bytes);
+  } catch {
+    throw new Error('الملف ليس صورة قابلة للعرض');
+  }
+
+  const contentType = (response.headers.get('content-type') || '').toLowerCase();
   const extFromType = contentType.includes('png') ? '.png'
     : contentType.includes('jpeg') || contentType.includes('jpg') ? '.jpg'
       : contentType.includes('webp') ? '.webp'
@@ -1520,8 +1526,11 @@ async function storeImageLocally(url, guildId, slotKey, previousValue = null) {
 
   const fileName = `${guildId}_${slotKey}_${Date.now()}${extFromType}`;
   const absolute = path.join(ticketImagesDir, fileName);
-  const bytes = Buffer.from(await response.arrayBuffer());
   fs.writeFileSync(absolute, bytes);
+  if (!fs.existsSync(absolute) || fs.statSync(absolute).size !== bytes.length) {
+    if (fs.existsSync(absolute)) fs.unlinkSync(absolute);
+    throw new Error('فشل التحقق من حفظ الملف');
+  }
 
   removeStoredImage(previousValue);
   return `local:${fileName}`;

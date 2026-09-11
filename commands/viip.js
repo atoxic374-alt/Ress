@@ -4,6 +4,7 @@ const { logEvent } = require('../utils/logs_system');
 const { isUserBlocked } = require('./block.js');
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
 
 const name = 'vip';
 
@@ -30,6 +31,15 @@ function loadBotStatus() {
             streamUrl: null
         };
     }
+}
+
+async function applyAndVerifyBotBanner(user, source) {
+    const response = await axios.get(source, { responseType: 'arraybuffer', timeout: 30000, maxContentLength: 15 * 1024 * 1024 });
+    const buffer = Buffer.from(response.data);
+    if (!buffer.length) throw new Error('الصورة فارغة');
+    const updatedUser = await user.setBanner(buffer);
+    if (!updatedUser) throw new Error('لم تُرجع Discord نتيجة تغيير البنر');
+    return updatedUser;
 }
 
 function saveBotStatus(statusData) {
@@ -176,7 +186,7 @@ async function execute(message, args, { responsibilities, BOT_OWNERS, client, sa
                         // Check if message has attachment
                         if (msg.attachments.size > 0) {
                             const attachment = msg.attachments.first();
-                            if (attachment.contentType && attachment.contentType.startsWith('image/')) {
+                            if (attachment?.url) {
                                 avatarUrl = attachment.url;
                             }
                         } else if (msg.content.trim()) {
@@ -259,7 +269,7 @@ async function execute(message, args, { responsibilities, BOT_OWNERS, client, sa
 
                         if (msg.attachments.size > 0) {
                             const attachment = msg.attachments.first();
-                            if (attachment.contentType && attachment.contentType.startsWith('image/')) {
+                            if (attachment?.url) {
                                 bannerUrl = attachment.url;
                             }
                         } else if (msg.content.trim()) {
@@ -278,7 +288,7 @@ async function execute(message, args, { responsibilities, BOT_OWNERS, client, sa
                         }
 
                         try {
-                            await client.user.setBanner(bannerUrl);
+                            await applyAndVerifyBotBanner(client.user, bannerUrl);
 
                             await msg.delete().catch(() => { });
 

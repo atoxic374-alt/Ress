@@ -157,9 +157,7 @@ function removeCustomBanner(userId) {
 function isValidImageUrl(url) {
     try {
         const urlObj = new URL(url);
-        return /\.(jpg|jpeg|png|gif|webp)$/i.test(urlObj.pathname) || 
-               urlObj.hostname.includes('discord') || 
-               urlObj.hostname.includes('imgur');
+        return urlObj.protocol === 'http:' || urlObj.protocol === 'https:';
     } catch {
         return false;
     }
@@ -349,7 +347,7 @@ async function handleInteraction(interaction, client) {
             // التحقق من المرفقات
             if (msg.attachments.size > 0) {
                 const attachment = msg.attachments.first();
-                if (attachment.contentType && attachment.contentType.startsWith('image/')) {
+                if (attachment?.url) {
                     imageUrl = attachment.url;
                 }
             }
@@ -361,7 +359,8 @@ async function handleInteraction(interaction, client) {
             if (imageUrl) {
                 try {
                     // التحقق من صحة الصورة
-                    await axios.head(imageUrl);
+                    const response = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 30000, maxContentLength: 15 * 1024 * 1024 });
+                    if (!response.data || !Buffer.from(response.data).length) throw new Error('الصورة فارغة');
                     
                     await setCustomAvatar(userId, imageUrl);
                     await msg.react('✅');
@@ -417,7 +416,7 @@ async function handleInteraction(interaction, client) {
             // التحقق من المرفقات
             if (msg.attachments.size > 0) {
                 const attachment = msg.attachments.first();
-                if (attachment.contentType && attachment.contentType.startsWith('image/')) {
+                if (attachment?.url) {
                     imageUrl = attachment.url;
                 }
             }
@@ -429,7 +428,8 @@ async function handleInteraction(interaction, client) {
             if (imageUrl) {
                 try {
                     // التحقق من صحة الصورة
-                    await axios.head(imageUrl);
+                    const response = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 30000, maxContentLength: 15 * 1024 * 1024 });
+                    if (!response.data || !Buffer.from(response.data).length) throw new Error('الصورة فارغة');
                     
                     await setCustomBanner(userId, imageUrl);
                     await msg.react('✅');
