@@ -20,6 +20,8 @@ const MIN_ROOM_DELETE_HOURS = 1;
 const MAX_ROOM_DELETE_HOURS = 168;
 const MIN_REJECT_COOLDOWN_MINUTES = 0;
 const MAX_REJECT_COOLDOWN_MINUTES = 10080;
+const SETROOM_COLOR_CANVAS_WIDTH = 3200;
+const SETROOM_COLOR_CANVAS_HEIGHT = 1100;
 
 ensureCairoFontsRegistered();
 
@@ -126,6 +128,8 @@ function getColorConfigHash(guildConfig) {
         guildIconEnabled: guildConfig.guildIconEnabled || false,
         imageUrl: guildConfig.imageUrl || '',
         localImagePath: guildConfig.localImagePath || '',
+        transparentColorsOnly: true,
+        colorCanvas: [SETROOM_COLOR_CANVAS_WIDTH, SETROOM_COLOR_CANVAS_HEIGHT],
         layoutSettings: { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) }
     });
     let hash = 0;
@@ -319,7 +323,7 @@ async function resendSetupEmbed(guildId, client) {
         const config = loadRoomConfig();
         const guildConfig = config[guildId];
 
-        if (!guildConfig || !guildConfig.embedChannelId || !guildConfig.imageUrl) {
+        if (!guildConfig || !guildConfig.embedChannelId) {
             console.error(`❌ لا توجد بيانات setup للسيرفر ${guildId}`);
             return false;
         }
@@ -503,7 +507,7 @@ async function deleteAndSendEmbed(client) {
                 })();
                 
                 const sendPromise = (async () => {
-                    if (guildConfig.imageUrl && guild) {
+                    if (guild) {
                         const newMessage = await sendSetupMessage(embedChannel, guild, guildConfig);
                         setupEmbedMessages.set(guildId, {
                             messageId: newMessage.id,
@@ -635,6 +639,11 @@ let setupEmbedMessages = loadSetupEmbedMessages();
 
 // دالة مساعدة لإرسال رسالة Setup حسب إعدادات الإيمبد
 async function sendSetupMessage(channel, guild, guildConfig) {
+    // guild.fetch() لا يضمن أن تكون الرولات موجودة في الكاش، خصوصاً بعد إعادة تشغيل البوت.
+    // تحميلها قبل بناء المنيو والصورة يمنع اختفاء الألوان بعد الحفظ والتعيين.
+    await guild.roles.fetch().catch(error => {
+        console.warn(`⚠️ تعذر تحميل رولات السيرفر ${guild.id}:`, error.message);
+    });
     const embedEnabled = guildConfig.embedEnabled !== false; // افتراضياً مفعّل
     const texts = getSetroomTexts(guildConfig);
     
@@ -660,7 +669,7 @@ async function sendSetupMessage(channel, guild, guildConfig) {
             files: []
         };
     } else {
-        // إرسال بدون Embed (صورة فقط بدون أي نص)
+        // حتى بدون Embed يجب إرسال صورة الألوان كمرفق ظاهر في الرسالة.
         messageOptions = { 
             content: texts.setupDescription || '',
             components: menus,
@@ -916,13 +925,13 @@ function createSetupMenus(guild, guildConfig) {
                 {
                     label: texts.condolenceLabel || 'Doaa',
                     description: texts.condolenceDescription || 'طلب روم دعاء',
-                    emoji: '<:emoji_83:1442589607639126046>',
+                    emoji: '🕊️',
                     value: 'condolence',
                 },
                 {
                     label: texts.birthdayLabel || 'Birthday',
                     description: texts.birthdayDescription || 'طلب روم ميلاد',
-                    emoji: '<:emoji_84:1442589686987227328>',
+                    emoji: '🎂',
                     value: 'birthday',
                 }
             ])
@@ -944,15 +953,14 @@ emoji: '<:emoji_60:1442587668306329733>',
         let index = 1;
         for (const roleId of guildConfig.colorRoleIds) {
             const role = guild.roles.cache.get(roleId);
-            if (role) {
-                colorOptions.push({
-                    label: `${index}`,
-                    description: role.hexColor,
-emoji: '<:emoji_51:1442585157516398722>',
-                    value: roleId
-                });
-                index++;
-            }
+            // لا تسقط الخيار إذا تأخر الكاش؛ الـ ID المحفوظ صالح حتى لو لم تُجلب الرول بعد.
+            colorOptions.push({
+                label: `${index}`,
+                description: (role?.hexColor || 'اختيار اللون').slice(0, 100),
+                emoji: '🎨',
+                value: roleId
+            });
+            index++;
         }
 
         if (colorOptions.length > 1) {
@@ -987,77 +995,10 @@ async function createColorsImage(guild, guildConfig) {
             return cachedImagePath;
         }
 
-        // تحميل الصورة الأصلية
-        let backgroundImage;
-        try {
-            // محاولة استخدام الصورة المحفوظة محلياً أولاً
-            if (guildConfig.localImagePath && fs.existsSync(guildConfig.localImagePath)) {
-                backgroundImage = await loadImage(guildConfig.localImagePath);
-            } 
-            // في حالة عدم وجود صورة محلية، استخدام الرابط
-            else if (guildConfig.imageUrl) {
-                const response = await fetch(guildConfig.imageUrl);
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                const arrayBuffer = await response.arrayBuffer();
-                const buffer = Buffer.from(arrayBuffer);
-                backgroundImage = await loadImage(buffer);
-                
-                // حفظ الصورة محلياً بعد التحميل الناجح
-                try {
-                    const localPath = await saveImageLocally(guildConfig.imageUrl, guild.id);
-                    if (localPath) {
-                        const config = loadRoomConfig();
-                        if (config[guild.id]) {
-                            config[guild.id].localImagePath = localPath;
-                            saveRoomConfig(config);
-                        }
-                    }
-                } catch (saveErr) {
-                    console.error('⚠️ تعذر حفظ الصورة محلياً:', saveErr.message);
-                }
-            } else {
-                console.error('❌ لا توجد صورة في الإعدادات');
-                return null;
-            }
-        } catch (imgError) {
-            // محاولة استخدام صورة محفوظة محلياً كخطة بديلة
-            const fallbackPath = path.join(setupImagesPath, `setup_${guild.id}.png`);
-            const fallbackPathJpg = path.join(setupImagesPath, `setup_${guild.id}.jpg`);
-            
-            if (fs.existsSync(fallbackPath)) {
-                try {
-                    backgroundImage = await loadImage(fallbackPath);
-                    console.log('✅ تم استخدام الصورة المحفوظة محلياً كبديل');
-                } catch (fallbackErr) {
-                    backgroundImage = null;
-                }
-            } else if (fs.existsSync(fallbackPathJpg)) {
-                try {
-                    backgroundImage = await loadImage(fallbackPathJpg);
-                    console.log('✅ تم استخدام الصورة المحفوظة محلياً كبديل (JPG)');
-                } catch (fallbackErr) {
-                    backgroundImage = null;
-                }
-            }
-            
-            if (!backgroundImage) {
-                // تقليل الرسائل المكررة - طباعة الخطأ مرة واحدة كل ساعة فقط
-                const now = Date.now();
-                const lastLog = lastImageErrorLog.get(guildConfig.imageUrl) || 0;
-                if (now - lastLog > 3600000) { // ساعة واحدة
-                    console.error('❌ فشل في تحميل الصورة:', imgError.message);
-                    console.error('💡 يرجى رفع صورة جديدة باستخدام أمر setroom');
-                    lastImageErrorLog.set(guildConfig.imageUrl, now);
-                }
-                return null;
-            }
-        }
-
-        // استخدام أبعاد الصورة الأصلية
-        const canvasWidth = backgroundImage.width;
-        const canvasHeight = backgroundImage.height;
+        // إنشاء لوحة PNG شفافة بالكامل؛ لا نرسم الخلفية أو النص أو أيقونة السيرفر.
+        // النتيجة ستكون المربعات فقط، مثل صورة الألوان المرجعية.
+        const canvasWidth = SETROOM_COLOR_CANVAS_WIDTH;
+        const canvasHeight = SETROOM_COLOR_CANVAS_HEIGHT;
 
         // إعدادات المعاينة/التخصيص
         const layout = { ...getDefaultLayoutSettings(), ...(guildConfig.layoutSettings || {}) };
@@ -1066,15 +1007,12 @@ async function createColorsImage(guild, guildConfig) {
         const gap = Math.max(2, 20 * scaleFactor * layout.boxGap);
         const cornerRadius = Math.max(4, 10 * scaleFactor);
 
-        const colorsPerRow = 10; // عدد الألوان في كل صف
+        const colorsPerRow = 10; // الإعداد السابق، بدون فرض عدد محدد للمربعات
         const totalColors = guildConfig.colorRoleIds.length;
         const rows = Math.ceil(totalColors / colorsPerRow);
 
         const canvas = createCanvas(canvasWidth, canvasHeight);
         const ctx = canvas.getContext('2d');
-
-        // رسم الصورة الأصلية كخلفية
-        ctx.drawImage(backgroundImage, 0, 0, canvasWidth, canvasHeight);
 
         // حساب عرض المربعات للتمركز أفقياً
         const totalBoxesWidth = (boxSize * colorsPerRow) + (gap * (colorsPerRow - 1));
@@ -1086,67 +1024,6 @@ async function createColorsImage(guild, guildConfig) {
             : (canvasHeight * 0.6) - (totalBoxesHeight / 2);
         const startX = baseStartX + (layout.boxOffsetX * scaleFactor);
         const startY = baseStartY + (layout.boxOffsetY * scaleFactor);
-        
-        // الحصول على النص المخصص من الإعدادات
-        const colorsTitle = guildConfig.colorsTitle !== undefined ? guildConfig.colorsTitle : 'Colors list :';
-        
-        const titleFontSize = Math.max(16, Math.round(26 * scaleFactor * layout.textScale));
-        const textOffsetX = (150 * scaleFactor) + (layout.textOffsetX * scaleFactor);
-        const textOffsetY = (33 * scaleFactor) + (layout.textOffsetY * scaleFactor);
-        const textColor = normalizeHexColor(guildConfig.textColor, '#ffffff');
-        const titleX = startX - textOffsetX;
-        const titleY = startY - textOffsetY;
-
-        if (guildConfig.guildIconEnabled && guild.iconURL()) {
-            try {
-                const guildIconSize = Math.max(28, 64 * scaleFactor * layout.guildScale);
-                const guildIconX = titleX - guildIconSize - (28 * scaleFactor) + (layout.guildOffsetX * scaleFactor);
-                const guildIconY = titleY - (guildIconSize * 0.7) + (layout.guildOffsetY * scaleFactor);
-                const guildIconBuffer = await fetch(guild.iconURL({ extension: 'png', size: 256 })).then(res => {
-                    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-                    return res.arrayBuffer();
-                });
-                const guildIconImage = await loadImage(Buffer.from(guildIconBuffer));
-                const borderWidth = Math.max(3, 4 * scaleFactor);
-                const iconCenterX = guildIconX + (guildIconSize / 2);
-                const iconCenterY = guildIconY + (guildIconSize / 2);
-                const iconRadius = guildIconSize / 2;
-
-                ctx.save();
-                ctx.imageSmoothingEnabled = true;
-                ctx.imageSmoothingQuality = 'high';
-                ctx.beginPath();
-                ctx.arc(iconCenterX, iconCenterY, iconRadius, 0, Math.PI * 2);
-                ctx.clip();
-                ctx.drawImage(guildIconImage, guildIconX, guildIconY, guildIconSize, guildIconSize);
-                ctx.restore();
-
-                if (layout.guildBorderEnabled !== false) {
-                    ctx.save();
-                    ctx.beginPath();
-                    ctx.arc(iconCenterX, iconCenterY, iconRadius + (borderWidth / 2), 0, Math.PI * 2);
-                    ctx.strokeStyle = '#FFFFFF';
-                    ctx.lineWidth = borderWidth;
-                    ctx.shadowColor = 'rgba(0, 0, 0, 0.18)';
-                    ctx.shadowBlur = Math.max(2, 5 * scaleFactor);
-                    ctx.stroke();
-                    ctx.restore();
-                }
-            } catch (guildIconError) {
-                console.error('⚠️ تعذر تحميل أيقونة السيرفر للمعاينة:', guildIconError.message);
-            }
-        }
-
-        // رسم النص فقط إذا لم يكن فارغاً
-        if (layout.showText && colorsTitle && colorsTitle.length > 0) {
-            ctx.fillStyle = textColor;
-            ctx.font = `bold ${titleFontSize}px Cairo`;
-            ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
-            ctx.shadowBlur = Math.max(6, Math.round(10 * scaleFactor));
-            ctx.textAlign = 'left';
-            ctx.fillText(colorsTitle, titleX, titleY);
-            ctx.shadowBlur = 0;
-        }
         
         // رسم المربعات
         let currentX = startX;
@@ -2716,6 +2593,12 @@ async function handleSetroomEditRequest(message, requestId, guildConfig) {
 }
 
 async function buildSetroomPanelPayload(guild, guildConfig, actor, extra = {}) {
+    if (extra.preview) {
+        // المعاينة الشفافة لا تعتمد على imageUrl، لكنها تحتاج الرولات لرسم ألوانها.
+        await guild.roles.fetch().catch(error => {
+            console.warn(`⚠️ تعذر تحميل رولات المعاينة للسيرفر ${guild.id}:`, error.message);
+        });
+    }
     const embed = getSetroomSummaryEmbed(guild, guildConfig, actor);
     const components = extra.preview ? createSetroomPreviewRows(guildConfig) : createSetroomMainRows();
     const payload = { embeds: [embed], components };
@@ -3429,7 +3312,7 @@ async function updateSetupEmbed(guildId, client) {
         const config = loadRoomConfig();
         const guildConfig = config[guildId];
 
-        if (!guildConfig || !guildConfig.embedChannelId || !guildConfig.imageUrl) {
+        if (!guildConfig || !guildConfig.embedChannelId) {
             return;
         }
 
