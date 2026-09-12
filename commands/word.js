@@ -489,10 +489,13 @@ async function handleInteraction(interaction, context) {
             return true;
         }
         pendingWordActions.delete(actionKey);
-        await interaction.deferUpdate();
-        await interaction.message.delete().catch(async () => {
+        const [deleteResult] = await Promise.allSettled([
+            interaction.message.delete(),
+            interaction.deferUpdate()
+        ]);
+        if (deleteResult.status === 'rejected') {
             await interaction.message.edit({ content: '', components: [] }).catch(() => {});
-        });
+        }
         await applyWordRoleAction(pending.message, pending.targetMember, selectedRoleId, pending.entry);
         return true;
     }
