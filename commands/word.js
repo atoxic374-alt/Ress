@@ -14,12 +14,14 @@ const fs = require('fs');
 const path = require('path');
 const interactionRouter = require('../utils/interactionRouter');
 const colorManager = require('../utils/colorManager');
+const { getDataDir } = require('../utils/storagePaths');
 
 const pendingRoleSelections = new Map();
 const pendingWordActions = new Map();
 
-const DATA_PATH = path.join(__dirname, '..', 'data', 'wordTriggers.json');
-const ADMIN_ROLES_PATH = path.join(__dirname, '..', 'data', 'adminRoles.json');
+const DATA_DIR = getDataDir();
+const DATA_PATH = path.join(DATA_DIR, 'wordTriggers.json');
+const ADMIN_ROLES_PATH = path.join(DATA_DIR, 'adminRoles.json');
 
 function readJson(filePath, fallback) {
     try {
