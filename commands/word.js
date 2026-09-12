@@ -322,20 +322,31 @@ async function refreshWordPanelMessage(interaction, panelMessageId) {
     }).catch(() => {});
 }
 
-function buildWordTargetMenu(customId, roles) {
-    const options = roles.slice(0, 25).map(role => ({
+function buildWordTargetMenu(customId, roles, targetMember, page = 0) {
+    const pageSize = 25;
+    const pageCount = Math.max(1, Math.ceil(roles.length / pageSize));
+    const currentPage = Math.min(Math.max(Number(page) || 0, 0), pageCount - 1);
+    const pageRoles = roles.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+    const options = pageRoles.map(role => ({
         label: role.name.slice(0, 100),
         value: role.id,
-        description: `تبديل رول ${role.name}`.slice(0, 100)
+        description: `${targetMember.roles.cache.has(role.id) ? 'Remove' : 'Give'} • ${role.name}`.slice(0, 100)
     }));
-    return new ActionRowBuilder().addComponents(
+    const rows = [new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
             .setCustomId(customId)
-            .setPlaceholder('اختر الرول المطلوب')
+            .setPlaceholder(`اختر الرول المطلوب (صفحة ${currentPage + 1}/${pageCount})`)
             .setMinValues(1)
             .setMaxValues(1)
             .addOptions(options)
-    );
+    )];
+    if (pageCount > 1) {
+        rows.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`word_apply_page:${customId.split(':').slice(1).join(':')}:${currentPage - 1}`).setLabel('السابق').setStyle(ButtonStyle.Secondary).setDisabled(currentPage === 0),
+            new ButtonBuilder().setCustomId(`word_apply_page:${customId.split(':').slice(1).join(':')}:${currentPage + 1}`).setLabel('التالي').setStyle(ButtonStyle.Secondary).setDisabled(currentPage === pageCount - 1)
+        ));
+    }
+    return rows;
 }
 
 function getTargetRolesForMessage(message, entry) {
@@ -432,9 +443,22 @@ async function handleInteraction(interaction, context) {
     const { BOT_OWNERS } = context;
     if (!interaction.guild) return false;
 
-    const isWordUsageSelection = interaction.isStringSelectMenu() && interaction.customId.startsWith('word_apply_role:');
+    const isWordUsageSelection = (interaction.isStringSelectMenu() && interaction.customId.startsWith('word_apply_role:')) || (interaction.isButton() && interaction.customId.startsWith('word_apply_page:'));
     if (!isWordUsageSelection && !isBotOwner(interaction.user.id, BOT_OWNERS)) {
         await interaction.reply({ content: '❌ **أمر word مخصص فقط لأونر البوت.**', flags: MessageFlags.Ephemeral });
+        return true;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('word_apply_page:')) {
+        const parts = interaction.customId.split(':');
+        const actionKey = parts.slice(1, -1).join(':');
+        const page = Number(parts.at(-1));
+        const pending = pendingWordActions.get(actionKey);
+        if (!pending || pending.authorId !== interaction.user.id) {
+            await interaction.reply({ content: '❌ **هذا المنيو مخصص للشخص الذي استخدم الكلمة.**', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        await interaction.update({ components: buildWordTargetMenu(`word_apply_role:${actionKey}`, pending.targetRoles, pending.targetMember, page) });
         return true;
     }
 
@@ -445,9 +469,15 @@ async function handleInteraction(interaction, context) {
             await interaction.reply({ content: '❌ **هذا المنيو مخصص للشخص الذي استخدم الكلمة.**', flags: MessageFlags.Ephemeral });
             return true;
         }
+        const selectedRoleId = interaction.values[0];
+        if (!pending.targetRoles.some(role => role.id === selectedRoleId)) {
+            await interaction.reply({ content: '❌ **الرول المختار غير متاح لهذه الكلمة.**', flags: MessageFlags.Ephemeral });
+            return true;
+        }
         pendingWordActions.delete(actionKey);
-        await interaction.update({ content: '', components: [] });
-        await applyWordRoleAction(pending.message, pending.targetMember, interaction.values[0], pending.entry);
+        await interaction.deferUpdate();
+        await interaction.message.edit({ content: '', components: [] }).catch(() => {});
+        await applyWordRoleAction(pending.message, pending.targetMember, selectedRoleId, pending.entry);
         return true;
     }
 
@@ -754,6 +784,7 @@ async function handleMessage(message, context) {
         await message.react('<:emoji_44:1481252878604697692>').catch(() => {});
         return true;
     }
+    await message.guild.roles.fetch().catch(() => null);
     const targetRoles = getTargetRolesForMessage(message, entry);
     if (targetRoles.length === 0) {
         await message.react('<:emoji_44:1481252878604697692>').catch(() => {});
@@ -761,12 +792,12 @@ async function handleMessage(message, context) {
     }
 
     const actionKey = `${message.id}:${message.author.id}:${Date.now()}`;
-    pendingWordActions.set(actionKey, { message, targetMember, entry, authorId: message.author.id });
+    pendingWordActions.set(actionKey, { message, targetMember, targetRoles, entry, authorId: message.author.id });
     const timeout = setTimeout(() => pendingWordActions.delete(actionKey), 60000);
     timeout.unref?.();
     await message.reply({
         content: `**اختر الرول المطلوب تطبيقه على ${targetMember}:**`,
-        components: [buildWordTargetMenu(`word_apply_role:${actionKey}`, targetRoles)]
+        components: buildWordTargetMenu(`word_apply_role:${actionKey}`, targetRoles, targetMember, 0)
     }).catch(() => pendingWordActions.delete(actionKey));
 
     return true;
