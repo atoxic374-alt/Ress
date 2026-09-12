@@ -701,7 +701,7 @@ async function handleInteraction(interaction, context) {
         pendingRoleSelections.set(pendingKey, { panelMessageId, existing, all });
         await interaction.reply({
             content: '✅ **تم تطبيق تعديلات النص. اختر الآن رولًا أو أكثر للكلمة.**',
-            embeds: [buildWordPreview(pending.existing, interaction.guild)],
+            embeds: [buildWordPreview(existing, interaction.guild)],
             components: [buildTargetRoleSelect(`word_target_roles_edit:${pendingKey}`, getTargetRoleIds(existing))],
             flags: MessageFlags.Ephemeral
         });
