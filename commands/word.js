@@ -65,6 +65,16 @@ function normalizeRoleName(input) {
         .trim();
 }
 
+function getModalText(interaction, customId, required = false) {
+    try {
+        const value = interaction.fields.getTextInputValue(customId);
+        return typeof value === 'string' ? value : '';
+    } catch (error) {
+        if (required) throw error;
+        return '';
+    }
+}
+
 function parseKeywordsInput(input) {
     const raw = String(input || '').trim();
     if (!raw) return { ok: false, error: '❌ **لازم تكتب كلمة واحدة على الأقل.**' };
@@ -513,9 +523,9 @@ async function handleInteraction(interaction, context) {
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith('word_create_modal')) {
         const panelMessageId = extractPanelMessageId(interaction.customId, 'word_create_modal');
-        const keywordValidation = parseKeywordsInput(interaction.fields.getTextInputValue('keyword'));
-        const noPermMessage = interaction.fields.getTextInputValue('noPermMessage')?.trim() || '';
-        const hasPermMessage = interaction.fields.getTextInputValue('hasPermMessage')?.trim() || '';
+        const keywordValidation = parseKeywordsInput(getModalText(interaction, 'keyword', true));
+        const noPermMessage = getModalText(interaction, 'noPermMessage').trim();
+        const hasPermMessage = getModalText(interaction, 'hasPermMessage').trim();
 
         if (!keywordValidation.ok) {
             await interaction.reply({ content: keywordValidation.error, flags: MessageFlags.Ephemeral });
@@ -597,7 +607,7 @@ async function handleInteraction(interaction, context) {
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith('word_delete_modal')) {
         const panelMessageId = extractPanelMessageId(interaction.customId, 'word_delete_modal');
-        const keyword = normalizeWord(interaction.fields.getTextInputValue('keyword'));
+        const keyword = normalizeWord(getModalText(interaction, 'keyword', true));
         const all = getWordData();
         const guildData = all[interaction.guild.id];
 
@@ -634,7 +644,7 @@ async function handleInteraction(interaction, context) {
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith('word_edit_modal')) {
         const panelMessageId = extractPanelMessageId(interaction.customId, 'word_edit_modal');
-        const currentKeyword = normalizeWord(interaction.fields.getTextInputValue('currentKeyword'));
+        const currentKeyword = normalizeWord(getModalText(interaction, 'currentKeyword', true));
         const all = getWordData();
         const guildData = all[interaction.guild.id];
 
@@ -649,9 +659,9 @@ async function handleInteraction(interaction, context) {
             return true;
         }
 
-        const newKeywordInput = interaction.fields.getTextInputValue('newKeyword');
-        const newNoPerm = interaction.fields.getTextInputValue('newNoPermMessage')?.trim();
-        const newHasPerm = interaction.fields.getTextInputValue('newHasPermMessage')?.trim();
+        const newKeywordInput = getModalText(interaction, 'newKeyword');
+        const newNoPerm = getModalText(interaction, 'newNoPermMessage').trim();
+        const newHasPerm = getModalText(interaction, 'newHasPermMessage').trim();
 
         const newKeywordValidation = parseKeywordsInput(newKeywordInput);
         const newKeywords = newKeywordValidation.ok ? newKeywordValidation.keywords : [];
