@@ -444,6 +444,7 @@ async function promptAllowedRolesByMessage(interaction) {
     }
 
     const response = collected.first();
+    await interaction.guild.roles.fetch().catch(() => null);
     const parsed = parseRolesFromMessage(interaction.guild, response.content);
 
     await response.delete().catch(() => {});
@@ -607,7 +608,11 @@ async function handleInteraction(interaction, context) {
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith('word_delete_modal')) {
         const panelMessageId = extractPanelMessageId(interaction.customId, 'word_delete_modal');
-        const keyword = normalizeWord(getModalText(interaction, 'keyword', true));
+        const keyword = normalizeWord(getModalText(interaction, 'keyword'));
+        if (!keyword) {
+            await interaction.reply({ content: '❌ **اكتب الكلمة التي تريد حذفها.**', flags: MessageFlags.Ephemeral });
+            return true;
+        }
         const all = getWordData();
         const guildData = all[interaction.guild.id];
 
@@ -644,7 +649,11 @@ async function handleInteraction(interaction, context) {
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith('word_edit_modal')) {
         const panelMessageId = extractPanelMessageId(interaction.customId, 'word_edit_modal');
-        const currentKeyword = normalizeWord(getModalText(interaction, 'currentKeyword', true));
+        const currentKeyword = normalizeWord(getModalText(interaction, 'currentKeyword'));
+        if (!currentKeyword) {
+            await interaction.reply({ content: '❌ **اكتب الكلمة الحالية التي تريد تعديلها.**', flags: MessageFlags.Ephemeral });
+            return true;
+        }
         const all = getWordData();
         const guildData = all[interaction.guild.id];
 
@@ -737,6 +746,7 @@ async function handleInteraction(interaction, context) {
         await response.delete().catch(() => {});
 
         if (content !== '-') {
+            await interaction.guild.roles.fetch().catch(() => null);
             const parsedAllowed = parseRolesFromMessage(interaction.guild, content);
             if (!parsedAllowed.ok) {
                 await interaction.editReply({
