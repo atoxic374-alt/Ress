@@ -446,7 +446,7 @@ async function handleInteraction(interaction, context) {
             return true;
         }
         pendingWordActions.delete(actionKey);
-        await interaction.update({ content: `⏳ **جاري تطبيق الرول <@&${interaction.values[0]}>...**`, components: [] });
+        await interaction.update({ content: '', components: [] });
         await applyWordRoleAction(pending.message, pending.targetMember, interaction.values[0], pending.entry);
         return true;
     }
