@@ -4,6 +4,7 @@ const {
     ButtonStyle,
     ModalBuilder,
     RoleSelectMenuBuilder,
+    StringSelectMenuBuilder,
     TextInputBuilder,
     TextInputStyle,
     MessageFlags,
@@ -15,6 +16,7 @@ const interactionRouter = require('../utils/interactionRouter');
 const colorManager = require('../utils/colorManager');
 
 const pendingRoleSelections = new Map();
+const pendingWordActions = new Map();
 
 const DATA_PATH = path.join(__dirname, '..', 'data', 'wordTriggers.json');
 const ADMIN_ROLES_PATH = path.join(__dirname, '..', 'data', 'adminRoles.json');
@@ -320,6 +322,51 @@ async function refreshWordPanelMessage(interaction, panelMessageId) {
     }).catch(() => {});
 }
 
+function buildWordTargetMenu(customId, roles) {
+    const options = roles.slice(0, 25).map(role => ({
+        label: role.name.slice(0, 100),
+        value: role.id,
+        description: `تبديل رول ${role.name}`.slice(0, 100)
+    }));
+    return new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+            .setCustomId(customId)
+            .setPlaceholder('اختر الرول المطلوب')
+            .setMinValues(1)
+            .setMaxValues(1)
+            .addOptions(options)
+    );
+}
+
+function getTargetRolesForMessage(message, entry) {
+    return getTargetRoleIds(entry)
+        .map(id => message.guild.roles.cache.get(id))
+        .filter(role => role && !role.managed);
+}
+
+async function applyWordRoleAction(message, targetMember, roleId, entry) {
+    const role = message.guild.roles.cache.get(String(roleId));
+    if (!role) {
+        await message.react('<:emoji_44:1481252878604697692>').catch(() => {});
+        return;
+    }
+    const hasRole = targetMember.roles.cache.has(role.id);
+    const action = hasRole ? 'remove' : 'add';
+    const result = action === 'remove'
+        ? await targetMember.roles.remove(role.id).then(() => true).catch(() => false)
+        : await targetMember.roles.add(role.id).then(() => true).catch(() => false);
+    if (!result) {
+        await message.reply(`❌ **فشل ${action === 'remove' ? 'إزالة' : 'إضافة'} الرول للهدف (تحقق من صلاحيات البوت وترتيب الرول).**`).catch(() => {});
+        await message.react('<:emoji_44:1481252878604697692>').catch(() => {});
+        return;
+    }
+    if (action === 'add' && entry?.hasPermMessage) {
+        await message.reply(entry.hasPermMessage).catch(() => {});
+    } else {
+        await message.react(action === 'remove' ? '<:emoji_42:1481252567227826388>' : '<:emoji_43:1481252608361365701>').catch(() => {});
+    }
+}
+
 function buildTargetRoleSelect(customId, defaultRoleIds = []) {
     const menu = new RoleSelectMenuBuilder()
         .setCustomId(customId)
@@ -385,8 +432,22 @@ async function handleInteraction(interaction, context) {
     const { BOT_OWNERS } = context;
     if (!interaction.guild) return false;
 
-    if (!isBotOwner(interaction.user.id, BOT_OWNERS)) {
+    const isWordUsageSelection = interaction.isStringSelectMenu() && interaction.customId.startsWith('word_apply_role:');
+    if (!isWordUsageSelection && !isBotOwner(interaction.user.id, BOT_OWNERS)) {
         await interaction.reply({ content: '❌ **أمر word مخصص فقط لأونر البوت.**', flags: MessageFlags.Ephemeral });
+        return true;
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('word_apply_role:')) {
+        const actionKey = interaction.customId.slice('word_apply_role:'.length);
+        const pending = pendingWordActions.get(actionKey);
+        if (!pending || pending.authorId !== interaction.user.id) {
+            await interaction.reply({ content: '❌ **هذا المنيو مخصص للشخص الذي استخدم الكلمة.**', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        pendingWordActions.delete(actionKey);
+        await interaction.update({ content: `⏳ **جاري تطبيق الرول <@&${interaction.values[0]}>...**`, components: [] });
+        await applyWordRoleAction(pending.message, pending.targetMember, interaction.values[0], pending.entry);
         return true;
     }
 
@@ -693,28 +754,20 @@ async function handleMessage(message, context) {
         await message.react('<:emoji_44:1481252878604697692>').catch(() => {});
         return true;
     }
-
-    const targetRoleIds = getTargetRoleIds(entry);
-    const hasAllTargetRoles = targetRoleIds.length > 0 && targetRoleIds.every(roleId => targetMember.roles.cache.has(roleId));
-    const roleAction = hasAllTargetRoles ? 'remove' : 'add';
-    const roleResult = roleAction === 'remove'
-        ? await targetMember.roles.remove(targetRoleIds).then(() => true).catch(() => false)
-        : await targetMember.roles.add(targetRoleIds).then(() => true).catch(() => false);
-    if (!roleResult) {
-        await message.reply(`❌ **فشل ${roleAction === 'remove' ? 'إزالة' : 'إضافة'} الرولات للهدف (تحقق من صلاحيات البوت وترتيب الرولات).**`).catch(() => {});
+    const targetRoles = getTargetRolesForMessage(message, entry);
+    if (targetRoles.length === 0) {
         await message.react('<:emoji_44:1481252878604697692>').catch(() => {});
         return true;
     }
-    if (roleAction === 'remove') {
-        await message.react('<:emoji_42:1481252567227826388>').catch(() => {});
-        return true;
-    }
 
-    if (entry.hasPermMessage) {
-        await message.reply(entry.hasPermMessage).catch(() => {});
-    } else {
-        await message.react('<:emoji_43:1481252608361365701>').catch(() => {});
-    }
+    const actionKey = `${message.id}:${message.author.id}:${Date.now()}`;
+    pendingWordActions.set(actionKey, { message, targetMember, entry, authorId: message.author.id });
+    const timeout = setTimeout(() => pendingWordActions.delete(actionKey), 60000);
+    timeout.unref?.();
+    await message.reply({
+        content: `**اختر الرول المطلوب تطبيقه على ${targetMember}:**`,
+        components: [buildWordTargetMenu(`word_apply_role:${actionKey}`, targetRoles)]
+    }).catch(() => pendingWordActions.delete(actionKey));
 
     return true;
 }
@@ -724,7 +777,7 @@ function registerInteractionHandler() {
         name: 'word-system',
         match: 'prefix',
         priority: 30,
-        types: ['button', 'modal', 'roleSelect']
+        types: ['button', 'modal', 'roleSelect', 'stringSelect']
     });
 }
 
