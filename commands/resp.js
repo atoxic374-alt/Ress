@@ -1870,7 +1870,9 @@ module.exports = {
 
                     setGuildConfig(guildId, { suggestionsChannel: suggestionsChannel.id, embedChannel: embedChannel.id });
 
-                    await roomMsg.edit({
+                    // الرسالة مؤقتة (ephemeral)، لذلك يجب تعديل رد التفاعل الأصلي
+                    // عبر editReply بدل Message#edit حتى تظهر أزرار نوع الرسالة.
+                    await interaction.editReply({
                         content: '**اختر نوع رسالة المسؤوليات :**',
                         components: [
                             new ActionRowBuilder().addComponents(
