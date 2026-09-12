@@ -4388,7 +4388,7 @@ client.on('interactionCreate', async (interaction) => {
     if (await interactionRouter.route(interaction, { client, BOT_OWNERS })) {
         return;
     }
-if ((interaction.isButton() || interaction.isModalSubmit()) && customId.startsWith('word_')) {
+if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRoleSelectMenu() || interaction.isStringSelectMenu()) && customId.startsWith('word_')) {
 
         const wordCommand = client.commands.get('word');
 

@@ -349,15 +349,27 @@ function buildWordTargetMenu(customId, roles, targetMember, page = 0) {
     return rows;
 }
 
-function getTargetRolesForMessage(message, entry) {
-    return getTargetRoleIds(entry)
-        .map(id => message.guild.roles.cache.get(id))
-        .filter(role => role && !role.managed);
+async function getTargetRolesForMessage(message, entry) {
+    const roles = await Promise.all(getTargetRoleIds(entry).map(async id => {
+        return message.guild.roles.cache.get(id) || await message.guild.roles.fetch(id).catch(() => null);
+    }));
+    return roles.filter(Boolean);
 }
 
 async function applyWordRoleAction(message, targetMember, roleId, entry) {
     const role = message.guild.roles.cache.get(String(roleId));
     if (!role) {
+        await message.react('<:emoji_44:1481252878604697692>').catch(() => {});
+        return;
+    }
+    if (role.managed) {
+        await message.reply('❌ **هذا الرول مُدار من Discord ولا يمكن إضافته أو إزالته يدويًا.**').catch(() => {});
+        await message.react('<:emoji_44:1481252878604697692>').catch(() => {});
+        return;
+    }
+    const botMember = message.guild.members.me;
+    if (!botMember || role.position >= botMember.roles.highest.position) {
+        await message.reply('❌ **لا يستطيع البوت التعامل مع هذا الرول لأنه أعلى أو يساوي أعلى رول لديه.**').catch(() => {});
         await message.react('<:emoji_44:1481252878604697692>').catch(() => {});
         return;
     }
@@ -785,9 +797,14 @@ async function handleMessage(message, context) {
         return true;
     }
     await message.guild.roles.fetch().catch(() => null);
-    const targetRoles = getTargetRolesForMessage(message, entry);
+    const targetRoles = await getTargetRolesForMessage(message, entry);
     if (targetRoles.length === 0) {
         await message.react('<:emoji_44:1481252878604697692>').catch(() => {});
+        return true;
+    }
+    const missingRoleIds = getTargetRoleIds(entry).filter(id => !targetRoles.some(role => role.id === id));
+    if (missingRoleIds.length > 0) {
+        await message.reply(`❌ **تعذر العثور على ${missingRoleIds.length} من الرولات المحفوظة لهذه الكلمة. أعد تعديل الكلمة واختر الرولات من جديد.**`).catch(() => {});
         return true;
     }
 
@@ -804,6 +821,8 @@ async function handleMessage(message, context) {
 }
 
 function registerInteractionHandler() {
+    if (global.__wordInteractionHandlerRegistered) return;
+    global.__wordInteractionHandlerRegistered = true;
     interactionRouter.register('word_', async (interaction, context) => handleInteraction(interaction, context), {
         name: 'word-system',
         match: 'prefix',
@@ -816,6 +835,7 @@ module.exports = {
     name: 'word',
     aliases: ['كلمة'],
     execute,
+    handleInteraction,
     handleMessage,
     registerInteractionHandler
 };
