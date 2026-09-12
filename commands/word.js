@@ -3,6 +3,7 @@ const {
     ButtonBuilder,
     ButtonStyle,
     ModalBuilder,
+    RoleSelectMenuBuilder,
     TextInputBuilder,
     TextInputStyle,
     MessageFlags,
@@ -12,6 +13,8 @@ const fs = require('fs');
 const path = require('path');
 const interactionRouter = require('../utils/interactionRouter');
 const colorManager = require('../utils/colorManager');
+
+const pendingRoleSelections = new Map();
 
 const DATA_PATH = path.join(__dirname, '..', 'data', 'wordTriggers.json');
 const ADMIN_ROLES_PATH = path.join(__dirname, '..', 'data', 'adminRoles.json');
@@ -92,6 +95,13 @@ function getAdminRoles() {
 
 function isBotOwner(userId, BOT_OWNERS = []) {
     return BOT_OWNERS.includes(userId);
+}
+
+function getTargetRoleIds(entry) {
+    if (Array.isArray(entry?.targetRoleIds) && entry.targetRoleIds.length > 0) {
+        return [...new Set(entry.targetRoleIds.map(String))];
+    }
+    return entry?.targetRoleId ? [String(entry.targetRoleId)] : [];
 }
 
 function getAllowedRoleIds(entry) {
@@ -243,13 +253,13 @@ function buildWordPreview(entry, guild) {
         .setDescription([
         ` ** `,
             `• الكلمات : ${keywordsText}`,
-            
-            `• الرول : <@&${entry.targetRoleId}>`,
-            
+
+            `• الرولات المستهدفة : ${getTargetRoleIds(entry).map(id => guild.roles.cache.get(id)?.toString() || `<@&${id}>`).join(' , ') || '—'}`,
+
             `• رسالة بدون صلاحية : ${entry.noPermMessage || ' رياكشن '}`,
-            
+
             `• رسالة مع صلاحية : ${entry.hasPermMessage || 'رياكشن '}`,
-            
+
             `• الرولات المسموح لها : ${allowedText}**`
         ].join('\n'));
 }
@@ -272,7 +282,7 @@ function buildWordSystemEmbed(guild) {
                 `**`,
                 `• #${index + 1}`,
                 `• Prefix : ${prefixes}`,
-                `• Role : <@&${entry.targetRoleId}>`,
+                `• Roles : ${getTargetRoleIds(entry).map(id => guild.roles.cache.get(id)?.toString() || `<@&${id}>`).join(' , ') || '—'}`,
                 `• Allowed : ${allowedText}**`
             ].join('\n');
         }).join('\n\n••••••••••••••••\n\n');
@@ -308,6 +318,30 @@ async function refreshWordPanelMessage(interaction, panelMessageId) {
         embeds: [buildWordSystemEmbed(interaction.guild)],
         components: [buildWordActionRow()]
     }).catch(() => {});
+}
+
+function buildTargetRoleSelect(customId, defaultRoleIds = []) {
+    const menu = new RoleSelectMenuBuilder()
+        .setCustomId(customId)
+        .setPlaceholder('اختر رول أو أكثر للكلمة')
+        .setMinValues(1)
+        .setMaxValues(25);
+    if (defaultRoleIds.length && typeof menu.setDefaultRoles === 'function') {
+        menu.setDefaultRoles(defaultRoleIds);
+    }
+    return new ActionRowBuilder().addComponents(menu);
+}
+
+function getSafeTargetRoles(interaction, roleIds) {
+    const roles = [...new Set((roleIds || []).map(String))]
+        .map(id => interaction.guild.roles.cache.get(id))
+        .filter(Boolean);
+    if (!roles.length) return { ok: false, error: '❌ **لازم تختار رول واحد على الأقل.**' };
+    for (const role of roles) {
+        const error = ensureSafeTargetRole(interaction, role);
+        if (error) return { ok: false, error };
+    }
+    return { ok: true, roles };
 }
 
 async function promptAllowedRolesByMessage(interaction) {
@@ -359,8 +393,7 @@ async function handleInteraction(interaction, context) {
     if (interaction.isButton() && interaction.customId === 'word_create') {
         const modal = new ModalBuilder().setCustomId(`word_create_modal:${interaction.message?.id || ''}`).setTitle('إنشاء كلمة');
         modal.addComponents(
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('keyword').setLabel('اكتب حتى 3 كلمات Prefix لنفس الرول').setStyle(TextInputStyle.Short).setRequired(true)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('targetRole').setLabel('ضع ID أو اسم الرول').setStyle(TextInputStyle.Short).setRequired(true)),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('keyword').setLabel('اكتب حتى 3 كلمات Prefix لنفس الرولات').setStyle(TextInputStyle.Short).setRequired(true)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('noPermMessage').setLabel('رسالة للي ما يملكون صلاحية (اختياري)').setStyle(TextInputStyle.Paragraph).setRequired(false)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('hasPermMessage').setLabel('رسالة للي يملكون صلاحية (اختياري)').setStyle(TextInputStyle.Paragraph).setRequired(false))
         );
@@ -371,7 +404,6 @@ async function handleInteraction(interaction, context) {
     if (interaction.isModalSubmit() && interaction.customId.startsWith('word_create_modal')) {
         const panelMessageId = extractPanelMessageId(interaction.customId, 'word_create_modal');
         const keywordValidation = parseKeywordsInput(interaction.fields.getTextInputValue('keyword'));
-        const targetRoleInput = interaction.fields.getTextInputValue('targetRole');
         const noPermMessage = interaction.fields.getTextInputValue('noPermMessage')?.trim() || '';
         const hasPermMessage = interaction.fields.getTextInputValue('hasPermMessage')?.trim() || '';
 
@@ -393,14 +425,30 @@ async function handleInteraction(interaction, context) {
             }
         }
 
-        const targetRole = findClosestRole(interaction.guild, targetRoleInput);
-        const safetyError = ensureSafeTargetRole(interaction, targetRole);
-        if (safetyError) {
-            await interaction.reply({ content: safetyError, flags: MessageFlags.Ephemeral });
+        const pendingKey = `${interaction.guild.id}:${interaction.user.id}:${Date.now()}`;
+        pendingRoleSelections.set(pendingKey, { panelMessageId, keywords, noPermMessage, hasPermMessage });
+        await interaction.reply({
+            content: '✅ **تم حفظ بيانات الكلمة. اختر الآن رولًا أو أكثر ليتم التبديل عليها عند استخدام الكلمة.**',
+            components: [buildTargetRoleSelect(`word_target_roles_create:${pendingKey}`)],
+            flags: MessageFlags.Ephemeral
+        });
+        return true;
+    }
+
+    if (interaction.isRoleSelectMenu() && interaction.customId.startsWith('word_target_roles_create:')) {
+        const pendingKey = interaction.customId.slice('word_target_roles_create:'.length);
+        const pending = pendingRoleSelections.get(pendingKey);
+        pendingRoleSelections.delete(pendingKey);
+        if (!pending) {
+            await interaction.update({ content: '❌ **انتهت جلسة الإنشاء، أعد المحاولة.**', components: [] });
             return true;
         }
-
-        await interaction.reply({ content: '⏳ **جاري انتظار رسالة الرولات المسموح لها...**', flags: MessageFlags.Ephemeral });
+        const selected = getSafeTargetRoles(interaction, interaction.values);
+        if (!selected.ok) {
+            await interaction.update({ content: selected.error, components: [] });
+            return true;
+        }
+        await interaction.update({ content: '⏳ **جاري انتظار رسالة الرولات المسموح لها...**', components: [] });
         const allowed = await promptAllowedRolesByMessage(interaction);
         if (!allowed.ok) {
             await interaction.editReply({ content: allowed.error, components: [] });
@@ -408,11 +456,12 @@ async function handleInteraction(interaction, context) {
         }
 
         const payload = {
-            keyword: keywords[0],
-            keywords,
-            targetRoleId: targetRole.id,
-            noPermMessage,
-            hasPermMessage,
+            keyword: pending.keywords[0],
+            keywords: pending.keywords,
+            targetRoleId: selected.roles[0].id,
+            targetRoleIds: selected.roles.map(role => role.id),
+            noPermMessage: pending.noPermMessage,
+            hasPermMessage: pending.hasPermMessage,
             allowedMode: allowed.mode,
             allowedRoleIds: allowed.roleIds,
             createdBy: interaction.user.id,
@@ -466,7 +515,6 @@ async function handleInteraction(interaction, context) {
         modal.addComponents(
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('currentKeyword').setLabel('كلمة حالية من كلمات البرفكس').setStyle(TextInputStyle.Short).setRequired(true)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('newKeyword').setLabel('كلمات Prefix جديدة (حتى 3 - اختياري)').setStyle(TextInputStyle.Short).setRequired(false)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('newTargetRole').setLabel('الرول الجديد (اختياري)').setStyle(TextInputStyle.Short).setRequired(false)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('newNoPermMessage').setLabel('رسالة بدون صلاحية (اختياري)').setStyle(TextInputStyle.Paragraph).setRequired(false)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('newHasPermMessage').setLabel('رسالة مع صلاحية (اختياري)').setStyle(TextInputStyle.Paragraph).setRequired(false))
         );
@@ -492,7 +540,6 @@ async function handleInteraction(interaction, context) {
         }
 
         const newKeywordInput = interaction.fields.getTextInputValue('newKeyword');
-        const newTargetRoleRaw = interaction.fields.getTextInputValue('newTargetRole')?.trim();
         const newNoPerm = interaction.fields.getTextInputValue('newNoPermMessage')?.trim();
         const newHasPerm = interaction.fields.getTextInputValue('newHasPermMessage')?.trim();
 
@@ -516,26 +563,38 @@ async function handleInteraction(interaction, context) {
             existing.keyword = newKeywords[0];
         }
 
-        if (newTargetRoleRaw) {
-            const role = findClosestRole(interaction.guild, newTargetRoleRaw);
-            const safetyError = ensureSafeTargetRole(interaction, role);
-            if (safetyError) {
-                await interaction.reply({ content: safetyError, flags: MessageFlags.Ephemeral });
-                return true;
-            }
-            existing.targetRoleId = role.id;
-        }
-
         if (newNoPerm) existing.noPermMessage = newNoPerm;
         if (newHasPerm) existing.hasPermMessage = newHasPerm;
 
         existing.updatedAt = Date.now();
 
+        const pendingKey = `${interaction.guild.id}:${interaction.user.id}:${Date.now()}`;
+        pendingRoleSelections.set(pendingKey, { panelMessageId, existing, all });
         await interaction.reply({
-            content: '⏳ **تم تطبيق التعديلات المبدئية.**\n**أرسل الآن رسالة بالرولات المسموح لها ( منشن / ID / اسم ) أو `0` لكل adminRoles.**\n**أو اكتب `-` للإبقاء عليها كما هي.**',
+            content: '✅ **تم تطبيق تعديلات النص. اختر الآن رولًا أو أكثر للكلمة.**',
             embeds: [buildWordPreview(existing, interaction.guild)],
+            components: [buildTargetRoleSelect(`word_target_roles_edit:${pendingKey}`, getTargetRoleIds(existing))],
             flags: MessageFlags.Ephemeral
         });
+        return true;
+    }
+
+    if (interaction.isRoleSelectMenu() && interaction.customId.startsWith('word_target_roles_edit:')) {
+        const pendingKey = interaction.customId.slice('word_target_roles_edit:'.length);
+        const pending = pendingRoleSelections.get(pendingKey);
+        pendingRoleSelections.delete(pendingKey);
+        if (!pending) {
+            await interaction.update({ content: '❌ **انتهت جلسة التعديل، أعد المحاولة.**', components: [] });
+            return true;
+        }
+        const selected = getSafeTargetRoles(interaction, interaction.values);
+        if (!selected.ok) {
+            await interaction.update({ content: selected.error, components: [] });
+            return true;
+        }
+        pending.existing.targetRoleIds = selected.roles.map(role => role.id);
+        pending.existing.targetRoleId = selected.roles[0].id;
+        await interaction.update({ content: '⏳ **تم تحديث الرولات. أرسل الآن رسالة بالرولات المسموح لها ( منشن / ID / اسم ) أو `0`، أو `-` للإبقاء عليها.**', components: [] });
 
         const collected = await interaction.channel.awaitMessages({
             filter: m => m.author.id === interaction.user.id,
@@ -635,21 +694,19 @@ async function handleMessage(message, context) {
         return true;
     }
 
-    if (targetMember.roles.cache.has(entry.targetRoleId)) {
-        const removeResult = await targetMember.roles.remove(entry.targetRoleId).then(() => true).catch(() => false);
-        if (!removeResult) {
-            await message.reply('❌ **فشل إزالة الرول من الهدف (تحقق من صلاحيات البوت وترتيب الرولات).**').catch(() => {});
-            await message.react('<:emoji_44:1481252878604697692>').catch(() => {});
-            return true;
-        }
-        await message.react('<:emoji_42:1481252567227826388>').catch(() => {});
+    const targetRoleIds = getTargetRoleIds(entry);
+    const hasAllTargetRoles = targetRoleIds.length > 0 && targetRoleIds.every(roleId => targetMember.roles.cache.has(roleId));
+    const roleAction = hasAllTargetRoles ? 'remove' : 'add';
+    const roleResult = roleAction === 'remove'
+        ? await targetMember.roles.remove(targetRoleIds).then(() => true).catch(() => false)
+        : await targetMember.roles.add(targetRoleIds).then(() => true).catch(() => false);
+    if (!roleResult) {
+        await message.reply(`❌ **فشل ${roleAction === 'remove' ? 'إزالة' : 'إضافة'} الرولات للهدف (تحقق من صلاحيات البوت وترتيب الرولات).**`).catch(() => {});
+        await message.react('<:emoji_44:1481252878604697692>').catch(() => {});
         return true;
     }
-
-    const addResult = await targetMember.roles.add(entry.targetRoleId).then(() => true).catch(() => false);
-    if (!addResult) {
-        await message.reply('❌ **فشل إضافة الرول للهدف (تحقق من صلاحيات البوت وترتيب الرولات).**').catch(() => {});
-        await message.react('<:emoji_44:1481252878604697692>').catch(() => {});
+    if (roleAction === 'remove') {
+        await message.react('<:emoji_42:1481252567227826388>').catch(() => {});
         return true;
     }
 
@@ -667,7 +724,7 @@ function registerInteractionHandler() {
         name: 'word-system',
         match: 'prefix',
         priority: 30,
-        types: ['button', 'modal']
+        types: ['button', 'modal', 'roleSelect']
     });
 }
 
