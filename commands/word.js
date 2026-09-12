@@ -531,7 +531,7 @@ async function handleInteraction(interaction, context) {
 
         upsertWord(interaction.guild.id, payload);
         await interaction.editReply({ content: '', embeds: [buildWordPreview(payload, interaction.guild)], components: [] });
-        await refreshWordPanelMessage(interaction, panelMessageId);
+        await refreshWordPanelMessage(interaction, pending.panelMessageId);
         return true;
     }
 
@@ -633,7 +633,7 @@ async function handleInteraction(interaction, context) {
         pendingRoleSelections.set(pendingKey, { panelMessageId, existing, all });
         await interaction.reply({
             content: '✅ **تم تطبيق تعديلات النص. اختر الآن رولًا أو أكثر للكلمة.**',
-            embeds: [buildWordPreview(existing, interaction.guild)],
+            embeds: [buildWordPreview(pending.existing, interaction.guild)],
             components: [buildTargetRoleSelect(`word_target_roles_edit:${pendingKey}`, getTargetRoleIds(existing))],
             flags: MessageFlags.Ephemeral
         });
@@ -667,9 +667,9 @@ async function handleInteraction(interaction, context) {
         if (!collected || !collected.first()) {
             await interaction.editReply({
                 content: '⚠️ **انتهى الوقت، تم حفظ التعديلات الأخرى بدون تغيير رولات الاستخدام.**',
-                embeds: [buildWordPreview(existing, interaction.guild)]
+                embeds: [buildWordPreview(pending.existing, interaction.guild)]
             });
-            saveWordData(all);
+            saveWordData(pending.all);
             return true;
         }
 
@@ -682,18 +682,18 @@ async function handleInteraction(interaction, context) {
             if (!parsedAllowed.ok) {
                 await interaction.editReply({
                     content: `${parsedAllowed.error}\n**تم حفظ بقية التعديلات بدون تحديث رولات الاستخدام.**`,
-                    embeds: [buildWordPreview(existing, interaction.guild)]
+                    embeds: [buildWordPreview(pending.existing, interaction.guild)]
                 });
-                saveWordData(all);
+                saveWordData(pending.all);
                 return true;
             }
-            existing.allowedMode = parsedAllowed.mode;
-            existing.allowedRoleIds = parsedAllowed.roleIds;
+            pending.existing.allowedMode = parsedAllowed.mode;
+            pending.existing.allowedRoleIds = parsedAllowed.roleIds;
         }
 
-        saveWordData(all);
-        await interaction.editReply({ content: '', embeds: [buildWordPreview(existing, interaction.guild)] });
-        await refreshWordPanelMessage(interaction, panelMessageId);
+        saveWordData(pending.all);
+        await interaction.editReply({ content: '', embeds: [buildWordPreview(pending.existing, interaction.guild)] });
+        await refreshWordPanelMessage(interaction, pending.panelMessageId);
         return true;
     }
 
