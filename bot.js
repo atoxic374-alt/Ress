@@ -4836,7 +4836,6 @@ if ((interaction.isButton() || interaction.isModalSubmit()) && customId.startsWi
     // --- SetAdmin System Interaction Router ---
     if (interaction.customId && (
         interaction.customId === 'setadmin_menu' ||
-        interaction.customId === 'select_application_channel' ||
         interaction.customId === 'select_approver_type' ||
         interaction.customId === 'select_approver_roles' ||
         interaction.customId === 'select_approver_responsibility' ||
@@ -4849,11 +4848,9 @@ if ((interaction.isButton() || interaction.isModalSubmit()) && customId.startsWi
         interaction.customId === 'activity_criteria_modal' ||
         interaction.customId === 'server_time_criteria_modal' ||
         interaction.customId === 'reactions_criteria_modal' ||
-        interaction.customId.startsWith('channel_page_') ||
         interaction.customId.startsWith('roles_page_') ||
         interaction.customId.startsWith('acceptance_role_page_') ||
-        interaction.customId.startsWith('resp_page_') ||
-        interaction.customId === 'back_to_setadmin_menu'
+        interaction.customId.startsWith('resp_page_')
     )) {
         console.log(`معالجة تفاعل setadmin: ${interaction.customId}`);
 

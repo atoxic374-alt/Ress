@@ -1884,9 +1884,14 @@ async function handleSetChannelInteraction(interaction, settings) {
         components: createComponents(currentPage)
     });
 
-    // إنشاء collector للتعامل مع التفاعلات
-    const collector = interaction.channel.createMessageComponentCollector({
-        filter: i => i.user.id === interaction.user.id,
+    // إنشاء collector للتعامل مع مكونات رسالة اختيار قناة التقديم فقط
+    const collector = interaction.message.createMessageComponentCollector({
+        filter: i => i.user.id === interaction.user.id && [
+            'select_application_channel',
+            'channel_page_prev',
+            'channel_page_next',
+            'back_to_setadmin_menu'
+        ].includes(i.customId),
         time: 120000
     });
 
