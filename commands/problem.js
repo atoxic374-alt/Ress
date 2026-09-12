@@ -25,6 +25,37 @@ const colorManager = require('../utils/colorManager.js');
 
 // Default thumbnail URL for interactive embeds (problem creation flows).
 const LOG_THUMBNAIL_URL = 'https://cdn.discordapp.com/attachments/1294840822780526633/1465458307329167360/problem-solving.png?ex=69792de7&is=6977dc67&hm=876028d8022c57e8258ee956d753608a9d247e1e5f774a62f149f29f1200a673&';
+const PROBLEM_HISTORY_PATH = path.join(__dirname, '..', 'data', 'problemHistory.json');
+
+function readProblemHistory() {
+  try {
+    if (!fs.existsSync(PROBLEM_HISTORY_PATH)) return [];
+    const value = JSON.parse(fs.readFileSync(PROBLEM_HISTORY_PATH, 'utf8'));
+    return Array.isArray(value) ? value : [];
+  } catch (error) {
+    console.error('Failed to read problem history:', error);
+    return [];
+  }
+}
+
+function appendProblemHistory(record) {
+  try {
+    const history = readProblemHistory();
+    const existingIndex = record.key ? history.map((item) => item.key).lastIndexOf(record.key) : -1;
+    if (existingIndex >= 0) history[existingIndex] = { ...history[existingIndex], ...record };
+    else history.push(record);
+    fs.writeFileSync(PROBLEM_HISTORY_PATH, JSON.stringify(history.slice(-5000), null, 2));
+  } catch (error) {
+    console.error('Failed to save problem history:', error);
+  }
+}
+
+function getProblemHistory(guildId, targetId = null) {
+  return readProblemHistory().filter((record) =>
+    (!guildId || record.guildId === guildId) &&
+    (!targetId || record.firstId === targetId || record.secondId === targetId)
+  );
+}
 
 function buildProblemEmbed(title, description, thumbnailUrl) {
   const embed = colorManager.createEmbed().setTitle(title).setDescription(description).setTimestamp();
@@ -67,6 +98,9 @@ function loadProblemConfig() {
       // Validate types and provide defaults
         return {
         logsChannelId: typeof config.logsChannelId === 'string' ? config.logsChannelId : null,
+        problemPanelChannelId: typeof config.problemPanelChannelId === 'string' ? config.problemPanelChannelId : null,
+        problemPanelMessageId: typeof config.problemPanelMessageId === 'string' ? config.problemPanelMessageId : null,
+        problemPanelImage: typeof config.problemPanelImage === 'string' ? config.problemPanelImage : null,
         muteRoleId: typeof config.muteRoleId === 'string' ? config.muteRoleId : null,
         muteDuration: typeof config.muteDuration === 'number' ? config.muteDuration : 10 * 60 * 1000,
         responsibleRoleIds: Array.isArray(config.responsibleRoleIds) ? config.responsibleRoleIds : [],
@@ -81,7 +115,7 @@ function loadProblemConfig() {
     console.error('Failed to load problemConfig:', err);
   }
   // default configuration
-  return { logsChannelId: null, muteRoleId: null, muteDuration: 10 * 60 * 1000, responsibleRoleIds: [], separatorEnabled: false, separatorImage: null, adminProblemEnabled: true };
+  return { logsChannelId: null, problemPanelChannelId: null, problemPanelMessageId: null, problemPanelImage: null, muteRoleId: null, muteDuration: 10 * 60 * 1000, responsibleRoleIds: [], separatorEnabled: false, separatorImage: null, adminProblemEnabled: true };
 }
 
 function saveProblemConfig(config) {
@@ -846,6 +880,18 @@ async function createProblems(interaction, session, context) {
         // This allows us to update the same embed for subsequent events rather than
         // sending a new message every time.
         logMessageId: null
+      });
+      appendProblemHistory({
+        key,
+        guildId: guild.id,
+        firstId,
+        secondId,
+        moderatorId: session.moderatorId,
+        reason: session.reason,
+        timestamp,
+        status: 'active',
+        endedAt: null,
+        endedById: null
       });
       // Persist new problem to disk
       saveActiveProblemsToDisk();
@@ -2444,6 +2490,18 @@ async function closeProblem(key, guild, context) {
     }
   }
   // Remove from activeProblems
+       appendProblemHistory({
+         key,
+         guildId: guild.id,
+         firstId: prob.firstId,
+         secondId: prob.secondId,
+         moderatorId: prob.moderatorId,
+         reason: prob.reason || null,
+         timestamp: prob.timestamp,
+         status: 'ended',
+         endedAt: Date.now(),
+         endedById: endedById || null
+       });
        activeProblems.delete(key);
        // Persist updated active problems to disk after deleting a case
        saveActiveProblemsToDisk();
@@ -2464,6 +2522,10 @@ function buildProblemSetupControls(adminProblemEnabled = true) {
       .setLabel('تعيين روم السجلات')
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
+      .setCustomId('problem_setup_set_panel')
+      .setLabel('تعيين روم البروبلم')
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
       .setCustomId('problem_setup_set_role')
       .setLabel('تعيين رول الميوت')
       .setStyle(ButtonStyle.Primary),
@@ -2474,21 +2536,63 @@ function buildProblemSetupControls(adminProblemEnabled = true) {
     new ButtonBuilder()
       .setCustomId('problem_setup_set_responsible_roles')
       .setLabel('تعيين الرولات المسؤولة')
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId('problem_setup_set_separator')
-      .setLabel('تعيين/تعطيل خط الفاصل')
-      .setStyle(ButtonStyle.Secondary)
+      .setStyle(ButtonStyle.Primary)
   );
 
   const controlsRow2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('problem_setup_toggle_admin')
       .setLabel('زر الإدارة (فتح البروبلم)')
-      .setStyle(adminProblemEnabled === false ? ButtonStyle.Danger : ButtonStyle.Success)
+      .setStyle(adminProblemEnabled === false ? ButtonStyle.Danger : ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId('problem_setup_set_separator')
+      .setLabel('تعيين/تعطيل خط الفاصل')
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId('problem_panel_settings')
+      .setLabel('Settings')
+      .setEmoji('<:emoji_70:1442588619368960213>')
+      .setStyle(ButtonStyle.Secondary)
   );
 
   return [controlsRow1, controlsRow2];
+}
+
+function buildProblemPanelButtons() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('problem_panel_create').setLabel('إنشاء بروبلم').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('problem_panel_end').setLabel('إنهاء بروبلم').setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId('problem_panel_unmute').setLabel('فك ميوت بروبلم').setStyle(ButtonStyle.Success)
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('problem_panel_logs').setLabel('سجل بروبلم').setStyle(ButtonStyle.Secondary)
+    )
+  ];
+}
+
+function isBotOwner(userId, owners = []) {
+  return Array.isArray(owners) && owners.includes(userId);
+}
+
+async function sendProblemPanel(guild, config) {
+  if (!config.problemPanelChannelId || !config.problemPanelImage) return null;
+  const channel = await guild.channels.fetch(config.problemPanelChannelId).catch(() => null);
+  if (!channel || !channel.isTextBased()) return null;
+  const payload = {
+    files: [{ attachment: config.problemPanelImage, name: 'problem-panel.png' }],
+    components: buildProblemPanelButtons()
+  };
+  let panel = config.problemPanelMessageId
+    ? await channel.messages.fetch(config.problemPanelMessageId).catch(() => null)
+    : null;
+  if (panel) await panel.edit(payload);
+  else {
+    panel = await channel.send(payload);
+    config.problemPanelMessageId = panel.id;
+    saveProblemConfig(config);
+  }
+  return panel;
 }
 
 // The problem setup command.  This command now provides an interactive
@@ -2513,6 +2617,9 @@ async function executeSetup(message, args, context) {
   const logsChannelDisplay = currentConfig.logsChannelId
     ? `<#${currentConfig.logsChannelId}>`
     : 'غير محدد';
+  const problemPanelDisplay = currentConfig.problemPanelChannelId
+    ? `<#${currentConfig.problemPanelChannelId}>${currentConfig.problemPanelImage ? ' (صورة محددة)' : ' (بدون صورة)'} `
+    : 'غير محدد';
   const muteRoleDisplay = currentConfig.muteRoleId
     ? `<@&${currentConfig.muteRoleId}>`
     : 'غير محدد';
@@ -2531,6 +2638,7 @@ async function executeSetup(message, args, context) {
     .setDescription('يمكنك تحديث الإعدادات عبر الأزرار أدناه.\nيتم تحديث الإيمبد تلقائيًا بعد أي تغيير.')
     .addFields(
       { name: 'روم السجلات الحالية', value: logsChannelDisplay, inline: true },
+      { name: 'روم لوحة البروبلم', value: problemPanelDisplay, inline: true },
       { name: 'رول الميوت الحالي', value: muteRoleDisplay, inline: true },
       { name: 'مدة الميوت الحالية', value: muteDurationDisplay, inline: true },
       { name: 'الرولات المسؤولة الحالية', value: responsibleRolesDisplay, inline: false },
@@ -2557,6 +2665,14 @@ async function executeSetup(message, args, context) {
       return handleSetupInteraction(interaction, { client: resolvedClient, BOT_OWNERS: context.BOT_OWNERS || ownersList });
     });
     client._problemSetupRouterRegistered = true;
+  }
+  if (!client._problemPanelRouterRegistered) {
+    const ownersList = context.BOT_OWNERS || [];
+    interactionRouter.register('problem_panel_', async (interaction, routerContext = {}) => {
+      const resolvedClient = routerContext.client || client;
+      return handleProblemPanelInteraction(interaction, { client: resolvedClient, BOT_OWNERS: routerContext.BOT_OWNERS || ownersList });
+    });
+    client._problemPanelRouterRegistered = true;
   }
   // Inform user interactively
   return message.reply({ content: '✅ **تم فتح إعدادات نظام البروبلم.**\nاضغط على الأزرار لتحديث الإعدادات.', allowedMentions: { repliedUser: false } });
@@ -2645,6 +2761,7 @@ async function handleSetupInteraction(interaction, context) {
   async function refreshEmbed() {
     const cfg = loadProblemConfig();
     const logsDisplay = cfg.logsChannelId ? `<#${cfg.logsChannelId}>` : 'غير محدد';
+    const panelDisplay = cfg.problemPanelChannelId ? `<#${cfg.problemPanelChannelId}>${cfg.problemPanelImage ? ' (صورة محددة)' : ' (بدون صورة)'}` : 'غير محدد';
     const roleDisplay = cfg.muteRoleId ? `<@&${cfg.muteRoleId}>` : 'غير محدد';
     const durMinutes = Math.round((cfg.muteDuration || (10 * 60 * 1000)) / 60000);
     const durDisplay = `${durMinutes} دقيقة`;
@@ -2660,6 +2777,7 @@ async function handleSetupInteraction(interaction, context) {
       .setDescription('يمكنك تحديث الإعدادات عبر الأزرار أدناه.\nيتم تحديث الإيمبد تلقائيًا بعد أي تغيير.')
       .addFields(
         { name: 'روم السجلات الحالية', value: logsDisplay, inline: true },
+        { name: 'روم لوحة البروبلم', value: panelDisplay, inline: true },
         { name: 'رول الميوت الحالي', value: roleDisplay, inline: true },
         { name: 'مدة الميوت الحالية', value: durDisplay, inline: true },
         { name: 'الرولات المسؤولة الحالية', value: responsibleDisplay, inline: false },
@@ -2686,33 +2804,67 @@ async function handleSetupInteraction(interaction, context) {
     return;
   }
   if (id === 'problem_setup_set_channel') {
-    // Prompt for channel
     await interaction.followUp({ content: '🔧 **يرجى منشن قناة السجلات أو كتابة الـ ID الخاص بها.**', ephemeral: true });
-    // Collect next message from the user
     const filter = (m) => m.author.id === interaction.user.id;
-    const collector = interaction.channel.createMessageCollector({ filter, max: 1, time: 60 * 1000 });
+    const collector = interaction.channel.createMessageCollector({ filter, max: 1, time: 60000 });
     collector.on('collect', async (m) => {
-      // Extract channel ID
       const chId = m.content.replace(/[^\d]/g, '');
       const channel = guild.channels.cache.get(chId);
-      if (!channel) {
-        await interaction.followUp({ content: '❌ **لم يتم العثور على قناة بهذه البيانات.**', ephemeral: true });
-      } else {
-        // Save config
+      if (!channel) await interaction.followUp({ content: '❌ **لم يتم العثور على قناة بهذه البيانات.**', ephemeral: true });
+      else {
         const cfg = loadProblemConfig();
         cfg.logsChannelId = chId;
         saveProblemConfig(cfg);
         await interaction.followUp({ content: `✅ **تم تحديث قناة السجلات إلى <#${chId}>.**`, ephemeral: true });
         await refreshEmbed();
       }
-      // Delete user message
-      try { await m.delete(); } catch (_) {}
+      await m.delete().catch(() => {});
     });
     collector.on('end', (collected) => {
-      if (collected.size === 0) {
-        interaction.followUp({ content: '⚠️ **انتهى الوقت ولم يتم استلام أي قيمة.**', ephemeral: true }).catch(() => {});
-      }
+      if (collected.size === 0) interaction.followUp({ content: '⚠️ **انتهى الوقت ولم يتم استلام أي قيمة.**', ephemeral: true }).catch(() => {});
     });
+  } else if (id === 'problem_setup_set_panel') {
+    await interaction.followUp({ content: '🔧 **أرفق صورة لوحة البروبلم أو أرسل رابط صورة مباشر.**', ephemeral: true });
+    const imageMessage = await interaction.channel.awaitMessages({
+      filter: (m) => m.author.id === interaction.user.id,
+      max: 1,
+      time: 120000,
+      errors: ['time']
+    }).then(collected => collected.first()).catch(() => null);
+    if (!imageMessage) return interaction.followUp({ content: '⚠️ **انتهى الوقت دون استلام صورة.**', ephemeral: true });
+    const imageUrl = imageMessage.attachments.first()?.url || imageMessage.content.trim();
+    if (!/^https?:\/\/\S+\.(?:png|jpe?g|gif|webp)(?:\?.*)?$/i.test(imageUrl)) {
+      return interaction.followUp({ content: '❌ **أرسل صورة مرفقة أو رابط صورة مباشر بصيغة png/jpg/gif/webp.**', ephemeral: true });
+    }
+    await imageMessage.delete().catch(() => {});
+    const channelPrompt = await interaction.followUp({
+      content: '**اختر روم لوحة البروبلم:**',
+      components: [new ActionRowBuilder().addComponents(
+        new ChannelSelectMenuBuilder().setCustomId('problem_setup_panel_channel').setPlaceholder('ابحث عن الروم').setChannelTypes(ChannelType.GuildText)
+      )],
+      ephemeral: true,
+      fetchReply: true
+    });
+    const channelPick = await channelPrompt.awaitMessageComponent({
+      filter: (i) => i.user.id === interaction.user.id && i.customId === 'problem_setup_panel_channel',
+      time: 120000
+    }).catch(() => null);
+    if (!channelPick) return;
+    const selectedChannel = channelPick.channels.first();
+    if (!selectedChannel || selectedChannel.guildId !== guild.id) {
+      return channelPick.update({ content: '❌ **اختر روم من نفس السيرفر.**', components: [] });
+    }
+    const cfg = loadProblemConfig();
+    cfg.problemPanelChannelId = selectedChannel.id;
+    cfg.problemPanelImage = imageUrl;
+    cfg.problemPanelMessageId = null;
+    saveProblemConfig(cfg);
+    const panel = await sendProblemPanel(guild, cfg);
+    await channelPick.update({
+      content: panel ? `✅ **تم إرسال لوحة البروبلم في <#${selectedChannel.id}> بدون Embed.**` : '❌ **تعذر إرسال اللوحة. تحقق من صلاحيات البوت في الروم.**',
+      components: []
+    });
+    await refreshEmbed();
   } else if (id === 'problem_setup_set_role') {
     // Prompt for role
     await interaction.followUp({ content: '🔧 **يرجى منشن رول الميوت أو كتابة الـ ID الخاص به.**', ephemeral: true });
@@ -2799,6 +2951,74 @@ async function handleSetupInteraction(interaction, context) {
   }
 }
 
+function panelMessageProxy(interaction) {
+  return {
+    author: interaction.user,
+    member: interaction.member,
+    guild: interaction.guild,
+    channel: interaction.channel,
+    mentions: { users: new Map() },
+    reply: (payload) => interaction.channel.send(payload)
+  };
+}
+
+async function handleProblemPanelInteraction(interaction, context) {
+  const { client, BOT_OWNERS = [] } = context;
+  const id = interaction.customId;
+  if (!id || !id.startsWith('problem_panel_')) return false;
+  if (!interaction.guild) return false;
+  const proxy = panelMessageProxy(interaction);
+  const config = loadProblemConfig();
+  const member = interaction.guild.members.cache.get(interaction.user.id) || interaction.member;
+  const allowed = isOwnerOrResponsible(member, BOT_OWNERS) || userIsModerator(member, loadAdminRoles(), BOT_OWNERS);
+  if (id === 'problem_panel_settings' && !isBotOwner(interaction.user.id, BOT_OWNERS)) {
+    return interaction.reply({ content: '❌ **إعدادات البروبلم متاحة لأونرز البوت فقط.**', ephemeral: true });
+  }
+  if (!allowed && id !== 'problem_panel_settings') {
+    return interaction.reply({ content: '❌ **ليس لديك صلاحية استخدام هذا الزر.**', ephemeral: true });
+  }
+  if (id === 'problem_panel_create') {
+    await interaction.deferUpdate();
+    return execute(interaction, [], { client, BOT_OWNERS });
+  }
+  if (id === 'problem_panel_end') {
+    return interaction.reply({ content: '**اختر العضو لعرض مشاكله النشطة:**', components: [new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('problem_panel_end_user').setPlaceholder('ابحث عن العضو').setMinValues(1).setMaxValues(1))], ephemeral: true });
+  }
+  if (id === 'problem_panel_end_user') {
+    await interaction.deferUpdate();
+    const endCommand = require('./end.js');
+    return endCommand.execute({ ...proxy, mentions: { users: new Map([[interaction.values[0], { id: interaction.values[0] }]]) } }, [interaction.values[0]], { client, BOT_OWNERS });
+  }
+  if (id === 'problem_panel_unmute') {
+    await interaction.deferUpdate();
+    const unmuteCommand = require('./mushkila.js');
+    return unmuteCommand.execute(proxy, [], { client, BOT_OWNERS });
+  }
+  if (id === 'problem_panel_logs') {
+    return interaction.reply({ content: '**اختر نوع السجل:**', components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('problem_panel_logs_all').setLabel('كل السجلات').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('problem_panel_logs_user').setLabel('سجل شخص معين').setStyle(ButtonStyle.Primary)
+    )], ephemeral: true });
+  }
+  if (id === 'problem_panel_logs_user') {
+    return interaction.update({ content: '**ابحث عن الشخص لعرض سجله:**', components: [new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('problem_panel_logs_user_select').setPlaceholder('ابحث عن شخص').setMinValues(1).setMaxValues(1))] });
+  }
+  if (id === 'problem_panel_logs_all' || id === 'problem_panel_logs_user_select') {
+    await interaction.deferUpdate();
+    const targetId = id === 'problem_panel_logs_user_select' ? interaction.values[0] : null;
+    const rows = getProblemHistory(interaction.guild.id, targetId).slice(-8).reverse();
+    if (!rows.length) return interaction.followUp({ content: '⚠️ **لا توجد سجلات مطابقة حالياً.**', ephemeral: true });
+    const lines = rows.map((p, index) => `${index + 1}. <@${p.firstId}> × <@${p.secondId}>\nالحالة: ${p.status === 'ended' ? 'منتهية' : 'نشطة'}\nالسبب: ${p.reason || 'غير محدد'}\nالبداية: <t:${Math.floor(new Date(p.timestamp).getTime() / 1000)}:F>${p.endedAt ? `\nالإنهاء: <t:${Math.floor(new Date(p.endedAt).getTime() / 1000)}:F>\nبواسطة: <@${p.endedById || p.moderatorId}>` : ''}`);
+    const content = `**سجل البروبلم${targetId ? ` للعضو <@${targetId}>` : ''}:**\n\n${lines.join('\n\n')}`;
+    return interaction.followUp({ content: content.slice(0, 1950), ephemeral: true });
+  }
+  if (id === 'problem_panel_settings') {
+    await interaction.deferUpdate();
+    return executeSetup(proxy, [], { client, BOT_OWNERS });
+  }
+  return false;
+}
+
 module.exports = {
   name,
   execute,
@@ -2812,6 +3032,7 @@ module.exports = {
   // allow other modules to end problems.
   ,activeProblems,
   getProblemKey,
+  getProblemHistory,
   closeProblem,
 
   saveActiveProblemsToDisk

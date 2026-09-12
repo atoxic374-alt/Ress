@@ -1041,7 +1041,7 @@ const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('
 for (const file of commandFiles) {
   try {
     const command = require(path.join(commandsPath, file));
-    if ('name' in command && 'execute' in command) {
+    if ('name' in command && 'execute' in command && !command.hidden) {
       client.commands.set(command.name, command);
       console.log(`Loaded command: ${command.name}`);
 if (command.aliases && Array.isArray(command.aliases)) {

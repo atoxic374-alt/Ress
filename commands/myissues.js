@@ -8,7 +8,7 @@ const {
 const interactionRouter = require('../utils/interactionRouter.js');
 const colorManager = require('../utils/colorManager.js');
 
-const { activeProblems } = require('./problem.js');
+const { activeProblems, getProblemHistory } = require('./problem.js');
 
 const fs = require('fs');
 const path = require('path');
@@ -115,6 +115,23 @@ async function execute(message, args, context) {
       });
     }
   }
+  for (const record of getProblemHistory(guild.id, targetId)) {
+    const otherId = record.firstId === targetId ? record.secondId : record.firstId;
+    entries.push({
+      otherId,
+      otherName: guild.members.cache.get(otherId)?.displayName || otherId,
+      timestamp: record.timestamp,
+      endedAt: record.endedAt,
+      status: record.status || 'ended',
+      reason: record.reason,
+      moderatorId: record.moderatorId,
+      moderatorName: guild.members.cache.get(record.moderatorId)?.displayName || record.moderatorId
+    });
+  }
+  const uniqueEntries = [...new Map(entries.map((entry) => [`${entry.otherId}:${entry.timestamp}:${entry.status}`, entry])).values()]
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  entries.length = 0;
+  entries.push(...uniqueEntries);
   if (entries.length === 0) {
     if (targetId === message.author.id) {
       return message.reply('⚠️ **ليس لديك أية مشاكل حالية.**');
@@ -189,7 +206,7 @@ function buildPageEmbed(entries, page, pageSize, targetId) {
      */
     embed.addFields({
       name: `الطرف الآخر : <@${e.otherId}>`,
-      value: `وقت المشكلة : ${timeStr}\nالمسؤول : <@${e.moderatorId}>`,
+      value: `الحالة : ${e.status === 'active' ? 'نشطة' : 'منتهية'}\nوقت البداية : ${timeStr}${e.endedAt ? `\nوقت الإنهاء : ${new Date(e.endedAt).toLocaleString('ar-SA', { timeZone: 'Asia/Riyadh' })}` : ''}\nالسبب : ${e.reason || 'غير محدد'}\nالمسؤول : <@${e.moderatorId}>`,
       inline: false
     });
   }

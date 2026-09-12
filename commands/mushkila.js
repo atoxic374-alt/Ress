@@ -157,6 +157,7 @@ function userIsResponsible(member, owners) {
 // "problem" and allows moderators to remove the mute role from users
 // involved in problems without closing the case.
 const name = 'مشكله';
+const hidden = true;
 
 /**
  * Execute the مشكله command.  When invoked without arguments, this command
@@ -340,6 +341,7 @@ async function handleInteraction(interaction, context) {
 
 module.exports = {
   name,
+  hidden,
   execute,
   handleInteraction
 };

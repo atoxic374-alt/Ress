@@ -90,6 +90,7 @@ function isOwnerOrResponsible(member, owners) {
 }
 
 const name = 'انهاء';
+const hidden = true;
 
 async function execute(message, args, context) {
   const { client } = context;
@@ -232,6 +233,7 @@ async function handleInteraction(interaction, context) {
 
 module.exports = {
   name,
+  hidden,
   execute,
   handleInteraction
 };
