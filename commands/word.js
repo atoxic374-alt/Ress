@@ -490,7 +490,9 @@ async function handleInteraction(interaction, context) {
         }
         pendingWordActions.delete(actionKey);
         await interaction.deferUpdate();
-        await interaction.message.edit({ content: '', components: [] }).catch(() => {});
+        await interaction.message.delete().catch(async () => {
+            await interaction.message.edit({ content: '', components: [] }).catch(() => {});
+        });
         await applyWordRoleAction(pending.message, pending.targetMember, selectedRoleId, pending.entry);
         return true;
     }
@@ -807,6 +809,11 @@ async function handleMessage(message, context) {
     const missingRoleIds = getTargetRoleIds(entry).filter(id => !targetRoles.some(role => role.id === id));
     if (missingRoleIds.length > 0) {
         await message.reply(`❌ **تعذر العثور على ${missingRoleIds.length} من الرولات المحفوظة لهذه الكلمة. أعد تعديل الكلمة واختر الرولات من جديد.**`).catch(() => {});
+        return true;
+    }
+
+    if (targetRoles.length === 1) {
+        await applyWordRoleAction(message, targetMember, targetRoles[0].id, entry);
         return true;
     }
 
