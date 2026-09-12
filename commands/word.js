@@ -796,7 +796,7 @@ async function handleMessage(message, context) {
     const timeout = setTimeout(() => pendingWordActions.delete(actionKey), 60000);
     timeout.unref?.();
     await message.reply({
-        content: `**اختر الرول المطلوب تطبيقه على ${targetMember}:**`,
+        content: '**Choose One of roles**',
         components: buildWordTargetMenu(`word_apply_role:${actionKey}`, targetRoles, targetMember, 0)
     }).catch(() => pendingWordActions.delete(actionKey));
 
