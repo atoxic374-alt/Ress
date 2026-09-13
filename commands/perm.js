@@ -244,6 +244,10 @@ function isSupportedChannelType(channel) {
   return Boolean(channel && channel.guild && channel.permissionOverwrites);
 }
 
+function isRangeChannel(channel) {
+  return isSupportedChannelType(channel) && channel.type !== ChannelType.GuildCategory;
+}
+
 function getOrderedMentionIds(content) {
   const orderedChannels = [];
   const orderedRoles = [];
@@ -268,8 +272,18 @@ async function getChannelsBetween(guild, firstChannelId, lastChannelId) {
   // the range so the result follows the current Discord channel list.
   await guild.channels.fetch();
 
+  const firstChannel = guild.channels.cache.get(firstChannelId);
+  const lastChannel = guild.channels.cache.get(lastChannelId);
+  if (!isRangeChannel(firstChannel) || !isRangeChannel(lastChannel)) {
+    return [];
+  }
+
+  // When both endpoints are in one category, only sibling channels belong to
+  // that visual range. This prevents channels from other categories from being
+  // pulled in merely because Discord assigns them nearby global positions.
+  const sameParent = firstChannel.parentId === lastChannel.parentId;
   const orderedChannels = guild.channels.cache
-    .filter(ch => isSupportedChannelType(ch))
+    .filter(ch => isRangeChannel(ch) && (!sameParent || ch.parentId === firstChannel.parentId))
     .map(ch => ch)
     .sort((a, b) => {
       const aPosition = Number.isFinite(a.position) ? a.position : a.rawPosition;
@@ -424,7 +438,7 @@ async function execute(message, args, { client, BOT_OWNERS }) {
       try {
         // Try fetching channel by ID
         const channel = await message.guild.channels.fetch(id).catch(() => null);
-        if (isSupportedChannelType(channel)) {
+        if (isRangeChannel(channel)) {
           mentionedChannels.push(channel);
           continue;
         }
@@ -473,9 +487,9 @@ async function execute(message, args, { client, BOT_OWNERS }) {
       const firstChannel = await message.guild.channels.fetch(firstChannelId).catch(() => null);
       const lastChannel = await message.guild.channels.fetch(lastChannelId).catch(() => null);
 
-      if (!isSupportedChannelType(firstChannel) || !isSupportedChannelType(lastChannel)) {
+      if (!isRangeChannel(firstChannel) || !isRangeChannel(lastChannel)) {
         const embed = colorManager.createEmbed()
-          .setDescription('❌ **لازم منشن رومين نص/صوت صحيحين لبداية ونهاية النطاق.**');
+          .setDescription('❌ **لازم منشن رومين فعليين وصالحين لبداية ونهاية النطاق، وليس تصنيفين.**');
         await message.channel.send({ embeds: [embed] });
         return;
       }
@@ -520,8 +534,12 @@ async function execute(message, args, { client, BOT_OWNERS }) {
     }
     // Channels field
     if (mentionedChannels.length > 0) {
-      const channelsStr = mentionedChannels.map(c => `<#${c.id}>`).join('\n');
-      summaryFields.push({ name: 'الرومات', value: channelsStr, inline: false });
+      const preview = mentionedChannels.slice(0, 20).map(c => `<#${c.id}>`).join('\n');
+      const remaining = mentionedChannels.length - Math.min(mentionedChannels.length, 20);
+      const channelsStr = remaining > 0
+        ? `${preview}\n… ورومات أخرى: **${remaining}**`
+        : preview;
+      summaryFields.push({ name: `الرومات (${mentionedChannels.length})`, value: channelsStr, inline: false });
     }
     // Unknown IDs field
     if (unknownIds.length > 0) {
