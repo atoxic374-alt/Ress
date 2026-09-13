@@ -3196,7 +3196,7 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
   }
 
   setGuildData(guildId, config, tickets, pendingRequests, safePanelId);
-  await interaction.editReply(buildTicketMessagePayload('Request', '**تم ارسال طلبك للإدارة يرجى الانتظار..**'));
+  await interaction.editReply(buildTicketMessagePayload('Request', '**تم ارسال طلبك للإدارة يرجى الانتظار.. وسيتم الارسال لك فالخاص عند قبول الاداره**'));
   } finally {
     ticketOpenRequestLocks.delete(lockKey);
   }
