@@ -239,7 +239,9 @@ function getSessionStore(client) {
 }
 
 function isSupportedChannelType(channel) {
-  return channel && (channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildVoice);
+  // Every guild channel that exposes permission overwrites can be part of a
+  // range: text, announcement, forum/media, stage, voice, and categories.
+  return Boolean(channel && channel.guild && channel.permissionOverwrites);
 }
 
 function getOrderedMentionIds(content) {
@@ -261,11 +263,18 @@ function getOrderedMentionIds(content) {
   return { orderedChannels, orderedRoles };
 }
 
-function getChannelsBetween(guild, firstChannelId, lastChannelId) {
+async function getChannelsBetween(guild, firstChannelId, lastChannelId) {
+  // The channel cache may be stale or incomplete. Refresh it before deriving
+  // the range so the result follows the current Discord channel list.
+  await guild.channels.fetch();
+
   const orderedChannels = guild.channels.cache
     .filter(ch => isSupportedChannelType(ch))
     .map(ch => ch)
     .sort((a, b) => {
+      const aPosition = Number.isFinite(a.position) ? a.position : a.rawPosition;
+      const bPosition = Number.isFinite(b.position) ? b.position : b.rawPosition;
+      if (aPosition !== bPosition) return aPosition - bPosition;
       if (a.rawPosition !== b.rawPosition) return a.rawPosition - b.rawPosition;
       return a.id.localeCompare(b.id);
     });
@@ -415,7 +424,7 @@ async function execute(message, args, { client, BOT_OWNERS }) {
       try {
         // Try fetching channel by ID
         const channel = await message.guild.channels.fetch(id).catch(() => null);
-        if (channel && (channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildVoice)) {
+        if (isSupportedChannelType(channel)) {
           mentionedChannels.push(channel);
           continue;
         }
@@ -471,7 +480,7 @@ async function execute(message, args, { client, BOT_OWNERS }) {
         return;
       }
 
-      const channelsInRange = getChannelsBetween(message.guild, firstChannel.id, lastChannel.id);
+      const channelsInRange = await getChannelsBetween(message.guild, firstChannel.id, lastChannel.id);
       if (!channelsInRange.length) {
         const embed = colorManager.createEmbed()
           .setDescription('❌ **تعذر تحديد الرومات بين الرومين المحددين.**');
@@ -767,9 +776,9 @@ async function applyPermissions(interaction, session) {
     if (session.specifiedChannels && session.specifiedChannels.length > 0) {
       channelsToModify = session.specifiedChannels
         .map(id => guild.channels.cache.get(id))
-        .filter(ch => ch && (ch.type === ChannelType.GuildText || ch.type === ChannelType.GuildVoice));
+        .filter(ch => isSupportedChannelType(ch));
     } else {
-      channelsToModify = guild.channels.cache.filter(ch => ch.type === ChannelType.GuildText || ch.type === ChannelType.GuildVoice).map(ch => ch);
+      channelsToModify = guild.channels.cache.filter(ch => isSupportedChannelType(ch)).map(ch => ch);
     }
     // Remove excluded channels
     if (session.excludedChannels && session.excludedChannels.length > 0) {
