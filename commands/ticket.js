@@ -43,6 +43,7 @@ let handlersRegistered = false;
 const pingCooldowns = new Map();
 
 const ticketClaimLocks = new Set();
+const ticketCloseLocks = new Set();
 const ticketOpenRequestLocks = new Set();
 const activeTicketSetupSessions = new Map();
 const recentTicketCommandMessages = new Set();
@@ -53,6 +54,7 @@ const PING_COOLDOWN_MS = 5 * 60 * 1000;
 const MAX_POINTS_AUDIT_ENTRIES = 5000;
 const MAX_MANAGER_AUDIT_ENTRIES = 5000;
 const FEEDBACK_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const CLAIMING_REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
 const TICKET_STATE_TABLES_READY = Symbol.for('ticket.state.tables.ready');
 const STATE_KEY_STORE = 'ticket.store';
 const STATE_KEY_POINTS = 'ticket.points';
@@ -108,7 +110,13 @@ function getTicketDb() {
 }
 
 async function ensureTicketStateTables() {
-  const db = getTicketDb();
+  let db = getTicketDb();
+  // ticket.js can be loaded before the main database finishes initializing.
+  // Do not permanently hydrate from a stale/empty JSON fallback in that case.
+  if (!db?.db && !dbManager.isInitialized && typeof dbManager.initialize === 'function') {
+    await dbManager.initialize().catch((error) => logSilentError('ticket.db.initialize', error));
+    db = getTicketDb();
+  }
   if (!db?.db) {
     ticketDbAvailable = false;
     return null;
@@ -257,7 +265,10 @@ async function persistStateSnapshot(key, filePath, value) {
  */
 function saveCachedState(key, filePath, value) {
   storeCache[key] = value; // Update in-memory cache immediately
-  queueStateWrite(STATE_SNAPSHOT_QUEUE_KEY, () => persistStateSnapshot(key, filePath, value)).catch((error) => {
+  // The state object is mutable. Capture a snapshot now, otherwise a later
+  // command can mutate an older queued write before it reaches disk/SQLite.
+  const snapshot = JSON.parse(JSON.stringify(value ?? {}));
+  queueStateWrite(STATE_SNAPSHOT_QUEUE_KEY, () => persistStateSnapshot(key, filePath, snapshot)).catch((error) => {
     logSilentError(`ticket.state.save.${key}`, error);
   });
 }
@@ -618,6 +629,25 @@ function loadPoints() {
 
 function savePoints(points) {
   saveCachedState(STATE_KEY_POINTS, pointsPath, points);
+  return true;
+}
+
+function addPointsForResponsibility({ responsibilityName, userId, amount = 1, actorId = 'system', source = 'responsibility' } = {}) {
+  const targetId = String(userId || '').trim();
+  const respName = String(responsibilityName || '').trim();
+  const delta = Number(amount);
+  if (!targetId || !respName || !Number.isFinite(delta) || delta <= 0) return 0;
+  const points = loadPoints();
+  if (!points[respName] || typeof points[respName] !== 'object') points[respName] = {};
+  const existing = points[respName][targetId];
+  const bucket = typeof existing === 'object' && existing ? existing : {};
+  if (typeof existing === 'number') bucket[`legacy_${Date.now()}`] = existing;
+  const entryId = `${Date.now()}_${targetId}_${source}`;
+  bucket[entryId] = delta;
+  points[respName][targetId] = bucket;
+  appendPointAuditEntry(points, { id: entryId, targetId, actorId, delta, respName, source, at: entryId });
+  savePoints(points);
+  return delta;
 }
 
 function ensurePointsAudit(points) {
@@ -2225,14 +2255,31 @@ function countOpenMemberTickets(tickets, userId) {
   return Object.values(tickets).filter((t) => isTicketOpenForFlow(t) && t.memberId === userId).length;
 }
 
+async function isTicketChannelDefinitelyMissing(guild, channelId) {
+  if (!guild?.channels?.fetch || !channelId) return false;
+  let timer;
+  const result = await Promise.race([
+    guild.channels.fetch(channelId)
+      .then(() => ({ type: 'found' }))
+      .catch((error) => ({ type: 'error', code: error?.code })),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve({ type: 'timeout' }), 1200);
+    })
+  ]);
+  clearTimeout(timer);
+  // Only a definitive Unknown Channel response may clean up persisted data.
+  // Timeouts, rate limits and network errors are not proof that it was deleted.
+  return result?.type === 'error' && [10003, 10004].includes(Number(result.code));
+}
+
 async function countOpenMemberTicketsSafe(guild, tickets, userId) {
   let changed = false;
   for (const [channelId, ticket] of Object.entries(tickets || {})) {
     if (!isTicketOpenForFlow(ticket) || ticket.memberId !== userId) continue;
     const cached = guild?.channels?.cache?.get(channelId);
     if (cached) continue;
-    const fetched = guild ? await withTimeout(guild.channels.fetch(channelId).catch(() => null), 1200) : null;
-    if (!fetched) {
+    const definitelyMissing = await isTicketChannelDefinitelyMissing(guild, channelId);
+    if (definitelyMissing) {
       ticket.status = 'closed';
       ticket.deletedChannel = true;
       ticket.claimedBy = null;
@@ -2256,8 +2303,8 @@ async function countClaimedByAdminSafe(guild, tickets, adminId) {
     if (!isTicketOpenForFlow(ticket) || ticket.claimedBy !== adminId) continue;
     const cached = guild?.channels?.cache?.get(channelId);
     if (cached) continue;
-    const fetched = guild ? await withTimeout(guild.channels.fetch(channelId).catch(() => null), 1200) : null;
-    if (!fetched) {
+    const definitelyMissing = await isTicketChannelDefinitelyMissing(guild, channelId);
+    if (definitelyMissing) {
       ticket.status = 'closed';
       ticket.deletedChannel = true;
       ticket.claimedBy = null;
@@ -2878,6 +2925,12 @@ async function createTicketChannel({
       id: memberId,
       allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory]
     });
+    if (claimedByOnCreate && claimedByOnCreate !== memberId) {
+      permissionOverwrites.push({
+        id: claimedByOnCreate,
+        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory]
+      });
+    }
     for (const roleId of bootstrapStaffRoles) {
       permissionOverwrites.push({
         id: roleId,
@@ -3065,8 +3118,8 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
 
   if (config.autoCreateOnRequest) {
     try {
-      await createTicketChannel({ guild, member: interaction.member, config, reasonKey, tickets, pendingRequests, panelId: safePanelId, openModalAnswers: interaction.ticketModalAnswers || null });
-      await interaction.editReply(buildTicketMessagePayload('Request', ` ** تم ارسال طلبك للإدارة يرجى الانتظار.. ** `));
+      const createdChannel = await createTicketChannel({ guild, member: interaction.member, config, reasonKey, tickets, pendingRequests, panelId: safePanelId, openModalAnswers: interaction.ticketModalAnswers || null });
+      await interaction.editReply(buildTicketMessagePayload('Request', `**تم إنشاء التكت بنجاح :** <#${createdChannel.id}>`));
     } catch (error) {
       console.error('ticket open create channel error:', error?.message || error);
       await interaction.editReply(buildTicketMessagePayload('Error', '**فشل فتح التكت، تأكد من صلاحيات البوت .**'));
@@ -3281,6 +3334,19 @@ async function handleClaimFromRequest(interaction, reqId) {
   }
 
   let { panelId, config, tickets, pendingRequests, req } = requestContext;
+  if (req?.status === 'claiming' && req?.claimedAt) {
+    const claimingAge = Date.now() - Number(req.claimedAt);
+    if (claimingAge < CLAIMING_REQUEST_TIMEOUT_MS) {
+      await interaction.editReply(buildTicketMessagePayload('Alert', '**جاري إنشاء التكت من طلب سابق، انتظر قليلًا.**', { user: interaction.user }));
+      return;
+    }
+    // A stale claim can be retried safely after the recovery window.
+    req.claimedAt = null;
+    req.claimedBy = null;
+    req.status = 'pending';
+    req.updatedAt = Date.now();
+    setGuildData(guildId, config, tickets, pendingRequests, panelId);
+  }
   const pruned = prunePendingRequests(pendingRequests, config);
   if (pruned) {
     setGuildData(guildId, config, tickets, pendingRequests, panelId);
@@ -3920,7 +3986,18 @@ async function sendAutoCloseWarning(channel, ticket, dueAt) {
   }).catch((error) => logSilentError('suppressed', error));
 }
 
-async function closeTicketCore({
+async function closeTicketCore(options = {}) {
+  const lockKey = `${options.guildId || ''}:${options.panelId || 'default'}:${options.channelId || options.channel?.id || ''}`;
+  if (ticketCloseLocks.has(lockKey)) return false;
+  ticketCloseLocks.add(lockKey);
+  try {
+    return await closeTicketCoreUnsafe(options);
+  } finally {
+    ticketCloseLocks.delete(lockKey);
+  }
+}
+
+async function closeTicketCoreUnsafe({
   channel,
   guildId,
   panelId = 'default',
@@ -3947,7 +4024,10 @@ async function closeTicketCore({
 
   if (!autoClose && closedByUserId) {
     const closerMember = await resolveGuildMember(channel.guild, closedByUserId);
-    if (closerMember && canUseGeneralPointsCommand(closerMember, guildId, channel.guild)) {
+    const closerActor = closerMember
+      ? { user: { id: closedByUserId }, member: closerMember, guild: channel.guild }
+      : null;
+    if (closerMember && canManageTicket(closerActor, ticket, config)) {
       const points = loadPoints();
       const appended = recordManagerClosePoint(points, {
         guildId,
@@ -4148,7 +4228,7 @@ async function handleClose(interaction, guildId, panelId, channelId) {
   if (!interaction.deferred && !interaction.replied) {
     await interaction.deferReply({ ephemeral: true }).catch((error) => logSilentError('suppressed', error));
   }
-  await closeTicketCore({
+  const closed = await closeTicketCore({
     channel: interaction.channel,
     guildId,
     panelId: resolvedPanelId,
@@ -4161,6 +4241,9 @@ async function handleClose(interaction, guildId, panelId, channelId) {
     closedByLabel: `<@${interaction.user.id}>`,
     closedByUserId: interaction.user.id
   });
+  if (!closed) {
+    await interaction.editReply(buildTicketMessagePayload('Alert', '**جاري إغلاق التكت، انتظر لحظات.**', { ephemeral: true })).catch((error) => logSilentError('close.editReply.busy', error));
+  }
 }
 
 async function handleCloseAliasMessage(message) {
@@ -4401,7 +4484,7 @@ function applyManualPointsDelta({ targetId, actorId, delta }) {
   const next = Math.max(0, total + delta);
   const actualDelta = next - total;
   const auditId = `${Date.now()}_${actorId}_${targetId}`;
-  points[respName][targetId] = { ...(typeof existing === 'object' && existing ? existing : {}), [Date.now()]: actualDelta };
+  points[respName][targetId] = { ...(typeof existing === 'object' && existing ? existing : {}), [auditId]: actualDelta };
   appendPointAuditEntry(points, {
     id: auditId,
     targetId,
@@ -6962,7 +7045,8 @@ function registerTicketMessageActivityTracker(client) {
     if (feedbackCfg.enabled && feedbackCfg.channelId && channelId === feedbackCfg.channelId) {
       const rawText = String(message.content || '').trim();
       const trigger = String(feedbackCfg.triggerWord || '').trim();
-      if (!trigger || rawText.startsWith(trigger) || rawText.length > 0) {
+      const triggerMatches = !trigger || rawText.toLowerCase().startsWith(trigger.toLowerCase());
+      if (triggerMatches && rawText.length > 0) {
         const starsMatch = rawText.match(/\b([1-5])\b/);
         const stars = parseStars(starsMatch?.[1] || '5') || 5;
         const comment = rawText.replace(/\b([1-5])\b/, '').replace(trigger, '').trim() || 'بدون تعليق';
@@ -7358,7 +7442,9 @@ function registerHandlers(client) {
           }
 
           const points = loadPoints();
-          const now = Date.now().toString();
+          // Include the actor in the bucket key: Date.now() alone can collide
+          // when two point actions are processed in the same millisecond.
+          const now = `${Date.now()}_${interaction.user.id}`;
           if (!points[respName] || typeof points[respName] !== 'object') points[respName] = {};
           const existingAward = ticket.pointAward && typeof ticket.pointAward === 'object' ? ticket.pointAward : null;
           if (existingAward) {
@@ -7386,6 +7472,10 @@ function registerHandlers(client) {
             : Number(existing || 0);
           const next = Math.max(0, total + delta);
           const actualDelta = next - total;
+          if (actualDelta === 0) {
+            await interaction.reply(buildTicketMessagePayload('Points', '**لا توجد نقاط كافية لتنفيذ هذا الخصم.**', { ephemeral: true }));
+            return;
+          }
           if (typeof existing === 'object' && existing !== null) {
             points[respName][targetId][now] = actualDelta;
           } else if (existing !== undefined) {
@@ -7431,7 +7521,7 @@ function registerHandlers(client) {
           });
 
           setGuildData(guildId, config, tickets, pendingRequests || {}, resolvedPanelId);
-          await interaction.reply(buildTicketMessagePayload('تم', `**تم تعديل النقاط (${delta > 0 ? '+' : ''}${delta}) للمستلم.**`, { ephemeral: true }));
+          await interaction.reply(buildTicketMessagePayload('تم', `**تم تعديل النقاط (${actualDelta > 0 ? '+' : ''}${actualDelta}) للمستلم.**`, { ephemeral: true }));
           return;
         }
 
@@ -7768,7 +7858,7 @@ function registerHandlers(client) {
         }
 
         if (modalId.startsWith('ticket_transfer_search_modal_')) {
-          const [, , , , guildId, panelId = 'default', channelId] = modalId.split('_');
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(modalId, 4);
           const query = interaction.fields.getTextInputValue('value');
           const responsibilities = loadResponsibilities();
           const results = searchResponsibilitiesByName(query, responsibilities, 50);
@@ -7901,4 +7991,14 @@ function registerHandlers(client) {
   });
 }
 
-module.exports = { name, aliases, execute, registerHandlers };
+module.exports = {
+  name,
+  aliases,
+  execute,
+  registerHandlers,
+  // Shared point storage API. reset.js must use this instead of writing the
+  // legacy JSON file directly, otherwise SQLite/cache can resurrect points.
+  loadPoints,
+  savePoints,
+  addPointsForResponsibility
+};

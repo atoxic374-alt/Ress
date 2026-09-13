@@ -4,6 +4,7 @@ const { logEvent } = require('../utils/logs_system.js');
 const { isUserBlocked, clearAllBlocks, getBlockedUsers } = require('./block.js');
 const fs = require('fs');
 const path = require('path');
+const ticketState = require('./ticket.js');
 
 // تعريف دالة وهمية لـ invalidateTopCache لأنها غير موجودة في الكود الأصلي
 // في بيئة الإنتاج، يجب استيراد هذه الدالة من مكانها الصحيح.
@@ -20,6 +21,7 @@ const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilitie
 
 // دوال قراءة وحفظ البيانات
 function readJSONFile(filePath, defaultValue = {}) {
+    if (filePath === pointsPath) return ticketState.loadPoints();
     try {
         if (fs.existsSync(filePath)) {
             const data = fs.readFileSync(filePath, 'utf8');
@@ -33,6 +35,10 @@ function readJSONFile(filePath, defaultValue = {}) {
 }
 
 function writeJSONFile(filePath, data) {
+    if (filePath === pointsPath) {
+        ticketState.savePoints(data);
+        return true;
+    }
     try {
         fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
         return true;

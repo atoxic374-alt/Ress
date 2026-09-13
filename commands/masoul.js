@@ -16,6 +16,7 @@ const { checkCooldown, startCooldown } = require('./cooldown.js');
 const { isUserBlocked } = require('./block.js');
 const fs = require('fs');
 const path = require('path');
+const ticketState = require('./ticket.js');
 
 // ===== إعدادات عامة =====
 const DEBUG = false;
@@ -263,8 +264,6 @@ async function handleClaimButton(interaction, context) {
     activeTasks.set(taskId, displayName);
     saveActiveTasks();
 
-    const { dbManager } = require('../utils/database.js');
-
     // Cancel reminder if it exists
     const notificationsCommand = client.commands.get('notifications');
     if (notificationsCommand?.cancelTaskTracking) {
@@ -340,7 +339,12 @@ async function handleClaimButton(interaction, context) {
 
             // منح النقطة فوراً إذا كان النظام لا يتطلب تقرير للنقاط
             if (!currentReportsConfig.pointsOnReport) {
-                await dbManager.addPoint(responsibilityName, interaction.user.id);
+                ticketState.addPointsForResponsibility({
+                  responsibilityName,
+                  userId: interaction.user.id,
+                  actorId: interaction.user.id,
+                  source: 'masoul_claim'
+                });
             }
 
             const reportEmbed = colorManager.createEmbed()
@@ -368,8 +372,12 @@ async function handleClaimButton(interaction, context) {
     } else {
         // --- ORIGINAL LOGIC for tasks NOT requiring a report ---
         // Award points immediately
-        const { dbManager } = require('../utils/database.js');
-        await dbManager.addPoint(responsibilityName, interaction.user.id);
+        ticketState.addPointsForResponsibility({
+          responsibilityName,
+          userId: interaction.user.id,
+          actorId: interaction.user.id,
+          source: 'masoul_claim'
+        });
 
         // زر رابط الرسالة (إن أمكن)
         const finalChannelId = originalChannelId || interaction.channelId;

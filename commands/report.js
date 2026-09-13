@@ -2,6 +2,7 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelect
 const colorManager = require('../utils/colorManager.js');
 const fs = require('fs');
 const path = require('path');
+const ticketState = require('./ticket.js');
 
 const name = 'report';
 const reportsPath = path.join(__dirname, '..', 'data', 'reports.json');
@@ -1860,19 +1861,15 @@ function registerInteractionHandler(client) {
         try {
             // إعادة تحميل البيانات من الملفات
             const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
-            const pointsPath = path.join(__dirname, '..', 'data', 'points.json');
             const botConfigPath = path.join(__dirname, '..', 'data', 'botConfig.json');
 
             let responsibilities = {};
-            let points = {};
+            let points = ticketState.loadPoints();
             let BOT_OWNERS = [];
 
             try {
                 if (fs.existsSync(responsibilitiesPath)) {
                     responsibilities = JSON.parse(fs.readFileSync(responsibilitiesPath, 'utf8'));
-                }
-                if (fs.existsSync(pointsPath)) {
-                    points = JSON.parse(fs.readFileSync(pointsPath, 'utf8'));
                 }
                 if (fs.existsSync(botConfigPath)) {
                     const botConfig = JSON.parse(fs.readFileSync(botConfigPath, 'utf8'));
@@ -1885,7 +1882,7 @@ function registerInteractionHandler(client) {
             // دالة للحفظ
             const scheduleSave = () => {
                 try {
-                    fs.writeFileSync(pointsPath, JSON.stringify(points, null, 2));
+                    ticketState.savePoints(points);
                     const botConfig = JSON.parse(fs.readFileSync(botConfigPath, 'utf8'));
                     const pendingReportsObj = {};
                     for (const [key, value] of client.pendingReports.entries()) {
