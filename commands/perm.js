@@ -245,14 +245,16 @@ function isSupportedChannelType(channel) {
 function getOrderedMentionIds(content) {
   const orderedChannels = [];
   const orderedRoles = [];
-  const mentionRegex = /<#(\d{17,19})>|<@&(\d{17,19})>/g;
+  const tokenRegex = /<#(\d{17,19})>|<@&(\d{17,19})>|https?:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/channels\/(\d{17,19})\/(\d{17,19})/gi;
   let match;
 
-  while ((match = mentionRegex.exec(content)) !== null) {
+  while ((match = tokenRegex.exec(content)) !== null) {
     if (match[1]) {
       orderedChannels.push(match[1]);
     } else if (match[2]) {
       orderedRoles.push(match[2]);
+    } else if (match[4]) {
+      orderedChannels.push(match[4]);
     }
   }
 
