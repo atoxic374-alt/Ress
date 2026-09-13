@@ -3424,6 +3424,13 @@ async function handleClaimFromRequest(interaction, reqId) {
 
   delete pendingRequests[reqId];
   setGuildData(guildId, config, tickets, pendingRequests, panelId);
+  const ticketUser = await interaction.client.users.fetch(createdTicket.memberId).catch(() => null);
+  if (ticketUser) {
+    await ticketUser.send(buildTicketMessagePayload(
+      'تم استلام التكت',
+      `**تم استلام تكتك من الإدارة بنجاح.**\n**روم التكت :** <#${channel.id}>`
+    )).catch((error) => logSilentError('ticket.claim.notify-member-dm', error));
+  }
   await interaction.editReply(buildTicketMessagePayload('Claimed', `**تم الاستلام والانشاء :** <#${channel.id}>`));
 
   const claimImage = resolveImageForSend(getReasonVisualSettings(config, createdTicket.reasonKey).claimImage);
