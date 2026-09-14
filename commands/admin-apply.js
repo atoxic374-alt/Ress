@@ -17,6 +17,7 @@ function loadAdminApplicationSettings() {
         return {
             settings: {
                 applicationChannel: null,
+                adminWelcomeChannel: null,
                 approvers: { type: "roles", list: [] },
                 maxPendingPerAdmin: 3,
                 rejectCooldownHours: 24
@@ -29,6 +30,7 @@ function loadAdminApplicationSettings() {
         return {
             settings: {
                 applicationChannel: null,
+                adminWelcomeChannel: null,
                 approvers: { type: "roles", list: [] },
                 maxPendingPerAdmin: 3,
                 rejectCooldownHours: 24
@@ -895,6 +897,25 @@ async function handleAdminApplicationInteraction(interaction) {
                 embeds: [approvedEmbed],
                 components: []
             });
+
+            // إرسال ترحيب عام في روم الترحيب المحددة، مع منشن العضو وصورته
+            if (settings.settings.adminWelcomeChannel && addedRoles.length > 0) {
+                try {
+                    const welcomeChannel = interaction.guild.channels.cache.get(settings.settings.adminWelcomeChannel)
+                        || await interaction.guild.channels.fetch(settings.settings.adminWelcomeChannel).catch(() => null);
+                    if (welcomeChannel && welcomeChannel.isTextBased()) {
+                        const welcomeEmbed = colorManager.createEmbed()
+                            .setTitle('🎉 مرحباً بالإداري الجديد')
+                            .setDescription(`نرحب بالإداري الجديد <@${candidate.id}> في فريق الإدارة!`)
+                            .addFields({ name: 'الرولات الإدارية', value: addedRoles.map(role => `<@&${role.id}>`).join(' • '), inline: false })
+                            .setThumbnail(candidate.user.displayAvatarURL({ dynamic: true, size: 256 }))
+                            .setTimestamp();
+                        await welcomeChannel.send({ content: `<@${candidate.id}>`, embeds: [welcomeEmbed] });
+                    }
+                } catch (welcomeError) {
+                    console.error('تعذر إرسال ترحيب الإداري الجديد:', welcomeError);
+                }
+            }
 
             // إرسال إشعار للمرشح
             if (addedRoles.length > 0) {

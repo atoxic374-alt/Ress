@@ -1,4 +1,4 @@
-const { EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ChannelType } = require('discord.js');
+const { EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ChannelSelectMenuBuilder, ChannelType } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const colorManager = require('../utils/colorManager');
@@ -16,6 +16,7 @@ function loadAdminApplicationSettings() {
         return {
             settings: {
                 applicationChannel: null,
+                adminWelcomeChannel: null,
                 approvers: { type: "roles", list: [] },
                 maxPendingPerAdmin: 3,
                 rejectCooldownHours: 24,
@@ -56,6 +57,7 @@ function loadAdminApplicationSettings() {
         return {
             settings: {
                 applicationChannel: null,
+                adminWelcomeChannel: null,
                 approvers: { type: "roles", list: [] },
                 maxPendingPerAdmin: 3,
                 rejectCooldownHours: 24,
@@ -186,6 +188,11 @@ module.exports = {
                     label: 'Application Channel',
                     description: 'تحديد الروم التي ستظهر بها طلبات التقديم الإداري',
                     value: 'set_channel'
+                },
+                {
+                    label: 'Admin Welcome Channel',
+                    description: 'تحديد روم ترحيب الإداري الجديد بعد قبوله',
+                    value: 'set_welcome_channel'
                 },
                 {
                     label: 'Approvers',
@@ -354,6 +361,40 @@ async function handleSetChannel(interaction, settings) {
                 content: '**انتهت مهلة الانتظار.**',
                 components: []
             }).catch(() => {});
+        }
+    });
+}
+
+// معالج تحديد روم ترحيب الإداري الجديد
+async function handleSetWelcomeChannelInteraction(interaction, settings) {
+    const channelMenu = new ChannelSelectMenuBuilder()
+        .setCustomId('select_admin_welcome_channel')
+        .setPlaceholder('اختر روم ترحيب الإداري الجديد')
+        .setChannelTypes([ChannelType.GuildText, ChannelType.GuildAnnouncement]);
+
+    await interaction.update({
+        content: 'اختر الروم التي سيظهر فيها ترحيب الإداري الجديد بعد قبول طلبه:',
+        components: [new ActionRowBuilder().addComponents(channelMenu)]
+    });
+
+    const collector = interaction.message.createMessageComponentCollector({
+        filter: i => i.user.id === interaction.user.id && i.customId === 'select_admin_welcome_channel',
+        time: 120000,
+        max: 1
+    });
+
+    collector.on('collect', async i => {
+        const channelId = i.values[0];
+        const channel = interaction.guild.channels.cache.get(channelId);
+        if (!channel) {
+            await i.update({ content: '❌ لم يتم العثور على الروم.', components: [] });
+            return;
+        }
+        settings.settings.adminWelcomeChannel = channelId;
+        if (saveAdminApplicationSettings(settings)) {
+            await i.update({ content: `✅ تم تحديد روم ترحيب الإداري إلى: ${channel}`, components: [] });
+        } else {
+            await i.update({ content: '❌ فشل حفظ إعداد روم الترحيب.', components: [] });
         }
     });
 }
@@ -1412,6 +1453,9 @@ async function handleInteraction(interaction) {
             switch (choice) {
                 case 'set_channel':
                     await handleSetChannelInteraction(interaction, settings);
+                    break;
+                case 'set_welcome_channel':
+                    await handleSetWelcomeChannelInteraction(interaction, settings);
                     break;
                 case 'set_approvers':
                     await handleSetApproversInteraction(interaction, settings);
