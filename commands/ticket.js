@@ -4642,7 +4642,9 @@ async function handlePointsAdjustActionInteraction(interaction, sessionId, mode)
     [1, 2, 3, 4, 5].map((value) => new ButtonBuilder()
       .setCustomId(`ticket_points_amount_${mode}_${value}_${sessionId}`)
       .setLabel(String(value))
-      .setStyle(mode === 'add' ? ButtonStyle.Success : ButtonStyle.Danger)),
+      .setStyle(mode === 'add' ? ButtonStyle.Success : ButtonStyle.Danger))
+  );
+  const customAmountRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`ticket_points_custom_${sessionId}`)
       .setLabel('رقم مخصص')
@@ -4660,7 +4662,7 @@ async function handlePointsAdjustActionInteraction(interaction, sessionId, mode)
       thumbnailMode: 'server',
       guild: interaction.guild
     })],
-    components: [amountRow]
+    components: [amountRow, customAmountRow]
   }).catch((error) => logSilentError('suppressed', error));
 }
 
