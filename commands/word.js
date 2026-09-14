@@ -104,7 +104,14 @@ function getEntryKeywords(entry) {
 
 function getAdminRoles() {
     const roles = readJson(ADMIN_ROLES_PATH, []);
-    return Array.isArray(roles) ? roles : [];
+    if (!Array.isArray(roles)) return [];
+
+    // adminRoles.json is the single source of truth for the Word admin mode.
+    // Normalize legacy/mixed values so comparisons cannot silently fail.
+    return [...new Set(roles
+        .map(role => typeof role === 'object' ? role?.id : role)
+        .map(role => String(role || '').trim())
+        .filter(Boolean))];
 }
 
 function isBotOwner(userId, BOT_OWNERS = []) {
@@ -123,22 +130,29 @@ function getAllowedRoleIds(entry) {
         return [];
     }
 
-    return [...new Set(entry.allowedRoleIds.map(String))];
+    return [...new Set(entry.allowedRoleIds
+        .map(role => typeof role === 'object' ? role?.id : role)
+        .map(role => String(role || '').trim())
+        .filter(Boolean))];
 }
 
 function canUseWord(member, entry, _BOT_OWNERS = []) {
     if (!member || !entry) return false;
 
+    const memberRoleIds = new Set(member.roles?.cache?.keys?.() || []);
+
     if (entry.allowedMode === 'admin') {
         const adminRoles = getAdminRoles();
         if (adminRoles.length === 0) return false;
-        return member.roles.cache.some(role => adminRoles.includes(role.id));
+        // Do not treat Discord Administrator permission or bot ownership as a
+        // bypass: all Word administration must come from adminRoles.json.
+        return adminRoles.some(roleId => memberRoleIds.has(roleId));
     }
 
     const allowedRoleIds = getAllowedRoleIds(entry);
     if (allowedRoleIds.length === 0) return false;
 
-    return member.roles.cache.some(role => allowedRoleIds.includes(role.id));
+    return allowedRoleIds.some(roleId => memberRoleIds.has(roleId));
 }
 
 function findClosestRole(guild, rawInput) {
@@ -497,6 +511,15 @@ async function handleInteraction(interaction, context) {
         const selectedRoleId = interaction.values[0];
         if (!pending.targetRoles.some(role => role.id === selectedRoleId)) {
             await interaction.reply({ content: '❌ **الرول المختار غير متاح لهذه الكلمة.**', flags: MessageFlags.Ephemeral });
+            return true;
+        }
+        // Re-check the invoker's current role before applying the action. This
+        // prevents a stale menu from bypassing a role that was removed after
+        // the original message was sent.
+        const currentMember = interaction.member || await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+        if (!canUseWord(currentMember, pending.entry, BOT_OWNERS)) {
+            pendingWordActions.delete(actionKey);
+            await interaction.reply({ content: '❌ **لم تعد تملك الرول المسموح لهذا الأمر.**', flags: MessageFlags.Ephemeral });
             return true;
         }
         pendingWordActions.delete(actionKey);
@@ -869,5 +892,9 @@ module.exports = {
     execute,
     handleInteraction,
     handleMessage,
-    registerInteractionHandler
+    registerInteractionHandler,
+    // Exported for regression tests and for other internal permission checks.
+    canUseWord,
+    getAdminRoles,
+    getAllowedRoleIds
 };
