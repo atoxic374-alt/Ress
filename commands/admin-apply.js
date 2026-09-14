@@ -57,7 +57,12 @@ function loadAdminRoles() {
         if (fs.existsSync(adminRolesPath)) {
             const data = fs.readFileSync(adminRolesPath, 'utf8');
             const adminRoles = JSON.parse(data);
-            return Array.isArray(adminRoles) ? adminRoles : [];
+            return Array.isArray(adminRoles)
+                ? [...new Set(adminRoles
+                    .map(role => typeof role === 'object' ? role?.id : role)
+                    .map(role => String(role || '').trim())
+                    .filter(Boolean))]
+                : [];
         }
         return [];
     } catch (error) {
@@ -66,10 +71,28 @@ function loadAdminRoles() {
     }
 }
 
+function getMemberRoleIds(member) {
+    if (!member?.roles) return new Set();
+
+    if (member.roles.cache?.keys) {
+        return new Set([...member.roles.cache.keys()].map(String));
+    }
+
+    if (Array.isArray(member.roles)) {
+        return new Set(member.roles
+            .map(role => typeof role === 'object' ? role?.id : role)
+            .map(role => String(role || '').trim())
+            .filter(Boolean));
+    }
+
+    return new Set();
+}
+
 // التحقق من صلاحية استخدام الأمر
 function canUseCommand(member) {
     const adminRoles = loadAdminRoles();
-    const hasAdminRole = member.roles.cache.some(role => adminRoles.includes(role.id));
+    const memberRoleIds = getMemberRoleIds(member);
+    const hasAdminRole = adminRoles.some(roleId => memberRoleIds.has(roleId));
 
     // فحص إذا كان مالك السيرفر
     const isGuildOwner = member.guild.ownerId === member.id;
@@ -84,7 +107,8 @@ function canUseCommand(member) {
 // التحقق من وجود أدوار إدارية للمرشح
 function candidateHasAdminRoles(member) {
     const adminRoles = loadAdminRoles();
-    return member.roles.cache.some(role => adminRoles.includes(role.id));
+    const memberRoleIds = getMemberRoleIds(member);
+    return adminRoles.some(roleId => memberRoleIds.has(roleId));
 }
 
 // التحقق من الكولداون

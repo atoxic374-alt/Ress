@@ -1751,17 +1751,32 @@ function incrementReceivedTicketsCounter(guildId, userId, amount = 1) {
   saveStore(store);
 }
 
+function recordReceivedTicket(guildId, userId, ticketKey) {
+  const normalizedUserId = String(userId || '').trim();
+  const normalizedKey = String(ticketKey || '').trim();
+  if (!/^\d{16,20}$/.test(normalizedUserId) || !normalizedKey) return;
+  const store = loadStore();
+  const existing = store[guildId] || {};
+  const audit = Array.isArray(existing.receivedTicketAudit) ? existing.receivedTicketAudit : [];
+  if (audit.some((entry) => entry.userId === normalizedUserId && entry.ticketKey === normalizedKey)) return;
+  store[guildId] = { ...existing, receivedTicketAudit: [...audit, { userId: normalizedUserId, ticketKey: normalizedKey, at: Date.now() }].slice(-10000) };
+  saveStore(store);
+}
+
 function getReceivedTicketsCounter(guildData, userId) {
   const normalizedUserId = String(userId || '').trim();
   if (!/^\d{16,20}$/.test(normalizedUserId)) return 0;
   const stored = Number(guildData?.stats?.receivedTickets?.[normalizedUserId] || 0);
+  const audited = Array.isArray(guildData?.receivedTicketAudit)
+    ? guildData.receivedTicketAudit.filter((entry) => String(entry?.userId || '') === normalizedUserId).length
+    : 0;
 
   // fallback legacy: احتساب التذاكر الحالية المستلمة حتى لا ينخفض المؤشر بعد التحديث.
   let live = 0;
   for (const panel of Object.values(guildData?.panels || {})) {
     live += Object.values(panel?.tickets || {}).filter((ticket) => ticket?.claimedBy === normalizedUserId).length;
   }
-  return Math.max(0, Math.max(stored, live));
+  return Math.max(0, Math.max(stored, audited, live));
 }
 
 function getPanelData(guildId, panelId = 'default') {
@@ -2178,7 +2193,8 @@ async function buildResponsibilitySearchResultsMessage(sessionId, responsibiliti
       label: name.slice(0, 100),
       value: `respidx_${index}`,
         emoji: '<:emoji_1:1484364853832319056>',
-      description: `عدد المسؤولين : ${count}`
+      description: `عدد المسؤولين : ${count}`,
+      disabled: count === 0
     };
   });
   return {
@@ -2998,6 +3014,7 @@ async function createTicketChannel({
 
   if (claimedByOnCreate) {
     incrementReceivedTicketsCounter(guild.id, claimedByOnCreate);
+    recordReceivedTicket(guild.id, claimedByOnCreate, channel.id);
   }
 
   const syncLogPromise = syncTicketLogMessage({
@@ -3245,6 +3262,7 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
   ticket.claimedBy = interaction.user.id;
   ticket.pointsReceiverId = interaction.user.id;
   incrementReceivedTicketsCounter(guildId, interaction.user.id);
+  recordReceivedTicket(guildId, interaction.user.id, actionChannelId);
   touchTicketActivity(ticket);
   recordClaimPointIfNeeded(ticket, {
     guildId,
@@ -4587,69 +4605,15 @@ async function handlePointsAdjustMessage(message, args, { BOT_OWNERS = [] } = {}
     return;
   }
 
+  // Interactions are handled by the central ticket router. Keeping a second
+  // collector here would process the same button twice and double the amount.
   const collector = sent.createMessageComponentCollector({ time: 3 * 60 * 1000 });
-  collector.on('collect', async (interaction) => {
-    if (interaction.user.id !== message.author.id) {
-      await interaction.reply(buildTicketMessagePayload('ملقوف', '**فقط صاحب الأمر يمكنه استخدام الأزرار.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
-      return;
-    }
-
-    const addPrefix = `ticket_points_action_add_${sessionId}`;
-    const removePrefix = `ticket_points_action_remove_${sessionId}`;
-    const amountPrefix = `ticket_points_amount_`;
-    if (interaction.customId === addPrefix || interaction.customId === removePrefix) {
-      const mode = interaction.customId === addPrefix ? 'add' : 'remove';
-      const updatedSession = { ...(pointsAdjustSessions.get(sessionId) || {}), mode };
-      pointsAdjustSessions.set(sessionId, updatedSession);
-      saveRuntimeSession('ticket-points-adjust', sessionId, updatedSession, 3 * 60 * 1000);
-      const amountRow = new ActionRowBuilder().addComponents(
-        [1, 2, 3, 4, 5].map((value) => new ButtonBuilder()
-          .setCustomId(`${amountPrefix}${mode}_${value}_${sessionId}`)
-          .setLabel(String(value))
-          .setStyle(mode === 'add' ? ButtonStyle.Success : ButtonStyle.Danger))
-      );
-      await interaction.update({
-        embeds: [buildMemberPointsEmbed({ requester: message.author, targetUser, targetId, guildId: message.guild.id, targetIsResponsible, note: `**تم اختيار :** ${mode === 'add' ? 'إضافة' : 'إزالة'}\n**اختر العدد من 1 إلى 5.**`, thumbnailMode: 'server', guild: message.guild })],
-        components: [amountRow]
-      }).catch((error) => logSilentError('suppressed', error));
-      return;
-    }
-
-    if (interaction.customId.startsWith(amountPrefix) && interaction.customId.endsWith(`_${sessionId}`)) {
-      const [, , , mode, valueStr] = interaction.customId.split('_');
-      const amount = Number(valueStr);
-      if (!['add', 'remove'].includes(mode) || !Number.isFinite(amount) || amount <= 0) {
-        await interaction.reply(buildTicketMessagePayload('Error', '**خيار غير صالح.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
-        return;
-      }
-      const delta = mode === 'remove' ? -Math.abs(amount) : Math.abs(amount);
-          // As per user request, manager points are only awarded via internal ticket evaluation buttons.
-          // Manual point adjustments via command will now only affect general user points.
-          const actualDelta = applyManualPointsDelta({ targetId, actorId: message.author.id, delta });
-      collector.stop('done');
-      await interaction.update({
-        embeds: [buildMemberPointsEmbed({
-          requester: message.author,
-          targetUser,
-          targetId,
-          guildId: message.guild.id,
-          targetIsResponsible,
-          note: `**✅ تم ${actualDelta >= 0 ? 'إضافة' : 'إزالة'} ${Math.abs(actualDelta)} ${targetIsResponsible ? 'نقطة مسؤول' : 'نقطة'} للعضو :** <@${targetId}>`,
-          thumbnailMode: 'server',
-          guild: message.guild
-        })],
-        components: []
-      }).catch((error) => logSilentError('suppressed', error));
-    }
-  });
-
   collector.on('end', async () => {
     pointsAdjustSessions.delete(sessionId);
     deleteRuntimeSession('ticket-points-adjust', sessionId);
     await sent.edit({ components: [] }).catch((error) => logSilentError('suppressed', error));
   });
 }
-
 
 async function getPointsAdjustSession(sessionId) {
   let session = pointsAdjustSessions.get(sessionId);
@@ -4678,7 +4642,11 @@ async function handlePointsAdjustActionInteraction(interaction, sessionId, mode)
     [1, 2, 3, 4, 5].map((value) => new ButtonBuilder()
       .setCustomId(`ticket_points_amount_${mode}_${value}_${sessionId}`)
       .setLabel(String(value))
-      .setStyle(mode === 'add' ? ButtonStyle.Success : ButtonStyle.Danger))
+      .setStyle(mode === 'add' ? ButtonStyle.Success : ButtonStyle.Danger)),
+    new ButtonBuilder()
+      .setCustomId(`ticket_points_custom_${sessionId}`)
+      .setLabel('رقم مخصص')
+      .setStyle(ButtonStyle.Secondary)
   );
   await interaction.update({
     embeds: [buildMemberPointsEmbed({
@@ -5157,6 +5125,7 @@ async function handleReassignClaim(interaction, guildId, panelId, channelId) {
   ticket.claimedBy = interaction.user.id;
   ticket.pointsReceiverId = interaction.user.id;
   incrementReceivedTicketsCounter(guildId, interaction.user.id);
+  recordReceivedTicket(guildId, interaction.user.id, actionChannelId);
   delete ticket.reassignPendingAt;
   touchTicketActivity(ticket);
   await ticketChannel.permissionOverwrites.edit(interaction.user.id, {
@@ -6838,6 +6807,13 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     await interaction.editReply(buildTicketMessagePayload('Error', '**المسؤولية غير موجودة.**')).catch((error) => logSilentError('suppressed', error));
     return;
   }
+  const selectedResponsibles = Array.isArray(selected.responsibles)
+    ? selected.responsibles.filter((id) => /^\d{16,20}$/.test(String(id || '').trim()))
+    : [];
+  if (selectedResponsibles.length === 0) {
+    await interaction.editReply(buildTicketMessagePayload('Error', '**هذه المسؤولية لا تحتوي على مسؤولين حاليًا ولا يمكن اختيارها.**')).catch((error) => logSilentError('suppressed', error));
+    return;
+  }
 
   const previousClaimer = ticket.claimedBy || null;
   const previousTransferredUserIds = Array.isArray(ticket.transferredUserIds)
@@ -7633,6 +7609,21 @@ function registerHandlers(client) {
           return;
         }
 
+        if (id.startsWith('ticket_points_custom_')) {
+          const sessionId = id.replace('ticket_points_custom_', '');
+          const session = await getPointsAdjustSession(sessionId);
+          if (!session || interaction.user.id !== session.actorId) {
+            await interaction.reply(buildTicketMessagePayload('ملقوف', '**هذه العملية مخصصة لصاحب الأمر فقط.**', { ephemeral: true }));
+            return;
+          }
+          const modal = new ModalBuilder().setCustomId(`ticket_points_custom_modal_${sessionId}`).setTitle('عدد النقاط');
+          modal.addComponents(new ActionRowBuilder().addComponents(
+            new TextInputBuilder().setCustomId('amount').setLabel('اكتب عدد النقاط').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('مثال: 10')
+          ));
+          await interaction.showModal(modal);
+          return;
+        }
+
         if (id.startsWith('ticket_points_amount_')) {
           const parts = id.split('_');
           const mode = parts[3];
@@ -7764,6 +7755,22 @@ function registerHandlers(client) {
         const modalId = interaction.customId;
         if (interaction.guild && interaction.member && resolveTicketBlockForMember(interaction.guild.id, interaction.member)) {
           await interaction.reply(buildTicketMessagePayload('Ticket Blocked', '**عليك بلوك تكت يرجى التوجه للخاص لرؤية المدة.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
+          return;
+        }
+
+        if (modalId.startsWith('ticket_points_custom_modal_')) {
+          const sessionId = modalId.replace('ticket_points_custom_modal_', '');
+          const session = await getPointsAdjustSession(sessionId);
+          const amount = Number(interaction.fields.getTextInputValue('amount'));
+          if (!session || interaction.user.id !== session.actorId) {
+            await interaction.reply(buildTicketMessagePayload('ملقوف', '**هذه العملية مخصصة لصاحب الأمر فقط.**', { ephemeral: true }));
+            return;
+          }
+          if (!Number.isSafeInteger(amount) || amount <= 0 || amount > 100000) {
+            await interaction.reply(buildTicketMessagePayload('Error', '**اكتب رقمًا صحيحًا أكبر من صفر وأقل من 100000.**', { ephemeral: true }));
+            return;
+          }
+          await handlePointsAdjustAmountInteraction(interaction, sessionId, session.mode, amount);
           return;
         }
 
