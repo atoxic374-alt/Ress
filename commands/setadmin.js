@@ -1,4 +1,4 @@
-const { EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ChannelType } = require('discord.js');
+const { EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ChannelSelectMenuBuilder, ChannelType } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const colorManager = require('../utils/colorManager');
@@ -186,6 +186,11 @@ module.exports = {
                     label: 'Application Channel',
                     description: 'تحديد الروم التي ستظهر بها طلبات التقديم الإداري',
                     value: 'set_channel'
+                },
+                {
+                    label: 'Admin Welcome Channel',
+                    description: 'تحديد روم ترحيب الإداري الجديد بعد قبوله',
+                    value: 'set_welcome_channel'
                 },
                 {
                     label: 'Approvers',
@@ -538,6 +543,11 @@ async function handleSelectRoles(interaction, settings) {
                         label: 'Application Channel',
                         description: 'تحديد الروم التي ستظهر بها طلبات التقديم الإداري',
                         value: 'set_channel'
+                    },
+                    {
+                        label: 'Admin Welcome Channel',
+                        description: 'تحديد روم ترحيب الإداري الجديد بعد قبوله',
+                        value: 'set_welcome_channel'
                     },
                     {
                         label: 'Approvers',
@@ -1413,6 +1423,9 @@ async function handleInteraction(interaction) {
                 case 'set_channel':
                     await handleSetChannelInteraction(interaction, settings);
                     break;
+                case 'set_welcome_channel':
+                    await handleSetWelcomeChannelInteraction(interaction, settings);
+                    break;
                 case 'set_approvers':
                     await handleSetApproversInteraction(interaction, settings);
                     break;
@@ -1939,6 +1952,11 @@ async function handleSetChannelInteraction(interaction, settings) {
                         value: 'set_channel'
                     },
                     {
+                        label: 'Admin Welcome Channel',
+                        description: 'تحديد روم ترحيب الإداري الجديد بعد قبوله',
+                        value: 'set_welcome_channel'
+                    },
+                    {
                         label: 'Approvers',
                         description: 'تحديد من يستطيع الموافقة على طلبات التقديم',
                         value: 'set_approvers'
@@ -2113,6 +2131,11 @@ async function handleSetAcceptanceRoleInteraction(interaction, settings) {
                         value: 'set_channel'
                     },
                     {
+                        label: 'Admin Welcome Channel',
+                        description: 'تحديد روم ترحيب الإداري الجديد بعد قبوله',
+                        value: 'set_welcome_channel'
+                    },
+                    {
                         label: 'Approvers',
                         description: 'تحديد من يستطيع الموافقة على طلبات التقديم',
                         value: 'set_approvers'
@@ -2165,6 +2188,39 @@ async function handleSetAcceptanceRoleInteraction(interaction, settings) {
                 content: '**انتهت مهلة الانتظار.**',
                 components: []
             }).catch(() => {});
+        }
+    });
+}
+
+async function handleSetWelcomeChannelInteraction(interaction, settings) {
+    const channelMenu = new ChannelSelectMenuBuilder()
+        .setCustomId('select_admin_welcome_channel')
+        .setPlaceholder('اختر روم ترحيب الإداري الجديد')
+        .setChannelTypes([ChannelType.GuildText, ChannelType.GuildAnnouncement]);
+
+    await interaction.update({
+        content: 'اختر الروم التي سيظهر فيها ترحيب الإداري الجديد بعد قبول طلبه:',
+        components: [new ActionRowBuilder().addComponents(channelMenu)]
+    });
+
+    const collector = interaction.message.createMessageComponentCollector({
+        filter: i => i.user.id === interaction.user.id && i.customId === 'select_admin_welcome_channel',
+        time: 120000,
+        max: 1
+    });
+
+    collector.on('collect', async i => {
+        const channelId = i.values[0];
+        const channel = interaction.guild.channels.cache.get(channelId);
+        if (!channel) {
+            await i.update({ content: '❌ لم يتم العثور على الروم.', components: [] });
+            return;
+        }
+        settings.settings.adminWelcomeChannel = channelId;
+        if (saveAdminApplicationSettings(settings)) {
+            await i.update({ content: `✅ تم تحديد روم ترحيب الإداري إلى: ${channel}`, components: [] });
+        } else {
+            await i.update({ content: '❌ فشل حفظ إعداد روم الترحيب.', components: [] });
         }
     });
 }
@@ -2520,6 +2576,12 @@ async function handleShowSettingsInteraction(interaction, settings) {
         channelText = channel ? `${channel}` : 'روم حذوف';
     }
 
+    let welcomeChannelText = 'غير محدد';
+    if (set.adminWelcomeChannel) {
+        const welcomeChannel = guild.channels.cache.get(set.adminWelcomeChannel);
+        welcomeChannelText = welcomeChannel ? `${welcomeChannel}` : 'روم حذوف';
+    }
+
     let approversText = 'غير محدد';
     if (set.approvers.type === 'owners') {
         approversText = 'مالكي البوت فقط';
@@ -2552,6 +2614,7 @@ async function handleShowSettingsInteraction(interaction, settings) {
         .setTitle('Current Admin Application Settings')
         .addFields([
             { name: 'Application Channel', value: channelText, inline: true },
+            { name: 'Admin Welcome Channel', value: welcomeChannelText, inline: true },
             { name: 'Approvers', value: approversText, inline: true },
             { name: 'Acceptance Role', value: acceptanceRoleText, inline: true },
             { name: 'Pending Limit', value: `${set.maxPendingPerAdmin} طلبات`, inline: true },

@@ -953,6 +953,28 @@ async function handleAdminApplicationInteraction(interaction) {
                     console.log(`⚠️ تعذر إرسال إشعار خاص للمرشح <@${application.candidateId}>:`, dmError.message);
                 }
 
+                // إرسال ترحيب في القناة المحددة من setadmin بعد قبول الإداري.
+                const announceChannelId = settings.settings.adminWelcomeChannel;
+                if (announceChannelId) {
+                    const announceChannel = interaction.guild.channels.cache.get(announceChannelId);
+                    if (announceChannel?.isTextBased()) {
+                        const welcomeEmbed = colorManager.createEmbed()
+                            .setTitle('رحبوا بالادمن الجديد')
+                            .addFields(
+                                { name: 'الادمن', value: `<@${application.candidateId}>`, inline: true },
+                                { name: 'ID', value: `\`${application.candidateId}\``, inline: true }
+                            )
+                            .setTimestamp();
+                        await announceChannel.send({
+                            content: '@here',
+                            embeds: [welcomeEmbed],
+                            allowedMentions: { parse: ['everyone'] }
+                        }).catch(channelError => {
+                            console.log(`⚠️ تعذر إرسال ترحيب الإداري في القناة ${announceChannelId}:`, channelError.message);
+                        });
+                    }
+                }
+
                 // حذف الطلب من الطلبات المعلقة
                 delete settings.pendingApplications[applicationId];
                 const saveResult = saveAdminApplicationSettings(settings);
