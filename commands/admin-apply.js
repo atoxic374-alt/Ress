@@ -111,6 +111,18 @@ function candidateHasAdminRoles(member) {
     return adminRoles.some(roleId => memberRoleIds.has(roleId));
 }
 
+function getApproverMentions(settings) {
+    const approvers = settings?.settings?.approvers;
+    if (!approvers || !Array.isArray(approvers.list)) return '';
+    if (approvers.type === 'roles') {
+        return approvers.list.map(id => `<@&${id}>`).join(' ');
+    }
+    if (approvers.type === 'owners') {
+        return approvers.list.map(id => `<@${id}>`).join(' ');
+    }
+    return '';
+}
+
 // التحقق من الكولداون
 function isInCooldown(userId, settings) {
     if (!settings.rejectedCooldowns) return false;
@@ -361,7 +373,9 @@ module.exports = {
 
             // إرسال الطلب إلى قناة التقديم أولاً
             try {
+                const approverMentions = getApproverMentions(settings);
                 const sentMessage = await applicationChannel.send({
+                    content: approverMentions ? `${approverMentions} طلب تقديم إداري جديد` : 'طلب تقديم إداري جديد',
                     embeds: [simpleEmbed],
                     components: [row1, row2]
                 });

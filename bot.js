@@ -3098,6 +3098,33 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
         const newRoles = newMember.roles.cache;
         const addedRoles = newRoles.filter(role => !oldRoles.has(role.id));
         const removedRoles = oldRoles.filter(role => !newRoles.has(role.id));
+        // حماية طلبات التقديم الإداري: أي رول مسجل في adminRoles يُسحب
+        // من صاحب الطلب المعلّق، مهما كان مصدر المنح. منح القبول الرسمي
+        // يستعمل bypass مؤقتاً حتى لا تُسحب الرولات فور إضافتها.
+        if (addedRoles.size > 0) {
+            try {
+                const adminRoles = readJSONFile(DATA_FILES.adminRoles, []);
+                const adminRoleIds = new Set((Array.isArray(adminRoles) ? adminRoles : [])
+                    .map(role => typeof role === 'object' ? role?.id : role)
+                    .map(roleId => String(roleId || '').trim())
+                    .filter(Boolean));
+                const applications = readJSONFile(DATA_FILES.adminApplications, {});
+                const pendingApplications = applications?.pendingApplications || {};
+                const hasPendingApplication = Object.values(pendingApplications).some(application =>
+                    String(application?.candidateId || '') === String(userId)
+                );
+                if (hasPendingApplication && adminRoleIds.size > 0) {
+                    for (const [roleId, role] of addedRoles) {
+                        const bypassKey = `${newMember.guild.id}_${userId}_${roleId}`;
+                        if (!adminRoleIds.has(String(roleId)) || global.adminRoleGrantBypass?.has(bypassKey)) continue;
+                        await newMember.roles.remove(role, 'حماية طلب إداري معلق: منع رول إداري قبل القبول أو الرفض');
+                        console.log(`🔒 تم سحب رول الإدارة ${role.name} من صاحب طلب معلق ${newMember.displayName}`);
+                    }
+                }
+            } catch (pendingAdminRoleError) {
+                console.error('❌ خطأ في حماية رولات أصحاب الطلبات الإدارية المعلقة:', pendingAdminRoleError);
+            }
+        }
 
         try {
 
