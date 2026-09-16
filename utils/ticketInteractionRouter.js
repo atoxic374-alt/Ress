@@ -8,7 +8,12 @@ function registerTicketInteractionRouter(handler) {
   interactionRouter.register('ticket_', async (interaction, context = {}) => handler(interaction, context), {
     name: 'ticket-system',
     priority: 70,
-    types: ['button', 'modal', 'stringSelect']
+    types: ['button', 'modal', 'stringSelect'],
+    // Ticket creation may include several Discord API calls (channel creation,
+    // intro message, logging, and persistence). Keep it below the interaction
+    // token lifetime, but do not let the router's default timeout interrupt a
+    // claim while the ticket is still being created.
+    timeoutMs: 180000
   });
 
   ticketRouterRegistered = true;

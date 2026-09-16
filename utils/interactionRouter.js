@@ -72,7 +72,14 @@ class InteractionRouter {
 
     async _safeRespond(interaction, payload) {
         if (!interaction) return;
-        if (interaction.deferred || interaction.replied) {
+        if (interaction.deferred) {
+            // The handler already acknowledged the interaction and may still be
+            // completing a long-running Discord operation. A second timeout
+            // follow-up makes a successful claim look failed and leaves users
+            // with the misleading ROUTER_HANDLER_TIMEOUT message.
+            return;
+        }
+        if (interaction.replied) {
             await interaction.followUp({ ...payload, ephemeral: true }).catch(() => {});
         } else {
             await interaction.reply({ ...payload, ephemeral: true }).catch(() => {});
