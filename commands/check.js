@@ -726,8 +726,8 @@ async function showUserActivityStats(message, user, client) {
         const voiceTimeFormatted = formatDuration(voiceTime);
 
         const embed = colorManager.createEmbed()
-            .setTitle(` Check - <@${user.id}>`)
-            .setDescription(`${colorEmoji} **Voice :** **${voiceTimeFormatted}**\n**Chat :** **${xp}xp**`)
+            .setTitle(` Check - ${user.globalName || user.username}`)
+            .setDescription(`**Member :** <@${user.id}>\n${colorEmoji} **Voice :** **${voiceTimeFormatted}**\n**Chat :** **${xp}xp**`)
             .setThumbnail(user.displayAvatarURL({ dynamic: true }))
             .setFooter({ text: ` Checking : ${user.username}` })
             .setTimestamp();
