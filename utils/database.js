@@ -2,6 +2,7 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const { getDatabasePath, getDataDir } = require('./storagePaths');
 const moment = require('moment-timezone');
+const { normalizeMentionableIds } = require('./mentions');
 
 // ضبط بداية الأسبوع على السبت (حسب التقويم العربي)
 moment.updateLocale('en', {
@@ -167,6 +168,9 @@ class DatabaseManager {
                 try {
                     const configStr = row.config || '{}';
                     const parsedConfig = JSON.parse(configStr);
+                    if (Array.isArray(parsedConfig.responsibles)) {
+                        parsedConfig.responsibles = normalizeMentionableIds(parsedConfig.responsibles);
+                    }
                     if (row.image) {
                         parsedConfig.image = row.image;
                     }
@@ -203,6 +207,12 @@ class DatabaseManager {
 
     async updateResponsibility(name, config) {
         try {
+            const normalizedConfig = {
+                ...(config || {})
+            };
+            if (Array.isArray(normalizedConfig.responsibles)) {
+                normalizedConfig.responsibles = normalizeMentionableIds(normalizedConfig.responsibles);
+            }
             const imageValue = typeof config?.image === 'string' ? config.image : null;
             await this.run(`
                 INSERT INTO responsibilities (name, config, image)
@@ -210,7 +220,7 @@ class DatabaseManager {
                 ON CONFLICT(name) DO UPDATE SET
                     config = excluded.config,
                     image = COALESCE(excluded.image, responsibilities.image)
-            `, [name, JSON.stringify(config), imageValue]);
+            `, [name, JSON.stringify(normalizedConfig), imageValue]);
             
             const fs = require('fs');
             const path = require('path');

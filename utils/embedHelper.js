@@ -1,6 +1,7 @@
 
 const colorManager = require('./colorManager.js');
 const { EmbedBuilder } = require('discord.js');
+const { allowedMentions } = require('./mentions.js');
 
 // معالج الأخطاء المتقدم
 class ErrorHandler {
@@ -61,6 +62,7 @@ class InteractionHandler {
             const replyOptions = {
                 content: content || '**حدث خطأ غير متوقع**',
                 ephemeral: true,
+                allowedMentions,
                 ...options
             };
 
@@ -89,6 +91,7 @@ class InteractionHandler {
             const followUpOptions = {
                 content: content || '**حدث خطأ غير متوقع**',
                 ephemeral: true,
+                allowedMentions,
                 ...options
             };
 
@@ -107,8 +110,8 @@ class MessageHandler {
 
         return await ErrorHandler.safeExecute(async () => {
             const messageOptions = typeof content === 'string' 
-                ? { content, ...options }
-                : { ...content, ...options };
+                ? { content, allowedMentions, ...options }
+                : { allowedMentions, ...content, ...options };
 
             return await channel.send(messageOptions);
         }, null, 'safeSend');
@@ -121,8 +124,8 @@ class MessageHandler {
 
         return await ErrorHandler.safeExecute(async () => {
             const editOptions = typeof content === 'string'
-                ? { content, ...options }
-                : { ...content, ...options };
+                ? { content, allowedMentions, ...options }
+                : { allowedMentions, ...content, ...options };
 
             return await message.edit(editOptions);
         }, null, 'safeEdit');
