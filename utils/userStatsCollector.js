@@ -2,6 +2,12 @@ const fs = require('fs');
 const path = require('path');
 const moment = require('moment-timezone');
 const { EmbedBuilder } = require('discord.js');
+const { normalizeDiscordId, userMention } = require('./mentions');
+
+function getUserStatsMention(userStats, member = null) {
+    const userId = normalizeDiscordId(member?.id || userStats?.userId);
+    return userMention(userId) || 'Unknown User';
+}
 
 // مسارات ملفات البيانات
 const vacationsPath = path.join(__dirname, '..', 'data', 'vacations.json');
@@ -377,7 +383,7 @@ async function collectUserStats(member) {
             // معلومات أساسية
             userId: userId,
             username: user.username,
-            mention: `<@${userId}>`,
+            mention: userMention(userId) || 'Unknown User',
             displayName: member.displayName,
             avatar: user.displayAvatarURL({ dynamic: true }),
 
@@ -640,18 +646,20 @@ function getCustomDownStatus(userId) {
 async function createUserStatsEmbed(userStats, colorManager, simpleView = false, requesterName = null, requesterMention = null) {
     // تحميل إعدادات التقييم في البداية
     const evaluationSettings = loadEvaluationSettings();
+    const mention = getUserStatsMention(userStats);
+    const displayName = userStats?.displayName || userStats?.username || 'User Stats';
 
     const embed = colorManager.createEmbed()
-        .setTitle(simpleView ? ` تقديم إداري` : ` ${userStats.displayName || userStats.username || 'User Stats'}`)
+        .setTitle(simpleView ? ` تقديم إداري` : ` ${displayName}`)
         .setThumbnail(userStats.avatar);
 
     if (!simpleView) {
-        embed.setDescription(`**Member :** ${userStats.mention}`);
+        embed.setDescription(`**Member :** ${mention}`);
     }
 
     if (simpleView && requesterMention) {
         // عرض مبسط ومختصر للآيفون
-        embed.setDescription(`**Admin :** ${requesterMention}\n**Member :** ${userStats.mention}`);
+        embed.setDescription(`**Admin :** ${requesterMention}\n**Member :** ${mention}`);
     }
 
     if (simpleView) {
@@ -762,7 +770,7 @@ async function createUserStatsEmbed(userStats, colorManager, simpleView = false,
             .addFields([
                 {
                     name: '**information**',
-                    value: `\n **العضو :** ${userStats.mention}\n**الاي دي :** \`${userStats.userId}\`\n **حالة الحساب :** ${userStats.accountStatus}\n`,
+                    value: `\n **العضو :** ${mention}\n**الاي دي :** \`${userStats.userId}\`\n **حالة الحساب :** ${userStats.accountStatus}\n`,
                     inline: false
                 },
                 {
