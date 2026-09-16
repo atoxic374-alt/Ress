@@ -27,6 +27,14 @@ function formatDuration(milliseconds) {
     return parts.length > 0 ? parts.join(' and ') : 'أقل من دقيقة';
 }
 
+function formatChannelDisplay(channelData, guild, emptyText = 'لا يوجد') {
+    if (!channelData?.channel_id) return emptyText;
+    const channel = guild?.channels?.cache?.get(channelData.channel_id);
+    if (channel) return `<#${channel.id}>`;
+    const safeName = String(channelData.channel_name || '').trim();
+    return safeName && safeName.toLowerCase() !== 'unknown' ? `#${safeName}` : 'قناة غير متاحة';
+}
+
 function parseTimeInput(value) {
     const trimmed = value.trim().toLowerCase();
     if (!trimmed) return { hour: 0, minute: 0 };
@@ -196,27 +204,20 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
         // جلب أكثر قناة صوتية مع قيمة افتراضية
         const topVoiceChannel = await dbManager.getMostActiveVoiceChannel(user.id, period) || { channel_id: null, channel_name: 'No Data', total_time: 0, session_count: 0 };
         // جلب أكثر قناة رسائل مع قيمة افتراضية
-        const topMessageChannel = await dbManager.getMostActiveMessageChannel(user.id) || { channel_id: null, channel_name: 'No Data', message_count: 0 };
+        const topMessageChannel = await dbManager.getMostActiveMessageChannel(user.id, message.guild?.id) || { channel_id: null, channel_name: 'No Data', message_count: 0 };
         // حساب XP (10 رسائل = 1 XP)
         const xp = Math.floor((stats.messages || 0) / 10);
         // تحضير منشن القنوات
-        const voiceChannelMention = topVoiceChannel?.channel_id ? `<#${topVoiceChannel.channel_id}>` : 'No Data';
-        const messageChannelMention = topMessageChannel?.channel_id ? `<#${topMessageChannel.channel_id}>` : 'No Data';
+        const voiceChannelMention = formatChannelDisplay(topVoiceChannel, message.guild, 'No Data');
+        const messageChannelMention = formatChannelDisplay(topMessageChannel, message.guild, 'No Data');
         // إنشاء Embed مصغر
         const embed = colorManager.createEmbed()
             .setTitle(`${periodLabel}`)
             .setDescription(`**تفاعل ${member.displayName}**`)
             .setThumbnail(user.displayAvatarURL({ dynamic: true }))
             .addFields(
-                { name: '# <:emoji_85:1442986413510627530> **Voice**', value: '** **', inline: false },
-                { name: '**الوقت**', value: `**${formatDuration(stats.voiceTime || 0)}**`, inline: true },
-                { name: '**جوينات**', value: `**${stats.voiceJoins || 0}**`, inline: true },
-                { name: '**أكثر روم**', value: `${voiceChannelMention}`, inline: true },
-                { name: '# <:emoji_85:1442986444712054954> **Chat**', value: '** **', inline: false },
-                { name: '**رسائل**', value: `**${stats.messages || 0}**`, inline: true },
-                { name: '**XP**', value: `**${xp}xp**`, inline: true },
-                { name: '**رياكتات**', value: `**${stats.reactions || 0}**`, inline: true },
-                { name: '**أكثر روم شات**', value: `${messageChannelMention}`, inline: false },
+                { name: '# <:emoji_85:1442986413510627530> **Voice**', value: `**الوقت :** **${formatDuration(stats.voiceTime || 0)}**  •  **جوينات :** **${stats.voiceJoins || 0}**\n**أكثر روم :** ${voiceChannelMention}`, inline: false },
+                { name: '# <:emoji_85:1442986444712054954> **Chat**', value: `**رسائل :** **${stats.messages || 0}**  •  **XP :** **${xp}xp**  •  **رياكتات :** **${stats.reactions || 0}**\n**أكثر روم شات :** ${messageChannelMention}`, inline: false },
                 { name: '**أيام التفاعل**', value: `**${activeDays || 0}${period === 'weekly' ? ' من 7' : ''}**`, inline: false }
             )
             .setFooter({ text: `${message.author.username}`, iconURL: message.author.displayAvatarURL() })
@@ -319,25 +320,18 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
                     stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
                 }
                 const topVoiceChannel = await dbManager.getMostActiveVoiceChannel(user.id, newPeriod) || { channel_id: null, channel_name: 'No Active Or Leave Channel', total_time: 0, session_count: 0 };
-                const topMessageChannel = await dbManager.getMostActiveMessageChannel(user.id) || { channel_id: null, channel_name: 'No Active In Chat', message_count: 0 };
+                const topMessageChannel = await dbManager.getMostActiveMessageChannel(user.id, interaction.guild?.id) || { channel_id: null, channel_name: 'No Active In Chat', message_count: 0 };
                 const xp = Math.floor((stats.messages || 0) / 10);
-                const voiceChannelMention = topVoiceChannel?.channel_id ? `<#${topVoiceChannel.channel_id}>` : 'No Active Or Leave Channel';
-                const messageChannelMention = topMessageChannel?.channel_id ? `<#${topMessageChannel.channel_id}>` : 'No Active In Chat';
+                const voiceChannelMention = formatChannelDisplay(topVoiceChannel, interaction.guild, 'No Active Or Leave Channel');
+                const messageChannelMention = formatChannelDisplay(topMessageChannel, interaction.guild, 'No Active In Chat');
                 // إنشاء الإمبد المحدث
                 const updatedEmbed = colorManager.createEmbed()
                     .setTitle(`${periodLabel}`)
                     .setDescription(`**تفاعل ${member.displayName}**`)
                     .setThumbnail(user.displayAvatarURL({ dynamic: true }))
                     .addFields(
-                        { name: '# <:emoji_85:1442986413510627530> **Voice**', value: '** **', inline: false },
-                        { name: '**الوقت**', value: `**${formatDuration(stats.voiceTime || 0)}**`, inline: true },
-                        { name: '**جوينات**', value: `**${stats.voiceJoins || 0}**`, inline: true },
-                        { name: '**أكثر روم**', value: `${voiceChannelMention}`, inline: true },
-                        { name: '# <:emoji_85:1442986444712054954> **Chat**', value: '** **', inline: false },
-                        { name: '**رسائل**', value: `**${stats.messages || 0}**`, inline: true },
-                        { name: '**XP**', value: `**${xp}xp**`, inline: true },
-                        { name: '**رياكتات**', value: `**${stats.reactions || 0}**`, inline: true },
-                        { name: '**أكثر روم شات**', value: `${messageChannelMention}`, inline: false },
+                        { name: '# <:emoji_85:1442986413510627530> **Voice**', value: `**الوقت :** **${formatDuration(stats.voiceTime || 0)}**  •  **جوينات :** **${stats.voiceJoins || 0}**\n**أكثر روم :** ${voiceChannelMention}`, inline: false },
+                        { name: '# <:emoji_85:1442986444712054954> **Chat**', value: `**رسائل :** **${stats.messages || 0}**  •  **XP :** **${xp}xp**  •  **رياكتات :** **${stats.reactions || 0}**\n**أكثر روم شات :** ${messageChannelMention}`, inline: false },
                         { name: '**أيام التفاعل**', value: `**${activeDays || 0}${newPeriod === 'weekly' ? ' من 7' : ''}**`, inline: false }
                     )
                     .setFooter({ text: `${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() })
@@ -467,30 +461,29 @@ module.exports = {
             LIMIT 1
         `, [targetUserId, fromTimestamp]) || { channel_id: null, channel_name: 'No Data', total_time: 0, session_count: 0 };
 
-        const voiceChannelMention = topVoiceChannel?.channel_id ? `<#${topVoiceChannel.channel_id}>` : 'No Data';
+        const voiceChannelMention = formatChannelDisplay(topVoiceChannel, interaction.guild, 'No Data');
         const topMessageChannel = await dbManager.get(`
+            SELECT channel_id, channel_name, message_count, last_message
+            FROM guild_message_channels
+            WHERE guild_id = ? AND user_id = ? AND last_message >= ?
+            ORDER BY message_count DESC, last_message DESC
+            LIMIT 1
+        `, [interaction.guild?.id, targetUserId, fromTimestamp]) || await dbManager.get(`
             SELECT channel_id, channel_name, message_count, last_message
             FROM message_channels
             WHERE user_id = ? AND last_message >= ?
-            ORDER BY message_count DESC
+            ORDER BY message_count DESC, last_message DESC
             LIMIT 1
         `, [targetUserId, fromTimestamp]) || { channel_id: null, channel_name: 'No Data', message_count: 0 };
-        const messageChannelMention = topMessageChannel?.channel_id ? `<#${topMessageChannel.channel_id}>` : 'No Data';
+        const messageChannelMention = formatChannelDisplay(topMessageChannel, interaction.guild, 'No Data');
         const xp = Math.floor((messages || 0) / 10);
 
         const summaryEmbed = colorManager.createEmbed()
             .setTitle('After Date')
             .setDescription(`**تفاعل ${memberDisplay}**\n**من :** ${dateMoment.format('YYYY-MM-DD hh:mm A')} ${noActivity ? '\n**لا يوجد نشاط مسجل بعد هذا التاريخ.**' : ''}`)
             .addFields(
-                { name: '# <:emoji_85:1442986413510627530> **Voice**', value: '** **', inline: false },
-                { name: '**الوقت**', value: `**${formatDuration(voiceTime)}**`, inline: true },
-                { name: '**جوينات**', value: `**${voiceJoins}**`, inline: true },
-                { name: '**أكثر روم**', value: `${voiceChannelMention}`, inline: true },
-                { name: '# <:emoji_85:1442986444712054954> **Chat**', value: '** **', inline: false },
-                { name: '**رسائل**', value: `**${messages}**`, inline: true },
-                { name: '**XP**', value: `**${xp}xp**`, inline: true },
-                { name: '**رياكتات**', value: `**${reactions}**`, inline: true },
-                { name: '**أكثر روم شات**', value: `${messageChannelMention}`, inline: false },
+                { name: '# <:emoji_85:1442986413510627530> **Voice**', value: `**الوقت :** **${formatDuration(voiceTime)}**  •  **جوينات :** **${voiceJoins}**\n**أكثر روم :** ${voiceChannelMention}`, inline: false },
+                { name: '# <:emoji_85:1442986444712054954> **Chat**', value: `**رسائل :** **${messages}**  •  **XP :** **${xp}xp**  •  **رياكتات :** **${reactions}**\n**أكثر روم شات :** ${messageChannelMention}`, inline: false },
                 { name: '**أيام التفاعل**', value: `**${activeDays}**`, inline: false }
             )
             .setTimestamp();

@@ -345,6 +345,18 @@ class DatabaseManager {
                 PRIMARY KEY (date, user_id)
             )`,
 
+            // نشاط يومي معزول لكل سيرفر لاستخدام التصفية والإحصائيات الدقيقة
+            `CREATE TABLE IF NOT EXISTS guild_daily_activity (
+                guild_id TEXT NOT NULL,
+                date TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                voice_time INTEGER DEFAULT 0,
+                messages INTEGER DEFAULT 0,
+                reactions INTEGER DEFAULT 0,
+                voice_joins INTEGER DEFAULT 0,
+                PRIMARY KEY (guild_id, date, user_id)
+            )`,
+
             // جدول المستخدمين الفريدين لكل قناة (بدلاً من Set)
             `CREATE TABLE IF NOT EXISTS channel_users (
                 channel_id TEXT NOT NULL,
@@ -361,6 +373,16 @@ class DatabaseManager {
                 message_count INTEGER DEFAULT 0,
                 last_message INTEGER,
                 PRIMARY KEY (user_id, channel_id)
+            )`,
+
+            `CREATE TABLE IF NOT EXISTS guild_message_channels (
+                guild_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                channel_name TEXT NOT NULL,
+                message_count INTEGER DEFAULT 0,
+                last_message INTEGER,
+                PRIMARY KEY (guild_id, user_id, channel_id)
             )`,
 
             // جدول مستويات المستخدمين للترقيات التلقائية
@@ -446,9 +468,11 @@ class DatabaseManager {
             'CREATE INDEX IF NOT EXISTS idx_voice_sessions_start_time ON voice_sessions(start_time)',
             'CREATE INDEX IF NOT EXISTS idx_daily_activity_date ON daily_activity(date)',
             'CREATE INDEX IF NOT EXISTS idx_daily_activity_user_id ON daily_activity(user_id)',
+            'CREATE INDEX IF NOT EXISTS idx_guild_daily_activity_user_date ON guild_daily_activity(guild_id, user_id, date)',
             'CREATE INDEX IF NOT EXISTS idx_channel_users_channel_id ON channel_users(channel_id)',
             'CREATE INDEX IF NOT EXISTS idx_user_totals_last_activity ON user_totals(last_activity)',
             'CREATE INDEX IF NOT EXISTS idx_message_channels_user_id ON message_channels(user_id)',
+            'CREATE INDEX IF NOT EXISTS idx_guild_message_channels_user ON guild_message_channels(guild_id, user_id, message_count)',
             'CREATE INDEX IF NOT EXISTS idx_user_levels_user_id ON user_levels(user_id)'
         ];
 
@@ -529,7 +553,7 @@ class DatabaseManager {
     }
 
     // حفظ جلسة صوتية
-    async saveVoiceSession(userId, channelId, channelName, duration, startTime, endTime) {
+    async saveVoiceSession(userId, channelId, channelName, duration, startTime, endTime, guildId = null) {
         try {
             const sessionId = `${userId}_${startTime}_${Math.random().toString(36).substr(2, 9)}`;
             const date = moment(startTime).tz('Asia/Riyadh').format('YYYY-MM-DD');
@@ -548,7 +572,7 @@ class DatabaseManager {
             await this.updateChannelTotals(channelId, channelName, duration, userId);
 
             // تحديث النشاط اليومي
-            await this.updateDailyActivity(date, userId, { voiceTime: duration });
+            await this.updateDailyActivity(date, userId, { voiceTime: duration }, guildId);
 
             return sessionId;
 
@@ -639,9 +663,33 @@ class DatabaseManager {
     }
 
     // تحديث النشاط اليومي
-    async updateDailyActivity(date, userId, activity) {
+    async updateDailyActivity(date, userId, activity, guildId = null) {
         try {
             const { messages = 0, voiceTime = 0, voiceJoins = 0, reactions = 0 } = activity;
+
+            if (guildId) {
+                await this.run(`
+                    INSERT OR IGNORE INTO guild_daily_activity
+                    (guild_id, date, user_id, messages, voice_time, voice_joins, reactions)
+                    VALUES (?, ?, ?, 0, 0, 0, 0)
+                `, [guildId, date, userId]);
+
+                const updates = [
+                    ['messages', messages],
+                    ['voice_time', voiceTime],
+                    ['voice_joins', voiceJoins],
+                    ['reactions', reactions]
+                ];
+                for (const [column, amount] of updates) {
+                    if (amount > 0) {
+                        await this.run(
+                            `UPDATE guild_daily_activity SET ${column} = ${column} + ? WHERE guild_id = ? AND date = ? AND user_id = ?`,
+                            [amount, guildId, date, userId]
+                        );
+                    }
+                }
+                return;
+            }
 
             // التأكد من وجود السجل أولاً
             await this.run(`
@@ -866,7 +914,7 @@ class DatabaseManager {
     }
 
     // تحديث رسائل القناة
-    async updateMessageChannel(userId, channelId, channelName) {
+    async updateMessageChannel(userId, channelId, channelName, guildId = null) {
         try {
             await this.run(`
                 INSERT INTO message_channels (user_id, channel_id, channel_name, message_count, last_message)
@@ -876,6 +924,16 @@ class DatabaseManager {
                     message_count = message_count + 1,
                     last_message = excluded.last_message
             `, [userId, channelId, channelName, Date.now()]);
+            if (guildId) {
+                await this.run(`
+                    INSERT INTO guild_message_channels (guild_id, user_id, channel_id, channel_name, message_count, last_message)
+                    VALUES (?, ?, ?, ?, 1, ?)
+                    ON CONFLICT(guild_id, user_id, channel_id) DO UPDATE SET
+                        channel_name = excluded.channel_name,
+                        message_count = message_count + 1,
+                        last_message = excluded.last_message
+                `, [guildId, userId, channelId, channelName, Date.now()]);
+            }
         } catch (error) {
             console.error('❌ خطأ في تحديث رسائل القناة:', error);
         }
@@ -922,17 +980,24 @@ class DatabaseManager {
     }
 
     // الحصول على أكثر قناة رسائل للمستخدم
-    async getMostActiveMessageChannel(userId) {
+    async getMostActiveMessageChannel(userId, guildId = null) {
         try {
-            const result = await this.get(`
+            const result = guildId ? await this.get(`
+                SELECT channel_id, channel_name, message_count
+                FROM guild_message_channels
+                WHERE guild_id = ? AND user_id = ?
+                ORDER BY message_count DESC, last_message DESC
+                LIMIT 1
+            `, [guildId, userId]) : null;
+            if (result) return result;
+            return await this.get(`
                 SELECT channel_id, channel_name, message_count
                 FROM message_channels
                 WHERE user_id = ?
-                ORDER BY message_count DESC
+                ORDER BY message_count DESC, last_message DESC
                 LIMIT 1
             `, [userId]);
 
-            return result || { channel_id: null, channel_name: 'لا يوجد', message_count: 0 };
         } catch (error) {
             console.error('❌ خطأ في جلب أكثر قناة رسائل:', error);
             return { channel_id: null, channel_name: 'لا يوجد', message_count: 0 };
@@ -971,27 +1036,31 @@ class DatabaseManager {
     }
 
     // جلب الإحصائيات الشهرية
-    async getMonthlyStats(userId) {
+    async getMonthlyStats(userId, guildId = null) {
         try {
             // حساب بداية الشهر الحالي بتوقيت الرياض
             const now = moment().tz('Asia/Riyadh');
             const monthStart = now.clone().startOf('month').format('YYYY-MM-DD');
+
+            const activityTable = guildId ? 'guild_daily_activity' : 'daily_activity';
+            const scopeClause = guildId ? 'guild_id = ? AND user_id = ? AND date >= ?' : 'user_id = ? AND date >= ?';
+            const scopeParams = guildId ? [guildId, userId, monthStart] : [userId, monthStart];
 
             const monthlyActivity = await this.all(`
                 SELECT SUM(voice_time) as voiceTime,
                        SUM(messages) as messages,
                        SUM(reactions) as reactions,
                        SUM(voice_joins) as voiceJoins
-                FROM daily_activity
-                WHERE user_id = ? AND date >= ?
-            `, [userId, monthStart]);
+                FROM ${activityTable}
+                WHERE ${scopeClause}
+            `, scopeParams);
 
             const activeDays = await this.get(`
                 SELECT COUNT(DISTINCT date) as count
-                FROM daily_activity
-                WHERE user_id = ? AND date >= ?
+                FROM ${activityTable}
+                WHERE ${scopeClause}
                 AND (voice_time > 0 OR messages > 0 OR reactions > 0 OR voice_joins > 0)
-            `, [userId, monthStart]);
+            `, scopeParams);
 
             return {
                 voiceTime: monthlyActivity[0]?.voiceTime || 0,
@@ -1440,9 +1509,9 @@ module.exports = {
     getUserLevel: getUserLevel,
     updateUserLevel: updateUserLevel,
     updateLastNotified: updateLastNotified,
-    saveVoiceSession: async (userId, channelId, channelName, duration, startTime, endTime) => {
+    saveVoiceSession: async (userId, channelId, channelName, duration, startTime, endTime, guildId = null) => {
         const db = getDatabase();
-        return await db.saveVoiceSession(userId, channelId, channelName, duration, startTime, endTime);
+        return await db.saveVoiceSession(userId, channelId, channelName, duration, startTime, endTime, guildId);
     },
     resetAllStats: async () => {
         const db = getDatabase();

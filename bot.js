@@ -1770,7 +1770,7 @@ client.once(Events.ClientReady, async () => {
 
         // 1. المستخدم انضم لقناة صوتية لأول مرة (لم يكن في أي قناة)
         if (!oldChannelId && newChannelId) {
-            await trackUserActivity(userId, 'voice_join').catch(() => {});
+            await trackUserActivity(userId, 'voice_join', { guildId: newState.guild.id }).catch(() => {});
             
             const sessionStartTime = now;
             // تخزين الجلسة فقط بدون interval لتقليل الضغط
@@ -1796,6 +1796,7 @@ client.once(Events.ClientReady, async () => {
 
                 if (duration > 1000) {
                     await trackUserActivity(userId, 'voice_time', {
+                        guildId: newState.guild.id,
                         duration: duration,
                         channelId: oldChannelId,
                         channelName: oldChannelName,
@@ -1822,6 +1823,7 @@ client.once(Events.ClientReady, async () => {
                 
                 if (duration > 1000) {
                     await trackUserActivity(userId, 'voice_time', {
+                        guildId: newState.guild.id,
                         duration: duration,
                         channelId: oldChannelId,
                         channelName: oldChannelName,
@@ -1832,7 +1834,7 @@ client.once(Events.ClientReady, async () => {
             }
 
             await checkAutoLevelUp(userId, 'voice', client).catch(() => {});
-            await trackUserActivity(userId, 'voice_join').catch(() => {});
+            await trackUserActivity(userId, 'voice_join', { guildId: newState.guild.id }).catch(() => {});
             
             client.voiceSessions.set(userId, { 
                 channelId: newChannelId, 
@@ -1891,6 +1893,7 @@ client.once(Events.ClientReady, async () => {
                             const remaining = limitTime - session.lastTrackedTime;
                             if (remaining > 1000) {
                                 await trackUserActivity(userId, 'voice_time', {
+                        guildId: newState.guild.id,
                                     duration: remaining,
                                     channelId: session.channelId,
                                     channelName: session.channelName,
@@ -1908,6 +1911,7 @@ client.once(Events.ClientReady, async () => {
                     const duration = now - session.lastTrackedTime;
                     if (duration >= 30000) { // حفظ إذا مرّت 30 ثانية على الأقل منذ آخر حفظ
                         await trackUserActivity(userId, 'voice_time', {
+                        guildId: newState.guild.id,
                             duration: duration,
                             channelId: session.channelId,
                             channelName: session.channelName,
@@ -1937,6 +1941,7 @@ client.once(Events.ClientReady, async () => {
                     const duration = endTime - session.lastTrackedTime;
                     if (duration > 1000) {
                         await trackUserActivity(userId, 'voice_time', {
+                        guildId: newState.guild.id,
                             duration: duration,
                             channelId: session.channelId,
                             channelName: session.channelName,
@@ -2332,11 +2337,11 @@ client.on('messageReactionAdd', async (reaction, user) => {
       console.log(`📊 محاولة تتبع تفاعل المستخدم ${user.username} (${user.id})`);
 
       const success = await trackUserActivity(user.id, 'reaction', {
+        guildId: reaction.message.guild?.id || reaction.message.guildId,
         messageId: reaction.message.id,
         channelId: reaction.message.channelId,
         emoji: reaction.emoji.name || reaction.emoji.id || 'custom_emoji',
         timestamp: Date.now(),
-        guildId: reaction.message.guild.id,
         messageAuthorId: reaction.message.author?.id
       });
 
@@ -2679,6 +2684,7 @@ client.on('messageCreate', async message => {
       if (dbManager && dbManager.isInitialized) {
         const { trackUserActivity } = require('./utils/userStatsCollector');
         await trackUserActivity(message.author.id, 'message', {
+          guildId: message.guild?.id,
           channelId: message.channel.id,
           channelName: message.channel.name,
           messageId: message.id,
@@ -5185,6 +5191,21 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
 
       }
 
+      return;
+    }
+
+    if (interaction.isButton() && customId.startsWith('tasfiyah_undo_')) {
+      try {
+        const tasfiyahCommand = client.commands.get('tasfiyah') || client.commands.get('تصفيه');
+        if (tasfiyahCommand?.handleUndoInteraction) {
+          await tasfiyahCommand.handleUndoInteraction(interaction, client);
+        }
+      } catch (error) {
+        console.error('Error in tasfiyah undo interaction:', error);
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({ content: '**❌ تعذر تنفيذ التراجع.**', ephemeral: true }).catch(() => {});
+        }
+      }
       return;
     }
 

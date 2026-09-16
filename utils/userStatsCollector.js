@@ -76,6 +76,7 @@ async function trackUserActivity(userId, activityType, data = {}) {
     try {
         const { getDatabase } = require('./database');
         const dbManager = getDatabase();
+        const guildId = data.guildId || null;
 
         // تحديث آخر نشاط (استخدام توقيت الرياض)
         const today = moment().tz('Asia/Riyadh').format('YYYY-MM-DD');
@@ -84,17 +85,17 @@ async function trackUserActivity(userId, activityType, data = {}) {
         switch (activityType) {
             case 'message':
                 await dbManager.updateUserTotals(userId, { messages: 1 });
-                await dbManager.updateDailyActivity(today, userId, { messages: 1 });
+                await dbManager.updateDailyActivity(today, userId, { messages: 1 }, guildId);
 
                 // تتبع القناة التي كتبت فيها الرسالة
                 if (data.channelId && data.channelName) {
-                    await dbManager.updateMessageChannel(userId, data.channelId, data.channelName);
+                    await dbManager.updateMessageChannel(userId, data.channelId, data.channelName, guildId);
                 }
                 break;
 
             case 'voice_join':
                 await dbManager.updateUserTotals(userId, { voiceJoins: 1 });
-                await dbManager.updateDailyActivity(today, userId, { voiceJoins: 1 });
+                await dbManager.updateDailyActivity(today, userId, { voiceJoins: 1 }, guildId);
                 break;
 
             case 'voice_time':
@@ -107,13 +108,13 @@ async function trackUserActivity(userId, activityType, data = {}) {
                 // حفظ الجلسة الصوتية المفصلة
                 try {
                     const { saveVoiceSession } = require('./voiceTimeManager');
-                    await saveVoiceSession(userId, channelId, channelName, duration, startTime, endTime);
+                    await saveVoiceSession(userId, channelId, channelName, duration, startTime, endTime, guildId);
                 } catch (error) {
                     console.error('❌ خطأ في حفظ الجلسة الصوتية:', error.message);
                     // حفظ بيانات مبسطة على الأقل
                     try {
                         await dbManager.updateUserTotals(userId, { voiceTime: duration });
-                        await dbManager.updateDailyActivity(today, userId, { voiceTime: duration });
+                        await dbManager.updateDailyActivity(today, userId, { voiceTime: duration }, guildId);
                     } catch (fallbackError) {
                         console.error('❌ فشل الحفظ البديل:', fallbackError.message);
                     }
@@ -127,7 +128,7 @@ async function trackUserActivity(userId, activityType, data = {}) {
                     await dbManager.updateUserTotals(userId, { reactions: 1 });
 
                     // تحديث النشاط اليومي
-                    await dbManager.updateDailyActivity(today, userId, { reactions: 1 });
+                        await dbManager.updateDailyActivity(today, userId, { reactions: 1 }, guildId);
 
                     console.log(`✅ تم تسجيل تفاعل للمستخدم ${userId} - ${data.emoji || 'تفاعل'}`);
 
