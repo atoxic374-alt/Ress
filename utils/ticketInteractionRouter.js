@@ -9,11 +9,10 @@ function registerTicketInteractionRouter(handler) {
     name: 'ticket-system',
     priority: 70,
     types: ['button', 'modal', 'stringSelect'],
-    // Ticket creation may include several Discord API calls (channel creation,
-    // intro message, logging, and persistence). Keep it below the interaction
-    // token lifetime, but do not let the router's default timeout interrupt a
-    // claim while the ticket is still being created.
-    timeoutMs: 180000
+    // Ticket creation should normally finish within a few seconds. This is a
+    // safety ceiling, not the expected duration; the handler acknowledges the
+    // interaction immediately and the router must not use its generic timeout.
+    timeoutMs: 30000
   });
 
   ticketRouterRegistered = true;
