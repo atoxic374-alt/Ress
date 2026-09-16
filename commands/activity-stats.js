@@ -216,8 +216,15 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
             .setDescription(`**تفاعل ${member.displayName}**`)
             .setThumbnail(user.displayAvatarURL({ dynamic: true }))
             .addFields(
-                { name: '# <:emoji_85:1442986413510627530> **Voice**', value: `**الوقت :** **${formatDuration(stats.voiceTime || 0)}**  •  **جوينات :** **${stats.voiceJoins || 0}**\n**أكثر روم :** ${voiceChannelMention}`, inline: false },
-                { name: '# <:emoji_85:1442986444712054954> **Chat**', value: `**رسائل :** **${stats.messages || 0}**  •  **XP :** **${xp}xp**  •  **رياكتات :** **${stats.reactions || 0}**\n**أكثر روم شات :** ${messageChannelMention}`, inline: false },
+                { name: '# <:emoji_85:1442986413510627530> **Voice**', value: '** **', inline: false },
+                { name: '**الوقت**', value: `**${formatDuration(stats.voiceTime || 0)}**`, inline: true },
+                { name: '**جوينات**', value: `**${stats.voiceJoins || 0}**`, inline: true },
+                { name: '**أكثر روم**', value: `${voiceChannelMention}`, inline: true },
+                { name: '# <:emoji_85:1442986444712054954> **Chat**', value: '** **', inline: false },
+                { name: '**رسائل**', value: `**${stats.messages || 0}**`, inline: true },
+                { name: '**XP**', value: `**${xp}xp**`, inline: true },
+                { name: '**رياكتات**', value: `**${stats.reactions || 0}**`, inline: true },
+                { name: '**أكثر روم شات**', value: `${messageChannelMention}`, inline: false },
                 { name: '**أيام التفاعل**', value: `**${activeDays || 0}${period === 'weekly' ? ' من 7' : ''}**`, inline: false }
             )
             .setFooter({ text: `${message.author.username}`, iconURL: message.author.displayAvatarURL() })
@@ -330,8 +337,15 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
                     .setDescription(`**تفاعل ${member.displayName}**`)
                     .setThumbnail(user.displayAvatarURL({ dynamic: true }))
                     .addFields(
-                        { name: '# <:emoji_85:1442986413510627530> **Voice**', value: `**الوقت :** **${formatDuration(stats.voiceTime || 0)}**  •  **جوينات :** **${stats.voiceJoins || 0}**\n**أكثر روم :** ${voiceChannelMention}`, inline: false },
-                        { name: '# <:emoji_85:1442986444712054954> **Chat**', value: `**رسائل :** **${stats.messages || 0}**  •  **XP :** **${xp}xp**  •  **رياكتات :** **${stats.reactions || 0}**\n**أكثر روم شات :** ${messageChannelMention}`, inline: false },
+                        { name: '# <:emoji_85:1442986413510627530> **Voice**', value: '** **', inline: false },
+                        { name: '**الوقت**', value: `**${formatDuration(stats.voiceTime || 0)}**`, inline: true },
+                        { name: '**جوينات**', value: `**${stats.voiceJoins || 0}**`, inline: true },
+                        { name: '**أكثر روم**', value: `${voiceChannelMention}`, inline: true },
+                        { name: '# <:emoji_85:1442986444712054954> **Chat**', value: '** **', inline: false },
+                        { name: '**رسائل**', value: `**${stats.messages || 0}**`, inline: true },
+                        { name: '**XP**', value: `**${xp}xp**`, inline: true },
+                        { name: '**رياكتات**', value: `**${stats.reactions || 0}**`, inline: true },
+                        { name: '**أكثر روم شات**', value: `${messageChannelMention}`, inline: false },
                         { name: '**أيام التفاعل**', value: `**${activeDays || 0}${newPeriod === 'weekly' ? ' من 7' : ''}**`, inline: false }
                     )
                     .setFooter({ text: `${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() })
@@ -482,8 +496,15 @@ module.exports = {
             .setTitle('After Date')
             .setDescription(`**تفاعل ${memberDisplay}**\n**من :** ${dateMoment.format('YYYY-MM-DD hh:mm A')} ${noActivity ? '\n**لا يوجد نشاط مسجل بعد هذا التاريخ.**' : ''}`)
             .addFields(
-                { name: '# <:emoji_85:1442986413510627530> **Voice**', value: `**الوقت :** **${formatDuration(voiceTime)}**  •  **جوينات :** **${voiceJoins}**\n**أكثر روم :** ${voiceChannelMention}`, inline: false },
-                { name: '# <:emoji_85:1442986444712054954> **Chat**', value: `**رسائل :** **${messages}**  •  **XP :** **${xp}xp**  •  **رياكتات :** **${reactions}**\n**أكثر روم شات :** ${messageChannelMention}`, inline: false },
+                { name: '# <:emoji_85:1442986413510627530> **Voice**', value: '** **', inline: false },
+                { name: '**الوقت**', value: `**${formatDuration(voiceTime)}**`, inline: true },
+                { name: '**جوينات**', value: `**${voiceJoins}**`, inline: true },
+                { name: '**أكثر روم**', value: `${voiceChannelMention}`, inline: true },
+                { name: '# <:emoji_85:1442986444712054954> **Chat**', value: '** **', inline: false },
+                { name: '**رسائل**', value: `**${messages}**`, inline: true },
+                { name: '**XP**', value: `**${xp}xp**`, inline: true },
+                { name: '**رياكتات**', value: `**${reactions}**`, inline: true },
+                { name: '**أكثر روم شات**', value: `${messageChannelMention}`, inline: false },
                 { name: '**أيام التفاعل**', value: `**${activeDays}**`, inline: false }
             )
             .setTimestamp();
