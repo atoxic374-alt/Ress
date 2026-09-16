@@ -3002,32 +3002,6 @@ async function createTicketChannel({
     permissionOverwrites
   });
 
-  const controls = await buildTicketControls(guild.id, panelId, channel.id, config, { includeClaimButton });
-
-  const shouldMentionAdminsOnOpen = Boolean(includeClaimButton && config.autoCreateOnRequest && !config.claimFromDedicatedChannel && !claimedByOnCreate);
-  const openMentionsText = shouldMentionAdminsOnOpen
-    ? buildMentionChunks(getAdminRoles(config, reasonKey)).join(' ')
-    : '';
-
-  const introText = renderTicketText(reasonSettings.beforeText, memberId);
-  const openImage = resolveImageForSend(reasonSettings.openImage);
-  const outroText = renderTicketText(reasonSettings.afterText, memberId);
-  const introContent = introText && openMentionsText
-    ? `${introText} | ${openMentionsText}`
-    : (introText || openMentionsText || '');
-
-  // Send initial message with controls and intro text/image first
-  await channel.send({
-    ...(introContent ? { content: introContent } : {}),
-    ...(openImage ? { files: [openImage] } : {}),
-    components: controls
-  }).catch((error) => logSilentError("create.sendIntroMessage", error));
-
-  // Trigger outro after intro is confirmed to preserve order, without blocking the rest of creation flow.
-  const outroSendPromise = outroText
-    ? channel.send({ content: outroText }).catch((error) => logSilentError("create.sendOutroMessage", error))
-    : Promise.resolve();
-
   // Update counter if not in user mode (this will be handled by setGuildData which queues writes)
   if (config.ticketNameMode !== "user") {
     config.counter = (config.counter || 1) + 1;
@@ -3057,18 +3031,48 @@ async function createTicketChannel({
     recordReceivedTicket(guild.id, claimedByOnCreate, channel.id);
   }
 
-  const syncLogPromise = syncTicketLogMessage({
-    guild,
-    config,
-    ticket: tickets[channel.id],
-    channelId: channel.id,
-    actionText: `تم فتح التكت عن طريق : <@${memberId}>`,
-    actor: member?.user || null
-  });
-
-  await Promise.allSettled([outroSendPromise, syncLogPromise]);
-
+  // Creating the channel is the success boundary for claim. Persist the ticket
+  // before any optional messages or logging so a slow Discord API call cannot
+  // leave a created room without a matching ticket record.
   setGuildData(guild.id, config, tickets, pendingRequests, panelId);
+
+  // Everything below is presentation/audit work. It must never delay the
+  // claim response after the channel and ticket record are already available.
+  void (async () => {
+    const controls = await withTimeout(
+      buildTicketControls(guild.id, panelId, channel.id, config, { includeClaimButton }),
+      5000
+    );
+    const shouldMentionAdminsOnOpen = Boolean(includeClaimButton && config.autoCreateOnRequest && !config.claimFromDedicatedChannel && !claimedByOnCreate);
+    const openMentionsText = shouldMentionAdminsOnOpen
+      ? buildMentionChunks(getAdminRoles(config, reasonKey)).join(' ')
+      : '';
+    const introText = renderTicketText(reasonSettings.beforeText, memberId);
+    const openImage = resolveImageForSend(reasonSettings.openImage);
+    const outroText = renderTicketText(reasonSettings.afterText, memberId);
+    const introContent = introText && openMentionsText
+      ? `${introText} | ${openMentionsText}`
+      : (introText || openMentionsText || '');
+
+    await withTimeout(channel.send({
+      ...(introContent ? { content: introContent } : {}),
+      ...(openImage ? { files: [openImage] } : {}),
+      components: controls || []
+    }), 8000).catch((error) => logSilentError('create.sendIntroMessage', error));
+
+    const outroSendPromise = outroText
+      ? withTimeout(channel.send({ content: outroText }), 8000).catch((error) => logSilentError('create.sendOutroMessage', error))
+      : Promise.resolve();
+    const syncLogPromise = syncTicketLogMessage({
+      guild,
+      config,
+      ticket: tickets[channel.id],
+      channelId: channel.id,
+      actionText: `تم فتح التكت عن طريق : <@${memberId}>`,
+      actor: member?.user || null
+    });
+    await Promise.allSettled([outroSendPromise, syncLogPromise]);
+  })().catch((error) => logSilentError('create.background-finalize', error));
   return channel;
 }
 
@@ -3499,58 +3503,52 @@ async function handleClaimFromRequest(interaction, reqId) {
 
   delete pendingRequests[reqId];
   setGuildData(guildId, config, tickets, pendingRequests, panelId);
-  const ticketUser = await interaction.client.users.fetch(createdTicket.memberId).catch(() => null);
-  if (ticketUser) {
-    await ticketUser.send(buildTicketMessagePayload(
-      'تم استلام التكت',
-      `**تم استلام تكتك من الإدارة بنجاح.**\n**روم التكت :** <#${channel.id}>`
-    )).catch((error) => logSilentError('ticket.claim.notify-member-dm', error));
-  }
   await interaction.editReply(buildTicketMessagePayload('Claimed', `**تم الاستلام والانشاء :** <#${channel.id}>`));
 
-  const claimImage = resolveImageForSend(getReasonVisualSettings(config, createdTicket.reasonKey).claimImage);
-  await sendClaimAnnounce({ channel, config, ticket: createdTicket, claimerId: interaction.user.id, claimImage });
-
-  const postClaimTasks = [];
-  // الصلاحيات تُضبط أثناء إنشاء التكت عند تفعيل hideOnClaim لتفادي أي تأخير بعد الإنشاء.
-  postClaimTasks.push(
-    syncTicketLogMessage({
+  // Notifications, audit logging, and cleanup are deliberately detached from
+  // the claim transaction. The room and state are already committed above.
+  void (async () => {
+    const ticketUser = await interaction.client.users.fetch(createdTicket.memberId).catch(() => null);
+    if (ticketUser) {
+      await ticketUser.send(buildTicketMessagePayload(
+        'تم استلام التكت',
+        `**تم استلام تكتك من الإدارة بنجاح.**\n**روم التكت :** <#${channel.id}>`
+      )).catch((error) => logSilentError('ticket.claim.notify-member-dm', error));
+    }
+    const claimImage = resolveImageForSend(getReasonVisualSettings(config, createdTicket.reasonKey).claimImage);
+    await sendClaimAnnounce({ channel, config, ticket: createdTicket, claimerId: interaction.user.id, claimImage }).catch((error) => logSilentError('ticket.claim.announce', error));
+    const postClaimTasks = [syncTicketLogMessage({
       guild: interaction.guild,
       config,
       ticket: createdTicket,
       channelId: channel.id,
       actionText: `تم الاستلام عن طريق : <@${interaction.user.id}>`,
       actor: interaction.user
-    })
-  );
-
-  if (interaction.message?.editable) {
-    postClaimTasks.push((async () => {
-      const updatedRows = interaction.message.components.map((row) => {
-        const components = row.components.map((component) => {
-          if (component.customId?.startsWith('ticket_claimreq_')) {
-            return ButtonBuilder.from(component).setDisabled(true).setEmoji('<:emoji_3:1484364952780144710>').setLabel('Claimed');
-          }
-          return component;
+    })];
+    if (interaction.message?.editable) {
+      postClaimTasks.push((async () => {
+        const updatedRows = interaction.message.components.map((row) => {
+          const components = row.components.map((component) => component.customId?.startsWith('ticket_claimreq_')
+            ? ButtonBuilder.from(component).setDisabled(true).setEmoji('<:emoji_3:1484364952780144710>').setLabel('Claimed')
+            : component);
+          return new ActionRowBuilder().addComponents(components);
         });
-        return new ActionRowBuilder().addComponents(components);
-      });
-      if (config.deleteClaimMessageOnClaim) {
-        await Promise.allSettled([
-          deleteTrackedMessages(interaction.guild, req?.claimMessageRefs, interaction.message.id),
-          deleteClaimMessageIfEnabled(interaction, config)
-        ]);
-      } else {
-        await interaction.message.edit({
-          content: buildClaimRequestContent(createdTicket, config, interaction.user.id),
-          embeds: [],
-          components: updatedRows
-        });
-      }
-    })());
-  }
-
-  await Promise.allSettled(postClaimTasks);
+        if (config.deleteClaimMessageOnClaim) {
+          await Promise.allSettled([
+            deleteTrackedMessages(interaction.guild, req?.claimMessageRefs, interaction.message.id),
+            deleteClaimMessageIfEnabled(interaction, config)
+          ]);
+        } else {
+          await interaction.message.edit({
+            content: buildClaimRequestContent(createdTicket, config, interaction.user.id),
+            embeds: [],
+            components: updatedRows
+          });
+        }
+      })());
+    }
+    await Promise.allSettled(postClaimTasks);
+  })().catch((error) => logSilentError('ticket.claim.background-finalize', error));
 
   } finally {
     ticketClaimLocks.delete(lockKey);
