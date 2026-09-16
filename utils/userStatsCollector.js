@@ -2,7 +2,22 @@ const fs = require('fs');
 const path = require('path');
 const moment = require('moment-timezone');
 const { EmbedBuilder } = require('discord.js');
-const { normalizeDiscordId, userMention } = require('./mentions');
+
+function normalizeDiscordId(value) {
+    if (value === null || value === undefined) return null;
+    const raw = typeof value === 'object'
+        ? (value.id ?? value.userId ?? value.user_id ?? value.memberId)
+        : value;
+    const text = String(raw ?? '').trim();
+    const mention = text.match(/^<@!?(\d{17,20})>$/);
+    const id = mention ? mention[1] : text;
+    return /^\d{17,20}$/.test(id) ? id : null;
+}
+
+function userMention(value) {
+    const id = normalizeDiscordId(value);
+    return id ? `<@${id}>` : null;
+}
 
 function getUserStatsMention(userStats, member = null) {
     const userId = normalizeDiscordId(member?.id || userStats?.userId);
