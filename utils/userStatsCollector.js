@@ -642,8 +642,12 @@ async function createUserStatsEmbed(userStats, colorManager, simpleView = false,
     const evaluationSettings = loadEvaluationSettings();
 
     const embed = colorManager.createEmbed()
-        .setTitle(simpleView ? ` تقديم إداري` : ` ${userStats.mention}`)
+        .setTitle(simpleView ? ` تقديم إداري` : ` ${userStats.displayName || userStats.username || 'User Stats'}`)
         .setThumbnail(userStats.avatar);
+
+    if (!simpleView) {
+        embed.setDescription(`**Member :** ${userStats.mention}`);
+    }
 
     if (simpleView && requesterMention) {
         // عرض مبسط ومختصر للآيفون
