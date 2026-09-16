@@ -2328,25 +2328,57 @@ async function isTicketChannelDefinitelyMissing(guild, channelId) {
   return result?.type === 'error' && [10003, 10004].includes(Number(result.code));
 }
 
+async function isTicketChannelConfirmedPresent(guild, channelId) {
+  if (!guild?.channels?.fetch || !channelId) return false;
+  if (guild.channels.cache?.has(channelId)) return true;
+  let timer;
+  const result = await Promise.race([
+    guild.channels.fetch(channelId)
+      .then((channel) => ({ type: 'found', channel }))
+      .catch((error) => ({ type: 'error', code: error?.code })),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve({ type: 'timeout' }), 1200);
+    })
+  ]);
+  clearTimeout(timer);
+  return result?.type === 'found' && Boolean(result.channel);
+}
+
 async function countOpenMemberTicketsSafe(guild, tickets, userId) {
   let changed = false;
+  let count = 0;
   for (const [channelId, ticket] of Object.entries(tickets || {})) {
     if (!isTicketOpenForFlow(ticket) || ticket.memberId !== userId) continue;
     const cached = guild?.channels?.cache?.get(channelId);
-    if (cached) continue;
+    if (cached) {
+      count += 1;
+      continue;
+    }
     const definitelyMissing = await isTicketChannelDefinitelyMissing(guild, channelId);
     if (definitelyMissing) {
       ticket.status = 'closed';
       ticket.deletedChannel = true;
       ticket.claimedBy = null;
       changed = true;
+      continue;
     }
+    if (await isTicketChannelConfirmedPresent(guild, channelId)) count += 1;
   }
-  return { count: countOpenMemberTickets(tickets, userId), changed };
+  return { count, changed };
 }
 
 function countPendingMemberRequests(pendingRequests, userId) {
-  return Object.values(pendingRequests || {}).filter((req) => req?.userId === userId).length;
+  const now = Date.now();
+  return Object.values(pendingRequests || {}).filter((req) => {
+    if (req?.userId !== userId || !req?.createdAt) return false;
+    if (req.status === 'claiming') {
+      const claimedAt = Number(req.claimedAt || 0);
+      return claimedAt > 0 && now - claimedAt < CLAIMING_REQUEST_TIMEOUT_MS;
+    }
+    return req.status === 'pending'
+      && Array.isArray(req.claimMessageRefs)
+      && req.claimMessageRefs.length > 0;
+  }).length;
 }
 
 function countClaimedByAdmin(tickets, adminId) {
@@ -2355,19 +2387,25 @@ function countClaimedByAdmin(tickets, adminId) {
 
 async function countClaimedByAdminSafe(guild, tickets, adminId) {
   let changed = false;
+  let count = 0;
   for (const [channelId, ticket] of Object.entries(tickets || {})) {
     if (!isTicketOpenForFlow(ticket) || ticket.claimedBy !== adminId) continue;
     const cached = guild?.channels?.cache?.get(channelId);
-    if (cached) continue;
+    if (cached) {
+      count += 1;
+      continue;
+    }
     const definitelyMissing = await isTicketChannelDefinitelyMissing(guild, channelId);
     if (definitelyMissing) {
       ticket.status = 'closed';
       ticket.deletedChannel = true;
       ticket.claimedBy = null;
       changed = true;
+      continue;
     }
+    if (await isTicketChannelConfirmedPresent(guild, channelId)) count += 1;
   }
-  return { count: countClaimedByAdmin(tickets, adminId), changed };
+  return { count, changed };
 }
 
 function prunePendingRequests(pendingRequests, config = null) {
@@ -2378,6 +2416,15 @@ function prunePendingRequests(pendingRequests, config = null) {
       delete pendingRequests[reqId];
       changed = true;
       continue;
+    }
+
+    if (req.status === 'claiming' && Number(req.claimedAt || 0)
+      && Date.now() - Number(req.claimedAt) >= CLAIMING_REQUEST_TIMEOUT_MS) {
+      req.status = 'pending';
+      req.claimedAt = null;
+      req.claimedBy = null;
+      req.updatedAt = Date.now();
+      changed = true;
     }
 
     const hasClaimRefs = Array.isArray(req?.claimMessageRefs) && req.claimMessageRefs.length > 0;
@@ -2411,6 +2458,13 @@ function removeClaimMessageRefFromPendingRequests(pendingRequests, channelId, me
   for (const [reqId, req] of Object.entries(pendingRequests || {})) {
     if (!req || !Array.isArray(req.claimMessageRefs) || !req.claimMessageRefs.length) continue;
 
+    const removedPrimary = req.claimMessageRefs.some((ref) => {
+      const refChannelId = String(ref?.channelId || '');
+      const refMessageId = String(ref?.messageId || '');
+      return Boolean(ref?.isPrimary)
+        && refChannelId === safeChannelId
+        && refMessageId === safeMessageId;
+    });
     const nextRefs = req.claimMessageRefs.filter((ref) => {
       const refChannelId = String(ref?.channelId || '');
       const refMessageId = String(ref?.messageId || '');
@@ -2423,7 +2477,7 @@ function removeClaimMessageRefFromPendingRequests(pendingRequests, channelId, me
     req.claimMessageRefs = nextRefs;
     req.updatedAt = Date.now();
 
-    if (!nextRefs.length && !req.claimedAt) {
+    if ((removedPrimary || !nextRefs.length) && !req.claimedAt) {
       delete pendingRequests[reqId];
       releasedRequests += 1;
     }
@@ -3238,12 +3292,12 @@ async function handleOpenRequest(interaction, guildId, panelId, reasonKey) {
     if (claimImage) {
       const sent = await targetChannel.send({ content: requestSummary, files: [claimImage], components: [row] });
       if (sent?.id) {
-        pendingRequests[reqId].claimMessageRefs.push({ channelId: sent.channelId || targetChannel.id, messageId: sent.id });
+        pendingRequests[reqId].claimMessageRefs.push({ channelId: sent.channelId || targetChannel.id, messageId: sent.id, isPrimary: true });
       }
     } else {
       const sent = await targetChannel.send({ content: requestSummary, components: [row] });
       if (sent?.id) {
-        pendingRequests[reqId].claimMessageRefs.push({ channelId: sent.channelId || targetChannel.id, messageId: sent.id });
+        pendingRequests[reqId].claimMessageRefs.push({ channelId: sent.channelId || targetChannel.id, messageId: sent.id, isPrimary: true });
       }
     }
   } catch (error) {
