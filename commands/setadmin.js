@@ -541,41 +541,49 @@ async function handleSelectRoles(interaction, settings) {
                 .addOptions([
                     {
                         label: 'Application Channel',
+                        emoji: '<:emoji_52:1430734157885210654>',
                         description: 'تحديد الروم التي ستظهر بها طلبات التقديم الإداري',
                         value: 'set_channel'
                     },
                     {
                         label: 'Admin Welcome Channel',
+                        emoji: '<:emoji_53:1430740078321209365>',
                         description: 'تحديد روم ترحيب الإداري الجديد بعد قبوله',
                         value: 'set_welcome_channel'
                     },
                     {
                         label: 'Approvers',
+                        emoji: '<:emoji_17:1448570976097931406>',
                         description: 'تحديد من يستطيع الموافقة على طلبات التقديم',
                         value: 'set_approvers'
                     },
                     {
                         label: 'Acceptance Role',
+                        emoji: '<:emoji_14:1448570758849757285>',
                         description: 'تحديد الرول الذي يُعطى للمرشح عند قبوله',
                         value: 'set_acceptance_role'
                     },
                     {
                         label: 'Pending Limit',
+                        emoji: '<:emoji_22:1463536623730954376>',
                         description: 'تحديد عدد الطلبات المعلقة المسموح لكل إداري',
                         value: 'set_pending_limit'
                     },
                     {
                         label: 'Cooldown Duration',
+                        emoji: '<:emoji_50:1430788365069848596>',
                         description: 'تحديد مدة منع التقديم بعد الرفض (بالساعات)',
                         value: 'set_cooldown'
                     },
                     {
                         label: 'Evaluation Settings',
+                        emoji: '<:emoji_16:1448570798380945539>',
                         description: 'تعديل معايير التقييم (الرسائل، النشاط، الوقت في السيرفر، الوقت الصوتي)',
                         value: 'set_evaluation'
                     },
                     {
                         label: 'Current Settings',
+                        emoji: '<:emoji_19:1457493164826034186>',
                         description: 'عرض جميع الإعدادات الحالية للنظام',
                         value: 'show_settings'
                     }
@@ -1948,41 +1956,49 @@ async function handleSetChannelInteraction(interaction, settings) {
                 .addOptions([
                     {
                         label: 'Application Channel',
+                        emoji: '<:emoji_52:1430734157885210654>',
                         description: 'تحديد الروم التي ستظهر بها طلبات التقديم الإداري',
                         value: 'set_channel'
                     },
                     {
                         label: 'Admin Welcome Channel',
+                        emoji: '<:emoji_53:1430740078321209365>',
                         description: 'تحديد روم ترحيب الإداري الجديد بعد قبوله',
                         value: 'set_welcome_channel'
                     },
                     {
                         label: 'Approvers',
+                        emoji: '<:emoji_17:1448570976097931406>',
                         description: 'تحديد من يستطيع الموافقة على طلبات التقديم',
                         value: 'set_approvers'
                     },
                     {
                         label: 'Acceptance Role',
+                        emoji: '<:emoji_14:1448570758849757285>',
                         description: 'تحديد الرول الذي يُعطى للمرشح عند قبوله',
                         value: 'set_acceptance_role'
                     },
                     {
                         label: 'Pending Limit',
+                        emoji: '<:emoji_22:1463536623730954376>',
                         description: 'تحديد عدد الطلبات المعلقة المسموح لكل إداري',
                         value: 'set_pending_limit'
                     },
                     {
                         label: 'Cooldown Duration',
+                        emoji: '<:emoji_50:1430788365069848596>',
                         description: 'تحديد مدة منع التقديم بعد الرفض (بالساعات)',
                         value: 'set_cooldown'
                     },
                     {
                         label: 'Evaluation Settings',
+                        emoji: '<:emoji_16:1448570798380945539>',
                         description: 'تعديل معايير التقييم (الرسائل، النشاط، الوقت في السيرفر، الوقت الصوتي)',
                         value: 'set_evaluation'
                     },
                     {
                         label: 'Current Settings',
+                        emoji: '<:emoji_19:1457493164826034186>',
                         description: 'عرض جميع الإعدادات الحالية للنظام',
                         value: 'show_settings'
                     }
@@ -2127,41 +2143,49 @@ async function handleSetAcceptanceRoleInteraction(interaction, settings) {
                 .addOptions([
                     {
                         label: 'Application Channel',
+                        emoji: '<:emoji_52:1430734157885210654>',
                         description: 'تحديد الروم التي ستظهر بها طلبات التقديم الإداري',
                         value: 'set_channel'
                     },
                     {
                         label: 'Admin Welcome Channel',
+                        emoji: '<:emoji_53:1430740078321209365>',
                         description: 'تحديد روم ترحيب الإداري الجديد بعد قبوله',
                         value: 'set_welcome_channel'
                     },
                     {
                         label: 'Approvers',
+                        emoji: '<:emoji_17:1448570976097931406>',
                         description: 'تحديد من يستطيع الموافقة على طلبات التقديم',
                         value: 'set_approvers'
                     },
                     {
                         label: 'Acceptance Role',
+                        emoji: '<:emoji_14:1448570758849757285>',
                         description: 'تحديد الرول الذي يُعطى للمرشح عند قبوله',
                         value: 'set_acceptance_role'
                     },
                     {
                         label: 'Pending Limit',
+                        emoji: '<:emoji_22:1463536623730954376>',
                         description: 'تحديد عدد الطلبات المعلقة المسموح لكل إداري',
                         value: 'set_pending_limit'
                     },
                     {
                         label: 'Cooldown Duration',
+                        emoji: '<:emoji_50:1430788365069848596>',
                         description: 'تحديد مدة منع التقديم بعد الرفض (بالساعات)',
                         value: 'set_cooldown'
                     },
                     {
                         label: 'Evaluation Settings',
+                        emoji: '<:emoji_16:1448570798380945539>',
                         description: 'تعديل معايير التقييم (الرسائل، النشاط، الوقت في السيرفر، الوقت الصوتي)',
                         value: 'set_evaluation'
                     },
                     {
                         label: 'Current Settings',
+                        emoji: '<:emoji_19:1457493164826034186>',
                         description: 'عرض جميع الإعدادات الحالية للنظام',
                         value: 'show_settings'
                     }
