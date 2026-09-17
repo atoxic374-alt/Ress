@@ -8,7 +8,8 @@ const interactionRouter = require('../utils/interactionRouter.js');
 const colorManager = require('../utils/colorManager.js');
 const { allowedMentions, userMention, normalizeDiscordId } = require('../utils/mentions.js');
 
-const { activeProblems, getProblemHistory } = require('./problem.js');
+const problemCommand = require('./problem.js');
+const { activeProblems } = problemCommand;
 
 const fs = require('fs');
 const path = require('path');
@@ -90,6 +91,27 @@ function addEntry(entries, entry) {
 
 function mentionOrFallback(id, fallback = 'غير معروف') {
   return userMention(id) || fallback;
+}
+
+function getProblemHistory(guildId, targetId = null) {
+  if (typeof problemCommand.getProblemHistory === 'function') {
+    return problemCommand.getProblemHistory(guildId, targetId);
+  }
+
+  // Compatibility fallback for older problem.js files that do not export history.
+  try {
+    const historyPath = path.join(__dirname, '..', 'data', 'problemHistory.json');
+    if (!fs.existsSync(historyPath)) return [];
+    const history = JSON.parse(fs.readFileSync(historyPath, 'utf8'));
+    if (!Array.isArray(history)) return [];
+    return history.filter((record) =>
+      (!guildId || record.guildId === guildId) &&
+      (!targetId || record.firstId === targetId || record.secondId === targetId)
+    );
+  } catch (error) {
+    console.error('Failed to load problem history in myissues.js:', error);
+    return [];
+  }
 }
 
 async function execute(message, args, context) {
