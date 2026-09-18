@@ -27,6 +27,10 @@ const REMINDER_PRAYERS = ['dhuhr', 'asr', 'maghrib', 'isha', 'fajr'];
 // تخزين آخر تذكير تم إرساله لكل صلاة ولمنع التكرار
 let lastReminderSent = {};
 
+// السماح بهامش زمني لأن setInterval قد يتأخر بسبب ضغط السيرفر أو إعادة الاتصال.
+// بدون هذا الهامش كان التذكير يفوت بالكامل إذا لم يعمل الفحص داخل نفس الدقيقة.
+const REMINDER_WINDOW_MINUTES = 5;
+
 // آيات قرآنية وأدعية مختارة وموسعة جداً
 const QURAN_VERSES = [
     { text: 'وَقُل رَّبِّ زِدۡنِي عِلۡمٗا', reference: 'سورة طه - آية 114' },
@@ -204,7 +208,12 @@ async function sendPrayerReminder(client, channelId, prayerName) {
             .setFooter({ text: ' By Ahmed. - حافظوا على صلاتكم' })
             .setTimestamp();
 
-        await channel.send({ content: '@here', embeds: [embed] }).catch(() => {});
+        try {
+            await channel.send({ content: '@here', embeds: [embed] });
+        } catch (error) {
+            console.error(`تعذر إرسال تذكير صلاة ${PRAYER_NAMES[prayerName]} في القناة ${channelId}:`, error.message);
+            return;
+        }
         console.log(`✅ تم إرسال تذكير صلاة ${PRAYER_NAMES[prayerName]} في القناة ${channelId}`);
 
     } catch (error) {
@@ -225,10 +234,11 @@ function checkPrayerTimes(client) {
         // إنشاء مفتاح فريد لكل صلاة بناءً على التاريخ والوقت
         const prayerKey = `${prayerName}_${prayerTime.format('YYYY-MM-DD_HH:mm')}`;
 
-        // التحقق من أن الوقت الحالي يطابق وقت الصلاة (في نفس الدقيقة)
-        const timeDiff = currentTime.diff(prayerTime, 'minutes');
+        // افحص نافذة زمنية قصيرة بدل الاعتماد على تطابق دقيقة واحدة فقط.
+        // هذا يمنع ضياع التذكير عند تأخر setInterval أو إعادة تشغيل البوت.
+        const timeDiffSeconds = currentTime.diff(prayerTime, 'seconds');
 
-        if (timeDiff >= 0 && timeDiff < 1 && !lastReminderSent[prayerKey]) {
+        if (timeDiffSeconds >= 0 && timeDiffSeconds < REMINDER_WINDOW_MINUTES * 60 && !lastReminderSent[prayerKey]) {
             console.log(`⏰ حان وقت صلاة ${PRAYER_NAMES[prayerName]} - ${formatTimeArabic(prayerTime)}`);
 
             lastReminderSent[prayerKey] = true;
@@ -312,14 +322,20 @@ function checkAndSendVerses(client) {
 function startPrayerReminderSystem(client) {
     console.log('🕌 بدء نظام تذكير الصلاة...');
 
-    // فحص كل دقيقة
+    // افحص فوراً عند التشغيل، ثم كل 20 ثانية حتى لا تضيع نافذة التذكير.
+    try {
+        checkPrayerTimes(client);
+    } catch (error) {
+        console.error('خطأ في الفحص الأولي لمواقيت الصلاة:', error);
+    }
+
     setInterval(() => {
         try {
             checkPrayerTimes(client);
         } catch (error) {
             console.error('خطأ في فحص مواقيت الصلاة:', error);
         }
-    }, 60000);
+    }, 20000);
 
     // إرسال آية أو دعاء فوراً عند بدء التشغيل
     setTimeout(() => {
