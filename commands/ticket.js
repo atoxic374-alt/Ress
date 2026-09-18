@@ -24,6 +24,7 @@ const { getDatabase, dbManager } = require('../utils/database');
 const { getDataDir, ensureDirSync } = require('../utils/storagePaths');
 const { getResponsibilitiesSnapshot } = require('../utils/responsibilitiesStore');
 const { ensureCairoFontsRegistered } = require('../utils/cairoFont');
+const { getOnlineResponsibleMentions } = require('../utils/ticketOnline');
 
 const name = 'ticket';
 const aliases = ['تكت', 'tclose', 'اغلاق', 'اقفال', 'myticket', 'نقاطي', 'tadd', 'اضافه', 'اضافة', 'إضافة', 'tremove', 'ازاله', 'ازالة', 'إزالة', 'tchange', 'تغيير', 'تحويل', 'ttop', 'نقاط', 'tname', 'اسم', 'تسميه', 'تسمية', 'remind', 'تنبيه', 'استدعاء', 'points', 'tm', 'treset', 'tmreset', 'tblock'];
@@ -7021,13 +7022,11 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     ...existingResponsibleUsers.map((id) => `<@${id}>`)
   ];
 
-  const onlineResponsibleMentions = existingResponsibleUsers
-    .filter((uid) => {
-      const member = interaction.guild.members.cache.get(uid);
-      const presence = member?.presence?.status;
-      return presence && presence !== 'offline';
-    })
-    .map((uid) => `<@${uid}>`);
+  const onlineResponsibleMentions = getOnlineResponsibleMentions(
+    interaction.guild,
+    targetRoles,
+    existingResponsibleUsers
+  );
 
   const previousClaimerHideTasks = previousClaimer
     ? [() => editOverwriteFast(interaction.channel, previousClaimer, { ViewChannel: false, SendMessages: false })]
