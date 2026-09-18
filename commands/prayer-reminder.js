@@ -7,6 +7,7 @@ const colorManager = require('../utils/colorManager.js');
 const { isUserBlocked } = require('./block.js');
 
 const name = 'pr';
+const aliases = ['prayer', 'صلاة'];
 
 // مسار ملف إعدادات التذكير
 const PRAYER_CONFIG_PATH = path.join(__dirname, '..', 'data', 'prayerConfig.json');
@@ -394,6 +395,11 @@ function showTodayPrayerTimes() {
 }
 
 async function execute(message, args, { client, BOT_OWNERS }) {
+    if (!message.guild) {
+        await message.reply('❌ أمر الصلاة يعمل داخل السيرفر فقط.').catch(() => {});
+        return;
+    }
+
     if (isUserBlocked(message.author.id)) {
         const blockedEmbed = colorManager.createEmbed()
             .setDescription('**🚫 أنت محظور من استخدام أوامر البوت**\n**للاستفسار، تواصل مع إدارة السيرفر**')
@@ -405,7 +411,7 @@ async function execute(message, args, { client, BOT_OWNERS }) {
 
     const isOwner = BOT_OWNERS.includes(message.author.id) || (message.guild && message.guild.ownerId === message.author.id);
     if (!isOwner) {
-        await message.react('❌').catch(() => {});
+        await message.reply('❌ هذا الأمر متاح لمالك السيرفر أو مالك البوت فقط.').catch(() => {});
         return;
     }
 
@@ -448,6 +454,7 @@ async function execute(message, args, { client, BOT_OWNERS }) {
 
 module.exports = {
     name,
+    aliases,
     execute,
     startPrayerReminderSystem
 };
