@@ -55,6 +55,16 @@ function writeJson(filePath, data) {
         return false;
     }
 }
+
+function normalizeSettings(settings = {}) {
+    const normalized = settings && typeof settings === 'object' ? settings : {};
+    if (!normalized.allowedUsers || typeof normalized.allowedUsers !== 'object') {
+        normalized.allowedUsers = { type: null, targets: [] };
+    }
+    if (!Array.isArray(normalized.allowedUsers.targets)) normalized.allowedUsers.targets = [];
+    return normalized;
+}
+
 function normalizeDuration(input) {
 
     if (!input) return null;
@@ -189,14 +199,14 @@ class DownManager {
 
     // Settings Management
     getSettings() {
-        return readJson(downSettingsPath, {
+        return normalizeSettings(readJson(downSettingsPath, {
             menuChannel: null,
             logChannel: null,
             allowedUsers: {
                 type: null,
                 targets: []
             }
-        });
+        }));
     }
 
     updateSettings(newSettings) {
@@ -227,17 +237,32 @@ class DownManager {
             case 'roles': {
                 const roleCache = interaction?.member?.roles?.cache;
                 if (!roleCache) return false;
-                const userRoles = roleCache.map(role => role.id);
+                const userRoles = typeof roleCache.map === 'function'
+                    ? roleCache.map(role => String(role.id))
+                    : [...(roleCache.keys?.() || [])].map(id => String(id));
                 return allowedTargets.some(roleId => userRoles.includes(roleId));
             }
 
             case 'responsibility': {
                 const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
                 const responsibilities = readJson(responsibilitiesPath, {});
+                const roleCache = interaction?.member?.roles?.cache;
+                const memberRoleIds = roleCache
+                    ? (typeof roleCache.map === 'function'
+                        ? roleCache.map(role => String(role.id))
+                        : [...(roleCache.keys?.() || [])].map(id => String(id)))
+                    : [];
 
                 for (const respName of allowedTargets) {
                     const respData = responsibilities[respName];
-                    if (respData && respData.responsibles && respData.responsibles.includes(userId)) {
+                    if (!respData) continue;
+                    const responsibleUsers = Array.isArray(respData.responsibles)
+                        ? respData.responsibles.map(id => String(id))
+                        : [];
+                    const responsibleRoles = Array.isArray(respData.roles)
+                        ? respData.roles.map(id => String(id))
+                        : [];
+                    if (responsibleUsers.includes(String(userId)) || responsibleRoles.some(id => memberRoleIds.includes(id))) {
                         return true;
                     }
                 }
@@ -263,15 +288,24 @@ class DownManager {
         try {
             duration = normalizeDuration(duration);
             const isVerbal = duration === 'شفوي' || duration === 'verbal';
+            let endTime = null;
+
+            if (!isVerbal && duration !== 'permanent') {
+                const durationMs = ms(duration);
+                if (!durationMs) {
+                    return { success: false, error: 'صيغة المدة غير صحيحة' };
+                }
+                endTime = Date.now() + durationMs;
+            }
             
             // Validate admin role (skip for verbal downs)
             if (!isVerbal && !this.isAdminRole(roleId)) {
                 return { success: false, error: 'الرول المحدد ليس من الرولات الإدارية' };
             }
 
-            // التحقق من صلاحيات البوت فقط (بدون فحص أمان الرولات) - تخطي للشفوي
+            // التحقق من صلاحيات البوت وأمان الرول - تخطي للشفوي
             if (!isVerbal) {
-                const validation = await this.validateBotPermissionsOnly(guild, roleId);
+                const validation = await this.validateBotPermissions(guild, roleId);
                 if (!validation.valid) {
                     return { success: false, error: validation.error };
                 }
@@ -284,7 +318,7 @@ class DownManager {
             }
 
             // Get role
-            const role = await guild.roles.fetch(roleId);
+            const role = isVerbal ? null : await guild.roles.fetch(roleId);
             if (!role && duration !== 'شفوي' && duration !== 'verbal') {
                 return { success: false, error: 'الرول غير موجود' };
             }
@@ -292,6 +326,19 @@ class DownManager {
             // Check if member has the role
             if (duration !== 'شفوي' && duration !== 'verbal' && !targetMember.roles.cache.has(roleId)) {
                 return { success: false, error: 'العضو لا يملك هذا الرول' };
+            }
+
+            if (!isVerbal) {
+                const duplicate = Object.values(this.getActiveDowns()).some(down =>
+                    down?.guildId === guild.id &&
+                    down?.userId === targetUserId &&
+                    down?.roleId === roleId &&
+                    down?.status === 'active' &&
+                    (!down.endTime || down.endTime > Date.now())
+                );
+                if (duplicate) {
+                    return { success: false, error: 'يوجد داون نشط على هذا العضو بهذا الرول بالفعل' };
+                }
             }
 
             // Remove the role with error handling
@@ -302,19 +349,6 @@ class DownManager {
                     console.error('Error removing role:', roleError);
                     return { success: false, error: 'فشل في سحب الرول - تحقق من صلاحيات البوت' };
                 }
-            }
-
-            // Calculate end time
-            let endTime = null;
-            
-            if (isVerbal) {
-                // No end time for verbal, it's just a record
-            } else if (duration !== 'permanent') {
-                const durationMs = ms(duration);
-                if (!durationMs) {
-                    return { success: false, error: 'صيغة المدة غير صحيحة' };
-                }
-                endTime = Date.now() + durationMs;
             }
 
             // Create down record
@@ -332,10 +366,12 @@ class DownManager {
                 status: isVerbal ? 'verbal' : 'active'
             };
 
-            // Save to active downs
-            const activeDowns = readJson(activeDownsPath, {});
-            activeDowns[downId] = downRecord;
-            writeJson(activeDownsPath, activeDowns);
+            // Verbal notices are history records, not active role downs.
+            if (!isVerbal) {
+                const activeDowns = readJson(activeDownsPath, {});
+                activeDowns[downId] = downRecord;
+                writeJson(activeDownsPath, activeDowns);
+            }
 
             // Log the action
             this.logAction(isVerbal ? 'DOWN_VERBAL' : 'DOWN_APPLIED', {
@@ -380,9 +416,9 @@ class DownManager {
                 return { success: false, error: 'الداون غير موجود' };
             }
 
-            // Get member and role
-            const member = await guild.members.fetch(downRecord.userId);
-            const role = await guild.roles.fetch(downRecord.roleId);
+            // Get member and role; the record can outlive either resource.
+            const member = await guild.members.fetch(downRecord.userId).catch(() => null);
+            const role = await guild.roles.fetch(downRecord.roleId).catch(() => null);
 
             if (member && role) {
                 // إضافة الرول لقائمة التجاهل قبل إرجاعه (للإنهاء اليدوي)
@@ -407,7 +443,7 @@ class DownManager {
                     reason,
                     originalReason: downRecord.reason,
                     duration: downRecord.duration || 'نهائي',
-                    byUser: await client.users.fetch(downRecord.byUserId)
+                    byUser: await client.users.fetch(downRecord.byUserId).catch(() => null)
                 });
             }
 
@@ -436,11 +472,16 @@ class DownManager {
 
     async modifyDownDuration(guild, client, downId, newDuration, modifiedBy) {
         try {
+            newDuration = normalizeDuration(newDuration);
+            const modifiedById = String(modifiedBy?.id || modifiedBy?.user?.id || modifiedBy || '');
             const activeDowns = readJson(activeDownsPath, {});
             const downRecord = activeDowns[downId];
 
             if (!downRecord) {
                 return { success: false, error: 'الداون غير موجود' };
+            }
+            if (!downRecord.roleId || downRecord.status === 'verbal') {
+                return { success: false, error: 'لا يمكن تعديل مدة التنبيه الشفوي' };
             }
 
             const oldDuration = downRecord.duration || 'نهائي';
@@ -458,7 +499,7 @@ class DownManager {
             // Update the record
             downRecord.duration = newDuration;
             downRecord.endTime = newEndTime;
-            downRecord.modifiedBy = modifiedBy;
+            downRecord.modifiedBy = modifiedById;
             downRecord.modifiedAt = Date.now();
 
             activeDowns[downId] = downRecord;
@@ -470,22 +511,24 @@ class DownManager {
                 roleId: downRecord.roleId,
                 oldDuration,
                 newDuration,
-                modifiedBy,
+                modifiedBy: modifiedById,
                 timestamp: Date.now()
             });
 
             // Send log message
-            const member = await guild.members.fetch(downRecord.userId);
-            const role = await guild.roles.fetch(downRecord.roleId);
-            await this.sendLogMessage(guild, client, 'DOWN_MODIFIED', {
-                targetUser: member.user,
-                role: role,
-                oldDuration,
-                newDuration: newDuration || 'نهائي',
-                modifiedBy: await client.users.fetch(modifiedBy)
-            });
+            const member = await guild.members.fetch(downRecord.userId).catch(() => null);
+            const role = await guild.roles.fetch(downRecord.roleId).catch(() => null);
+            if (member && role) {
+                await this.sendLogMessage(guild, client, 'DOWN_MODIFIED', {
+                    targetUser: member.user,
+                    role,
+                    oldDuration,
+                    newDuration: newDuration || 'نهائي',
+                    modifiedBy: await client.users.fetch(modifiedById).catch(() => null)
+                });
+            }
 
-            return { success: true };
+            return { success: true, newDuration, endTime: newEndTime };
 
         } catch (error) {
             console.error('Error modifying down duration:', error);
@@ -1074,7 +1117,7 @@ class DownManager {
             const activeDowns = readJson(activeDownsPath, {});
             for (const [downId, down] of Object.entries(activeDowns)) {
                 // التأكد من وجود الحقول المطلوبة
-                if (!down.userId || !down.roleId || !down.guildId) {
+                if (!down.userId || !down.guildId || (down.status !== 'verbal' && !down.roleId)) {
                     delete activeDowns[downId];
                     fixed = true;
                     console.log(`🔧 حذف داون فاسد: ${downId}`);
@@ -1234,6 +1277,17 @@ class DownManager {
             const settings = this.getSettings();
             if (!settings.logChannel) return;
 
+            if (!data?.user || !data?.role || !data?.moderator) {
+                this.logAction('DOWN_SYSTEM', {
+                    guildId: guild?.id,
+                    type: data?.type || 'UNKNOWN',
+                    moderatorId: data?.moderator?.id || data?.moderator?.user?.id || null,
+                    reason: data?.reason || null,
+                    timestamp: Date.now()
+                });
+                return;
+            }
+
             const { logEvent } = require('./logs_system');
 
             logEvent(this.client || require('../bot').client, guild, {
@@ -1279,20 +1333,6 @@ class DownManager {
         return this.botRestorationTracking.has(restorationKey);
     }
 
-    // Alias for compatibility with commands/down.js
-    async logDownAction(guild, data) {
-        return await this.logAction('DOWN_SYSTEM', {
-            userId: data.user.id,
-            roleId: data.role.id,
-            guildId: guild.id,
-            moderatorId: data.moderator.id,
-            reason: data.reason,
-            duration: data.duration,
-            endTime: data.endTime,
-            type: data.type
-        });
-    }
-
     // نظام حماية عند الانسحاب - حفظ بيانات الداون
     async handleMemberLeave(member) {
         try {
@@ -1306,7 +1346,7 @@ class DownManager {
 
             // البحث عن الداونات النشطة للعضو
             for (const [downId, downData] of Object.entries(activeDowns)) {
-                if (downData.userId === member.id && downData.guildId === member.guild.id) {
+                if (downData.userId === member.id && downData.guildId === member.guild.id && downData.roleId && downData.status === 'active') {
                     userDowns.push({ downId, ...downData });
                 }
             }

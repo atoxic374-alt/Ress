@@ -42,9 +42,10 @@ function normalizeDownSettings(settings = {}) {
 // Check if initial setup is required
 function needsSetup() {
     const settingsPath = path.join(__dirname, '..', 'data', 'downSettings.json');
-    const settings = readJson(settingsPath, {});
-
-    return !settings.menuChannel || !settings.logChannel || !settings.allowedUsers?.type;
+    const settings = normalizeDownSettings(readJson(settingsPath, {}));
+    const permissionConfigured = settings.allowedUsers.type === 'owners'
+        || (['roles', 'responsibility'].includes(settings.allowedUsers.type) && settings.allowedUsers.targets.length > 0);
+    return !settings.menuChannel || !settings.logChannel || !permissionConfigured;
 }
 
 // Create setup status embed
@@ -319,6 +320,32 @@ async function handleInteraction(interaction, context) {
         // Check interaction validity
         if (interaction.replied || interaction.deferred) {
             console.log('Interaction already processed');
+            return;
+        }
+
+        const isSetupInteraction = customId.startsWith('down_setup_');
+        const isSettingsInteraction = new Set([
+            'down_settings_button',
+            'down_owner_settings',
+            'down_edit_setting',
+            'down_edit_permission_type',
+            'down_edit_select_roles',
+            'down_edit_select_responsibilities',
+            'down_edit_log_channel_select',
+            'down_edit_menu_channel_select',
+            'down_confirm_reset',
+            'down_cancel_reset'
+        ]).has(customId);
+        const hasPermission = isSetupInteraction || isSettingsInteraction
+            ? BOT_OWNERS.includes(interaction.user?.id)
+            : await downManager.hasPermission(interaction, BOT_OWNERS);
+        if (!hasPermission) {
+            await interaction.reply({
+                content: isSetupInteraction || isSettingsInteraction
+                    ? ' **هذه الإعدادات متاحة للمالكين فقط.**'
+                    : ' **ليس لديك صلاحية استخدام نظام الداون.**',
+                ephemeral: true
+            });
             return;
         }
 
@@ -762,12 +789,14 @@ async function handleQuickActions(interaction, context) {
                 ephemeral: true
             });
             break;
+        default:
+            await interaction.reply({ content: ' **الإجراء غير معروف.**', ephemeral: true });
     }
 }
 
 async function createSystemStats() {
     const activeDownsPath = path.join(__dirname, '..', 'data', 'activeDowns.json');
-    const downHistoryPath = path.join(__dirname, '..', 'data', 'downHistory.json');
+    const downHistoryPath = path.join(__dirname, '..', 'data', 'downLogs.json');
 
     const activeDowns = readJson(activeDownsPath, {});
     const history = readJson(downHistoryPath, []);
@@ -840,6 +869,8 @@ async function handleMainMenu(interaction, context) {
         case 'user_downs':
             await handleUserDowns(interaction, context, respond);
             break;
+        default:
+            await respond({ content: ' **الإجراء غير معروف.**' });
     }
 
     // Refresh main menu after action
@@ -1027,15 +1058,18 @@ async function handleActiveDowns(interaction, context, respond) {
         const member = await interaction.guild.members.fetch(downData.userId).catch(() => null);
         const memberMention = member ? `<@${downData.userId}>` : `ID: ${downData.userId}`;
 
-        const role = await interaction.guild.roles.fetch(downData.roleId).catch(() => null);
-        const roleMention = role ? `<@&${downData.roleId}>` : `Role ID: ${downData.roleId}`;
+        const role = downData.roleId
+            ? await interaction.guild.roles.fetch(downData.roleId).catch(() => null)
+            : null;
+        const roleMention = role ? `<@&${downData.roleId}>` : (downData.roleId ? `Role ID: ${downData.roleId}` : 'شفوي');
 
         const endTime = downData.endTime ? `<t:${Math.floor(downData.endTime / 1000)}:R>` : 'نهائي';
 
         downsList += `**${count}.** ${memberMention}\n`;
         downsList += `└ **الرول :** ${roleMention}\n`;
         downsList += `└ **ينتهي :** ${endTime}\n`;
-        downsList += `└ **السبب :** ${downData.reason.substring(0, 50)}${downData.reason.length > 50 ? '...' : ''}\n\n`;
+        const reason = String(downData.reason || 'غير محدد');
+        downsList += `└ **السبب :** ${reason.substring(0, 50)}${reason.length > 50 ? '...' : ''}\n\n`;
     }
 
     if (downsList.length > 4000) {
@@ -1069,8 +1103,19 @@ async function handleDownInteractions(interaction, context) {
             (interaction.isStringSelectMenu() && (customId === 'down_role_selection' || customId === 'down_select_down_to_modify' || customId === 'down_select_down_to_end')) ||
             (interaction.isModalSubmit()) || 
             (interaction.isUserSelectMenu() && (customId === 'down_show_user_records' || customId === 'down_selected_user' || customId === 'down_select_user_for_end_down'));
+        const isImmediateResponseFlow = [
+            'down_owner_settings',
+            'down_edit_setting',
+            'down_edit_permission_type',
+            'down_edit_select_roles',
+            'down_edit_select_responsibilities',
+            'down_edit_log_channel_select',
+            'down_edit_menu_channel_select',
+            'down_confirm_reset',
+            'down_cancel_reset'
+        ].includes(customId);
 
-        if (!interaction.replied && !interaction.deferred && !isModalTrigger) {
+        if (!interaction.replied && !interaction.deferred && !isModalTrigger && !isImmediateResponseFlow) {
             await interaction.deferReply({ ephemeral: true }).catch(() => {});
         }
     } catch (e) {}
@@ -1798,7 +1843,7 @@ async function handleDownInteractions(interaction, context) {
                 // Clear all data
                 saveJson(path.join(__dirname, '..', 'data', 'downSettings.json'), {});
                 saveJson(path.join(__dirname, '..', 'data', 'activeDowns.json'), {});
-                saveJson(path.join(__dirname, '..', 'data', 'downHistory.json'), []);
+                saveJson(path.join(__dirname, '..', 'data', 'downLogs.json'), []);
                 // Optionally, clear responsibilities if needed, but that might be a separate command
                 // saveJson(path.join(__dirname, '..', 'data', 'responsibilities.json'), {});
 
@@ -2089,7 +2134,7 @@ async function handleDownInteractions(interaction, context) {
     if (interaction.isStringSelectMenu() && customId === 'down_edit_permission_type') {
         const selectedType = interaction.values[0];
         const settingsPath = path.join(__dirname, '..', 'data', 'downSettings.json');
-        const settings = readJson(settingsPath, {});
+        const settings = normalizeDownSettings(readJson(settingsPath, {}));
 
         settings.allowedUsers.type = selectedType;
         settings.allowedUsers.targets = []; // Clear existing targets
@@ -2294,4 +2339,4 @@ async function handleResetSystem(interaction, context) {
 
 
 
-module.exports = { name, execute, handleInteraction };
+module.exports = { name, execute, handleInteraction, createPermanentMenu };
