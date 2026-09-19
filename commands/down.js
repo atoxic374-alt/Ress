@@ -39,6 +39,12 @@ function normalizeDownSettings(settings = {}) {
     return normalized;
 }
 
+function getBotOwners(context = {}) {
+    if (Array.isArray(context.BOT_OWNERS)) return context.BOT_OWNERS.map(String);
+    if (Array.isArray(global.BOT_OWNERS)) return global.BOT_OWNERS.map(String);
+    return [];
+}
+
 // Check if initial setup is required
 function needsSetup() {
     const settingsPath = path.join(__dirname, '..', 'data', 'downSettings.json');
@@ -201,7 +207,8 @@ emoji: '<:emoji_77:1442588896008339579>',
 }
 
 async function execute(message, args, context) {
-    const { client, BOT_OWNERS } = context;
+    const { client } = context;
+    const BOT_OWNERS = getBotOwners(context);
 
     // Check if user is owner
     if (!BOT_OWNERS.includes(message.author.id)) {
@@ -314,7 +321,8 @@ async function execute(message, args, context) {
 
 async function handleInteraction(interaction, context) {
     try {
-        const { client, BOT_OWNERS } = context;
+        const { client } = context;
+        const BOT_OWNERS = getBotOwners(context);
         const customId = interaction.customId;
 
         // Check interaction validity
@@ -452,7 +460,8 @@ async function handleInteraction(interaction, context) {
 }
 
 async function handleSetupStep(interaction, context) {
-    const { client, BOT_OWNERS } = context;
+    const { client } = context;
+    const BOT_OWNERS = getBotOwners(context);
     const settingsPath = path.join(__dirname, '..', 'data', 'downSettings.json');
     const settings = readJson(settingsPath, {
         menuChannel: null,
@@ -885,7 +894,7 @@ async function handleMainMenu(interaction, context) {
 }
 
 async function handleSettingsButton(interaction, context) {
-    const { BOT_OWNERS } = context;
+    const BOT_OWNERS = getBotOwners(context);
 
     // Check if user is owner for settings
     if (!BOT_OWNERS.includes(interaction.user.id)) {
@@ -1672,7 +1681,7 @@ async function handleDownInteractions(interaction, context) {
         settings.allowedUsers.targets = []; // Clear existing targets
 
         if (permissionType === 'owners') {
-            settings.allowedUsers.targets = context.BOT_OWNERS;
+            settings.allowedUsers.targets = getBotOwners(context);
             saveJson(settingsPath, settings);
             await interaction.reply({
                 content: ' **تم تغيير صلاحيات المعتمدين إلى "المالكين فقط".**',
@@ -2140,7 +2149,7 @@ async function handleDownInteractions(interaction, context) {
         settings.allowedUsers.targets = []; // Clear existing targets
 
         if (selectedType === 'owners') {
-            settings.allowedUsers.targets = context.BOT_OWNERS;
+            settings.allowedUsers.targets = getBotOwners(context);
             saveJson(settingsPath, settings);
             await interaction.update({
                 content: ' **تم تغيير صلاحيات المعتمدين إلى "المالكين فقط".**',
