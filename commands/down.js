@@ -30,6 +30,15 @@ function saveJson(filePath, data) {
     }
 }
 
+function normalizeDownSettings(settings = {}) {
+    const normalized = settings && typeof settings === 'object' ? settings : {};
+    if (!normalized.allowedUsers || typeof normalized.allowedUsers !== 'object') {
+        normalized.allowedUsers = { type: null, targets: [] };
+    }
+    if (!Array.isArray(normalized.allowedUsers.targets)) normalized.allowedUsers.targets = [];
+    return normalized;
+}
+
 // Check if initial setup is required
 function needsSetup() {
     const settingsPath = path.join(__dirname, '..', 'data', 'downSettings.json');
@@ -317,6 +326,22 @@ async function handleInteraction(interaction, context) {
                 const isModalTrigger = 
                     (interaction.isStringSelectMenu() && (customId === 'down_role_selection' || customId === 'down_select_down_to_modify' || customId === 'down_select_down_to_end')) ||
                     (interaction.isModalSubmit());
+
+                // These handlers acknowledge with update() or reply() themselves.
+                // Deferring here first makes Discord reject their acknowledgement.
+                const isImmediateResponseFlow = [
+                    'down_quick_actions',
+                    'down_settings_button',
+                    'down_owner_settings',
+                    'down_edit_setting',
+                    'down_edit_permission_type',
+                    'down_edit_select_roles',
+                    'down_edit_select_responsibilities',
+                    'down_edit_log_channel_select',
+                    'down_edit_menu_channel_select',
+                    'down_confirm_reset',
+                    'down_cancel_reset'
+                ].includes(customId);
         
                 // Interactions that should NOT be deferred (because they lead to a modal or are already a modal submission)
                 if (isModalTrigger) {
@@ -328,7 +353,7 @@ async function handleInteraction(interaction, context) {
                     const isDurationUserSelect = customId === 'down_select_user_for_duration_modify';
                     
             // We defer everything else, except the setup selects and main menu select (which use update/editReply later)
-            if (!isSetupSelect && !isMainMenu && !isDurationUserSelect) {
+            if (!isSetupSelect && !isMainMenu && !isDurationUserSelect && !isImmediateResponseFlow) {
                 await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(err => {
                     // Ignore "Unknown interaction" error (10062) if it was already replied/deferred elsewhere
                     if (err.code !== 10062) console.log('Defer error:', err.message);
@@ -1596,7 +1621,7 @@ async function handleDownInteractions(interaction, context) {
     if (interaction.isModalSubmit() && customId.startsWith('down_edit_permission_')) {
         const permissionType = customId.split('_')[3]; // Get 'owners', 'roles', or 'responsibility'
         const settingsPath = path.join(__dirname, '..', 'data', 'downSettings.json');
-        const settings = readJson(settingsPath, {});
+        const settings = normalizeDownSettings(readJson(settingsPath, {}));
 
         settings.allowedUsers.type = permissionType;
         settings.allowedUsers.targets = []; // Clear existing targets
@@ -1657,7 +1682,7 @@ async function handleDownInteractions(interaction, context) {
     // Handle role selection for editing permissions
     if (interaction.isRoleSelectMenu() && customId === 'down_edit_select_roles') {
         const settingsPath = path.join(__dirname, '..', 'data', 'downSettings.json');
-        const settings = readJson(settingsPath, {});
+        const settings = normalizeDownSettings(readJson(settingsPath, {}));
         settings.allowedUsers.targets = interaction.values;
         saveJson(settingsPath, settings);
 
@@ -1671,7 +1696,7 @@ async function handleDownInteractions(interaction, context) {
     // Handle responsibility selection for editing permissions
     if (interaction.isStringSelectMenu() && customId === 'down_edit_select_responsibilities') {
         const settingsPath = path.join(__dirname, '..', 'data', 'downSettings.json');
-        const settings = readJson(settingsPath, {});
+        const settings = normalizeDownSettings(readJson(settingsPath, {}));
         settings.allowedUsers.targets = interaction.values;
         saveJson(settingsPath, settings);
 
@@ -1685,7 +1710,7 @@ async function handleDownInteractions(interaction, context) {
     // Handle log channel selection for editing
     if (interaction.isChannelSelectMenu() && customId === 'down_edit_log_channel_select') {
         const settingsPath = path.join(__dirname, '..', 'data', 'downSettings.json');
-        const settings = readJson(settingsPath, {});
+        const settings = normalizeDownSettings(readJson(settingsPath, {}));
         settings.logChannel = interaction.values[0];
         saveJson(settingsPath, settings);
 
@@ -1699,7 +1724,7 @@ async function handleDownInteractions(interaction, context) {
     // Handle menu channel selection for editing
     if (interaction.isChannelSelectMenu() && customId === 'down_edit_menu_channel_select') {
         const settingsPath = path.join(__dirname, '..', 'data', 'downSettings.json');
-        const settings = readJson(settingsPath, {});
+        const settings = normalizeDownSettings(readJson(settingsPath, {}));
         settings.menuChannel = interaction.values[0];
         saveJson(settingsPath, settings);
 
@@ -2126,7 +2151,7 @@ async function handleDownInteractions(interaction, context) {
 // New functions for handling settings edits
 async function handleEditSettings(interaction, context) {
     const settingsPath = path.join(__dirname, '..', 'data', 'downSettings.json');
-    const settings = readJson(settingsPath, {});
+    const settings = normalizeDownSettings(readJson(settingsPath, {}));
 
     const editEmbed = colorManager.createEmbed()
         .setTitle('Edit Settings')
