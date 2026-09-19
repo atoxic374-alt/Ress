@@ -24,7 +24,6 @@ const { getDatabase, dbManager } = require('../utils/database');
 const { getDataDir, ensureDirSync } = require('../utils/storagePaths');
 const { getResponsibilitiesSnapshot } = require('../utils/responsibilitiesStore');
 const { ensureCairoFontsRegistered } = require('../utils/cairoFont');
-const { getOnlineResponsibleMentions } = require('../utils/ticketOnline');
 
 const name = 'ticket';
 const aliases = ['تكت', 'tclose', 'اغلاق', 'اقفال', 'myticket', 'نقاطي', 'tadd', 'اضافه', 'اضافة', 'إضافة', 'tremove', 'ازاله', 'ازالة', 'إزالة', 'tchange', 'تغيير', 'تحويل', 'ttop', 'نقاط', 'tname', 'اسم', 'تسميه', 'تسمية', 'remind', 'تنبيه', 'استدعاء', 'points', 'tm', 'treset', 'tmreset', 'tblock'];
@@ -2599,6 +2598,25 @@ function hasResponsibleTicketAccess(member, config, guild, ticket = null) {
   memberRoleIds = memberRoleIds.map((id) => String(id));
   if (memberUserId && transferredUserIds.includes(memberUserId)) return true;
   return memberRoleIds.some((id) => allowedRoleIds.includes(id));
+}
+
+function getOnlineResponsibleMentions(guild, roleIds = [], userIds = []) {
+  const candidateIds = new Set((userIds || []).map((id) => String(id || '').trim()).filter(Boolean));
+  const validRoleIds = new Set((roleIds || []).map((id) => String(id || '').trim()).filter(Boolean));
+  if (guild?.members?.cache) {
+    for (const member of guild.members.cache.values()) {
+      if (member?.roles?.cache && [...validRoleIds].some((roleId) => member.roles.cache.has(roleId))) {
+        candidateIds.add(String(member.id));
+      }
+    }
+  }
+  return [...candidateIds]
+    .filter((userId) => {
+      const member = guild?.members?.cache?.get(userId);
+      const presence = member?.presence || guild?.presences?.cache?.get(userId);
+      return Boolean(presence?.status && presence.status !== 'offline');
+    })
+    .map((userId) => `<@${userId}>`);
 }
 
 function canManageTicket(interaction, ticket, config) {
