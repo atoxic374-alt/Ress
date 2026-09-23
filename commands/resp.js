@@ -1,4 +1,4 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ComponentType, StringSelectMenuBuilder, ChannelSelectMenuBuilder, RoleSelectMenuBuilder, AttachmentBuilder, ChannelType } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ComponentType, StringSelectMenuBuilder, ChannelSelectMenuBuilder, RoleSelectMenuBuilder, UserSelectMenuBuilder, AttachmentBuilder, ChannelType } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
@@ -244,6 +244,44 @@ function getAllowedAdminRolesForGuild(guildId) {
         return Array.isArray(byGuild) ? byGuild : [];
     }
     return [];
+}
+
+function getRespManagers(guildId) {
+    const config = getGuildRespConfig(guildId);
+    const managers = config.guilds[guildId]?.respManagers;
+    return {
+        roleIds: Array.isArray(managers?.roleIds) ? [...new Set(managers.roleIds.map(String))] : [],
+        userIds: Array.isArray(managers?.userIds) ? [...new Set(managers.userIds.map(String))] : []
+    };
+}
+
+function setRespManagers(guildId, updates = {}) {
+    const config = getGuildRespConfig(guildId);
+    if (!config.guilds[guildId]) config.guilds[guildId] = {};
+    const current = getRespManagers(guildId);
+    config.guilds[guildId].respManagers = {
+        roleIds: Array.isArray(updates.roleIds) ? [...new Set(updates.roleIds.map(String))] : current.roleIds,
+        userIds: Array.isArray(updates.userIds) ? [...new Set(updates.userIds.map(String))] : current.userIds
+    };
+    writeJSONFile(DATA_FILES.respConfig, config);
+    return config.guilds[guildId].respManagers;
+}
+
+function isRespManager(interactionLike) {
+    const guild = interactionLike?.guild;
+    const userId = interactionLike?.user?.id || interactionLike?.author?.id;
+    if (!guild || !userId) return false;
+
+    const botConfig = readJSONFile(path.join(__dirname, '..', 'data', 'botConfig.json'), {});
+    const owners = Array.isArray(botConfig.owners) ? botConfig.owners.map(String) : [];
+    if (owners.includes(String(userId)) || guild.ownerId === String(userId)) return true;
+
+    const managers = getRespManagers(guild.id);
+    if (managers.userIds.includes(String(userId))) return true;
+    const memberRoleIds = interactionLike.member?.roles?.cache
+        ? [...interactionLike.member.roles.cache.keys()].map(String)
+        : [];
+    return managers.roleIds.some((roleId) => memberRoleIds.includes(roleId));
 }
 
 function appendRespAuditLog(guildId, actorId, action, details = {}) {
@@ -1386,9 +1424,7 @@ async function handleApplyRespModal(interaction, client) {
 // دالة للتعامل مع أزرار القبول والرفض
 async function handleApplyAction(interaction, client) {
     try {
-        const botConfig = readJSONFile(path.join(__dirname, '..', 'data', 'botConfig.json'), {});
-        const BOT_OWNERS = botConfig.owners || [];
-        const isAllowed = BOT_OWNERS.includes(interaction.user.id) || interaction.guild.ownerId === interaction.user.id;
+        const isAllowed = isRespManager(interaction);
 
         if (!isAllowed) {
             return await interaction.reply({
@@ -1496,9 +1532,7 @@ async function handleApplyAction(interaction, client) {
 // دالة للتعامل مع مودال سبب الرفض
 async function handleRejectReasonModal(interaction, client) {
     try {
-        const botConfig = readJSONFile(path.join(__dirname, '..', 'data', 'botConfig.json'), {});
-        const BOT_OWNERS = botConfig.owners || [];
-        const isAllowed = BOT_OWNERS.includes(interaction.user.id) || interaction.guild.ownerId === interaction.user.id;
+        const isAllowed = isRespManager(interaction);
 
         if (!isAllowed) {
             return await interaction.reply({
@@ -1600,6 +1634,7 @@ module.exports = {
             const guildCfg = guildRespConfig.guilds[guildId] || {};
             const currentResps = getCurrentResponsibilities();
             const currentRestrictions = getRespRoleRestrictions(guildId);
+            const currentManagers = getRespManagers(guildId);
             const currentFull = Array.isArray(guildCfg.fullResponsibilities) ? guildCfg.fullResponsibilities : [];
             const cooldownMsNow = getRespApplyCooldownMs(guildId);
             const cooldownText = cooldownMsNow ? formatMinutesArabic(Math.round(cooldownMsNow / 60000)) : 'مغلق';
@@ -1635,6 +1670,9 @@ module.exports = {
                     '**🔐 Access Roles** — رولات مسموح لها بالتقديم على مسؤولية',
                     `> **Restricted responsibilities : ${Object.keys(currentRestrictions).length}**`,
                     '',
+                    '**👥 Resp Managers** — من يستطيع تشغيل Resp وقبول/رفض الطلبات',
+                    `> **Roles : ${currentManagers.roleIds.length} | Users : ${currentManagers.userIds.length}**`,
+                    '',
                     '**⏱️ Cooldown** — تخصيص/إيقاف كولداون التقديم + كولداون الرفض',
                     `> **Current : ${cooldownText}**`,
                     '',
@@ -1654,7 +1692,8 @@ module.exports = {
         const panelRow2 = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`resp_panel_full_${message.id}`).setLabel('Full Slots').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(`resp_panel_access_${message.id}`).setLabel('Access Roles').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId(`resp_panel_cooldown_${message.id}`).setLabel('Cooldown').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(`resp_panel_cooldown_${message.id}`).setLabel('Cooldown').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`resp_panel_managers_${message.id}`).setLabel('Resp Managers').setStyle(ButtonStyle.Primary).setDisabled(!isOwner)
         );
 
         const panelRow3 = new ActionRowBuilder().addComponents(
@@ -1809,6 +1848,66 @@ module.exports = {
 
         panelCollector.on('collect', async (interaction) => {
             try {
+                if (interaction.customId.startsWith('resp_panel_managers_')) {
+                    if (!isOwner) {
+                        await interaction.reply({ content: '**❌ إعداد مسؤولي Resp للمالك فقط.**', ephemeral: true });
+                        return;
+                    }
+
+                    const managerMessage = await interaction.reply({
+                        content: '**حدد الرتب أو الأشخاص المسموح لهم بتشغيل Resp وقبول/رفض الطلبات.**\nيمكنك اختيار كل نوع بشكل مستقل، والتغييرات تحفظ فوراً.',
+                        components: [
+                            new ActionRowBuilder().addComponents(
+                                new RoleSelectMenuBuilder()
+                                    .setCustomId(`resp_manager_roles_${message.id}`)
+                                    .setPlaceholder('اختر رتب المسؤولين')
+                                    .setMinValues(0)
+                                    .setMaxValues(10)
+                            ),
+                            new ActionRowBuilder().addComponents(
+                                new UserSelectMenuBuilder()
+                                    .setCustomId(`resp_manager_users_${message.id}`)
+                                    .setPlaceholder('اختر أشخاص المسؤولين')
+                                    .setMinValues(0)
+                                    .setMaxValues(25)
+                            ),
+                            new ActionRowBuilder().addComponents(
+                                new ButtonBuilder().setCustomId(`resp_manager_clear_${message.id}`).setLabel('مسح الكل').setStyle(ButtonStyle.Danger),
+                                new ButtonBuilder().setCustomId(`resp_manager_done_${message.id}`).setLabel('تم').setStyle(ButtonStyle.Success)
+                            )
+                        ],
+                        ephemeral: true,
+                        fetchReply: true
+                    });
+
+                    const managerFilter = (i) => i.user.id === message.author.id && i.customId.endsWith(message.id) && (
+                        i.customId.startsWith('resp_manager_roles_') ||
+                        i.customId.startsWith('resp_manager_users_') ||
+                        i.customId.startsWith('resp_manager_clear_') ||
+                        i.customId.startsWith('resp_manager_done_')
+                    );
+                    while (true) {
+                        const managerPick = await managerMessage.awaitMessageComponent({ filter: managerFilter, time: 120000 }).catch(() => null);
+                        if (!managerPick) return;
+
+                        if (managerPick.customId.startsWith('resp_manager_roles_')) {
+                            const managers = setRespManagers(guildId, { roleIds: managerPick.values, userIds: getRespManagers(guildId).userIds });
+                            await managerPick.update({ content: `**✅ تم حفظ الرتب.**\nالرتب: ${managers.roleIds.length}\nالأشخاص: ${managers.userIds.length}`, components: managerMessage.components });
+                        } else if (managerPick.customId.startsWith('resp_manager_users_')) {
+                            const managers = setRespManagers(guildId, { roleIds: getRespManagers(guildId).roleIds, userIds: managerPick.values });
+                            await managerPick.update({ content: `**✅ تم حفظ الأشخاص.**\nالرتب: ${managers.roleIds.length}\nالأشخاص: ${managers.userIds.length}`, components: managerMessage.components });
+                        } else if (managerPick.customId.startsWith('resp_manager_clear_')) {
+                            setRespManagers(guildId, { roleIds: [], userIds: [] });
+                            await managerPick.update({ content: '**✅ تم مسح جميع مسؤولي Resp.**', components: [] });
+                            break;
+                        } else {
+                            await managerPick.update({ content: '**✅ تم إنهاء إعداد مسؤولي Resp.**', components: [] });
+                            break;
+                        }
+                    }
+                    return;
+                }
+
                 if (interaction.customId.startsWith('resp_panel_setup_')) {
                     const roomMsg = await interaction.reply({
                         content: '**اختر روم الاقتراحات ثم روم عرض المسؤوليات).**',
@@ -2518,7 +2617,8 @@ module.exports = {
     updateEmbedMessage,
     handleSuggestionButton,
     handleSuggestionModal,
-    handleResponsibilitySelect
+    handleResponsibilitySelect,
+    isRespManager
 };
 
 // دوال إدارة الإعدادات لكل سيرفر

@@ -8,10 +8,11 @@ const {
 } = require('discord.js');
 const { dbManager } = require('../utils/database.js');
 const colorManager = require('../utils/colorManager.js');
+const respCommand = require('./resp.js');
 
 module.exports = {
     name: 'مسؤوليه',
-    description: 'إدارة مسؤوليات عضو (للأونرز فقط)',
+    description: 'إدارة مسؤوليات عضو (للأونرز ومسؤولي Resp)',
     aliases: ['مسؤولية'],
     async execute(message, args) {
         try {
@@ -21,8 +22,9 @@ module.exports = {
             const allOwners = [...new Set([...BOT_OWNERS_ENV, ...(botConfig.owners || []), ...(global.BOT_OWNERS || [])])];
             
             const isOwner = allOwners.includes(message.author.id);
+            const isRespManager = typeof respCommand.isRespManager === 'function' && respCommand.isRespManager(message);
             
-            if (!isOwner) {
+            if (!isOwner && !isRespManager) {
                 return message.react('❌');
             }
 
