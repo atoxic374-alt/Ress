@@ -6,6 +6,7 @@ const dns = require('dns').promises;
 const net = require('net');
 const colorManager = require('../utils/colorManager.js');
 const { getResponsibilitiesSnapshot, normalizeResponsibilitiesMap } = require('../utils/responsibilitiesStore');
+const { splitDiscordText, limitDiscordContent } = require('../utils/discordMessageText');
 
 // نظام الكولداون
 const applyCooldowns = new Map();
@@ -631,30 +632,8 @@ function createResponsibilitiesText(responsibilities) {
     
     return text;
 }
-function splitText(text, maxLength = 2000) {
-
-    const parts = [];
-
-    let current = '';
-
-    for (const line of text.split('\n')) {
-
-        if ((current + line + '\n').length > maxLength) {
-
-            parts.push(current);
-
-            current = '';
-
-        }
-
-        current += line + '\n';
-
-    }
-
-    if (current.trim()) parts.push(current);
-
-    return parts;
-
+function splitText(text, maxLength = 1900) {
+    return splitDiscordText(text, maxLength);
 }
 
 // دالة لإنشاء الأزرار والمنيو
@@ -1710,7 +1689,7 @@ module.exports = {
             const entries = Object.entries(restrictions);
             if (!entries.length) return '**لا توجد تقييدات حالياً.**';
 
-            return entries
+            return limitDiscordContent(entries
                 .slice(0, 15)
                 .map(([respName, roleIds]) => {
                     const rolesText = Array.isArray(roleIds) && roleIds.length
@@ -1718,7 +1697,7 @@ module.exports = {
                         : '**غير محدد**';
                     return `• **${respName}** → ${rolesText}`;
                 })
-                .join('\n');
+                .join('\n'));
         };
 
         const requireNonEmptyResponsibilities = async (interactionLike) => {
@@ -1735,7 +1714,7 @@ module.exports = {
         const confirmEphemeralAction = async (interaction, summaryText) => {
             const token = createSessionToken('confirm');
             const payload = {
-                content: `${summaryText}\n\n**هل تريد التأكيد؟**`,
+                content: limitDiscordContent(`${summaryText}\n\n**هل تريد التأكيد؟**`),
                 components: [
                     new ActionRowBuilder().addComponents(
                         new ButtonBuilder().setCustomId(`resp_confirm_yes_${token}`).setLabel('تأكيد').setStyle(ButtonStyle.Secondary),
@@ -2192,12 +2171,12 @@ module.exports = {
                         }));
 
                         return {
-                            content: [
+                            content: limitDiscordContent([
                                 '**إدارة Full Slots**',
                                 `**صفحة :** ${page + 1}/${totalPages}`,
                                 `**المحدد حالياً :** ${selected.size}`,
                                 `**المحفوظ مسبقاً :** ${previous.length ? previous.join(' ، ') : 'لا يوجد'}`
-                            ].join('\n'),
+                            ].join('\n')),
                             components: [
                                 new ActionRowBuilder().addComponents(
                                     new StringSelectMenuBuilder()
@@ -2280,14 +2259,14 @@ module.exports = {
                         }));
 
                         return {
-                            content: [
+                            content: limitDiscordContent([
                                 '**التقييدات الحالية :**',
                                 buildRestrictionsPreview(),
                                 '',
                                 '**اختر المسؤوليات المطلوب تطبيق نفس التقييد عليها :**',
                                 `**Page :** ${page + 1}/${totalPages}`,
                                 `**المحدد حالياً :** ${selectedResponsibilities.size}`
-                            ].join('\n'),
+                            ].join('\n')),
                             components: [
                                 new ActionRowBuilder().addComponents(
                                     new StringSelectMenuBuilder()
@@ -2357,12 +2336,12 @@ module.exports = {
 
                     const selectedList = [...selectedResponsibilities];
                     const accessMsg = await interaction.followUp({
-                        content: [
+                        content: limitDiscordContent([
                             `**إدارة Access Roles : ${selectedList.join(' ، ')}**`,
                             `**عدد المسؤوليات المحددة :** ${selectedList.length}`,
                             '',
                             '**اختر الرولات الجديدة أو اضغط إزالة التقييد.**'
-                        ].join('\n'),
+                        ].join('\n')),
                         components: [
                             new ActionRowBuilder().addComponents(
                                 new RoleSelectMenuBuilder().setCustomId(`resp_access_roles_${accessSession}`).setMinValues(1).setMaxValues(10).setPlaceholder('Search roles')
@@ -2402,7 +2381,7 @@ module.exports = {
                             before: previousMap
                         });
                         await followPick.update({
-                            content: `**✅ تم إلغاء التقييد عن ${selectedList.length} مسؤولية.**\n\n**التقييدات الحالية :**\n${buildRestrictionsPreview()}`,
+                            content: limitDiscordContent(`**✅ تم إلغاء التقييد عن ${selectedList.length} مسؤولية.**\n\n**التقييدات الحالية :**\n${buildRestrictionsPreview()}`),
                             components: []
                         }).catch(() => {});
                         return;
@@ -2437,7 +2416,7 @@ module.exports = {
                         after: roleIds
                     });
                     await followPick.update({
-                        content: `**✅ تم حفظ التقييد لـ ${selectedList.length} مسؤولية.**\n\n**التقييدات الحالية :**\n${buildRestrictionsPreview()}`,
+                        content: limitDiscordContent(`**✅ تم حفظ التقييد لـ ${selectedList.length} مسؤولية.**\n\n**التقييدات الحالية :**\n${buildRestrictionsPreview()}`),
                         components: []
                     }).catch(() => {});
                     return;
