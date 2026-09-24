@@ -1028,7 +1028,7 @@ emoji: '<:emoji_60:1442587668306329733>',
             colorOptions.push({
                 label: `${index}`,
                 description: (role?.hexColor || 'اختيار اللون').slice(0, 100),
-                emoji: '🎨',
+                emoji: '<:emoji_51:1442585157516398722>',
                 value: roleId
             });
             index++;
