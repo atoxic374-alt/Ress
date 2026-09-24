@@ -1,3 +1,27 @@
+function isGenericAdminRole(role) {
+    return role.name.trim().toLowerCase() === 'admin';
+}
+
+function matchesPromotionType(role, selectedType) {
+    if (isGenericAdminRole(role)) return false;
+    return (role.name.length <= 3) === (selectedType === 'rank');
+}
+
+function getQuickPromotionTypes(memberRoles, adminRoleIds, selectedType) {
+    if (selectedType !== 'both') {
+        return { types: [selectedType], missingTypes: [] };
+    }
+
+    const adminRoles = memberRoles.filter((role) => adminRoleIds.includes(role.id));
+    const hasRank = adminRoles.some((role) => matchesPromotionType(role, 'rank'));
+    const hasVisual = adminRoles.some((role) => matchesPromotionType(role, 'visual'));
+
+    return {
+        types: ['rank', 'visual'].filter((type) => type === 'rank' ? hasRank : hasVisual),
+        missingTypes: ['rank', 'visual'].filter((type) => type === 'rank' ? !hasRank : !hasVisual)
+    };
+}
+
 function resolveQuickPromotion({
     memberRoles,
     adminRoleIds,
@@ -6,24 +30,18 @@ function resolveQuickPromotion({
     selectedAction,
     levels
 }) {
-    const isRankPromotion = selectedType === 'rank';
-    const isGenericAdminRole = (role) => role.name.trim().toLowerCase() === 'admin';
-    const matchesSelectedType = (role) =>
-        !isGenericAdminRole(role) && (role.name.length <= 3) === isRankPromotion;
-    const highestPositionFirst = (a, b) => b.position - a.position;
-
     const currentRole = memberRoles
-        .filter((role) => adminRoleIds.includes(role.id) && matchesSelectedType(role))
-        .sort(highestPositionFirst)[0] || null;
+        .filter((role) => adminRoleIds.includes(role.id) && matchesPromotionType(role, selectedType))
+        .sort((a, b) => b.position - a.position)[0] || null;
 
-    // إذا لم تكن لدى العضو رتبة من النوع المطلوب، تُستخدم رتبته الإدارية
-    // الحالية (ومنها admin) كنقطة انطلاق للنوع الذي اختاره المسؤول.
+    // عند عدم وجود رتبة من النوع المختار في الترقية، استخدم الرتبة الإدارية
+    // الحالية كنقطة انطلاق للتحويل إلى النوع المطلوب.
     const startingRole = !currentRole && selectedAction === 'up'
         ? memberRoles
             .filter((role) => adminRoleIds.includes(role.id) && (
-                isGenericAdminRole(role) || !matchesSelectedType(role)
+                isGenericAdminRole(role) || !matchesPromotionType(role, selectedType)
             ))
-            .sort(highestPositionFirst)[0] || null
+            .sort((a, b) => b.position - a.position)[0] || null
         : null;
     const sourceRole = currentRole || startingRole;
 
@@ -33,7 +51,7 @@ function resolveQuickPromotion({
 
     let targetIndex;
     if (startingRole) {
-        // التحويل بين النوعين يبدأ من أول رتبة من النوع المختار.
+        // التحويل إلى النوع المختار يبدأ من الرتبة ذات المستوى الذي اختاره المستخدم.
         targetIndex = levels - 1;
     } else {
         const signedLevels = selectedAction === 'up' ? levels : -levels;
@@ -49,11 +67,10 @@ function resolveQuickPromotion({
     }
 
     const newRole = availableRoles[targetIndex];
-    // إذا كان النوع المختار موجودًا، احذف رتب هذا النوع وحدها. أما إذا لم
-    // يكن موجودًا، فاستبدل رتب المصدر بالنوع الجديد المختار.
+    // احذف رتب النوع المختار فقط إذا كان موجودًا؛ عند التحويل تُزال رتبة المصدر.
     const rolesToRemove = memberRoles
         .filter((role) => adminRoleIds.includes(role.id) && (
-            matchesSelectedType(role) || Boolean(startingRole)
+            matchesPromotionType(role, selectedType) || Boolean(startingRole)
         ))
         .map((role) => role.id);
 
@@ -65,4 +82,4 @@ function resolveQuickPromotion({
     };
 }
 
-module.exports = { resolveQuickPromotion };
+module.exports = { getQuickPromotionTypes, resolveQuickPromotion };

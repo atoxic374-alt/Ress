@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { resolveQuickPromotion } = require('./utils/quickPromotionResolver');
+const { getQuickPromotionTypes, resolveQuickPromotion } = require('./utils/quickPromotionResolver');
 
 const roles = {
     admin: { id: 'admin-id', name: 'admin', position: 1 },
@@ -12,6 +12,19 @@ const roles = {
 const adminRoleIds = Object.values(roles).map((role) => role.id);
 const rankRoles = [roles.c, roles.b, roles.a];
 const visualRoles = [roles.v2, roles.v1];
+
+assert.deepEqual(getQuickPromotionTypes([roles.c, roles.v1], adminRoleIds, 'both'), {
+    types: ['rank', 'visual'],
+    missingTypes: []
+});
+assert.deepEqual(getQuickPromotionTypes([roles.c], adminRoleIds, 'both'), {
+    types: ['rank'],
+    missingTypes: ['visual']
+});
+assert.deepEqual(getQuickPromotionTypes([roles.admin], adminRoleIds, 'both'), {
+    types: [],
+    missingTypes: ['rank', 'visual']
+});
 
 function resolve(memberRoles, selectedType, selectedAction = 'up', levels = 1) {
     return resolveQuickPromotion({

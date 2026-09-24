@@ -8,7 +8,7 @@ const {
 } = require('discord.js');
 const colorManager = require('../utils/colorManager');
 const promoteManager = require('../utils/promoteManager');
-const { resolveQuickPromotion } = require('../utils/quickPromotionResolver');
+const { getQuickPromotionTypes, resolveQuickPromotion } = require('../utils/quickPromotionResolver');
 const { getRealUserStats } = require('../utils/userStatsCollector');
 const fs = require('fs');
 const path = require('path');
@@ -139,7 +139,7 @@ module.exports = {
         });
 
         let selectedAction = null; // 'up' or 'down'
-        let selectedType = null;   // 'rank' or 'visual'
+        let selectedType = null;   // 'rank', 'visual', or 'both'
         let selectedLevels = 0;
 
         collector.on('collect', async (interaction) => {
@@ -155,7 +155,8 @@ module.exports = {
                     .setPlaceholder('اختر النوع...')
                     .addOptions([
                         { label: 'رتب الحرف (Rank)', value: 'rank', description: 'التعامل مع رولات (A , B , C ...)' },
-                        { label: 'رتب ظاهرية (Visual)', value: 'visual', description: 'التعامل مع رولات الأسماء والظواهر' }
+                        { label: 'رتب ظاهرية (Visual)', value: 'visual', description: 'التعامل مع رولات الأسماء والظواهر' },
+                        { label: 'الاثنين (حرف + ظاهرية)', value: 'both', description: 'ترقية أو تنزيل النوعين كلٌ على حدة' }
                     ]);
 
                 await interaction.update({ embeds: [typeEmbed], components: [new ActionRowBuilder().addComponents(typeMenu)] });
@@ -166,7 +167,7 @@ module.exports = {
                 
                 const levelEmbed = colorManager.createEmbed()
                     .setTitle('تحديد عدد الترقيات')
-                    .setDescription(`**العملية: ___${selectedAction === 'up' ? 'ترقية' : 'تنزيل'} (${selectedType === 'rank' ? 'حرف' : 'ظواهر'})___\nاختر عدد لترقيات التي تريد تنفيذها :**`);
+                    .setDescription(`**العملية: ___${selectedAction === 'up' ? 'ترقية' : 'تنزيل'} (${selectedType === 'rank' ? 'حرف' : selectedType === 'visual' ? 'ظواهر' : 'حرف + ظواهر'})___\nاختر عدد المستويات التي تريد تنفيذها لكل نوع :**`);
 
                 const levelRow = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId('level_1').setLabel('1').setStyle(ButtonStyle.Primary),
@@ -186,120 +187,133 @@ module.exports = {
 
                 const processingEmbed = colorManager.createEmbed()
                     .setTitle('جاري تنفيذ العملية ...')
-                    .setDescription(`يتم الآن معالجة **${selectedAction === 'up' ? 'ترقية' : 'تنزيل'}** عدد **${targets.size}** إداري بمقدار **${selectedLevels}** مستويات .\nيرجى الانتظار ثوانٍ معدودة ...`);
+                    .setDescription(`يتم الآن معالجة **${selectedAction === 'up' ? 'ترقية' : 'تنزيل'}** **${targets.size}** إداري بمقدار **${selectedLevels}** مستوى لكل نوع محدد (${selectedType === 'both' ? 'الحرف والظاهرية بشكل مستقل' : selectedType === 'rank' ? 'الحرف' : 'الظاهرية'}).\nيرجى الانتظار ثوانٍ معدودة ...`);
                     
                 await interaction.update({ embeds: [processingEmbed], components: [] });
 
-                const results = [];
-                const promotionDetails = [];
+                const promotionDetails = { rank: [], visual: [] };
                 const undoData = [];
                 
                 const sortedAdminRoles = await getSortedAdminRoles(message.guild);
-                const availableRoles = sortedAdminRoles.filter(r => (r.name.length <= 3) === (selectedType === 'rank'));
 
                 const promoPromises = targets.map(async (target) => {
                     try {
-                        const resolution = resolveQuickPromotion({
-                            memberRoles: [...target.roles.cache.values()],
-                            adminRoleIds: adminRolesListIds,
-                            availableRoles,
-                            selectedType,
-                            selectedAction,
-                            levels: selectedLevels
-                        });
+                        const memberOutcome = [];
+                        const initialRoles = [...target.roles.cache.values()];
+                        const typePlan = getQuickPromotionTypes(initialRoles, adminRolesListIds, selectedType);
 
-                        if (resolution.error === 'no-current-role') {
-                            return `**❌ ${target.displayName} : لا يملك رول إداري .**`;
+                        if (typePlan.types.length === 0) {
+                            return [`❌ **${target.displayName}**: لا يملك رتبة حرف أو ظاهرية مسجلة.`];
                         }
-                        if (resolution.error === 'out-of-range') {
-                            return `**⚠️ ${target.displayName} : وصل للحد الأقصى/الأدنى .**`;
+                        if (selectedType === 'both' && typePlan.missingTypes.length > 0) {
+                            const missingNames = typePlan.missingTypes.map(type => type === 'rank' ? 'الحرف' : 'الظاهرية').join(' و');
+                            memberOutcome.push(`⚠️ **${target.displayName}**: لا يملك رتبة ${missingNames}، تم تخطي هذا المسار.`);
                         }
 
-                        const { currentRole, newRole, rolesToRemove: rolesToRemoveBeforePromotion } = resolution;
-
-                        const res = await promoteManager.createPromotion(
-                            message.guild, client, target.id, newRole.id, 
-                            'نهائي', `Shortcut ${selectedAction.toUpperCase()}`, 
-                            message.author.id, false, true, true
-                        );
-
-                        if (res.success) {
-                            // عند التحويل بين الحرف والظاهرية، اسحب المصدر من النوع الآخر.
-                            // createPromotion يزيل رتب النوع نفسه فقط وفق تصنيفه الداخلي.
-                            for (const oldRoleId of rolesToRemoveBeforePromotion) {
-                                if (oldRoleId === newRole.id || !target.roles.cache.has(oldRoleId)) continue;
-                                await target.roles.remove(oldRoleId, 'استبدال رتبة النوع الآخر في الترقية السريعة').catch(() => {});
-                            }
-
-                            promotionDetails.push(`**الإداري : ${target} - من الرول : ${currentRole} - الى الرول : ${newRole}**`);
-                            undoData.push({ 
-                                memberId: target.id, 
-                                addedRoleId: newRole.id,
-                                removedRoleIds: rolesToRemoveBeforePromotion 
+                        // كل نوع عملية مستقلة؛ فشل إحداها لا يمنع تنفيذ النوع الآخر.
+                        for (const type of typePlan.types) {
+                            const member = await message.guild.members.fetch({ user: target.id, force: true }).catch(() => target);
+                            const memberRoles = [...member.roles.cache.values()];
+                            const typeName = type === 'rank' ? 'حرف' : 'ظاهرية';
+                            const availableRoles = sortedAdminRoles.filter(role =>
+                                (role.name.length <= 3) === (type === 'rank')
+                            );
+                            const resolution = resolveQuickPromotion({
+                                memberRoles,
+                                adminRoleIds: adminRolesListIds,
+                                availableRoles,
+                                selectedType: type,
+                                selectedAction,
+                                levels: selectedLevels
                             });
 
-                            // إرسال إشعار DM للعضو (استخدام الاسم بدلاً من المنشن لتجنب Unknown Role)
-                            try {
-                                await target.send(`** ✅ تم ${selectedAction === 'up' ? 'ترقيتك' : 'تنزيلك'} بسيرفر : ${message.guild.name}\n من الرتبة : ${currentRole.name} الى الرتبة : ${newRole.name} **`).catch(() => {});
-                            } catch (e) {}
+                            if (resolution.error === 'no-current-role') {
+                                memberOutcome.push(`❌ **${target.displayName} — ${typeName}**: لا يملك رتبًا إدارية مناسبة لهذا المسار.`);
+                                continue;
+                            }
+                            if (resolution.error === 'out-of-range') {
+                                memberOutcome.push(`⚠️ **${target.displayName} — ${typeName}**: وصل إلى الحد الأقصى/الأدنى.`);
+                                continue;
+                            }
 
-                            return `✅ **${target.displayName}** : تمت ${selectedAction === 'up' ? 'ترقيته' : 'تنزيله'} بنجاح إلى ${newRole}`;
+                            const { currentRole, newRole, rolesToRemove } = resolution;
+                            const res = await promoteManager.createPromotion(
+                                message.guild, client, target.id, newRole.id,
+                                'نهائي', `Shortcut ${selectedAction.toUpperCase()} (${typeName})`,
+                                message.author.id, false, true, true
+                            );
+
+                            if (!res.success) {
+                                memberOutcome.push(`❌ **${target.displayName} — ${typeName}**: فشل (${res.error}).`);
+                                continue;
+                            }
+
+                            // إزالة رتبة المصدر عند التحويل، مع المحافظة على النوع الآخر
+                            // الذي يملكه العضو عند تشغيل المسارين معًا.
+                            for (const oldRoleId of rolesToRemove) {
+                                if (oldRoleId === newRole.id) continue;
+                                const currentMember = await message.guild.members.fetch({ user: target.id, force: true }).catch(() => member);
+                                if (currentMember.roles.cache.has(oldRoleId)) {
+                                    await currentMember.roles.remove(oldRoleId, 'استبدال رتبة النوع المختار في الترقية السريعة').catch(() => {});
+                                }
+                            }
+
+                            promotionDetails[type].push(`• ${target} — ${currentRole.name} ← ${newRole.name}`);
+                            undoData.push({
+                                memberId: target.id,
+                                addedRoleId: newRole.id,
+                                removedRoleIds: rolesToRemove
+                            });
+                            memberOutcome.push(`✅ **${target.displayName} — ${typeName}**: ${selectedAction === 'up' ? 'تمت ترقيته' : 'تم تنزيله'} من **${currentRole.name}** إلى **${newRole.name}**.`);
+
+                            try {
+                                await target.send(`**✅ تم ${selectedAction === 'up' ? 'ترقيتك' : 'تنزيلك'} (${typeName}) في ${message.guild.name}: ${currentRole.name} ← ${newRole.name}**`).catch(() => {});
+                            } catch (e) {}
                         }
-                        return `❌ **${target.displayName}** : فشل ( ${res.error} )`;
+                        return memberOutcome;
                     } catch (e) { 
-                        return `❌ **${target.displayName}** : حدث خطأ غير متوقع .`; 
+                        return [`❌ **${target.displayName}**: حدث خطأ غير متوقع أثناء المعالجة.`];
                     } finally {
                         lockedMembers.delete(target.id); // فك القفل بعد الانتهاء
                     }
                 });
 
-                const outcome = await Promise.all(promoPromises);
+                const outcome = (await Promise.all(promoPromises)).flat();
                 activeOperations.delete(message.author.id);
 
                 const settings = promoteManager.getSettings();
-                if (settings.logChannel && promotionDetails.length > 0) {
+                const hasPromotionDetails = promotionDetails.rank.length > 0 || promotionDetails.visual.length > 0;
+                if (settings.logChannel && hasPromotionDetails) {
                     const logChannel = client.channels.cache.get(settings.logChannel);
                     if (logChannel) {
-                        // Build the base embed with static fields
                         const logEmbed = colorManager.createEmbed()
-                            .setTitle(selectedAction === 'up' ? '✅️ Promoted Successfully' : '🔽 Demoted Successfully')
+                            .setTitle(selectedAction === 'up' ? 'سجل الترقية السريعة' : 'سجل التنزيل السريع')
+                            .setDescription(`تم تنفيذ الطلب بواسطة ${message.author}؛ كل نوع عولج بشكل مستقل.`)
                             .setTimestamp();
 
-                        // Prepare the list of field objects to add. Start with the static ones.
-                        const fields = [];
-                        fields.push({ name: 'المسؤول المنفذ', value: `${message.author}`, inline: true });
-                        fields.push({ name: 'عدد الترقيات', value: `**${selectedLevels}**`, inline: true });
-                        fields.push({ name: 'نوع العملية', value: `**${selectedAction === 'up' ? 'ترقية' : 'تنزيل'} (${selectedType === 'rank' ? 'حرف' : 'ظواهر'})**`, inline: true });
-                        // We'll add the affected members list later and timestamp after
-                        fields.push({ name: 'التاريخ', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true });
+                        const fields = [
+                            { name: 'المسؤول', value: `${message.author}`, inline: true },
+                            { name: 'الإجراء', value: selectedAction === 'up' ? 'ترقية' : 'تنزيل', inline: true },
+                            { name: 'المستويات لكل مسار', value: `${selectedLevels}`, inline: true },
+                            { name: 'التاريخ', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+                        ];
 
-                        // Build the affected members string(s) ensuring each does not exceed Discord's 1024 character per field limit.
-                        const maxFieldLength = 1024;
-                        const lines = promotionDetails.slice(0, 10); // limit to first 10 affected entries in logs
-                        if (promotionDetails.length > 10) {
-                            lines.push(`\n*... وغيرهم ( ${promotionDetails.length - 10} آخرين )*`);
-                        }
-                        let current = '';
-                        let part = 1;
-                        lines.forEach((line, idx) => {
-                            // Determine if adding this line would exceed the max length
-                            // +1 for a newline when needed
-                            const newLen = current.length + (current.length ? 1 : 0) + line.length;
-                            if (newLen > maxFieldLength) {
-                                // Push the current chunk and start a new one
-                                fields.push({ name: part === 1 ? 'المتأثرين' : `المتأثرين (جزء ${part})`, value: current });
-                                part++;
-                                current = line;
-                            } else {
-                                current += (current.length ? '\n' : '') + line;
+                        for (const [type, title] of [['rank', 'الحرف'], ['visual', 'الظاهرية']]) {
+                            const entries = promotionDetails[type];
+                            if (!entries.length) continue;
+                            let part = 1;
+                            let current = '';
+                            for (const line of entries.slice(0, 12)) {
+                                if (current && current.length + line.length + 1 > 950) {
+                                    fields.push({ name: part === 1 ? `نتائج ${title}` : `نتائج ${title} (${part})`, value: current, inline: false });
+                                    current = '';
+                                    part++;
+                                }
+                                current += `${current ? '\n' : ''}${line}`;
                             }
-                        });
-                        if (current) {
-                            fields.push({ name: part === 1 ? 'المتأثرين' : `المتأثرين (جزء ${part})`, value: current });
+                            if (entries.length > 12) current += `\n… و${entries.length - 12} عملية أخرى`;
+                            if (current) fields.push({ name: part === 1 ? `نتائج ${title}` : `نتائج ${title} (${part})`, value: current, inline: false });
                         }
-                        // Add the built fields to the embed in chunks of 25 to respect Discord's field limits
-                        // (There are only a few fields expected here, but we stay safe.)
-                        // Discord allows up to 25 fields per embed. We send only one embed.
                         logEmbed.addFields(fields);
 
                         await logChannel.send({ embeds: [logEmbed] }).catch(() => {});
@@ -331,10 +345,50 @@ module.exports = {
                     .setTitle(statusTitle)
                     .setDescription(
                         `${statusLine}\n` +
-                        `**الملخص:** ✅ ${successCount} | ❌ ${failedCount} | ⚠️ ${skippedCount}\n\n` +
-                        `**النتائج :**\n${outcome.join('\n')}`
+                        `**ملخص العمليات:** ✅ ${successCount} | ❌ ${failedCount} | ⚠️ ${skippedCount}\n` +
+                        `**الاختيار:** ${selectedType === 'both' ? 'الحرف والظاهرية، كل مسار مستقل' : selectedType === 'rank' ? 'الحرف' : 'الظاهرية'} × ${selectedLevels} مستوى`
                     )
-                    .setFooter({ text: 'يمكنك التراجع عن العمليات الناجحة خلال دقيقة واحدة .' });
+                    .setFooter({ text: undoData.length ? 'يمكنك التراجع عن العمليات الناجحة خلال دقيقة واحدة.' : 'انتهت المعالجة.' });
+
+                const resultGroups = [
+                    ['الحرف', outcome.filter(line => line.includes('— حرف'))],
+                    ['الظاهرية', outcome.filter(line => line.includes('— ظاهرية'))],
+                    ['ملاحظات أخرى', outcome.filter(line => !line.includes('— حرف') && !line.includes('— ظاهرية'))]
+                ];
+                let remainingResultChars = 4700;
+                for (const [groupTitle, lines] of resultGroups) {
+                    if (!lines.length || remainingResultChars <= 0) continue;
+                    const fieldsForGroup = [];
+                    let current = '';
+                    let part = 1;
+                    for (const line of lines) {
+                        const remainingLines = lines.length - fieldsForGroup.reduce((sum, field) => sum + field.lineCount, 0);
+                        if (fieldsForGroup.length >= 2 || remainingResultChars <= 0) break;
+                        const safeLine = line.length > Math.min(900, remainingResultChars)
+                            ? `${line.slice(0, Math.max(0, Math.min(900, remainingResultChars) - 1))}…`
+                            : line;
+                        if (current && current.length + safeLine.length + 1 > Math.min(900, remainingResultChars)) {
+                            fieldsForGroup.push({ name: part === 1 ? `نتائج ${groupTitle}` : `نتائج ${groupTitle} (${part})`, value: current, lineCount: current.split('\n').length });
+                            remainingResultChars -= current.length;
+                            current = '';
+                            part++;
+                            if (fieldsForGroup.length >= 2 || remainingResultChars <= 0) break;
+                        }
+                        current += `${current ? '\n' : ''}${safeLine}`;
+                        if (remainingLines <= 1) break;
+                    }
+                    if (current && fieldsForGroup.length < 2) {
+                        fieldsForGroup.push({ name: part === 1 ? `نتائج ${groupTitle}` : `نتائج ${groupTitle} (${part})`, value: current, lineCount: current.split('\n').length });
+                        remainingResultChars -= current.length;
+                    }
+                    const shownLines = fieldsForGroup.reduce((sum, field) => sum + field.lineCount, 0);
+                    for (const field of fieldsForGroup) finalResultEmbed.addFields({ name: field.name, value: field.value, inline: false });
+                    if (shownLines < lines.length && remainingResultChars > 100) {
+                        const note = `… تمت معالجة ${lines.length - shownLines} نتيجة إضافية.`;
+                        finalResultEmbed.addFields({ name: `بقية ${groupTitle}`, value: note, inline: false });
+                        remainingResultChars -= note.length;
+                    }
+                }
 
                 const undoButton = new ButtonBuilder()
                     .setCustomId(undoId)
