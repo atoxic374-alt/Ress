@@ -256,7 +256,7 @@ module.exports = {
                                 }
                             }
 
-                            promotionDetails[type].push(`• ${target} | من **${currentRole.name}** إلى **${newRole.name}**`);
+                            promotionDetails[type].push(`• ${target} | ${currentRole.name} ➜ ${newRole.name}`);
                             undoData.push({
                                 memberId: target.id,
                                 addedRoleId: newRole.id,
@@ -285,19 +285,17 @@ module.exports = {
                     const logChannel = await client.channels.fetch(settings.logChannel).catch(() => null);
                     if (logChannel) {
                         const logEmbed = colorManager.createEmbed()
-                            .setTitle(selectedAction === 'up' ? 'Promotion Summary | ملخص الترقيات' : 'Demotion Summary | ملخص التنزيلات')
-                            .setDescription(`تم تنفيذ العملية بواسطة ${message.author}\nعند اختيار النوعين، تُسجّل نتيجة كل نوع على حدة.`)
+                            .setTitle(selectedAction === 'up' ? 'Promotions | الترقيات' : 'Demotions | التنزيلات')
+                            .setDescription(`${message.author} • ${selectedLevels} مستوى`)
                             .setThumbnail(message.guild.iconURL({ size: 256 }) || client.user.displayAvatarURL())
                             .setTimestamp();
 
                         const fields = [
-                            { name: 'EXECUTED BY | المسؤول المنفذ', value: `${message.author}`, inline: false },
-                            { name: 'ACTION | نوع العملية', value: selectedAction === 'up' ? 'ترقية | Promotion' : 'تنزيل | Demotion', inline: false },
-                            { name: 'LEVELS | عدد المستويات', value: `${selectedLevels}`, inline: false },
-                            { name: 'DATE | التاريخ', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+                            { name: 'ACTION | العملية', value: selectedAction === 'up' ? 'Promotion | ترقية' : 'Demotion | تنزيل', inline: true },
+                            { name: 'LEVELS | المستويات', value: `${selectedLevels}`, inline: true }
                         ];
 
-                        for (const [type, title] of [['rank', 'RANK PROMOTIONS | ترقيات رتب الحروف'], ['visual', 'VISUAL PROMOTIONS | ترقيات الرتب الظاهرية']]) {
+                        for (const [type, title] of [['rank', 'RANK | الحروف'], ['visual', 'VISUAL | الظاهرية']]) {
                             const entries = promotionDetails[type];
                             if (!entries.length) continue;
                             let part = 1;
