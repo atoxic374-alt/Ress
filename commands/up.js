@@ -207,7 +207,7 @@ module.exports = {
                         }
                         if (selectedType === 'both' && typePlan.missingTypes.length > 0) {
                             const missingNames = typePlan.missingTypes.map(type => type === 'rank' ? 'الحرف' : 'الظاهرية').join(' و');
-                            memberOutcome.push(`⚠️ **${target.displayName}**: لا يملك رتبة ${missingNames}، تم تخطي هذا المسار.`);
+                            memberOutcome.push(`⚠️ **${target.displayName}**: لا يملك رتبة ${missingNames}، تم تخطي هذا النوع.`);
                         }
 
                         // كل نوع عملية مستقلة؛ فشل إحداها لا يمنع تنفيذ النوع الآخر.
@@ -226,7 +226,7 @@ module.exports = {
                             });
 
                             if (resolution.error === 'no-current-role') {
-                                memberOutcome.push(`❌ **${target.displayName} — ${typeName}**: لا يملك رتبًا إدارية مناسبة لهذا المسار.`);
+                                memberOutcome.push(`❌ **${target.displayName} — ${typeName}**: لا يملك رتبًا إدارية مناسبة لهذا النوع.`);
                                 continue;
                             }
                             if (resolution.error === 'out-of-range') {
@@ -256,16 +256,16 @@ module.exports = {
                                 }
                             }
 
-                            promotionDetails[type].push(`• ${target} — ${currentRole.name} ← ${newRole.name}`);
+                            promotionDetails[type].push(`• ${target} | ${currentRole.name} ➜ ${newRole.name}`);
                             undoData.push({
                                 memberId: target.id,
                                 addedRoleId: newRole.id,
                                 removedRoleIds: rolesToRemove
                             });
-                            memberOutcome.push(`✅ **${target.displayName} — ${typeName}**: ${selectedAction === 'up' ? 'تمت ترقيته' : 'تم تنزيله'} من **${currentRole.name}** إلى **${newRole.name}**.`);
+                            memberOutcome.push(`✅ **${target.displayName} — ${typeName}**: ${selectedAction === 'up' ? 'تمت ترقيته' : 'تم تنزيله'} | من **${currentRole.name}** إلى **${newRole.name}**`);
 
                             try {
-                                await target.send(`**✅ تم ${selectedAction === 'up' ? 'ترقيتك' : 'تنزيلك'} (${typeName}) في ${message.guild.name}: ${currentRole.name} ← ${newRole.name}**`).catch(() => {});
+                                await target.send(`**✅ تم ${selectedAction === 'up' ? 'ترقيتك' : 'تنزيلك'} (${typeName}) في ${message.guild.name}\nمن الرتبة: ${currentRole.name}\nإلى الرتبة: ${newRole.name}**`).catch(() => {});
                             } catch (e) {}
                         }
                         return memberOutcome;
@@ -282,39 +282,64 @@ module.exports = {
                 const settings = promoteManager.getSettings();
                 const hasPromotionDetails = promotionDetails.rank.length > 0 || promotionDetails.visual.length > 0;
                 if (settings.logChannel && hasPromotionDetails) {
-                    const logChannel = client.channels.cache.get(settings.logChannel);
+                    const logChannel = await client.channels.fetch(settings.logChannel).catch(() => null);
                     if (logChannel) {
                         const logEmbed = colorManager.createEmbed()
-                            .setTitle(selectedAction === 'up' ? 'سجل الترقية السريعة' : 'سجل التنزيل السريع')
-                            .setDescription(`تم تنفيذ الطلب بواسطة ${message.author}؛ كل نوع عولج بشكل مستقل.`)
+                            .setTitle(selectedAction === 'up' ? 'Promotions | الترقيات' : 'Demotions | التنزيلات')
+                            .setDescription(`${message.author} • ${selectedLevels} مستوى`)
+                            .setThumbnail(message.guild.iconURL({ size: 256 }) || client.user.displayAvatarURL())
                             .setTimestamp();
 
                         const fields = [
-                            { name: 'المسؤول', value: `${message.author}`, inline: true },
-                            { name: 'الإجراء', value: selectedAction === 'up' ? 'ترقية' : 'تنزيل', inline: true },
-                            { name: 'المستويات لكل مسار', value: `${selectedLevels}`, inline: true },
-                            { name: 'التاريخ', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+                            { name: 'ACTION | العملية', value: selectedAction === 'up' ? 'Promotion | ترقية' : 'Demotion | تنزيل', inline: true },
+                            { name: 'LEVELS | المستويات', value: `${selectedLevels}`, inline: true }
                         ];
 
-                        for (const [type, title] of [['rank', 'الحرف'], ['visual', 'الظاهرية']]) {
+                        for (const [type, title] of [['rank', 'RANK | الحروف'], ['visual', 'VISUAL | الظاهرية']]) {
                             const entries = promotionDetails[type];
                             if (!entries.length) continue;
                             let part = 1;
                             let current = '';
                             for (const line of entries.slice(0, 12)) {
                                 if (current && current.length + line.length + 1 > 950) {
-                                    fields.push({ name: part === 1 ? `نتائج ${title}` : `نتائج ${title} (${part})`, value: current, inline: false });
+                                    fields.push({ name: part === 1 ? title : `${title} (${part})`, value: current, inline: false });
                                     current = '';
                                     part++;
                                 }
                                 current += `${current ? '\n' : ''}${line}`;
                             }
                             if (entries.length > 12) current += `\n… و${entries.length - 12} عملية أخرى`;
-                            if (current) fields.push({ name: part === 1 ? `نتائج ${title}` : `نتائج ${title} (${part})`, value: current, inline: false });
+                            if (current) fields.push({ name: part === 1 ? title : `${title} (${part})`, value: current, inline: false });
                         }
                         logEmbed.addFields(fields);
+                        logEmbed.setFooter({ text: 'QUICK PROMOTION LOG • سجل الترقيات السريعة' });
 
-                        await logChannel.send({ embeds: [logEmbed] }).catch(() => {});
+                        // حدّث آخر سجل للبوت بدل إرسال رسالة جديدة مع كل عملية.
+                        let previousLog = settings.quickLogMessageId
+                            ? await logChannel.messages.fetch(settings.quickLogMessageId).catch(() => null)
+                            : null;
+                        if (!previousLog) {
+                            const recentMessages = await logChannel.messages.fetch({ limit: 50 }).catch(() => null);
+                            previousLog = recentMessages?.find((candidate) =>
+                                candidate.author.id === client.user.id && candidate.embeds.some((existingEmbed) =>
+                                existingEmbed.footer?.text === 'QUICK PROMOTION LOG • سجل الترقيات السريعة' ||
+                                ['سجل الترقية السريعة', 'سجل التنزيل السريع', 'Promotion Summary | ملخص الترقيات', 'Demotion Summary | ملخص التنزيلات'].includes(existingEmbed.title)
+                                )
+                            ) || null;
+                        }
+
+                        let savedLog = null;
+                        if (previousLog) {
+                            savedLog = await previousLog.edit({ embeds: [logEmbed], components: [] }).catch(() => null);
+                        }
+                        if (!savedLog) savedLog = await logChannel.send({ embeds: [logEmbed] }).catch(() => null);
+                        if (savedLog) {
+                            await promoteManager.updateSettings({
+                                ...settings,
+                                quickLogMessageId: savedLog.id,
+                                quickLogChannelId: logChannel.id
+                            }).catch(() => {});
+                        }
                     }
                 }
 
@@ -344,7 +369,7 @@ module.exports = {
                     .setDescription(
                         `${statusLine}\n` +
                         `**ملخص العمليات:** ✅ ${successCount} | ❌ ${failedCount} | ⚠️ ${skippedCount}\n` +
-                        `**الاختيار:** ${selectedType === 'both' ? 'الحرف والظاهرية، كل مسار مستقل' : selectedType === 'rank' ? 'الحرف' : 'الظاهرية'} × ${selectedLevels} مستوى`
+                        `**الاختيار:** ${selectedType === 'both' ? 'الحرف والظاهرية، كل نوع مستقل' : selectedType === 'rank' ? 'الحرف' : 'الظاهرية'} × ${selectedLevels} مستوى`
                     )
                     .setFooter({ text: undoData.length ? 'يمكنك التراجع عن العمليات الناجحة خلال دقيقة واحدة.' : 'انتهت المعالجة.' });
 
