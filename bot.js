@@ -2709,19 +2709,20 @@ client.on('messageCreate', async message => {
           timestamp: Date.now()
         });
 
-        try {
-          const bonusCommand = client.commands.get('bonus');
-          if (bonusCommand?.recordMessage) await bonusCommand.recordMessage(message, getCachedPrefix());
-        } catch (bonusError) {
-          console.error('❌ خطأ في تسجيل رسالة نظام البونس:', bonusError);
-        }
-
         // فحص تلقائي للترقية في مستوى الشات
         await checkAutoLevelUp(message.author.id, 'chat', client);
       }
       // تم إزالة رسالة الكونسول لتجنب الإزعاج
     } catch (error) {
       console.error('❌ خطأ في تتبع الرسالة:', error);
+    }
+
+    // نظام البونس مستقل عن جامع الإحصاءات القديم؛ فشل أحدهما لا يمنع الآخر.
+    try {
+      const bonusCommand = client.commands.get('bonus');
+      if (bonusCommand?.recordMessage) await bonusCommand.recordMessage(message, getCachedPrefix());
+    } catch (bonusError) {
+      console.error('❌ خطأ مستقل في تسجيل رسالة نظام البونس:', bonusError);
     }
 
     // Handle Streak system message processing
@@ -3921,7 +3922,6 @@ client.on('guildMemberRemove', async (member) => {
 
         try {
             const bonusCommand = client.commands.get('bonus');
-            if (bonusCommand?.checkpointMemberVoice) await bonusCommand.checkpointMemberVoice(member);
             if (bonusCommand?.handleMemberLeave) await bonusCommand.handleMemberLeave(member);
         } catch (bonusLeaveError) {
             console.error('❌ خطأ في حفظ رصيد البونس عند مغادرة العضو:', bonusLeaveError);

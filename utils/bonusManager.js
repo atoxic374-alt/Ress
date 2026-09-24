@@ -26,11 +26,13 @@ function calculateAward(progress, amount, threshold, pointsPerThreshold, multipl
 function chooseOldestGroup(groups, roleIds, grantHistory = {}) {
   const heldRoleIds = new Set(Array.from(roleIds || [], String));
   const candidates = (groups || []).filter(group => heldRoleIds.has(String(group.role_id)));
+  // لا نخمن عند تعدد القروبات: لا تُحتسب النقاط حتى يتوفر تاريخ موثوق لكل رول.
+  if (candidates.length > 1 && candidates.some(group => Number(grantHistory[String(group.role_id)] || 0) <= 0)) return null;
   candidates.sort((a, b) => {
     const ta = Number(grantHistory[String(a.role_id)] || 0);
     const tb = Number(grantHistory[String(b.role_id)] || 0);
-    const effectiveA = ta > 0 ? ta : Number(a.created_at || Number.MAX_SAFE_INTEGER);
-    const effectiveB = tb > 0 ? tb : Number(b.created_at || Number.MAX_SAFE_INTEGER);
+    const effectiveA = ta > 0 ? ta : Number.MAX_SAFE_INTEGER;
+    const effectiveB = tb > 0 ? tb : Number.MAX_SAFE_INTEGER;
     if (effectiveA !== effectiveB) return effectiveA - effectiveB;
     const createdOrder = Number(a.created_at || 0) - Number(b.created_at || 0);
     if (createdOrder) return createdOrder;
@@ -48,27 +50,32 @@ function createBonusManager(dbManager) {
   }
 
   async function saveConfig(guildId, patch, actorId = null) {
-    const current = await readConfig(guildId);
-    const next = { ...current, ...patch };
-    await dbManager.run(`
-      INSERT INTO bonus_guild_config (guild_id, config_json, updated_at)
-      VALUES (?, ?, ?)
-      ON CONFLICT(guild_id) DO UPDATE SET config_json = excluded.config_json, updated_at = excluded.updated_at
-    `, [String(guildId), JSON.stringify(next), Date.now()]);
-    if (actorId) {
-      await audit(guildId, actorId, 'config_update', null, null, null, { keys: Object.keys(patch) });
-    }
-    return next;
+    return dbManager.transaction(async tx => {
+      const row = await tx.get('SELECT config_json FROM bonus_guild_config WHERE guild_id = ?', [String(guildId)]);
+      const current = safeJsonParse(row?.config_json, {});
+      const next = { ...current, ...patch };
+      await tx.run(`
+        INSERT INTO bonus_guild_config (guild_id, config_json, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(guild_id) DO UPDATE SET config_json = excluded.config_json, updated_at = excluded.updated_at
+      `, [String(guildId), JSON.stringify(next), Date.now()]);
+      if (actorId) await insertAudit(tx, guildId, actorId, 'config_update', null, null, null, { keys: Object.keys(patch) });
+      return next;
+    }, 'bonus-config-save');
   }
 
-  async function audit(guildId, actorId, action, targetUserId, sourceGroupId, targetGroupId, details = {}) {
-    await dbManager.run(`
+  async function insertAudit(executor, guildId, actorId, action, targetUserId, sourceGroupId, targetGroupId, details = {}) {
+    await executor.run(`
       INSERT INTO bonus_audit_log
         (guild_id, actor_id, action, target_user_id, source_group_id, target_group_id, details_json, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `, [String(guildId), actorId ? String(actorId) : null, String(action), targetUserId ? String(targetUserId) : null,
       sourceGroupId == null ? null : Number(sourceGroupId), targetGroupId == null ? null : Number(targetGroupId),
       JSON.stringify(details || {}), Date.now()]);
+  }
+
+  async function audit(guildId, actorId, action, targetUserId, sourceGroupId, targetGroupId, details = {}) {
+    await insertAudit(dbManager, guildId, actorId, action, targetUserId, sourceGroupId, targetGroupId, details);
   }
 
   async function listGroups(guildId, includeArchived = false) {
@@ -133,27 +140,88 @@ function createBonusManager(dbManager) {
   }
 
   async function addGroup(guildId, roleId, ownerId, actorId, avatarUrl = null) {
-    const existing = await dbManager.get('SELECT * FROM bonus_groups WHERE guild_id = ? AND role_id = ?', [String(guildId), String(roleId)]);
-    if (existing && existing.archived_at == null) throw new Error('ROLE_ALREADY_REGISTERED');
-    if (existing && existing.archived_at != null) {
-      await dbManager.run(`UPDATE bonus_groups SET owner_id = ?, avatar_url = ?, archived_at = NULL WHERE id = ?`,
-        [String(ownerId), avatarUrl, Number(existing.id)]);
-      await audit(guildId, actorId, 'group_reactivate', null, null, Number(existing.id), { roleId: String(roleId), ownerId: String(ownerId) });
-      return dbManager.get('SELECT * FROM bonus_groups WHERE id = ?', [Number(existing.id)]);
-    }
-    const now = Date.now();
-    const result = await dbManager.run(`
-      INSERT INTO bonus_groups (guild_id, role_id, owner_id, avatar_url, created_at, created_by)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `, [String(guildId), String(roleId), String(ownerId), avatarUrl, now, String(actorId)]);
-    await audit(guildId, actorId, 'group_add', null, null, result.id, { roleId: String(roleId), ownerId: String(ownerId) });
-    return dbManager.get('SELECT * FROM bonus_groups WHERE id = ?', [result.id]);
+    return dbManager.transaction(async tx => {
+      const existing = await tx.get('SELECT * FROM bonus_groups WHERE guild_id = ? AND role_id = ?', [String(guildId), String(roleId)]);
+      if (existing && existing.archived_at == null) throw new Error('ROLE_ALREADY_REGISTERED');
+      if (existing && existing.archived_at != null) {
+        await tx.run(`UPDATE bonus_groups SET owner_id = ?, avatar_url = ?, archived_at = NULL WHERE id = ?`,
+          [String(ownerId), avatarUrl, Number(existing.id)]);
+        await insertAudit(tx, guildId, actorId, 'group_reactivate', null, null, Number(existing.id), { roleId: String(roleId), ownerId: String(ownerId) });
+        return tx.get('SELECT * FROM bonus_groups WHERE id = ?', [Number(existing.id)]);
+      }
+      const now = Date.now();
+      const result = await tx.run(`
+        INSERT INTO bonus_groups (guild_id, role_id, owner_id, avatar_url, created_at, created_by)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `, [String(guildId), String(roleId), String(ownerId), avatarUrl, now, String(actorId)]);
+      await insertAudit(tx, guildId, actorId, 'group_add', null, null, result.id, { roleId: String(roleId), ownerId: String(ownerId) });
+      return tx.get('SELECT * FROM bonus_groups WHERE id = ?', [result.id]);
+    }, 'bonus-group-add');
   }
 
   async function resolveTargetGroup(guildId, userId, roleIds, grantHistory = {}) {
     const groups = await listGroups(guildId, false);
     const target = chooseOldestGroup(groups, roleIds, grantHistory);
     return target ? Number(target.id) : null;
+  }
+
+  async function getRoleGrantHistory(guildId, userId, roleIds = []) {
+    const ids = Array.from(new Set(Array.from(roleIds || [], String)));
+    if (!ids.length) return {};
+    const placeholders = ids.map(() => '?').join(', ');
+    const rows = await dbManager.all(`
+      SELECT role_id, granted_at
+      FROM bonus_member_role_history
+      WHERE guild_id = ? AND user_id = ? AND removed_at IS NULL AND role_id IN (${placeholders})
+    `, [String(guildId), String(userId), ...ids]);
+    return Object.fromEntries(rows.map(row => [String(row.role_id), Number(row.granted_at) || 0]));
+  }
+
+  async function recordRoleChanges(guildId, userId, { addedRoleIds = [], removedRoleIds = [], changedAt = Date.now() } = {}) {
+    const added = Array.from(new Set(Array.from(addedRoleIds || [], String)));
+    const removed = Array.from(new Set(Array.from(removedRoleIds || [], String)));
+    if (!added.length && !removed.length) return { added: 0, removed: 0 };
+    const now = Number(changedAt) || Date.now();
+    return dbManager.transaction(async tx => {
+      for (const roleId of added) {
+        await tx.run(`
+          INSERT INTO bonus_member_role_history (guild_id, user_id, role_id, granted_at, removed_at, updated_at)
+          VALUES (?, ?, ?, ?, NULL, ?)
+          ON CONFLICT(guild_id, user_id, role_id) DO UPDATE SET
+            granted_at = CASE WHEN bonus_member_role_history.removed_at IS NULL
+              THEN bonus_member_role_history.granted_at ELSE excluded.granted_at END,
+            removed_at = NULL,
+            updated_at = excluded.updated_at
+        `, [String(guildId), String(userId), roleId, now, now]);
+      }
+      for (const roleId of removed) {
+        await tx.run(`
+          UPDATE bonus_member_role_history
+          SET removed_at = ?, updated_at = ?
+          WHERE guild_id = ? AND user_id = ? AND role_id = ? AND removed_at IS NULL
+        `, [now, now, String(guildId), String(userId), roleId]);
+      }
+      return { added: added.length, removed: removed.length };
+    }, 'bonus-role-history');
+  }
+
+  async function seedRoleGrantHistory(guildId, userId, history = {}) {
+    const entries = Object.entries(history || {})
+      .map(([roleId, grantedAt]) => [String(roleId), Number(grantedAt)])
+      .filter(([, grantedAt]) => Number.isSafeInteger(grantedAt) && grantedAt > 0);
+    if (!entries.length) return 0;
+    return dbManager.transaction(async tx => {
+      let inserted = 0;
+      for (const [roleId, grantedAt] of entries) {
+        const result = await tx.run(`
+          INSERT OR IGNORE INTO bonus_member_role_history
+            (guild_id, user_id, role_id, granted_at, removed_at, updated_at)
+          VALUES (?, ?, ?, ?, NULL, ?)
+        `, [String(guildId), String(userId), roleId, grantedAt, Date.now()]);
+        inserted += result.changes;
+      }
+      return inserted;
+    }, 'bonus-role-history-seed');
   }
 
   async function syncAssignment(guildId, userId, targetGroupId, actorId = null, reason = 'role_sync') {
@@ -168,9 +236,10 @@ function createBonusManager(dbManager) {
       const now = Date.now();
       await tx.run(`
         INSERT INTO bonus_balances
-          (guild_id, user_id, group_id, points, message_progress, voice_progress_ms, updated_at)
-        VALUES (?, ?, ?, 0, 0, 0, ?)
-        ON CONFLICT(guild_id, user_id) DO UPDATE SET group_id = excluded.group_id, updated_at = excluded.updated_at
+          (guild_id, user_id, group_id, points, message_progress, voice_progress_ms, last_message_id, last_message_at, updated_at)
+        VALUES (?, ?, ?, 0, 0, 0, NULL, NULL, ?)
+        ON CONFLICT(guild_id, user_id) DO UPDATE SET group_id = excluded.group_id, points = 0,
+          message_progress = 0, voice_progress_ms = 0, last_message_id = NULL, last_message_at = NULL, updated_at = excluded.updated_at
       `, [guild, user, nextGroupId, now]);
 
       if (current) {
@@ -187,7 +256,8 @@ function createBonusManager(dbManager) {
             voiceProgressMs: Number(current.voice_progress_ms) || 0 }), now]);
       }
       return { changed: true, sourceGroupId: oldGroupId, targetGroupId: nextGroupId,
-        balance: current || { points: 0, message_progress: 0, voice_progress_ms: 0 } };
+        balance: { ...(current || {}), group_id: nextGroupId, points: 0, message_progress: 0, voice_progress_ms: 0,
+          last_message_id: null, last_message_at: null } };
     }, 'bonus-assignment');
   }
 
@@ -200,14 +270,20 @@ function createBonusManager(dbManager) {
     const targetGroupId = await resolveTargetGroup(guild, user, roleIds, roleGrantHistory);
 
     return dbManager.transaction(async tx => {
-      if (metric === BONUS_METRICS.voice) {
-        const inserted = await tx.run(`
-          INSERT OR IGNORE INTO bonus_activity_events
-            (event_id, guild_id, user_id, metric, amount, awarded_points, group_id, created_at)
-          VALUES (?, ?, ?, ?, ?, 0, ?, ?)
-        `, [String(eventId), guild, user, metric, safeAmount, targetGroupId, Date.now()]);
-        if (!inserted.changes) return { duplicate: true, awardedPoints: 0 };
+      // سجل كل نشاط كبصمة فريدة لمنع إعادة احتسابه بعد تغير إسناد العضو.
+      const inserted = await tx.run(`
+        INSERT OR IGNORE INTO bonus_activity_events
+          (event_id, guild_id, user_id, metric, amount, awarded_points, group_id, created_at)
+        VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+      `, [String(eventId), guild, user, metric, safeAmount, targetGroupId, Date.now()]);
+      if (!inserted.changes) return { duplicate: true, awardedPoints: 0 };
+
+      // لا يمنح البونس نقاطاً أو تقدماً لعضو غير مسند إلى قروب نشط.
+      // يبقى الحدث مسجلاً فقط لمنع إعادة معالجة نفس النشاط لاحقاً.
+      if (targetGroupId == null) {
+        return { unassigned: true, assignedGroupId: null, awardedPoints: 0, countedAmount: 0 };
       }
+
       const persistVoiceCursor = async () => {
         if (metric !== BONUS_METRICS.voice || !voiceSession) return;
         await tx.run(`
@@ -219,24 +295,20 @@ function createBonusManager(dbManager) {
       };
 
       let balance = await tx.get('SELECT * FROM bonus_balances WHERE guild_id = ? AND user_id = ?', [guild, user]);
+      const currentMessageId = metric === BONUS_METRICS.messages ? String(eventId).split(':').pop() : null;
+      let shouldAdvanceMessageCursor = metric === BONUS_METRICS.messages;
       if (metric === BONUS_METRICS.messages && balance?.last_message_id) {
-        const currentSnowflake = String(eventId).split(':').pop();
-        const previousSnowflake = String(balance.last_message_id);
-        try {
-          if (currentSnowflake === previousSnowflake || (BigInt(currentSnowflake) <= BigInt(previousSnowflake))) {
-            return { duplicate: true, awardedPoints: 0 };
-          }
-        } catch {
-          if (currentSnowflake === previousSnowflake) return { duplicate: true, awardedPoints: 0 };
-        }
+        try { shouldAdvanceMessageCursor = BigInt(currentMessageId) > BigInt(String(balance.last_message_id)); }
+        catch { shouldAdvanceMessageCursor = currentMessageId !== String(balance.last_message_id); }
       }
       if (!balance || (balance.group_id == null ? null : Number(balance.group_id)) !== targetGroupId) {
         const now = Date.now();
         const oldGroupId = balance?.group_id == null ? null : Number(balance.group_id);
         await tx.run(`
-          INSERT INTO bonus_balances (guild_id, user_id, group_id, points, message_progress, voice_progress_ms, updated_at)
-          VALUES (?, ?, ?, 0, 0, 0, ?)
-          ON CONFLICT(guild_id, user_id) DO UPDATE SET group_id = excluded.group_id, updated_at = excluded.updated_at
+          INSERT INTO bonus_balances (guild_id, user_id, group_id, points, message_progress, voice_progress_ms, last_message_id, last_message_at, updated_at)
+          VALUES (?, ?, ?, 0, 0, 0, NULL, NULL, ?)
+          ON CONFLICT(guild_id, user_id) DO UPDATE SET group_id = excluded.group_id, points = 0,
+            message_progress = 0, voice_progress_ms = 0, last_message_id = NULL, last_message_at = NULL, updated_at = excluded.updated_at
         `, [guild, user, targetGroupId, now]);
         if (balance) {
           if (oldGroupId != null) {
@@ -249,7 +321,8 @@ function createBonusManager(dbManager) {
             VALUES (?, 'member_transfer', ?, ?, ?, ?, ?)
           `, [guild, user, oldGroupId, targetGroupId, JSON.stringify({ reason: 'activity_role_resolution', points: balance.points,
             messageProgress: balance.message_progress, voiceProgressMs: balance.voice_progress_ms }), now]);
-          balance = { ...balance, group_id: targetGroupId };
+        balance = { ...balance, group_id: targetGroupId, points: 0, message_progress: 0, voice_progress_ms: 0,
+          last_message_id: null, last_message_at: null };
         } else {
           balance = { points: 0, message_progress: 0, voice_progress_ms: 0, group_id: targetGroupId };
         }
@@ -258,9 +331,10 @@ function createBonusManager(dbManager) {
       const rule = await tx.get('SELECT threshold, points, activated_at FROM bonus_rules WHERE guild_id = ? AND metric = ?', [guild, metric]);
       if (!rule) {
         if (metric === BONUS_METRICS.messages) {
-          const snowflake = String(eventId).split(':').pop();
-          await tx.run('UPDATE bonus_balances SET last_message_id = ?, last_message_at = ?, updated_at = ? WHERE guild_id = ? AND user_id = ?',
-            [snowflake, Date.now(), Date.now(), guild, user]);
+          if (shouldAdvanceMessageCursor) {
+            await tx.run('UPDATE bonus_balances SET last_message_id = ?, last_message_at = ?, updated_at = ? WHERE guild_id = ? AND user_id = ?',
+              [currentMessageId, Date.now(), Date.now(), guild, user]);
+          }
         } else {
           await tx.run('UPDATE bonus_activity_events SET group_id = ? WHERE event_id = ?', [targetGroupId, String(eventId)]);
           await persistVoiceCursor();
@@ -306,11 +380,11 @@ function createBonusManager(dbManager) {
 
       const award = calculateAward(previousProgress, eligibleAmount, Number(rule.threshold), Number(rule.points), multiplier);
       if (metric === BONUS_METRICS.messages) {
-        const snowflake = String(eventId).split(':').pop();
+        const lastMessageId = shouldAdvanceMessageCursor ? currentMessageId : balance.last_message_id;
         await tx.run(`
           UPDATE bonus_balances SET ${progressColumn} = ?, points = points + ?, last_message_id = ?, last_message_at = ?, updated_at = ?
           WHERE guild_id = ? AND user_id = ?
-        `, [award.leftover, award.awardedPoints, snowflake, now, now, guild, user]);
+        `, [award.leftover, award.awardedPoints, lastMessageId, shouldAdvanceMessageCursor ? now : balance.last_message_at, now, guild, user]);
       } else {
         await tx.run(`
           UPDATE bonus_balances SET ${progressColumn} = ?, points = points + ?, updated_at = ?
@@ -326,11 +400,14 @@ function createBonusManager(dbManager) {
   }
 
   async function setMultiplier(guildId, { scope, groupId, userId = null, durationMs = null }, actorId) {
-    if (!['group', 'user'].includes(scope) || !Number.isSafeInteger(Number(groupId))) throw new Error('INVALID_MULTIPLIER_SCOPE');
+    if (!['group', 'user'].includes(scope) || !Number.isSafeInteger(Number(groupId)) || Number(groupId) < 1) throw new Error('INVALID_MULTIPLIER_SCOPE');
     if (scope === 'user' && !userId) throw new Error('USER_REQUIRED');
+    if (durationMs != null && (!Number.isSafeInteger(Number(durationMs)) || Number(durationMs) <= 0)) throw new Error('INVALID_MULTIPLIER_DURATION');
     const now = Date.now();
     const endsAt = durationMs ? now + Math.max(60000, Math.min(Number(durationMs), 30 * 24 * 60 * 60 * 1000)) : null;
     return dbManager.transaction(async tx => {
+      const group = await tx.get('SELECT id FROM bonus_groups WHERE guild_id = ? AND id = ? AND archived_at IS NULL', [String(guildId), Number(groupId)]);
+      if (!group) throw new Error('GROUP_NOT_FOUND');
       await tx.run(`
         UPDATE bonus_multipliers SET active = 0
         WHERE guild_id = ? AND scope = ? AND group_id = ? AND active = 1 AND COALESCE(user_id, '') = COALESCE(?, '')
@@ -349,12 +426,24 @@ function createBonusManager(dbManager) {
   }
 
   async function clearMultiplier(guildId, { scope, groupId, userId = null }, actorId) {
-    const result = await dbManager.run(`
-      UPDATE bonus_multipliers SET active = 0
-      WHERE guild_id = ? AND scope = ? AND group_id = ? AND active = 1 AND COALESCE(user_id, '') = COALESCE(?, '')
-    `, [String(guildId), scope, Number(groupId), userId ? String(userId) : null]);
-    await audit(guildId, actorId, 'double_bonus_off', userId, groupId, groupId, { scope, removed: result.changes });
-    return result.changes;
+    if (!['group', 'user'].includes(scope) || !Number.isSafeInteger(Number(groupId)) || Number(groupId) < 1) {
+      throw new Error('INVALID_MULTIPLIER_SCOPE');
+    }
+    if (scope === 'user' && !userId) throw new Error('USER_REQUIRED');
+    return dbManager.transaction(async tx => {
+      const group = await tx.get('SELECT id FROM bonus_groups WHERE guild_id = ? AND id = ? AND archived_at IS NULL', [String(guildId), Number(groupId)]);
+      if (!group) throw new Error('GROUP_NOT_FOUND');
+      const result = await tx.run(`
+        UPDATE bonus_multipliers SET active = 0
+        WHERE guild_id = ? AND scope = ? AND group_id = ? AND active = 1 AND COALESCE(user_id, '') = COALESCE(?, '')
+      `, [String(guildId), scope, Number(groupId), userId ? String(userId) : null]);
+      await tx.run(`
+        INSERT INTO bonus_audit_log (guild_id, actor_id, action, target_user_id, target_group_id, details_json, created_at)
+        VALUES (?, ?, 'double_bonus_off', ?, ?, ?, ?)
+      `, [String(guildId), actorId ? String(actorId) : null, userId ? String(userId) : null, Number(groupId),
+        JSON.stringify({ scope, removed: result.changes }), Date.now()]);
+      return result.changes;
+    }, 'bonus-multiplier-clear');
   }
 
   async function listActiveUserMultipliers(guildId, groupId) {
@@ -389,63 +478,64 @@ function createBonusManager(dbManager) {
       if (!group) throw new Error('GROUP_NOT_FOUND');
       const currentRow = await tx.get('SELECT points FROM bonus_group_point_balances WHERE guild_id = ? AND group_id = ?', [String(guildId), Number(groupId)]);
       const manualBefore = Number(currentRow?.points) || 0;
-      const members = await tx.all('SELECT user_id, points FROM bonus_balances WHERE guild_id = ? AND group_id = ? AND points > 0 ORDER BY points DESC, user_id ASC',
+      const membersRow = await tx.get('SELECT COALESCE(SUM(points), 0) AS points FROM bonus_balances WHERE guild_id = ? AND group_id = ?',
         [String(guildId), Number(groupId)]);
-      const membersBefore = members.reduce((sum, row) => sum + Number(row.points || 0), 0);
-      const before = manualBefore + membersBefore;
-      let after;
-      let actualDelta;
-      let manualDelta = 0;
-      let memberDelta = 0;
-      const deductionPreview = [];
-      let deductionCount = 0;
+      const adjustmentsRow = await tx.get('SELECT COALESCE(SUM(delta), 0) AS points FROM bonus_group_adjustments WHERE guild_id = ? AND group_id = ? AND active = 1',
+        [String(guildId), Number(groupId)]);
+      const before = manualBefore + Number(membersRow?.points || 0) + Number(adjustmentsRow?.points || 0);
+      const actualDelta = safeDelta > 0 ? safeDelta : -Math.min(Math.abs(safeDelta), Math.max(0, before));
+      if (safeDelta < 0 && actualDelta === 0) throw new Error('NO_POINTS_TO_REMOVE');
+      const after = before + actualDelta;
       if (safeDelta > 0) {
-        after = before + safeDelta;
-        actualDelta = safeDelta;
-        manualDelta = safeDelta;
         await tx.run(`
           INSERT INTO bonus_group_point_balances (guild_id, group_id, points, updated_at)
           VALUES (?, ?, ?, ?)
           ON CONFLICT(guild_id, group_id) DO UPDATE SET points = excluded.points, updated_at = excluded.updated_at
         `, [String(guildId), Number(groupId), manualBefore + safeDelta, Date.now()]);
       } else {
-        const requested = Math.abs(safeDelta);
-        const remaining = Math.min(requested, before);
-        if (!remaining) throw new Error('NO_POINTS_TO_REMOVE');
-        const manualTaken = Math.min(manualBefore, remaining);
-        manualDelta = -manualTaken;
-        let pending = remaining - manualTaken;
-        if (manualTaken) {
-          await tx.run('UPDATE bonus_group_point_balances SET points = points - ?, updated_at = ? WHERE guild_id = ? AND group_id = ?',
-            [manualTaken, Date.now(), String(guildId), Number(groupId)]);
-        }
-        for (const member of members) {
-          if (pending <= 0) break;
-          const balance = Number(member.points) || 0;
-          const taken = Math.min(balance, pending);
-          await tx.run('UPDATE bonus_balances SET points = points - ?, updated_at = ? WHERE guild_id = ? AND user_id = ? AND group_id = ?',
-            [taken, Date.now(), String(guildId), String(member.user_id), Number(groupId)]);
-          if (deductionPreview.length < 25) deductionPreview.push({ userId: String(member.user_id), points: taken });
-          deductionCount += 1;
-          memberDelta -= taken;
-          pending -= taken;
-        }
-        actualDelta = -(manualTaken + Math.abs(memberDelta));
-        after = before + actualDelta;
+        await tx.run(`
+          INSERT INTO bonus_group_adjustments (guild_id, group_id, delta, reason, actor_id, active, created_at)
+          VALUES (?, ?, ?, 'manual_group_deduction', ?, 1, ?)
+        `, [String(guildId), Number(groupId), actualDelta, actorId ? String(actorId) : null, Date.now()]);
       }
       await tx.run(`
         INSERT INTO bonus_audit_log (guild_id, actor_id, action, source_group_id, target_group_id, details_json, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `, [String(guildId), actorId ? String(actorId) : null, safeDelta > 0 ? 'manual_group_points_add' : 'manual_group_points_remove',
         Number(groupId), Number(groupId), JSON.stringify({ requested: Math.abs(safeDelta), actual: Math.abs(actualDelta), before, after,
-          manualDelta, memberDelta, deductedMembers: deductionCount, deductionPreview }), Date.now()]);
-      return { before, after, delta: actualDelta, manualDelta, memberDelta, deductedMembers: deductionCount, deductions: deductionPreview };
+          affectsMembers: false, persistent: safeDelta < 0 }), Date.now()]);
+      return { before, after, delta: actualDelta, manualDelta: safeDelta > 0 ? actualDelta : 0, memberDelta: 0, deductions: [] };
     }, 'bonus-manual-group-points');
+  }
+
+  async function adjustUserPoints(guildId, groupId, userId, amount, actorId) {
+    const safeAmount = Number(amount);
+    if (!Number.isSafeInteger(safeAmount) || safeAmount <= 0 || safeAmount > MAX_POINTS_PER_EVENT) throw new Error('INVALID_POINTS_ADJUSTMENT');
+    return dbManager.transaction(async tx => {
+      const group = await tx.get('SELECT id FROM bonus_groups WHERE guild_id = ? AND id = ? AND archived_at IS NULL', [String(guildId), Number(groupId)]);
+      const row = await tx.get('SELECT points FROM bonus_balances WHERE guild_id = ? AND group_id = ? AND user_id = ?', [String(guildId), Number(groupId), String(userId)]);
+      if (!group || !row) throw new Error('MEMBER_NOT_IN_GROUP');
+      const before = Number(row.points) || 0;
+      if (safeAmount > before) throw new Error('INSUFFICIENT_MEMBER_POINTS');
+      const now = Date.now();
+      await tx.run('UPDATE bonus_balances SET points = points - ?, updated_at = ? WHERE guild_id = ? AND group_id = ? AND user_id = ?',
+        [safeAmount, now, String(guildId), Number(groupId), String(userId)]);
+      await tx.run(`
+        INSERT INTO bonus_audit_log (guild_id, actor_id, action, target_user_id, source_group_id, target_group_id, details_json, created_at)
+        VALUES (?, ?, 'member_points_remove', ?, ?, ?, ?, ?)
+      `, [String(guildId), actorId ? String(actorId) : null, String(userId), Number(groupId), Number(groupId),
+        JSON.stringify({ requested: safeAmount, before, after: before - safeAmount }), now]);
+      return { userId: String(userId), before, after: before - safeAmount, delta: -safeAmount };
+    }, 'bonus-member-points-remove');
   }
 
   async function resetGroup(guildId, groupId, actorId) {
     return dbManager.transaction(async tx => {
+      const group = await tx.get('SELECT id FROM bonus_groups WHERE guild_id = ? AND id = ? AND archived_at IS NULL', [String(guildId), Number(groupId)]);
+      if (!group) throw new Error('GROUP_NOT_FOUND');
       const rows = await tx.all('SELECT user_id, points, message_progress, voice_progress_ms FROM bonus_balances WHERE guild_id = ? AND group_id = ?', [String(guildId), Number(groupId)]);
+      const adjustments = await tx.all('SELECT delta, reason, actor_id, created_at FROM bonus_group_adjustments WHERE guild_id = ? AND group_id = ? AND active = 1',
+        [String(guildId), Number(groupId)]);
       const totals = rows.reduce((acc, row) => ({
         members: acc.members + 1,
         points: acc.points + Number(row.points || 0),
@@ -455,14 +545,67 @@ function createBonusManager(dbManager) {
       const manual = await tx.get('SELECT points FROM bonus_group_point_balances WHERE guild_id = ? AND group_id = ?', [String(guildId), Number(groupId)]);
       totals.manualPoints = Number(manual?.points) || 0;
       totals.points += totals.manualPoints;
+      totals.adjustmentPoints = adjustments.reduce((sum, row) => sum + Number(row.delta || 0), 0);
+      totals.points += totals.adjustmentPoints;
+      const snapshotAt = Date.now();
+      const snapshot = { snapshotAt, rows, manualPoints: totals.manualPoints, adjustments };
+      const snapshotResult = await tx.run(`
+        INSERT INTO bonus_group_reset_snapshots (guild_id, group_id, snapshot_json, actor_id, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `, [String(guildId), Number(groupId), JSON.stringify(snapshot), actorId ? String(actorId) : null, snapshotAt]);
       await tx.run(`UPDATE bonus_balances SET points = 0, message_progress = 0, voice_progress_ms = 0, updated_at = ? WHERE guild_id = ? AND group_id = ?`, [Date.now(), String(guildId), Number(groupId)]);
       await tx.run('UPDATE bonus_group_point_balances SET points = 0, updated_at = ? WHERE guild_id = ? AND group_id = ?', [Date.now(), String(guildId), Number(groupId)]);
+      await tx.run('UPDATE bonus_group_adjustments SET active = 0 WHERE guild_id = ? AND group_id = ? AND active = 1', [String(guildId), Number(groupId)]);
       await tx.run(`
         INSERT INTO bonus_audit_log (guild_id, actor_id, action, source_group_id, target_group_id, details_json, created_at)
         VALUES (?, ?, 'group_reset', ?, ?, ?, ?)
-      `, [String(guildId), String(actorId), Number(groupId), Number(groupId), JSON.stringify(totals), Date.now()]);
-      return totals;
+      `, [String(guildId), String(actorId), Number(groupId), Number(groupId), JSON.stringify({ ...totals, snapshotId: snapshotResult.id }), Date.now()]);
+      return { ...totals, snapshotId: snapshotResult.id };
     }, 'bonus-reset-group');
+  }
+
+  async function listGroupResetSnapshots(guildId, groupId, limit = 10) {
+    return dbManager.all(`
+      SELECT id, actor_id, created_at, restored_at
+      FROM bonus_group_reset_snapshots
+      WHERE guild_id = ? AND group_id = ?
+      ORDER BY created_at DESC LIMIT ?
+    `, [String(guildId), Number(groupId), Math.max(1, Math.min(25, Number(limit) || 10))]);
+  }
+
+  async function restoreGroupReset(guildId, groupId, snapshotId, actorId) {
+    return dbManager.transaction(async tx => {
+      const group = await tx.get('SELECT id FROM bonus_groups WHERE guild_id = ? AND id = ? AND archived_at IS NULL', [String(guildId), Number(groupId)]);
+      if (!group) throw new Error('GROUP_NOT_FOUND');
+      const snapshotRow = await tx.get('SELECT * FROM bonus_group_reset_snapshots WHERE guild_id = ? AND group_id = ? AND id = ?',
+        [String(guildId), Number(groupId), Number(snapshotId)]);
+      if (!snapshotRow) throw new Error('RESET_SNAPSHOT_NOT_FOUND');
+      const snapshot = safeJsonParse(snapshotRow.snapshot_json, {});
+      const now = Date.now();
+      for (const row of Array.isArray(snapshot.rows) ? snapshot.rows : []) {
+        await tx.run(`UPDATE bonus_balances SET points = ?, message_progress = ?, voice_progress_ms = ?, updated_at = ?
+          WHERE guild_id = ? AND group_id = ? AND user_id = ?`,
+        [Math.max(0, Number(row.points) || 0), Math.max(0, Number(row.message_progress) || 0), Math.max(0, Number(row.voice_progress_ms) || 0), now,
+          String(guildId), Number(groupId), String(row.user_id)]);
+      }
+      await tx.run(`
+        INSERT INTO bonus_group_point_balances (guild_id, group_id, points, updated_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(guild_id, group_id) DO UPDATE SET points = excluded.points, updated_at = excluded.updated_at
+      `, [String(guildId), Number(groupId), Math.max(0, Number(snapshot.manualPoints) || 0), now]);
+      await tx.run('UPDATE bonus_group_adjustments SET active = 0 WHERE guild_id = ? AND group_id = ?', [String(guildId), Number(groupId)]);
+      for (const adjustment of Array.isArray(snapshot.adjustments) ? snapshot.adjustments : []) {
+        const delta = Number(adjustment.delta);
+        if (!Number.isSafeInteger(delta) || delta === 0) continue;
+        await tx.run(`INSERT INTO bonus_group_adjustments (guild_id, group_id, delta, reason, actor_id, active, created_at)
+          VALUES (?, ?, ?, ?, ?, 1, ?)`, [String(guildId), Number(groupId), delta, String(adjustment.reason || 'restored'),
+          adjustment.actor_id ? String(adjustment.actor_id) : null, Number(adjustment.created_at) || now]);
+      }
+      await tx.run('UPDATE bonus_group_reset_snapshots SET restored_at = ? WHERE id = ?', [now, Number(snapshotId)]);
+      await tx.run(`INSERT INTO bonus_audit_log (guild_id, actor_id, action, source_group_id, target_group_id, details_json, created_at)
+        VALUES (?, ?, 'group_reset_restore', ?, ?, ?, ?)`, [String(guildId), actorId ? String(actorId) : null, Number(groupId), Number(groupId),
+        JSON.stringify({ snapshotId: Number(snapshotId) }), now]);
+      return { restored: true, snapshotId: Number(snapshotId) };
+    }, 'bonus-reset-restore');
   }
 
   async function resetUser(guildId, groupId, userId, actorId) {
@@ -485,14 +628,16 @@ function createBonusManager(dbManager) {
     const allowed = ['owner_id', 'avatar_url'];
     const entries = Object.entries(patch).filter(([key]) => allowed.includes(key));
     if (!entries.length) throw new Error('EMPTY_GROUP_UPDATE');
-    const current = await dbManager.get('SELECT * FROM bonus_groups WHERE guild_id = ? AND id = ?', [String(guildId), Number(groupId)]);
-    if (!current) throw new Error('GROUP_NOT_FOUND');
-    const setSql = entries.map(([key]) => `${key} = ?`).join(', ');
-    const values = entries.map(([, value]) => value);
-    await dbManager.run(`UPDATE bonus_groups SET ${setSql} WHERE guild_id = ? AND id = ?`, [...values, String(guildId), Number(groupId)]);
-    await audit(guildId, actorId, entries.some(([key]) => key === 'owner_id') ? 'owner_change' : 'group_update', null,
-      Number(groupId), Number(groupId), Object.fromEntries(entries));
-    return dbManager.get('SELECT * FROM bonus_groups WHERE guild_id = ? AND id = ?', [String(guildId), Number(groupId)]);
+    return dbManager.transaction(async tx => {
+      const current = await tx.get('SELECT * FROM bonus_groups WHERE guild_id = ? AND id = ?', [String(guildId), Number(groupId)]);
+      if (!current) throw new Error('GROUP_NOT_FOUND');
+      const setSql = entries.map(([key]) => `${key} = ?`).join(', ');
+      const values = entries.map(([, value]) => value);
+      await tx.run(`UPDATE bonus_groups SET ${setSql} WHERE guild_id = ? AND id = ?`, [...values, String(guildId), Number(groupId)]);
+      await insertAudit(tx, guildId, actorId, entries.some(([key]) => key === 'owner_id') ? 'owner_change' : 'group_update', null,
+        Number(groupId), Number(groupId), Object.fromEntries(entries));
+      return tx.get('SELECT * FROM bonus_groups WHERE guild_id = ? AND id = ?', [String(guildId), Number(groupId)]);
+    }, 'bonus-group-update');
   }
 
   async function archiveGroup(guildId, groupId, actorId) {
@@ -503,8 +648,12 @@ function createBonusManager(dbManager) {
       if (!result.changes) return false;
       const members = await tx.all('SELECT user_id, points, message_progress, voice_progress_ms FROM bonus_balances WHERE guild_id = ? AND group_id = ?',
         [String(guildId), Number(groupId)]);
-      await tx.run('UPDATE bonus_balances SET group_id = NULL, updated_at = ? WHERE guild_id = ? AND group_id = ?',
-        [now, String(guildId), Number(groupId)]);
+      await tx.run(`
+        UPDATE bonus_balances
+        SET group_id = NULL, points = 0, message_progress = 0, voice_progress_ms = 0,
+          last_message_id = NULL, last_message_at = NULL, updated_at = ?
+        WHERE guild_id = ? AND group_id = ?
+      `, [now, String(guildId), Number(groupId)]);
       await tx.run('UPDATE bonus_multipliers SET active = 0 WHERE guild_id = ? AND group_id = ?', [String(guildId), Number(groupId)]);
       await tx.run(`
         INSERT INTO bonus_audit_log (guild_id, actor_id, action, source_group_id, details_json, created_at)
@@ -518,11 +667,13 @@ function createBonusManager(dbManager) {
   async function getLeaderboard(guildId, limit = 10) {
     return dbManager.all(`
       SELECT g.id, g.role_id, g.owner_id, g.avatar_url, g.created_at,
-        COALESCE(SUM(b.points), 0) + COALESCE(MAX(gp.points), 0) AS points,
+        COALESCE(SUM(b.points), 0) + COALESCE(MAX(gp.points), 0) + COALESCE(MAX(ga.points), 0) AS points,
         COUNT(DISTINCT CASE WHEN b.points > 0 THEN b.user_id END) AS contributors
       FROM bonus_groups g
       LEFT JOIN bonus_balances b ON b.guild_id = g.guild_id AND b.group_id = g.id
       LEFT JOIN bonus_group_point_balances gp ON gp.guild_id = g.guild_id AND gp.group_id = g.id
+      LEFT JOIN (SELECT guild_id, group_id, SUM(delta) AS points FROM bonus_group_adjustments WHERE active = 1 GROUP BY guild_id, group_id) ga
+        ON ga.guild_id = g.guild_id AND ga.group_id = g.id
       WHERE g.guild_id = ? AND g.archived_at IS NULL
       GROUP BY g.id
       ORDER BY points DESC, g.created_at ASC, g.id ASC
@@ -533,14 +684,26 @@ function createBonusManager(dbManager) {
   async function getLeaderboardSummary(guildId) {
     return dbManager.get(`
       SELECT COUNT(*) AS groups, COALESCE(SUM(points), 0) AS points FROM (
-        SELECT g.id, COALESCE(SUM(b.points), 0) + COALESCE(MAX(gp.points), 0) AS points
+        SELECT g.id, COALESCE(SUM(b.points), 0) + COALESCE(MAX(gp.points), 0) + COALESCE(MAX(ga.points), 0) AS points
         FROM bonus_groups g
         LEFT JOIN bonus_balances b ON b.guild_id = g.guild_id AND b.group_id = g.id
         LEFT JOIN bonus_group_point_balances gp ON gp.guild_id = g.guild_id AND gp.group_id = g.id
+        LEFT JOIN (SELECT guild_id, group_id, SUM(delta) AS points FROM bonus_group_adjustments WHERE active = 1 GROUP BY guild_id, group_id) ga
+          ON ga.guild_id = g.guild_id AND ga.group_id = g.id
         WHERE g.guild_id = ? AND g.archived_at IS NULL
         GROUP BY g.id
       )
     `, [String(guildId)]);
+  }
+
+  async function getGroupPoints(guildId, groupId) {
+    const row = await dbManager.get(`
+      SELECT COALESCE((SELECT SUM(points) FROM bonus_balances WHERE guild_id = ? AND group_id = ?), 0)
+        + COALESCE((SELECT points FROM bonus_group_point_balances WHERE guild_id = ? AND group_id = ?), 0)
+        + COALESCE((SELECT SUM(delta) FROM bonus_group_adjustments WHERE guild_id = ? AND group_id = ? AND active = 1), 0) AS points
+      FROM bonus_groups WHERE guild_id = ? AND id = ? AND archived_at IS NULL
+    `, [String(guildId), Number(groupId), String(guildId), Number(groupId), String(guildId), Number(groupId), String(guildId), Number(groupId)]);
+    return row ? Number(row.points) || 0 : null;
   }
 
   async function getBalance(guildId, userId) {
@@ -554,8 +717,10 @@ function createBonusManager(dbManager) {
 
   return {
     readConfig, saveConfig, audit, listGroups, getRules, setRule, disableRule, addGroup, resolveTargetGroup,
+    getRoleGrantHistory, recordRoleChanges, seedRoleGrantHistory,
     syncAssignment, addActivity, setMultiplier, clearMultiplier, listActiveUserMultipliers, getActiveGroupMultiplier,
-    adjustGroupPoints, resetGroup, resetUser, updateGroup, archiveGroup, getLeaderboard, getLeaderboardSummary, getBalance, isReady
+    adjustGroupPoints, adjustUserPoints, resetGroup, listGroupResetSnapshots, restoreGroupReset, resetUser, updateGroup, archiveGroup,
+    getLeaderboard, getLeaderboardSummary, getGroupPoints, getBalance, isReady
   };
 }
 

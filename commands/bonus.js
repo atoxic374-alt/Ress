@@ -10,9 +10,8 @@ const { createBonusManager, BONUS_METRICS } = require('../utils/bonusManager');
 const { buildBonusTopImage, normalizeHex } = require('../utils/bonusTopRenderer');
 const colorManager = require('../utils/colorManager');
 const interactionRouter = require('../utils/interactionRouter');
-
 const name = 'bonus';
-const aliases = ['بونس'];
+const aliases = [];
 const roleHistoryPath = path.join(__dirname, '..', 'data', 'roleGrantHistory.json');
 const activeAddFlows = new Map();
 const pendingRuleChanges = new Map();
@@ -22,6 +21,11 @@ const lastRenderAt = new Map();
 const activeBoardPanels = new Map();
 const roleAuditCache = new Map();
 const guildRoleAuditCache = new Map();
+const groupSearchCache = new Map();
+const voiceTrackingCache = new Map();
+const displayEntityCache = new Map();
+const DISPLAY_CACHE_TTL_MS = 60 * 1000;
+const DISPLAY_MEMBER_BATCH_SIZE = 100;
 let manager;
 let boundClient = null;
 let voiceInterval = null;
@@ -66,11 +70,15 @@ async function readRoleHistoryForMember(guild, member) {
   const cacheKey = idKey(guild.id, member.id);
   const cached = roleAuditCache.get(cacheKey);
   if (cached && Date.now() - cached.checkedAt < 60000) return { ...cached.values };
+  const manager = getManager();
   const history = { ...readRoleHistory(guild.id, member.id) };
-  const groups = await getManager().listGroups(guild.id).catch(() => []);
+  const groups = await manager.listGroups(guild.id, true).catch(() => []);
   const heldGroupRoles = groups.map(group => String(group.role_id)).filter(roleId => member.roles?.cache?.has(roleId));
+  const persistedHistory = await manager.getRoleGrantHistory(guild.id, member.id, heldGroupRoles).catch(() => ({}));
+  Object.assign(history, persistedHistory);
   const missing = heldGroupRoles.filter(roleId => !Number(history[roleId] || 0));
   if (!missing.length) {
+    await manager.seedRoleGrantHistory(guild.id, member.id, history).catch(() => {});
     roleAuditCache.set(cacheKey, { checkedAt: Date.now(), values: history });
     return history;
   }
@@ -92,7 +100,7 @@ async function readRoleHistoryForMember(guild, member) {
         }
       }
     } catch {
-      // Missing audit-log permission falls back to stable group creation order.
+      // عند غياب صلاحية السجل لا نخمن القروب؛ يبقى العضو بلا استهداف مؤقتاً.
     }
     auditSnapshot = { checkedAt: Date.now(), grants };
     guildRoleAuditCache.set(String(guild.id), auditSnapshot);
@@ -103,6 +111,7 @@ async function readRoleHistoryForMember(guild, member) {
     if (timestamp > 0) values[roleId] = timestamp;
   }
   const mergedHistory = { ...history, ...values };
+  await manager.seedRoleGrantHistory(guild.id, member.id, mergedHistory).catch(() => {});
   roleAuditCache.set(cacheKey, { checkedAt: Date.now(), values: mergedHistory });
   return mergedHistory;
 }
@@ -286,18 +295,66 @@ function buildGroupSelect(action, groups, page = 0) {
   const nav = [];
   if (safePage > 0) nav.push(button(`bonus:page:${action}:${safePage - 1}`, 'السابق'));
   if (safePage + 1 < pageCount) nav.push(button(`bonus:page:${action}:${safePage + 1}`, 'التالي'));
+  nav.push(button(`bonus:group-search:${action}`, 'بحث'));
   nav.push(button('bonus:home', 'إلغاء / رجوع'));
   rows.push(new ActionRowBuilder().addComponents(nav));
   return { content: `اختر القروب المطلوب (صفحة ${safePage + 1}/${pageCount}):`, components: rows };
 }
 
-async function getGroupsForDisplay(guild) {
-  const groups = await getManager().listGroups(guild.id, false);
+async function getGroupsForDisplay(guild, sourceGroups = null) {
+  const groups = sourceGroups || await getManager().listGroups(guild.id, false);
+  const roleIds = [...new Set(groups.map(group => String(group.role_id)).filter(Boolean))];
+  const ownerIds = [...new Set(groups.map(group => String(group.owner_id)).filter(Boolean))];
+  const cacheKey = String(guild.id);
+  let cached = displayEntityCache.get(cacheKey);
+  if (!cached || cached.expiresAt <= Date.now()) {
+    cached = { roles: new Map(), members: new Map(), expiresAt: Date.now() + DISPLAY_CACHE_TTL_MS };
+    displayEntityCache.set(cacheKey, cached);
+  }
+
+  // الرولات يمكن جلبها دفعة واحدة، بدلاً من طلب مستقل لكل رول.
+  const missingRoleIds = roleIds.filter(roleId => !guild.roles.cache.has(roleId) && !cached.roles.has(roleId));
+  if (missingRoleIds.length && typeof guild.roles.fetch === 'function') {
+    const fetchedRoles = await guild.roles.fetch().catch(error => {
+      console.error('[bonus] batch role fetch failed:', error);
+      return null;
+    });
+    if (fetchedRoles) for (const role of fetchedRoles.values()) cached.roles.set(String(role.id), role);
+  }
+
+  // جلب المالكين على دفعات Discord، مع عدم تكرار المعرفات والكاش لمدة قصيرة.
+  const missingOwnerIds = ownerIds.filter(ownerId => !guild.members.cache.has(ownerId) && !cached.members.has(ownerId));
+  if (typeof guild.members.fetch === 'function') {
+    for (let index = 0; index < missingOwnerIds.length; index += DISPLAY_MEMBER_BATCH_SIZE) {
+      const batch = missingOwnerIds.slice(index, index + DISPLAY_MEMBER_BATCH_SIZE);
+      if (!batch.length) continue;
+      const fetchedMembers = await guild.members.fetch({ user: batch }).catch(error => {
+        console.error('[bonus] batch member fetch failed:', error);
+        return null;
+      });
+      if (fetchedMembers) for (const member of fetchedMembers.values()) cached.members.set(String(member.id), member);
+    }
+  }
+
+  cached.expiresAt = Date.now() + DISPLAY_CACHE_TTL_MS;
   return groups.map(group => ({
     ...group,
-    role_name: guild.roles.cache.get(String(group.role_id))?.name || 'رول محذوف',
-    owner_name: guild.members.cache.get(String(group.owner_id))?.displayName || guild.members.cache.get(String(group.owner_id))?.user?.username || 'مالك غير موجود'
+    role_name: guild.roles.cache.get(String(group.role_id))?.name || cached.roles.get(String(group.role_id))?.name || 'رول محذوف',
+    owner_name: guild.members.cache.get(String(group.owner_id))?.displayName
+      || guild.members.cache.get(String(group.owner_id))?.user?.username
+      || cached.members.get(String(group.owner_id))?.displayName
+      || cached.members.get(String(group.owner_id))?.user?.username
+      || 'مالك غير موجود'
   }));
+}
+
+async function resolveCurrentGroupForMember(guild, member) {
+  if (!guild || !member) return { groups: [], targetGroupId: null, roleHistory: {} };
+  const db = getManager();
+  const groups = await db.listGroups(guild.id, false);
+  const roleHistory = await readRoleHistoryForMember(guild, member);
+  const targetGroupId = await db.resolveTargetGroup(guild.id, member.id, getRoleIds(member), roleHistory);
+  return { groups, targetGroupId: targetGroupId == null ? null : Number(targetGroupId), roleHistory };
 }
 
 async function maybeRefreshBoard(guild, force = false) {
@@ -343,7 +400,7 @@ function buildPublicRows() {
     button('bonus:add-points', 'إعطاء نقاط'),
     button('bonus:remove-points', 'إزالة نقاط', ButtonStyle.Danger),
     button('bonus:double', 'دبل بونس')
-  )];
+  ), new ActionRowBuilder().addComponents(button('bonus:owner-avatar', 'تغيير أفتار قروبي'))];
 }
 
 function boardCounter(summary) {
@@ -358,11 +415,11 @@ async function buildBoardPayload(guild, prompt = '') {
   const [summary, leaderboard] = await Promise.all([
     db.getLeaderboardSummary(guild.id), db.getLeaderboard(guild.id, 10)
   ]);
-  const groups = leaderboard.map((group, index) => ({
-    ...group,
-    role_name: guild.roles.cache.get(String(group.role_id))?.name || `قروب ${index + 1}`,
-    owner_name: guild.members.cache.get(String(group.owner_id))?.displayName || guild.members.cache.get(String(group.owner_id))?.user?.username || 'مالك غير محدد'
-  }));
+  const groups = await getGroupsForDisplay(guild, leaderboard);
+  groups.forEach((group, index) => {
+    if (!group.role_name || group.role_name === 'رول محذوف') group.role_name = `قروب ${index + 1}`;
+    if (!group.owner_name || group.owner_name === 'مالك غير موجود') group.owner_name = 'مالك غير محدد';
+  });
   const attachment = await buildBonusTopImage({ guild, groups, config, updatedAt: Date.now() });
   return { content: [boardCounter(summary), prompt].filter(Boolean).join('\n'), files: [attachment], attachments: [], components: buildPublicRows() };
 }
@@ -542,13 +599,92 @@ async function handleInteraction(interaction, context = {}) {
       return handleManagerMenu(interaction, `${action}:${parts.join(':')}`);
     }
 
+    if (action === 'owner-avatar') {
+      const ownGroups = await getGroupsForDisplay(interaction.guild);
+      const ownedGroups = ownGroups.filter(group => String(group.owner_id) === String(interaction.user.id));
+      if (!ownedGroups.length) {
+        await showPrivatePanel(interaction, { content: 'لا يوجد قروب مملوك لك.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+      } else if (ownedGroups.length === 1) {
+        await interaction.showModal(modal(`bonus:modal:owner-avatar:${ownedGroups[0].id}`, 'صورة القروب', [
+          { id: 'url', label: 'رابط صورة من Discord CDN (اختياري)', required: false, maxLength: 300,
+            placeholder: 'https://cdn.discordapp.com/attachments/…' }
+        ]));
+      } else {
+        await showPrivatePanel(interaction, buildGroupSelect('owner-avatar', ownedGroups), true);
+      }
+      return true;
+    }
+
+    if (action === 'page' && parts[0] === 'owner-avatar') {
+      const ownedGroups = (await getGroupsForDisplay(interaction.guild))
+        .filter(group => String(group.owner_id) === String(interaction.user.id));
+      await showPrivatePanel(interaction, buildGroupSelect('owner-avatar', ownedGroups, Number(parts[1])), true);
+      return true;
+    }
+
+    if (action === 'select' && parts[0] === 'owner-avatar') {
+      const groupId = Number(interaction.values[0]);
+      const group = (await getManager().listGroups(interaction.guild.id)).find(item =>
+        Number(item.id) === groupId && String(item.owner_id) === String(interaction.user.id));
+      if (!group) {
+        await deny(interaction, 'هذا القروب غير مملوك لك أو لم يعد نشطاً.');
+        return true;
+      }
+      await interaction.showModal(modal(`bonus:modal:owner-avatar:${groupId}`, 'صورة القروب', [
+        { id: 'url', label: 'رابط صورة من Discord CDN (اختياري)', required: false, maxLength: 300,
+          placeholder: 'https://cdn.discordapp.com/attachments/…' }
+      ]));
+      return true;
+    }
+
+    if (action === 'group-search' && parts[0] === 'owner-avatar') {
+      await interaction.showModal(modal('bonus:modal:group-search:owner-avatar', 'بحث في قروباتي', [
+        { id: 'query', label: 'اسم الرول أو رقم القروب', placeholder: 'اكتب كلمة البحث', maxLength: 80 }
+      ]));
+      return true;
+    }
+
+    if (action === 'modal' && parts[0] === 'group-search' && parts[1] === 'owner-avatar') {
+      const query = String(collectModalValue(interaction, 'query') || '').trim().toLowerCase();
+      const ownedGroups = (await getGroupsForDisplay(interaction.guild))
+        .filter(group => String(group.owner_id) === String(interaction.user.id));
+      const filtered = query ? ownedGroups.filter(group => [group.role_name, group.role_id, group.id]
+        .some(value => String(value || '').toLowerCase().includes(query))) : ownedGroups;
+      groupSearchCache.set(`${interaction.guild.id}:${interaction.user.id}:owner-avatar`, { createdAt: Date.now(), groups: filtered });
+      await showPrivatePanel(interaction, filtered.length ? buildGroupSelect('owner-avatar', filtered, 0)
+        : { content: 'لا يوجد قروب مطابق تملكه.', components: [new ActionRowBuilder().addComponents(button('bonus:owner-avatar', 'بحث جديد'), button('bonus:home', 'رجوع'))] }, true);
+      return true;
+    }
+
+    if (action === 'modal' && parts[0] === 'owner-avatar') {
+      const groupId = Number(parts[1]);
+      const group = (await getManager().listGroups(interaction.guild.id)).find(item =>
+        Number(item.id) === groupId && String(item.owner_id) === String(interaction.user.id));
+      if (!group) {
+        await deny(interaction, 'لا تملك صلاحية تعديل هذا القروب.');
+        return true;
+      }
+      const url = collectModalValue(interaction, 'url');
+      if (url && (!/^https:\/\/(cdn\.discordapp\.com|media\.discordapp\.net)\//i.test(url) || !/\.(png|jpe?g|webp|gif)(\?|$)/i.test(url))) {
+        await showPrivatePanel(interaction, await buildReturnPayload(interaction, 'استخدم رابط صورة مباشر من Discord CDN بصيغة PNG/JPG/WEBP/GIF، أو اتركه فارغاً.'), true);
+        return true;
+      }
+      await getManager().updateGroup(interaction.guild.id, groupId, { avatar_url: url || null }, interaction.user.id);
+      await showPrivatePanel(interaction, await buildReturnPayload(interaction, url ? 'تم تحديث أفتار قروبك.' : 'عاد القروب لاستخدام أيقونة السيرفر.'), true);
+      scheduleRefresh(interaction.guild, true);
+      return true;
+    }
+
     if (!await requireManager(interaction, context)) return true;
     const db = getManager();
 
     if (action === 'page') {
       const selectAction = parts[0];
       const page = Number(parts[1]);
-      const groups = await getGroupsForDisplay(interaction.guild);
+      const cacheKey = `${interaction.guild.id}:${interaction.user.id}:${selectAction}`;
+      const cachedSearch = groupSearchCache.get(cacheKey);
+      const groups = cachedSearch && Date.now() - cachedSearch.createdAt < 5 * 60 * 1000
+        ? cachedSearch.groups : await getGroupsForDisplay(interaction.guild);
       await showPrivatePanel(interaction, buildGroupSelect(selectAction, groups, page), true);
       return true;
     }
@@ -728,10 +864,68 @@ async function handleInteraction(interaction, context = {}) {
       return true;
     }
 
+    if (action === 'group-search') {
+      const searchAction = parts[0];
+      if (!['add-points', 'remove-points', 'double', 'reset-group', 'remove-group'].includes(searchAction)) return true;
+      await interaction.showModal(modal(`bonus:modal:group-search:${searchAction}`, 'بحث في القروبات', [
+        { id: 'query', label: 'اسم الرول أو رقم القروب أو المالك', placeholder: 'اكتب كلمة البحث', maxLength: 80 }
+      ]));
+      return true;
+    }
+
+    if (action === 'remove-mode') {
+      const [mode, rawGroupId] = parts;
+      const groupId = Number(rawGroupId);
+      const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
+      if (!group) {
+        await deny(interaction, 'القروب غير موجود أو مؤرشف.');
+        return true;
+      }
+      if (mode === 'group') {
+        await interaction.showModal(modal(`bonus:modal:manual-points:remove-group:${groupId}`, 'إزالة نقاط من إجمالي القروب', [
+          { id: 'amount', label: 'عدد النقاط المراد إزالتها', placeholder: '100', maxLength: 8 }
+        ]));
+      } else if (mode === 'member') {
+        const menu = new UserSelectMenuBuilder().setCustomId(`bonus:select:remove-member:${groupId}`)
+          .setPlaceholder('ابحث عن عضو يحمل رول القروب').setMinValues(1).setMaxValues(1);
+        await showPrivatePanel(interaction, {
+          content: `اختر عضواً من رول القروب <@&${group.role_id}>. البحث في Discord متاح، وسيُعاد التحقق من الرول والرصيد عند التأكيد.`,
+          components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(button('bonus:home', 'إلغاء / رجوع'))]
+        }, true);
+      }
+      return true;
+    }
+
+    if (action === 'select' && parts[0] === 'remove-member') {
+      const groupId = Number(parts[1]);
+      const userId = interaction.values[0];
+      const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
+      const member = await interaction.guild.members.fetch(userId).catch(() => null);
+      const balance = await db.getBalance(interaction.guild.id, userId);
+      if (!group || !member || !member.roles.cache.has(String(group.role_id)) || Number(balance?.group_id) !== groupId) {
+        await deny(interaction, 'العضو لا يحمل رول القروب أو لا يملك رصيداً داخله.');
+        return true;
+      }
+      await interaction.showModal(modal(`bonus:modal:manual-points:remove-member:${groupId}:${userId}`, 'إزالة نقاط من عضو', [
+        { id: 'amount', label: `رصيد العضو الحالي: ${Number(balance.points || 0)}`, placeholder: '10', maxLength: 8 }
+      ]));
+      return true;
+    }
+
     if (action === 'select' && ['add-points', 'remove-points'].includes(parts[0])) {
       const groupId = Number(interaction.values[0]);
       const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
       if (!group) return true;
+      if (parts[0] === 'remove-points') {
+        await showPrivatePanel(interaction, {
+          content: `اختر نوع الإزالة للقروب <@&${group.role_id}>:`,
+          components: [new ActionRowBuilder().addComponents(
+            button(`bonus:remove-mode:group:${groupId}`, 'إزالة من إجمالي القروب', ButtonStyle.Danger),
+            button(`bonus:remove-mode:member:${groupId}`, 'إزالة من عضو محدد', ButtonStyle.Secondary)
+          ), new ActionRowBuilder().addComponents(button('bonus:home', 'إلغاء / رجوع'))]
+        }, true);
+        return true;
+      }
       const verb = parts[0] === 'add-points' ? 'إعطاء' : 'إزالة';
       await interaction.showModal(modal(`bonus:modal:manual-points:${parts[0]}:${groupId}`, `${verb} نقاط للقروب`, [
         { id: 'amount', label: `عدد النقاط (${verb})`, placeholder: '100', maxLength: 8 }
@@ -927,8 +1121,17 @@ async function handleInteraction(interaction, context = {}) {
       if (!['group', 'user'].includes(scope)) return true;
       const userId = scope === 'user' ? rawUserId : null;
       const durationMs = durationToken === 'forever' ? null : Number(durationToken);
+      const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
+      if (!group) {
+        await deny(interaction, 'القروب غير موجود أو مؤرشف.');
+        return true;
+      }
+      const role = await interaction.guild.roles.fetch(String(group.role_id)).catch(() => null);
+      if (!role) {
+        await deny(interaction, 'رول القروب غير موجود في السيرفر حالياً.');
+        return true;
+      }
       if (scope === 'user') {
-        const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
         const member = await interaction.guild.members.fetch(userId).catch(() => null);
         if (!group || !member || !member.roles.cache.has(String(group.role_id))) {
           await deny(interaction, 'العضو لم يعد يحمل رول هذا القروب.');
@@ -954,13 +1157,28 @@ async function handleInteraction(interaction, context = {}) {
       return true;
     }
 
+    if (action === 'restore-reset') {
+      const [rawGroupId, rawSnapshotId] = parts;
+      try {
+        await db.restoreGroupReset(interaction.guild.id, Number(rawGroupId), Number(rawSnapshotId), interaction.user.id);
+        await showPrivatePanel(interaction, await buildReturnPayload(interaction, 'تمت استعادة آخر لقطة محفوظة للتصفير.'), true);
+        scheduleRefresh(interaction.guild, true);
+      } catch (error) {
+        await showPrivatePanel(interaction, await buildReturnPayload(interaction, error.message === 'RESET_SNAPSHOT_NOT_FOUND'
+          ? 'لقطة التصفير غير موجودة.' : 'تعذرت استعادة اللقطة.'), true);
+      }
+      return true;
+    }
+
     if (action === 'confirm') {
-      const [confirmAction, rawGroupId, rawUserId] = parts;
+      const [confirmAction, rawGroupId, rawUserId, rawAmount] = parts;
       const groupId = Number(rawGroupId);
       if (confirmAction === 'group-reset') {
         await settleVoiceBeforeReset(interaction.guild, groupId);
         const totals = await db.resetGroup(interaction.guild.id, groupId, interaction.user.id);
-        await showPrivatePanel(interaction, { content: `تم تصفير القروب. خُصمت ${totals.points.toLocaleString()} نقطة وأُعيد تقدم ${totals.members} عضوًا إلى الصفر.`, components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع للإعدادات'))] }, true);
+        await showPrivatePanel(interaction, { content: `تم تصفير القروب وبدأ من 0. تم حفظ نسخة سابقة قابلة للاستعادة. كانت النقاط ${totals.points.toLocaleString()} لعدد ${totals.members} عضوًا.`, components: [new ActionRowBuilder().addComponents(
+          button(`bonus:restore-reset:${groupId}:${totals.snapshotId}`, 'استعادة ما قبل التصفير', ButtonStyle.Secondary), button('bonus:home', 'رجوع للإعدادات')
+        )] }, true);
       } else if (confirmAction === 'user-reset') {
         await settleVoiceBeforeReset(interaction.guild, groupId, rawUserId === '0' ? null : rawUserId);
         const result = await db.resetUser(interaction.guild.id, groupId, rawUserId === '0' ? '' : rawUserId, interaction.user.id);
@@ -970,16 +1188,21 @@ async function handleInteraction(interaction, context = {}) {
         await showPrivatePanel(interaction, await buildReturnPayload(interaction, archived
           ? 'أزيل القروب من التوب وأُرشف دون حذف الرصيد؛ إعادة إضافة الرول تعيد القروب وتاريخه.'
           : 'القروب غير موجود أو مؤرشف.'), true);
-      } else if (confirmAction === 'remove-points') {
-        const amount = Number(rawUserId);
+      } else if (confirmAction === 'remove-group' || confirmAction === 'remove-member') {
+        const userId = confirmAction === 'remove-member' ? rawUserId : null;
+        const amount = Number(confirmAction === 'remove-member' ? rawAmount : rawUserId);
         try {
-          const result = await db.adjustGroupPoints(interaction.guild.id, groupId, -amount, interaction.user.id);
-          const memberDeducted = Math.abs(Number(result.memberDelta) || 0);
-          const manualDeducted = Math.abs(Number(result.manualDelta) || 0);
-          const prompt = `تم خصم ${Math.abs(result.delta).toLocaleString()} نقطة من إجمالي القروب. من الرصيد الإداري: ${manualDeducted.toLocaleString()}، ومن أرصدة الأعضاء: ${memberDeducted.toLocaleString()}.`;
+          const result = confirmAction === 'remove-member'
+            ? await db.adjustUserPoints(interaction.guild.id, groupId, userId, amount, interaction.user.id)
+            : await db.adjustGroupPoints(interaction.guild.id, groupId, -amount, interaction.user.id);
+          const prompt = confirmAction === 'remove-member'
+            ? `تمت إزالة ${Math.abs(result.delta).toLocaleString()} نقطة من <@${userId}> فقط.`
+            : `تمت إزالة ${Math.abs(result.delta).toLocaleString()} نقطة من إجمالي القروب وحفظ الخصم؛ لم تتغير نقاط الأعضاء.`;
           await showPrivatePanel(interaction, await buildReturnPayload(interaction, prompt), true);
         } catch (error) {
-          const prompt = error.message === 'NO_POINTS_TO_REMOVE' ? 'لا توجد نقاط متاحة للخصم.' : 'تعذر خصم النقاط.';
+          const prompt = error.message === 'NO_POINTS_TO_REMOVE' ? 'لا توجد نقاط متاحة للخصم.'
+            : error.message === 'INSUFFICIENT_MEMBER_POINTS' ? 'رصيد العضو أقل من المبلغ المطلوب.'
+              : error.message === 'MEMBER_NOT_IN_GROUP' ? 'العضو لم يعد تابعاً لهذا القروب.' : 'تعذر تنفيذ الإزالة.';
           await showPrivatePanel(interaction, await buildReturnPayload(interaction, prompt), true);
         }
       }
@@ -1041,6 +1264,18 @@ async function handleInteraction(interaction, context = {}) {
         scheduleRefresh(interaction.guild, true);
         return true;
       }
+      if (modalAction === 'group-search') {
+        const searchAction = parts[1];
+        const query = collectModalValue(interaction, 'query').trim().toLowerCase();
+        const groups = await getGroupsForDisplay(interaction.guild);
+        const filtered = query ? groups.filter(group => [group.role_name, group.role_id, group.owner_name, group.owner_id, group.id]
+          .some(value => String(value || '').toLowerCase().includes(query))) : groups;
+        groupSearchCache.set(`${interaction.guild.id}:${interaction.user.id}:${searchAction}`, { createdAt: Date.now(), groups: filtered });
+        await showPrivatePanel(interaction, filtered.length
+          ? buildGroupSelect(searchAction, filtered, 0)
+          : { content: 'لم توجد قروبات مطابقة للبحث.', components: [new ActionRowBuilder().addComponents(button(`bonus:group-search:${searchAction}`, 'بحث جديد'), button('bonus:home', 'رجوع'))] }, true);
+        return true;
+      }
       if (modalAction === 'rule') {
         const metricName = parts[1];
         const metric = metricName === 'messages' ? BONUS_METRICS.messages : metricName === 'voice' ? BONUS_METRICS.voice : null;
@@ -1096,7 +1331,7 @@ async function handleInteraction(interaction, context = {}) {
         return true;
       }
       if (modalAction === 'manual-points') {
-        const [, operation, rawGroupId] = parts;
+        const [, operation, rawGroupId, rawUserId] = parts;
         const groupId = Number(rawGroupId);
         const amount = Number(collectModalValue(interaction, 'amount').replace(/[,،\s]/g, ''));
         if (!Number.isSafeInteger(amount) || amount <= 0 || amount > 1000000) {
@@ -1104,11 +1339,31 @@ async function handleInteraction(interaction, context = {}) {
           return true;
         }
         try {
-          if (operation === 'remove-points') {
+          if (operation === 'remove-group') {
+            const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
+            const current = await db.getGroupPoints(interaction.guild.id, groupId);
+            if (!group || current == null) throw new Error('GROUP_NOT_FOUND');
+            if (amount > Math.max(0, current)) throw new Error('INSUFFICIENT_GROUP_POINTS');
             await showPrivatePanel(interaction, {
-              content: `تأكيد خصم حتى ${amount.toLocaleString()} نقطة من إجمالي القروب؟ يُخصم من الرصيد الإداري أولًا، ثم من أرصدة الأعضاء أصحاب النقاط الأعلى. إن كان الإجمالي أقل فسيُخصم المتاح فقط.`,
+              content: `تأكيد إزالة ${amount.toLocaleString()} نقطة من إجمالي القروب؟\nالإجمالي الحالي: ${current.toLocaleString()}\nالإجمالي بعد الإزالة: ${(current - amount).toLocaleString()}\nلن تتغير نقاط أي عضو، وسيبقى الخصم محفوظاً.`,
               components: [new ActionRowBuilder().addComponents(
-                button(`bonus:confirm:remove-points:${groupId}:${amount}`, 'تأكيد الخصم', ButtonStyle.Danger),
+                button(`bonus:confirm:remove-group:${groupId}:${amount}`, 'تأكيد الإزالة', ButtonStyle.Danger),
+                button('bonus:home', 'إلغاء')
+              )]
+            }, true);
+          } else if (operation === 'remove-member') {
+            const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
+            const member = await interaction.guild.members.fetch(String(rawUserId)).catch(() => null);
+            const balance = await db.getBalance(interaction.guild.id, String(rawUserId));
+            if (!group || !member || !member.roles.cache.has(String(group.role_id)) || Number(balance?.group_id) !== groupId) {
+              throw new Error('MEMBER_NOT_IN_GROUP');
+            }
+            const current = Number(balance.points) || 0;
+            if (amount > current) throw new Error('INSUFFICIENT_MEMBER_POINTS');
+            await showPrivatePanel(interaction, {
+              content: `تأكيد إزالة ${amount.toLocaleString()} نقطة من <@${rawUserId}>؟\nرصيده الحالي: ${current.toLocaleString()}\nرصيده بعد الإزالة: ${(current - amount).toLocaleString()}`,
+              components: [new ActionRowBuilder().addComponents(
+                button(`bonus:confirm:remove-member:${groupId}:${rawUserId}:${amount}`, 'تأكيد الإزالة', ButtonStyle.Danger),
                 button('bonus:home', 'إلغاء')
               )]
             }, true);
@@ -1116,11 +1371,13 @@ async function handleInteraction(interaction, context = {}) {
             const result = await db.adjustGroupPoints(interaction.guild.id, groupId, amount, interaction.user.id);
             const changed = Math.abs(result.delta).toLocaleString();
             await showPrivatePanel(interaction, await buildReturnPayload(interaction,
-              `تمت إضافة ${changed} نقطة إلى إجمالي القروب في رصيد الإدارة؛ لم تتغير أرصدة الأعضاء الفردية.`), true);
+              `تمت إضافة ${changed} نقطة إلى إجمالي القروب؛ لم تتغير أرصدة الأعضاء الفردية.`), true);
             scheduleRefresh(interaction.guild, true);
           }
         } catch (error) {
-          const note = error.message === 'NO_POINTS_TO_REMOVE' ? 'لا توجد نقاط إدارية متاحة للخصم.' : 'تعذر تعديل رصيد النقاط للقروب.';
+          const note = error.message === 'INSUFFICIENT_GROUP_POINTS' ? 'عدد النقاط أكبر من إجمالي القروب.'
+            : error.message === 'INSUFFICIENT_MEMBER_POINTS' ? 'عدد النقاط أكبر من رصيد العضو.'
+              : error.message === 'MEMBER_NOT_IN_GROUP' ? 'العضو لم يعد تابعاً لهذا القروب.' : 'تعذر تعديل النقاط.';
           await showPrivatePanel(interaction, await buildReturnPayload(interaction, note), true);
         }
         return true;
@@ -1155,7 +1412,7 @@ function scheduleRefresh(guild, force = false) {
   }
 }
 
-async function recordActivity(guild, member, metric, amount, eventId, voiceSession = null) {
+async function recordActivity(guild, member, metric, amount, eventId, voiceSession = null, roleIdsOverride = null) {
   if (!guild || !member || member.user?.bot) return { ignored: true };
   let db;
   try { db = getDatabase(); } catch { return { ignored: true }; }
@@ -1168,7 +1425,7 @@ async function recordActivity(guild, member, metric, amount, eventId, voiceSessi
       metric,
       amount,
       eventId,
-      roleIds: getRoleIds(member),
+      roleIds: roleIdsOverride || getRoleIds(member),
       roleGrantHistory,
       voiceSession
     });
@@ -1202,10 +1459,29 @@ function isEligibleVoiceState(state) {
   if (!state?.guild || !state.member || state.member.user?.bot || !state.channelId) return false;
   if (state.channel?.type === ChannelType.GuildStageVoice) return false;
   if (state.guild.afkChannelId && state.channelId === state.guild.afkChannelId) return false;
+  // سياسة البونس: المشاركة الفعلية، وليس مجرد الوجود في القناة.
+  if (state.serverMute || state.selfMute || state.serverDeaf || state.selfDeaf) return false;
   return true;
 }
 
-async function checkpointVoice(session, toTime = Date.now(), member = null) {
+async function isBonusVoiceTrackingEnabled(guildId) {
+  const key = String(guildId);
+  const cached = voiceTrackingCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.enabled;
+  let enabled = false;
+  try {
+    const database = getDatabase();
+    if (!database?.isInitialized || database.isDegraded) return false;
+    const [rules, groups] = await Promise.all([getManager().getRules(key), getManager().listGroups(key)]);
+    enabled = Boolean(rules?.[BONUS_METRICS.voice] && groups.length > 0);
+  } catch (error) {
+    console.error('[bonus] voice readiness check failed:', error);
+  }
+  voiceTrackingCache.set(key, { enabled, expiresAt: Date.now() + 2000 });
+  return enabled;
+}
+
+async function checkpointVoice(session, toTime = Date.now(), member = null, roleIdsOverride = null) {
   if (!session) return;
   if (session.pendingCheckpoint) {
     await session.pendingCheckpoint;
@@ -1217,6 +1493,12 @@ async function checkpointVoice(session, toTime = Date.now(), member = null) {
     const start = Number(session.lastTrackedAt) || end;
     const duration = end - start;
     if (duration < 1000) return;
+    if (!await isBonusVoiceTrackingEnabled(session.guildId)) {
+      session.lastTrackedAt = end;
+      voiceSessions.delete(voiceKey(session.guildId, session.userId));
+      await removeSavedVoiceSession(session.guildId, session.userId).catch(() => {});
+      return;
+    }
     const sessionGuild = boundClient?.guilds?.cache?.get(String(session.guildId));
     const liveMember = member || sessionGuild?.members?.cache?.get(String(session.userId)) ||
       (sessionGuild ? await sessionGuild.members.fetch(String(session.userId)).catch(() => null) : null);
@@ -1228,7 +1510,7 @@ async function checkpointVoice(session, toTime = Date.now(), member = null) {
     const result = await recordActivity(liveMember.guild, liveMember, BONUS_METRICS.voice, duration, eventId, {
       channelId: session.channelId,
       lastCheckpointAt: end
-    });
+    }, roleIdsOverride);
     if (result.error || result.degraded) return;
     session.lastTrackedAt = end;
   })();
@@ -1243,6 +1525,13 @@ async function handleVoiceState(oldState, newState) {
   if (!guild || !member || member.user?.bot) return;
   const key = voiceKey(guild.id, member.id);
   const session = voiceSessions.get(key);
+  if (!await isBonusVoiceTrackingEnabled(guild.id)) {
+    if (session) {
+      voiceSessions.delete(key);
+      await removeSavedVoiceSession(guild.id, member.id).catch(() => {});
+    }
+    return;
+  }
   const oldEligible = isEligibleVoiceState(oldState);
   const newEligible = isEligibleVoiceState(newState);
   const sameEligibleChannel = oldEligible && newEligible && oldState.channelId === newState.channelId;
@@ -1271,6 +1560,7 @@ async function restoreVoiceSessions(client) {
   const activeKeys = new Set();
   const now = Date.now();
   for (const guild of client.guilds.cache.values()) {
+    if (!await isBonusVoiceTrackingEnabled(guild.id)) continue;
     for (const state of guild.voiceStates.cache.values()) {
       if (!isEligibleVoiceState(state)) continue;
       const key = voiceKey(guild.id, state.member.id);
@@ -1298,10 +1588,40 @@ async function handleMemberRoleUpdate(oldMember, newMember) {
   const key = voiceKey(newMember.guild.id, newMember.id);
   roleAuditCache.delete(idKey(newMember.guild.id, newMember.id));
   guildRoleAuditCache.delete(String(newMember.guild.id));
+  const activeVoiceSession = voiceSessions.get(key);
+  if (activeVoiceSession) {
+    // اقفل مدة القروب القديم قبل تغيير الإسناد، حتى لا تنتقل الجلسة كاملة للقروب الجديد.
+    await checkpointVoice(activeVoiceSession, Date.now(), oldMember || newMember).catch(error => {
+      console.error('[bonus] role-change voice settlement failed:', error);
+    });
+    voiceSessions.delete(key);
+    await removeSavedVoiceSession(newMember.guild.id, newMember.id).catch(() => {});
+  }
   try {
+    const manager = getManager();
+    const groups = await manager.listGroups(newMember.guild.id, true);
+    const groupRoleIds = new Set(groups.map(group => String(group.role_id)));
+    const oldRoleIds = new Set(getRoleIds(oldMember));
+    const newRoleIds = new Set(getRoleIds(newMember));
+    const addedRoleIds = Array.from(newRoleIds).filter(roleId => groupRoleIds.has(roleId) && !oldRoleIds.has(roleId));
+    const removedRoleIds = Array.from(oldRoleIds).filter(roleId => groupRoleIds.has(roleId) && !newRoleIds.has(roleId));
+    await manager.recordRoleChanges(newMember.guild.id, newMember.id, { addedRoleIds, removedRoleIds });
     const history = await readRoleHistoryForMember(newMember.guild, newMember);
-    const targetGroupId = await getManager().resolveTargetGroup(newMember.guild.id, newMember.id, getRoleIds(newMember), history);
-    await getManager().syncAssignment(newMember.guild.id, newMember.id, targetGroupId, null, 'guild_member_update');
+    const targetGroupId = await manager.resolveTargetGroup(newMember.guild.id, newMember.id, getRoleIds(newMember), history);
+    await manager.syncAssignment(newMember.guild.id, newMember.id, targetGroupId, null, 'guild_member_update');
+
+    // إذا بقي العضو مشاركاً في الصوت، تبدأ جلسة جديدة من لحظة تغيير الرول.
+    const voiceState = newMember.voice;
+    if (voiceState && isEligibleVoiceState(voiceState) && await isBonusVoiceTrackingEnabled(newMember.guild.id)) {
+      const nextSession = {
+        guildId: String(newMember.guild.id),
+        userId: String(newMember.id),
+        channelId: String(voiceState.channelId),
+        lastTrackedAt: Date.now()
+      };
+      voiceSessions.set(key, nextSession);
+      await saveVoiceSession(nextSession).catch(error => console.error('[bonus] role-change voice session save failed:', error));
+    }
   } catch (error) {
     console.error('[bonus] role assignment sync failed:', error);
   }
@@ -1310,11 +1630,20 @@ async function handleMemberRoleUpdate(oldMember, newMember) {
 
 async function handleMemberLeave(member) {
   if (!member?.guild || member.user?.bot) return;
+  const key = voiceKey(member.guild.id, member.id);
+  const session = voiceSessions.get(key);
   try {
+    // مثل نظام الصوت العادي: تسوية المدة المتبقية مرة واحدة قبل إنهاء الجلسة.
+    if (session) await checkpointVoice(session, Date.now(), member).catch(() => {});
+    voiceSessions.delete(key);
+    await removeSavedVoiceSession(member.guild.id, member.id).catch(() => {});
     await getManager().syncAssignment(member.guild.id, member.id, null, null, 'guild_member_leave');
     scheduleRefresh(member.guild, false);
   } catch (error) {
     console.error('[bonus] member leave assignment sync failed:', error);
+    // لا نترك جلسة يتيمة حتى لو فشل حفظ الإسناد أو سجل التدقيق.
+    voiceSessions.delete(key);
+    await removeSavedVoiceSession(member.guild.id, member.id).catch(() => {});
   }
 }
 
@@ -1322,7 +1651,25 @@ async function handleRoleDelete(role) {
   if (!role?.guild) return;
   try {
     const group = (await getManager().listGroups(role.guild.id)).find(item => String(item.role_id) === String(role.id));
-    if (group) await getManager().archiveGroup(role.guild.id, Number(group.id), null);
+    if (group) {
+      const rows = await getDatabase().all(
+        'SELECT user_id FROM bonus_balances WHERE guild_id = ? AND group_id = ?',
+        [String(role.guild.id), Number(group.id)]
+      );
+      const affectedUsers = new Set(rows.map(row => String(row.user_id)));
+      const now = Date.now();
+      for (const session of Array.from(voiceSessions.values())) {
+        if (String(session.guildId) !== String(role.guild.id) || !affectedUsers.has(String(session.userId))) continue;
+        const member = role.guild.members.cache.get(String(session.userId))
+          || await role.guild.members.fetch(String(session.userId)).catch(() => null);
+        if (member) await checkpointVoice(session, now, member, [String(role.id)]).catch(error => {
+          console.error('[bonus] deleted-role voice settlement failed:', error);
+        });
+        voiceSessions.delete(voiceKey(session.guildId, session.userId));
+        await removeSavedVoiceSession(session.guildId, session.userId).catch(() => {});
+      }
+      await getManager().archiveGroup(role.guild.id, Number(group.id), null);
+    }
   } catch (error) {
     console.error('[bonus] deleted group role handling failed:', error);
   }
@@ -1395,4 +1742,4 @@ function registerInteractionHandler(client) {
   });
 }
 
-module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicRows, boardCounter, buildHomeEmbed };
+module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicRows, boardCounter, buildHomeEmbed, buildGroupSelect, isEligibleVoiceState, resolveCurrentGroupForMember };

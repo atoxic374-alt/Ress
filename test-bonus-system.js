@@ -6,8 +6,10 @@ const { DatabaseManager } = require('./utils/database');
 const { createBonusManager, calculateAward, chooseOldestGroup, BONUS_METRICS } = require('./utils/bonusManager');
 const { buildBonusTopImage } = require('./utils/bonusTopRenderer');
 const bonusCommand = require('./commands/bonus');
+const bonusProfileCommand = require('./commands/bonus-profile');
 const interactionRouter = require('./utils/interactionRouter');
 const colorManager = require('./utils/colorManager');
+const { ChannelType } = require('discord.js');
 const { EventEmitter } = require('node:events');
 const sqlite3 = require('sqlite3').verbose();
 
@@ -21,13 +23,38 @@ async function main() {
     { id: 2, role_id: 'role-b', created_at: 20 }
   ], ['role-a', 'role-b'], { 'role-a': 500, 'role-b': 100 });
   assert.equal(selected.role_id, 'role-b', 'role with earlier grant timestamp is selected');
+  assert.equal(chooseOldestGroup([
+    { id: 1, role_id: 'role-a', created_at: 10 },
+    { id: 2, role_id: 'role-b', created_at: 20 }
+  ], ['role-a', 'role-b'], { 'role-a': 500 }), null,
+  'multiple group roles without complete grant history must not guess a target');
   assert.equal(bonusCommand.name, 'bonus');
+  assert.deepEqual(bonusCommand.aliases, [], 'Arabic bonus name is no longer an alias for the settings command');
+  assert.equal(bonusProfileCommand.name, 'بونس', 'Arabic bonus profile command is registered separately');
   assert.deepEqual(bonusCommand.parseBonusCustomId('bonus:select:add-role'), {
     prefix: 'bonus', action: 'select', parts: ['add-role']
   });
   assert.deepEqual(bonusCommand.parseBonusCustomId('bonus:select:add-owner'), {
     prefix: 'bonus', action: 'select', parts: ['add-owner']
   });
+  const voiceState = {
+    guild: { afkChannelId: 'afk-channel' }, member: { user: { bot: false } },
+    channelId: 'voice-channel', channel: { type: ChannelType.GuildVoice },
+    serverMute: false, selfMute: false, serverDeaf: false, selfDeaf: false
+  };
+  assert.equal(bonusCommand.isEligibleVoiceState(voiceState), true, 'active unmuted voice participation is eligible for bonus');
+  for (const flag of ['serverMute', 'selfMute', 'serverDeaf', 'selfDeaf']) {
+    assert.equal(bonusCommand.isEligibleVoiceState({ ...voiceState, [flag]: true }), false, `${flag} excludes bonus voice time`);
+  }
+  assert.equal(bonusCommand.isEligibleVoiceState({ ...voiceState, channelId: 'afk-channel' }), false, 'AFK excludes bonus voice time');
+  assert.equal(bonusCommand.isEligibleVoiceState({ ...voiceState, channel: { type: ChannelType.GuildStageVoice } }), false, 'Stage excludes bonus voice time');
+  const manyGroups = Array.from({ length: 51 }, (_, index) => ({ id: index + 1, role_id: `role-${index + 1}`, role_name: `Role ${index + 1}` }));
+  const groupPage = bonusCommand.buildGroupSelect('remove-points', manyGroups, 2);
+  const pageMenu = groupPage.components[0].components[0];
+  assert.equal(pageMenu.options.length, 1, 'group pages cap each select at 25 options');
+  assert.match(groupPage.content, /صفحة 3\/3/, 'group pagination supports more than 25 groups');
+  assert.ok(groupPage.components[1].components.some(component => component.data.custom_id === 'bonus:page:remove-points:1'),
+    'previous page navigation is available');
   const settingsEmbed = bonusCommand.buildHomeEmbed({ name: 'Test Guild' }, {}, [], {}, false);
   assert.equal(settingsEmbed.data.color, Number.parseInt(colorManager.getColor().replace('#', ''), 16), 'bonus embed uses the shared bot-avatar color');
   assert.deepEqual(bonusCommand.buildHomeRows().map(row => row.components.map(component => component.data.label)), [
@@ -36,6 +63,8 @@ async function main() {
   ]);
   assert.deepEqual(bonusCommand.buildPublicRows()[0].components.map(component => component.data.label),
     ['إضافة قروب', 'إزالة قروب', 'إعطاء نقاط', 'إزالة نقاط', 'دبل بونس']);
+  assert.equal(bonusCommand.buildPublicRows()[1].components[0].data.custom_id, 'bonus:owner-avatar',
+    'public board exposes only the owner-avatar entry point');
   assert.match(bonusCommand.boardCounter({ groups: 3, points: 725 }), /3 Groups\s+•\s+725 Points/);
   const fakeClient = new EventEmitter();
   fakeClient.guilds = { cache: new Map() };
@@ -78,12 +107,53 @@ async function main() {
     const userId = 'test-user';
     const groupA = await bonus.addGroup(guildId, 'role-a', 'owner-a', actorId);
     const groupB = await bonus.addGroup(guildId, 'role-b', 'owner-b', actorId);
+    const groupAddAudit = await db.get(`SELECT action, target_group_id FROM bonus_audit_log WHERE guild_id = ? AND action = 'group_add' AND target_group_id = ?`,
+      [guildId, Number(groupA.id)]);
+    assert.equal(groupAddAudit.action, 'group_add', 'group creation and its audit record are committed together');
+    await bonus.updateGroup(guildId, Number(groupA.id), { avatar_url: 'https://cdn.example/avatar.png' }, actorId);
+    const groupUpdateAudit = await db.get(`SELECT action FROM bonus_audit_log WHERE guild_id = ? AND action = 'group_update' AND source_group_id = ?`,
+      [guildId, Number(groupA.id)]);
+    assert.equal(groupUpdateAudit.action, 'group_update', 'group avatar update is audited atomically');
     const newMessageRule = await bonus.setRule(guildId, BONUS_METRICS.messages, 300, 1, actorId);
     assert.equal(newMessageRule.newlyActivated, true);
     const newVoiceRule = await bonus.setRule(guildId, BONUS_METRICS.voice, 100 * 60 * 60 * 1000, 1, actorId);
     assert.equal(newVoiceRule.newlyActivated, true);
     const voiceFirstStart = newVoiceRule.activatedAt + 1000;
     const voiceFirstEnd = voiceFirstStart + 50 * 60 * 60 * 1000;
+
+    const historyUserId = 'role-history-user';
+    await bonus.recordRoleChanges(guildId, historyUserId, {
+      addedRoleIds: ['role-a', 'role-b'], changedAt: 1000
+    });
+    const storedRoleHistory = await bonus.getRoleGrantHistory(guildId, historyUserId, ['role-a', 'role-b']);
+    assert.deepEqual(storedRoleHistory, { 'role-a': 1000, 'role-b': 1000 }, 'role history stores active group roles');
+    await bonus.recordRoleChanges(guildId, historyUserId, { removedRoleIds: ['role-b'], changedAt: 2000 });
+    assert.deepEqual(await bonus.getRoleGrantHistory(guildId, historyUserId, ['role-a', 'role-b']), { 'role-a': 1000 },
+      'removed roles are excluded from active role history');
+    await bonus.recordRoleChanges(guildId, historyUserId, { addedRoleIds: ['role-b'], changedAt: 3000 });
+    assert.deepEqual(await bonus.getRoleGrantHistory(guildId, historyUserId, ['role-a', 'role-b']), { 'role-a': 1000, 'role-b': 3000 },
+      're-added roles receive a new grant timestamp');
+
+    const unassignedUserId = 'unassigned-user';
+    const unassignedMessage = await bonus.addActivity({ guildId, userId: unassignedUserId, metric: BONUS_METRICS.messages,
+      amount: 300, eventId: 'message:test-guild:unassigned-100', roleIds: [] });
+    assert.equal(unassignedMessage.unassigned, true, 'unassigned message activity is ignored by bonus');
+    assert.equal(unassignedMessage.awardedPoints, 0);
+    assert.equal(await bonus.getBalance(guildId, unassignedUserId), undefined,
+      'unassigned message activity does not create a bonus balance');
+    const unassignedVoice = await bonus.addActivity({ guildId, userId: unassignedUserId, metric: BONUS_METRICS.voice,
+      amount: 60 * 60 * 1000, eventId: 'voice:test-guild:unassigned-100', roleIds: [],
+      voiceSession: { channelId: 'unassigned-voice', lastCheckpointAt: Date.now() } });
+    assert.equal(unassignedVoice.unassigned, true, 'unassigned voice activity is ignored by bonus');
+    assert.equal(await db.get('SELECT * FROM bonus_voice_sessions WHERE guild_id = ? AND user_id = ?', [guildId, unassignedUserId]), undefined,
+      'unassigned voice activity does not persist a bonus voice cursor');
+    await bonus.syncAssignment(guildId, unassignedUserId, Number(groupA.id), actorId, 'test-late-assignment');
+    const replayedUnassigned = await bonus.addActivity({ guildId, userId: unassignedUserId, metric: BONUS_METRICS.messages,
+      amount: 300, eventId: 'message:test-guild:unassigned-100', roleIds: ['role-a'] });
+    assert.equal(replayedUnassigned.duplicate, true, 'unassigned activity cannot be replayed after later assignment');
+    const assignedAfterUnassigned = await bonus.getBalance(guildId, unassignedUserId);
+    assert.equal(Number(assignedAfterUnassigned.points), 0);
+    assert.equal(Number(assignedAfterUnassigned.message_progress), 0);
 
     const oldestGroupId = await bonus.resolveTargetGroup(guildId, userId, ['role-a', 'role-b'], { 'role-a': 200, 'role-b': 100 });
     assert.equal(oldestGroupId, Number(groupB.id));
@@ -118,26 +188,55 @@ async function main() {
     await bonus.syncAssignment(guildId, userId, Number(groupA.id), actorId, 'test-transfer');
     let balance = await bonus.getBalance(guildId, userId);
     assert.equal(Number(balance.group_id), Number(groupA.id));
-    assert.equal(Number(balance.points), 1, 'points travel with the member');
+    assert.equal(Number(balance.points), 0, 'points reset when the member changes groups');
     assert.equal(Number(balance.message_progress), 0);
-    assert.equal(Number(balance.voice_progress_ms), 50 * 60 * 60 * 1000, 'partial voice progress travels with the member');
+    assert.equal(Number(balance.voice_progress_ms), 0, 'voice progress resets when the member changes groups');
+    assert.equal(balance.last_message_id, null, 'message cursor resets when the member changes groups');
     let leaderboard = await bonus.getLeaderboard(guildId, 10);
     const pointsA = Number(leaderboard.find(row => Number(row.id) === Number(groupA.id)).points);
     const pointsB = Number(leaderboard.find(row => Number(row.id) === Number(groupB.id)).points);
-    assert.equal(pointsA, 1);
+    assert.equal(pointsA, 0);
     assert.equal(pointsB, 0, 'old group has no duplicate balance');
+
+    const archivedDoubleGroup = await bonus.addGroup(guildId, 'role-double-archived', 'owner-double', actorId);
+    await db.run(`INSERT INTO bonus_balances
+      (guild_id, user_id, group_id, points, message_progress, voice_progress_ms, last_message_id, last_message_at, updated_at)
+      VALUES (?, ?, ?, 12, 44, 3600000, 'old-message', 123, ?)`,
+    [guildId, 'archived-member', Number(archivedDoubleGroup.id), Date.now()]);
+    await bonus.archiveGroup(guildId, Number(archivedDoubleGroup.id), actorId);
+    const archivedBalance = await bonus.getBalance(guildId, 'archived-member');
+    assert.equal(archivedBalance.group_id, null, 'archived members become unassigned');
+    assert.equal(Number(archivedBalance.points), 0, 'archiving a group resets member points');
+    assert.equal(Number(archivedBalance.message_progress), 0);
+    assert.equal(Number(archivedBalance.voice_progress_ms), 0);
+    assert.equal(archivedBalance.last_message_id, null);
+    await assert.rejects(
+      bonus.setMultiplier(guildId, { scope: 'group', groupId: Number(archivedDoubleGroup.id) }, actorId),
+      error => error.message === 'GROUP_NOT_FOUND',
+      'archived groups cannot receive a multiplier'
+    );
+    await assert.rejects(
+      bonus.setMultiplier(guildId, { scope: 'group', groupId: 999999 }, actorId),
+      error => error.message === 'GROUP_NOT_FOUND',
+      'unknown groups cannot receive a multiplier'
+    );
+    await assert.rejects(
+      bonus.clearMultiplier(guildId, { scope: 'group', groupId: Number(archivedDoubleGroup.id) }, actorId),
+      error => error.message === 'GROUP_NOT_FOUND',
+      'archived groups cannot clear a multiplier through the manager'
+    );
 
     await bonus.setMultiplier(guildId, { scope: 'group', groupId: Number(groupA.id) }, actorId);
     await bonus.setMultiplier(guildId, { scope: 'user', groupId: Number(groupA.id), userId }, actorId);
     result = await bonus.addActivity({ guildId, userId, metric: BONUS_METRICS.messages, amount: 300,
       eventId: 'message:test-guild:102', roleIds: ['role-a'], roleGrantHistory: { 'role-a': 200 } });
-    assert.equal(result.awardedPoints, 2, 'group and member doubles cap at x2 rather than x4');
+    assert.equal(result.awardedPoints, 2, 'group and member doubles cap at x2 rather than x4 after a clean transfer');
 
     const voiceSecondStart = voiceFirstEnd + 1000;
     const voiceSecondEnd = voiceSecondStart + 50 * 60 * 60 * 1000;
     result = await bonus.addActivity({ guildId, userId, metric: BONUS_METRICS.voice, amount: 50 * 60 * 60 * 1000,
       eventId: `voice:test-guild:test-user:${voiceSecondStart}:${voiceSecondEnd}`, roleIds: ['role-a'], roleGrantHistory: { 'role-a': 200 } });
-    assert.equal(result.awardedPoints, 2, 'double multiplies a completed voice rule');
+    assert.equal(result.awardedPoints, 0, 'voice progress starts from zero after a group transfer');
 
     const activeUserDoubles = await bonus.listActiveUserMultipliers(guildId, Number(groupA.id));
     assert.equal(activeUserDoubles.length, 1, 'user doubles remain stored for later manual deactivation');
@@ -177,7 +276,7 @@ async function main() {
     groupBTop = await bonus.getLeaderboard(guildId, 10);
     assert.equal(Number(groupBTop.find(row => Number(row.id) === Number(groupB.id)).points), 9, 'archiving and reactivation retain the manual group ledger');
     const resetGroup = await bonus.resetGroup(guildId, Number(groupB.id), actorId);
-    assert.equal(resetGroup.manualPoints, 9);
+    assert.equal(resetGroup.manualPoints, 24, 'reset snapshot preserves the separate add-points ledger');
     groupBTop = await bonus.getLeaderboard(guildId, 10);
     assert.equal(Number(groupBTop.find(row => Number(row.id) === Number(groupB.id)).points), 0, 'group reset also clears manual points');
 
@@ -234,6 +333,23 @@ async function main() {
     await bonus.saveConfig(oneMetricGuild, { channelId: 'text-channel', topMessageId: 'top-message' }, actorId);
     assert.equal(await bonus.isReady(oneMetricGuild), true, 'message-only configuration is sufficient to publish and run the board');
 
+    const outOfOrderGuild = 'out-of-order-messages-guild';
+    const outOfOrderGroup = await bonus.addGroup(outOfOrderGuild, 'out-of-order-role', 'out-of-order-owner', actorId);
+    await bonus.setRule(outOfOrderGuild, BONUS_METRICS.messages, 2, 1, actorId);
+    const newer = await bonus.addActivity({ guildId: outOfOrderGuild, userId: 'out-of-order-user', metric: BONUS_METRICS.messages,
+      amount: 1, eventId: 'message:out-of-order-messages-guild:200', roleIds: ['out-of-order-role'] });
+    const older = await bonus.addActivity({ guildId: outOfOrderGuild, userId: 'out-of-order-user', metric: BONUS_METRICS.messages,
+      amount: 1, eventId: 'message:out-of-order-messages-guild:100', roleIds: ['out-of-order-role'] });
+    assert.equal(newer.awardedPoints, 0, 'the newer message contributes progress');
+    assert.equal(older.awardedPoints, 1, 'a valid older message is still counted');
+    const outOfOrderBalance = await bonus.getBalance(outOfOrderGuild, 'out-of-order-user');
+    assert.equal(Number(outOfOrderBalance.points), 1, 'out-of-order messages award exactly once');
+    assert.equal(Number(outOfOrderBalance.message_progress), 0, 'both messages complete one two-message step');
+    const duplicateEvent = await bonus.addActivity({ guildId: outOfOrderGuild, userId: 'out-of-order-user', metric: BONUS_METRICS.messages,
+      amount: 1, eventId: 'message:out-of-order-messages-guild:100', roleIds: ['out-of-order-role'] });
+    assert.equal(duplicateEvent.duplicate, true, 'replaying the same event is ignored by event_id');
+    assert.equal(Number((await bonus.getBalance(outOfOrderGuild, 'out-of-order-user')).points), 1);
+
     const deductionGuild = 'deduction-order-guild';
     const deductionGroup = await bonus.addGroup(deductionGuild, 'deduction-role', 'deduction-owner', actorId);
     await db.run(`INSERT INTO bonus_balances (guild_id, user_id, group_id, points, message_progress, voice_progress_ms, updated_at)
@@ -241,16 +357,25 @@ async function main() {
     [deductionGuild, 'highest-member', deductionGroup.id, 7, Date.now(), deductionGuild, 'next-member', deductionGroup.id, 3, Date.now()]);
     await bonus.adjustGroupPoints(deductionGuild, Number(deductionGroup.id), 5, actorId);
     const groupDeduction = await bonus.adjustGroupPoints(deductionGuild, Number(deductionGroup.id), -10, actorId);
-    assert.equal(groupDeduction.manualDelta, -5, 'deductions consume the manual group ledger first');
-    assert.equal(groupDeduction.memberDelta, -5, 'remaining deductions affect contributor balances');
-    assert.deepEqual(groupDeduction.deductions, [{ userId: 'highest-member', points: 5 }],
-      'contributor deduction starts with the highest individual balance');
+    assert.equal(groupDeduction.manualDelta, 0, 'general deductions do not alter member or add-point balances');
+    assert.equal(groupDeduction.memberDelta, 0, 'general deductions do not affect contributor balances');
+    assert.deepEqual(groupDeduction.deductions, [], 'general deductions never distribute across members');
     const remainingHighest = await bonus.getBalance(deductionGuild, 'highest-member');
     const remainingNext = await bonus.getBalance(deductionGuild, 'next-member');
-    assert.equal(Number(remainingHighest.points), 2);
+    assert.equal(Number(remainingHighest.points), 7);
     assert.equal(Number(remainingNext.points), 3);
     const deductionTop = await bonus.getLeaderboard(deductionGuild, 10);
     assert.equal(Number(deductionTop[0].points), 5, 'group score falls by precisely the amount actually deducted');
+    const memberDeduction = await bonus.adjustUserPoints(deductionGuild, Number(deductionGroup.id), 'highest-member', 2, actorId);
+    assert.equal(memberDeduction.after, 5, 'member deduction changes only the selected member');
+    assert.equal(Number((await bonus.getBalance(deductionGuild, 'next-member')).points), 3);
+    assert.equal(Number((await bonus.getLeaderboard(deductionGuild, 10))[0].points), 3);
+    const resetSnapshot = await bonus.resetGroup(deductionGuild, Number(deductionGroup.id), actorId);
+    assert.ok(resetSnapshot.snapshotId, 'group reset stores a reversible snapshot');
+    assert.equal(Number((await bonus.getLeaderboard(deductionGuild, 10))[0].points), 0, 'group reset starts from zero');
+    await bonus.restoreGroupReset(deductionGuild, Number(deductionGroup.id), resetSnapshot.snapshotId, actorId);
+    assert.equal(Number((await bonus.getBalance(deductionGuild, 'highest-member')).points), 5, 'reset can restore member points');
+    assert.equal(Number((await bonus.getLeaderboard(deductionGuild, 10))[0].points), 3, 'reset restore reactivates saved deductions');
 
     await assert.rejects(db.transaction(async tx => {
       await tx.run('INSERT INTO bonus_audit_log (guild_id, action, details_json, created_at) VALUES (?, ?, ?, ?)',

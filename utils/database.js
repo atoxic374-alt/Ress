@@ -436,6 +436,16 @@ class DatabaseManager {
                 UNIQUE (guild_id, role_id)
             )`,
             `CREATE INDEX IF NOT EXISTS idx_bonus_groups_guild_active ON bonus_groups(guild_id, archived_at, created_at)`,
+            `CREATE TABLE IF NOT EXISTS bonus_member_role_history (
+                guild_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                role_id TEXT NOT NULL,
+                granted_at INTEGER NOT NULL,
+                removed_at INTEGER,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, user_id, role_id)
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_bonus_role_history_member ON bonus_member_role_history(guild_id, user_id, removed_at, granted_at)`,
             `CREATE TABLE IF NOT EXISTS bonus_group_point_balances (
                 guild_id TEXT NOT NULL,
                 group_id INTEGER NOT NULL,
@@ -444,6 +454,29 @@ class DatabaseManager {
                 PRIMARY KEY (guild_id, group_id),
                 FOREIGN KEY (group_id) REFERENCES bonus_groups(id) ON DELETE CASCADE
             )`,
+            `CREATE TABLE IF NOT EXISTS bonus_group_adjustments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                group_id INTEGER NOT NULL,
+                delta INTEGER NOT NULL CHECK (delta <> 0),
+                reason TEXT NOT NULL DEFAULT 'manual_group_deduction',
+                actor_id TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (group_id) REFERENCES bonus_groups(id) ON DELETE CASCADE
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_bonus_group_adjustments_active ON bonus_group_adjustments(guild_id, group_id, active, created_at)`,
+            `CREATE TABLE IF NOT EXISTS bonus_group_reset_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                group_id INTEGER NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                actor_id TEXT,
+                created_at INTEGER NOT NULL,
+                restored_at INTEGER,
+                FOREIGN KEY (group_id) REFERENCES bonus_groups(id) ON DELETE CASCADE
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_bonus_group_reset_snapshots_lookup ON bonus_group_reset_snapshots(guild_id, group_id, restored_at, created_at DESC)`,
             `CREATE TABLE IF NOT EXISTS bonus_rules (
                 guild_id TEXT NOT NULL,
                 metric TEXT NOT NULL CHECK (metric IN ('messages', 'voice_ms')),
