@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { getAvailableQuickRoles, getQuickPromotionTypes, resolveQuickPromotion } = require('./utils/quickPromotionResolver');
+const { validateRoleDirection } = require('./utils/roleDirectionValidator');
 
 const roles = {
     admin: { id: 'admin-id', name: 'admin', position: 1 },
@@ -81,7 +82,15 @@ const regularPromotion = resolve([roles.c], 'rank');
 assert.equal(regularPromotion.newRole.id, roles.b.id);
 assert.equal(regularPromotion.startedFromOtherType, false);
 
+const regularDemotion = resolve([roles.b], 'rank', 'down', 1);
+assert.equal(regularDemotion.newRole.id, roles.c.id);
+
 const outOfRange = resolve([roles.a], 'rank');
 assert.equal(outOfRange.error, 'out-of-range');
+
+assert.equal(validateRoleDirection('demotion', roles.a, roles.c).valid, true);
+assert.equal(validateRoleDirection('demotion', roles.c, roles.a).valid, false);
+assert.equal(validateRoleDirection('promotion', roles.c, roles.a).valid, true);
+assert.equal(validateRoleDirection('promotion', roles.a, roles.c).valid, false);
 
 console.log('All quick promotion resolver tests passed.');
