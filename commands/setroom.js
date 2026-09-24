@@ -1066,8 +1066,8 @@ async function createColorsImage(guild, guildConfig) {
             return cachedImagePath;
         }
 
-        // إنشاء لوحة PNG شفافة بالكامل؛ لا نرسم الخلفية أو النص أو أيقونة السيرفر.
-        // النتيجة ستكون المربعات فقط، مثل صورة الألوان المرجعية.
+        // إنشاء لوحة PNG ثم رسم الصورة المخصصة كخلفية قبل طبقة الألوان.
+        // بهذا تظهر المناطق الشفافة حول المربعات فوق صورة المستخدم بدل أن تختفي خلفها.
         const canvasWidth = SETROOM_COLOR_CANVAS_WIDTH;
         const canvasHeight = SETROOM_COLOR_CANVAS_HEIGHT;
 
@@ -1084,6 +1084,25 @@ async function createColorsImage(guild, guildConfig) {
 
         const canvas = createCanvas(canvasWidth, canvasHeight);
         const ctx = canvas.getContext('2d');
+
+        let backgroundImage = null;
+        try {
+            if (guildConfig.localImagePath && fs.existsSync(guildConfig.localImagePath)) {
+                backgroundImage = await loadImage(guildConfig.localImagePath);
+            } else if (guildConfig.imageUrl) {
+                const response = await fetch(guildConfig.imageUrl);
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const arrayBuffer = await response.arrayBuffer();
+                backgroundImage = await loadImage(Buffer.from(arrayBuffer));
+            }
+
+            if (backgroundImage) {
+                // احتواء الصورة داخل مساحة اللوحة دون ترك مساحة شفافة حولها.
+                ctx.drawImage(backgroundImage, 0, 0, canvasWidth, canvasHeight);
+            }
+        } catch (error) {
+            console.warn(`⚠️ تعذر تحميل صورة خلفية setroom للسيرفر ${guild.id}:`, error.message);
+        }
 
         // حساب عرض المربعات للتمركز أفقياً
         const totalBoxesWidth = (boxSize * colorsPerRow) + (gap * (colorsPerRow - 1));
