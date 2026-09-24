@@ -19,11 +19,13 @@ const pendingRuleChanges = new Map();
 const voiceSessions = new Map();
 const renderTimers = new Map();
 const lastRenderAt = new Map();
+const activeBoardPanels = new Map();
 const roleAuditCache = new Map();
 const guildRoleAuditCache = new Map();
 let manager;
 let boundClient = null;
 let voiceInterval = null;
+let boardRefreshInterval = null;
 let lastEventPruneAt = 0;
 let roleHistoryCache = { mtime: 0, value: {} };
 
@@ -179,19 +181,16 @@ function buildHomeRows() {
   return [
     new ActionRowBuilder().addComponents(
       button('bonus:managers', 'المسؤولون'),
-      button('bonus:rules', 'نقاط التوب'),
-      button('bonus:add-group', 'إضافة قروب')
-    ),
-    new ActionRowBuilder().addComponents(
+      button('bonus:rules', 'قواعد النقاط'),
       button('bonus:channel', 'روم التوب'),
       button('bonus:color', 'لون الصورة'),
       button('bonus:publish', 'نشر / تحديث', ButtonStyle.Success)
     ),
     new ActionRowBuilder().addComponents(
+      button('bonus:add-group', 'إضافة قروب'),
       button('bonus:manage-groups', 'إدارة القروبات'),
       button('bonus:reset', 'تصفير'),
-      button('bonus:double', 'دبل بونس'),
-      button('bonus:refresh-home', 'تحديث اللوحة')
+      button('bonus:double', 'دبل بونس')
     )
   ];
 }
@@ -204,15 +203,27 @@ async function buildHome(guild) {
   return { embeds: [buildHomeEmbed(guild, config, groups, rules, ready)], components: buildHomeRows() };
 }
 
-function isEphemeralMessage(interaction) {
-  try { return Boolean(interaction.message?.flags?.has(64)); }
-  catch { return false; }
-}
-
 async function showPrivatePanel(interaction, payload, update = false) {
-  if (update && isEphemeralMessage(interaction)) {
+  if (update && (interaction.message || interaction.deferred || interaction.replied)) {
     const cleanPayload = { ...payload };
     delete cleanPayload.ephemeral;
+    const currentContent = String(interaction.message?.content || '');
+    const currentCounter = currentContent.match(/^\*\*[^\n]*Groups\s+•\s+[^\n]*Points\*\*/)?.[0];
+    if (currentCounter) {
+      const content = String(cleanPayload.content || '');
+      const newCounter = content.match(/^\*\*[^\n]*Groups\s+•\s+[^\n]*Points\*\*/)?.[0];
+      const nextContent = content.replace(/^\*\*[^\n]*Groups\s+•\s+[^\n]*Points\*\*\n?/, '');
+      cleanPayload.content = [newCounter || currentCounter, nextContent].filter(Boolean).join('\n');
+    }
+    if (!('files' in cleanPayload) && !('attachments' in cleanPayload) && interaction.message?.attachments?.size) {
+      cleanPayload.attachments = Array.from(interaction.message.attachments.values(), attachment => ({
+        id: attachment.id, filename: attachment.name, description: attachment.description || undefined
+      }));
+    }
+    if (isBonusBoardMessage(interaction.message)) {
+      if (Array.isArray(cleanPayload.files) && cleanPayload.files.length) activeBoardPanels.delete(String(interaction.guild?.id));
+      else activeBoardPanels.set(String(interaction.guild?.id), Date.now() + 10 * 60 * 1000);
+    }
     if (interaction.deferred || interaction.replied) await interaction.editReply(cleanPayload);
     else await interaction.update(cleanPayload);
     return;
@@ -295,13 +306,16 @@ async function maybeRefreshBoard(guild, force = false) {
   const config = await db.readConfig(guild.id);
   if (!config.topMessageId || !config.channelId) return;
   const now = Date.now();
+  const panelExpiry = activeBoardPanels.get(String(guild.id)) || 0;
+  const preservePanel = panelExpiry > now;
+  if (panelExpiry && panelExpiry <= now) activeBoardPanels.delete(String(guild.id));
   const last = lastRenderAt.get(guild.id) || 0;
-  if (!force && now - last < 60000) {
+  if (!force && now - last < 30000) {
     if (!renderTimers.has(guild.id)) {
       renderTimers.set(guild.id, setTimeout(() => {
         renderTimers.delete(guild.id);
-        maybeRefreshBoard(guild, true).catch(error => console.error('[bonus] render refresh failed:', error));
-      }, Math.max(1000, 60000 - (now - last))));
+        maybeRefreshBoard(guild, false).catch(error => console.error('[bonus] render refresh failed:', error));
+      }, Math.max(1000, 30000 - (now - last))));
     }
     return;
   }
@@ -310,21 +324,56 @@ async function maybeRefreshBoard(guild, force = false) {
   if (!isGuildText(channel)) return;
   const boardMessage = await channel.messages.fetch(String(config.topMessageId)).catch(() => null);
   if (!boardMessage) return;
-  const [groups, rawGroups] = await Promise.all([db.getLeaderboard(guild.id, 10), db.listGroups(guild.id)]);
-  const enriched = groups.map((group, index) => ({
-    ...group,
-    role_name: guild.roles.cache.get(String(group.role_id))?.name || `قروب ${index + 1}`,
-    owner_name: guild.members.cache.get(String(group.owner_id))?.displayName || guild.members.cache.get(String(group.owner_id))?.user?.username || 'مالك غير محدد'
-  }));
-  const attachment = await buildBonusTopImage({ guild, groups: enriched, config, updatedAt: now });
-  await boardMessage.edit({ files: [attachment], attachments: [], components: buildPublicRows() });
+  const payload = await buildBoardPayload(guild);
+  if (preservePanel) {
+    const currentCounter = String(boardMessage.content || '').match(/^\*\*[^\n]*Groups\s+•\s+[^\n]*Points\*\*/)?.[0];
+    const newCounter = String(payload.content || '').match(/^\*\*[^\n]*Groups\s+•\s+[^\n]*Points\*\*/)?.[0];
+    const prompt = String(boardMessage.content || '').replace(/^\*\*[^\n]*Groups\s+•\s+[^\n]*Points\*\*\n?/, '').trim();
+    payload.content = [newCounter || currentCounter, prompt].filter(Boolean).join('\n');
+    payload.components = boardMessage.components;
+    if (boardMessage.embeds?.length) payload.embeds = boardMessage.embeds;
+  }
+  await boardMessage.edit(payload);
 }
 
 function buildPublicRows() {
   return [new ActionRowBuilder().addComponents(
-    button('bonus:public-settings', 'إعدادات القروبات'),
-    button('bonus:public-refresh', 'تحديث التوب')
+    button('bonus:add-group', 'إضافة قروب', ButtonStyle.Success),
+    button('bonus:remove-group', 'إزالة قروب', ButtonStyle.Danger),
+    button('bonus:add-points', 'إعطاء نقاط'),
+    button('bonus:remove-points', 'إزالة نقاط', ButtonStyle.Danger),
+    button('bonus:double', 'دبل بونس')
   )];
+}
+
+function boardCounter(summary) {
+  const groups = Number(summary?.groups) || 0;
+  const points = Number(summary?.points) || 0;
+  return `**${groups.toLocaleString('en-US')} Groups  •  ${points.toLocaleString('en-US')} Points**`;
+}
+
+async function buildBoardPayload(guild, prompt = '') {
+  const db = getManager();
+  const config = await db.readConfig(guild.id);
+  const [summary, leaderboard] = await Promise.all([
+    db.getLeaderboardSummary(guild.id), db.getLeaderboard(guild.id, 10)
+  ]);
+  const groups = leaderboard.map((group, index) => ({
+    ...group,
+    role_name: guild.roles.cache.get(String(group.role_id))?.name || `قروب ${index + 1}`,
+    owner_name: guild.members.cache.get(String(group.owner_id))?.displayName || guild.members.cache.get(String(group.owner_id))?.user?.username || 'مالك غير محدد'
+  }));
+  const attachment = await buildBonusTopImage({ guild, groups, config, updatedAt: Date.now() });
+  return { content: [boardCounter(summary), prompt].filter(Boolean).join('\n'), files: [attachment], attachments: [], components: buildPublicRows() };
+}
+
+function isBonusBoardMessage(message) {
+  return Boolean(message?.attachments?.some(attachment => attachment.name === 'bonus-top.png'));
+}
+
+async function buildReturnPayload(interaction, prompt = '') {
+  if (isBonusBoardMessage(interaction.message)) return buildBoardPayload(interaction.guild, prompt);
+  return { ...(await buildHome(interaction.guild)), content: prompt };
 }
 
 async function publishBoard(guild, actorId) {
@@ -334,7 +383,7 @@ async function publishBoard(guild, actorId) {
   const rules = await db.getRules(guild.id);
   if (!config.channelId) throw new Error('CHANNEL_REQUIRED');
   if (!groups.length) throw new Error('GROUP_REQUIRED');
-  if (!rules[ BONUS_METRICS.messages ] || !rules[ BONUS_METRICS.voice ]) throw new Error('RULE_REQUIRED');
+  if (!Object.keys(rules).length) throw new Error('RULE_REQUIRED');
   const channel = await guild.channels.fetch(String(config.channelId)).catch(() => null);
   if (!isGuildText(channel)) throw new Error('CHANNEL_NOT_FOUND');
   const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
@@ -345,18 +394,12 @@ async function publishBoard(guild, actorId) {
     PermissionsBitField.Flags.AttachFiles,
     PermissionsBitField.Flags.ReadMessageHistory
   ])) throw new Error('MISSING_CHANNEL_PERMISSIONS');
-  const leaderboard = await db.getLeaderboard(guild.id, 10);
-  const enriched = leaderboard.map((group, index) => ({
-    ...group,
-    role_name: guild.roles.cache.get(String(group.role_id))?.name || `قروب ${index + 1}`,
-    owner_name: guild.members.cache.get(String(group.owner_id))?.displayName || guild.members.cache.get(String(group.owner_id))?.user?.username || 'مالك غير محدد'
-  }));
-  const attachment = await buildBonusTopImage({ guild, groups: enriched, config });
+  const payload = await buildBoardPayload(guild);
   let message = config.topMessageId ? await channel.messages.fetch(String(config.topMessageId)).catch(() => null) : null;
   if (message) {
-    await message.edit({ files: [attachment], attachments: [], components: buildPublicRows() });
+    await message.edit(payload);
   } else {
-    message = await channel.send({ files: [attachment], components: buildPublicRows() });
+    message = await channel.send(payload);
   }
   await db.saveConfig(guild.id, { topMessageId: message.id, channelId: channel.id, setupCompletedAt: Date.now() }, actorId);
   lastRenderAt.set(guild.id, Date.now());
@@ -404,8 +447,11 @@ function modal(customId, title, fields) {
 }
 
 async function refreshEphemeralHome(interaction) {
-  if (isEphemeralMessage(interaction)) await interaction.update(await buildHome(interaction.guild));
-  else await interaction.reply({ ...(await buildHome(interaction.guild)), ephemeral: true });
+  if (interaction.message?.attachments?.some(attachment => attachment.name === 'bonus-top.png')) {
+    await showPrivatePanel(interaction, await buildBoardPayload(interaction.guild), true);
+  } else {
+    await showPrivatePanel(interaction, await buildHome(interaction.guild), true);
+  }
 }
 
 async function confirmComponent(interaction, action, groupId, userId = null) {
@@ -465,17 +511,21 @@ async function handleInteraction(interaction, context = {}) {
       await deny(interaction, 'هذه التفاعلات تعمل داخل السيرفر فقط.');
       return true;
     }
-    if (interaction.isAnySelectMenu?.() && !interaction.deferred && !interaction.replied) {
+    if (isBonusBoardMessage(interaction.message)) activeBoardPanels.set(String(interaction.guild.id), Date.now() + 10 * 60 * 1000);
+    const manualPointsSelection = action === 'select' && ['add-points', 'remove-points'].includes(parts[0]);
+    if (interaction.isAnySelectMenu?.() && !manualPointsSelection && !interaction.deferred && !interaction.replied) {
       await interaction.deferUpdate();
     }
+    const opensModal = action === 'color-manual' || action === 'rule' || (action === 'group-action' && parts[0] === 'avatar');
+    if (interaction.isButton?.() && !opensModal && !interaction.deferred && !interaction.replied) await interaction.deferUpdate();
+    if (interaction.isModalSubmit?.() && action === 'modal' && !interaction.deferred && !interaction.replied) await interaction.deferUpdate();
 
     if (action === 'public-settings' || action === 'public-refresh' || action === 'open' || action === 'refresh-home' || action === 'home') {
       if (action === 'public-settings' || action === 'open') {
         if (!await requireManager(interaction, context)) return true;
-        await showPrivatePanel(interaction, await buildHome(interaction.guild), false);
+        await showPrivatePanel(interaction, await buildHome(interaction.guild), true);
       } else if (action === 'public-refresh') {
-        await maybeRefreshBoard(interaction.guild, true).catch(() => {});
-        await interaction.reply({ content: 'تم طلب تحديث التوب.', ephemeral: true }).catch(() => {});
+        await showPrivatePanel(interaction, await buildBoardPayload(interaction.guild), true);
       } else {
         if (!await requireManager(interaction, context)) return true;
         await refreshEphemeralHome(interaction);
@@ -558,11 +608,46 @@ async function handleInteraction(interaction, context = {}) {
     }
 
     if (action === 'rules') {
+      const currentRules = await db.getRules(interaction.guild.id);
       const row = new ActionRowBuilder().addComponents(
-        button('bonus:rule:messages', 'قاعدة الرسائل'),
-        button('bonus:rule:voice', 'قاعدة الساعات الصوتية')
+        button('bonus:rule:messages', currentRules.messages ? 'تعديل قاعدة الرسائل' : 'تفعيل قاعدة الرسائل', ButtonStyle.Primary),
+        button('bonus:rule:voice', currentRules.voice_ms ? 'تعديل قاعدة الصوت' : 'تفعيل قاعدة الصوت', ButtonStyle.Primary)
       );
-      await showPrivatePanel(interaction, { content: 'اختر نوع القاعدة. الصوت يُدخل بالساعات ثم يُحوّل داخليًا إلى ميلي ثانية.', components: [row, new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+      const disableButtons = [];
+      if (currentRules.messages) disableButtons.push(button('bonus:rule-off:messages', 'إيقاف الرسائل', ButtonStyle.Danger));
+      if (currentRules.voice_ms) disableButtons.push(button('bonus:rule-off:voice', 'إيقاف الصوت', ButtonStyle.Danger));
+      const rows = [row];
+      if (disableButtons.length) rows.push(new ActionRowBuilder().addComponents(disableButtons));
+      rows.push(new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع')));
+      const status = [
+        `الرسائل: ${currentRules.messages ? `مفعّلة (${Number(currentRules.messages.threshold).toLocaleString()} رسالة = ${currentRules.messages.points} نقطة)` : 'متوقفة'}`,
+        `الصوت: ${currentRules.voice_ms ? `مفعّلة (${Number(currentRules.voice_ms.threshold) / 3600000} ساعة = ${currentRules.voice_ms.points} نقطة)` : 'متوقف'}`
+      ];
+      await showPrivatePanel(interaction, { content: `${status.join('\n')}\nيمكن تشغيل أي قاعدة وحدها. إيقاف قاعدة يمسح تقدمها الجزئي فقط ولا يمسح النقاط المكتسبة أو إحصاءات البوت.`, components: rows }, true);
+      return true;
+    }
+
+    if (action === 'rule-off') {
+      const metricName = parts[0];
+      const metric = metricName === 'messages' ? BONUS_METRICS.messages : metricName === 'voice' ? BONUS_METRICS.voice : null;
+      if (!metric) return true;
+      if (metric === BONUS_METRICS.voice) {
+        for (const session of voiceSessions.values()) {
+          if (String(session.guildId) === String(interaction.guild.id)) await checkpointVoice(session, Date.now()).catch(() => {});
+        }
+      }
+      const result = await db.disableRule(interaction.guild.id, metric, interaction.user.id);
+      if (metric === BONUS_METRICS.voice) {
+        const now = Date.now();
+        for (const session of voiceSessions.values()) {
+          if (String(session.guildId) !== String(interaction.guild.id)) continue;
+          session.lastTrackedAt = now;
+          await saveVoiceSession(session).catch(() => {});
+        }
+      }
+      scheduleRefresh(interaction.guild, true);
+      const label = metric === BONUS_METRICS.messages ? 'الرسائل' : 'الصوت';
+      await showPrivatePanel(interaction, { content: result.disabled ? `تم إيقاف قاعدة ${label}. حُذف التقدم الجزئي (${Number(result.clearedProgress).toLocaleString()} من وحدتها)، وبقيت النقاط المكتسبة والإحصاءات الأصلية كما هي.` : `قاعدة ${label} متوقفة بالفعل.`, components: [new ActionRowBuilder().addComponents(button('bonus:rules', 'العودة لقواعد النقاط'))] }, true);
       return true;
     }
 
@@ -585,13 +670,25 @@ async function handleInteraction(interaction, context = {}) {
       return true;
     }
 
+    if (action === 'remove-group') {
+      await showPrivatePanel(interaction, buildGroupSelect('remove-group', await getGroupsForDisplay(interaction.guild)), true);
+      return true;
+    }
+
+    if (action === 'add-points' || action === 'remove-points') {
+      await showPrivatePanel(interaction, buildGroupSelect(action, await getGroupsForDisplay(interaction.guild)), true);
+      return true;
+    }
+
     if (action === 'select' && parts[0] === 'add-role') {
       const roleId = interaction.values[0];
       if (!interaction.guild.roles.cache.has(roleId)) {
         await showPrivatePanel(interaction, { content: 'الرول غير موجود في هذا السيرفر.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
         return true;
       }
-      activeAddFlows.set(idKey(interaction.guild.id, interaction.user.id), { roleId, createdAt: Date.now() });
+      activeAddFlows.set(idKey(interaction.guild.id, interaction.user.id), {
+        roleId, createdAt: Date.now(), fromBoard: interaction.message?.attachments?.some(attachment => attachment.name === 'bonus-top.png') || false
+      });
       const menu = new UserSelectMenuBuilder().setCustomId('bonus:select:add-owner').setPlaceholder('ابحث واختر Owner القروب').setMinValues(1).setMaxValues(1);
       await showPrivatePanel(interaction, { content: `الرول: <@&${roleId}>\nاختر Owner القروب:`, components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(button('bonus:home', 'إلغاء'))] }, true);
       return true;
@@ -616,11 +713,29 @@ async function handleInteraction(interaction, context = {}) {
         roleAuditCache.clear();
         guildRoleAuditCache.delete(String(interaction.guild.id));
         scheduleRefresh(interaction.guild, true);
-        await showPrivatePanel(interaction, { content: `تمت إضافة <@&${flow.roleId}> وربطه بالـOwner <@${ownerId}>.`, components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع للإعدادات'))] }, true);
+        const confirmation = `تمت إضافة <@&${flow.roleId}> وربطه بالـOwner <@${ownerId}>.`;
+        const payload = flow.fromBoard ? await buildBoardPayload(interaction.guild, confirmation) : { ...(await buildHome(interaction.guild)), content: confirmation };
+        await showPrivatePanel(interaction, payload, true);
       } catch (error) {
         const text = error.message === 'ROLE_ALREADY_REGISTERED' ? 'هذا الرول مسجل كقروب بالفعل.' : 'تعذرت إضافة القروب.';
         await showPrivatePanel(interaction, { content: text, components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
       }
+      return true;
+    }
+
+    if (action === 'select' && parts[0] === 'remove-group') {
+      await showPrivatePanel(interaction, await confirmComponent(interaction, 'archive', Number(interaction.values[0])), true);
+      return true;
+    }
+
+    if (action === 'select' && ['add-points', 'remove-points'].includes(parts[0])) {
+      const groupId = Number(interaction.values[0]);
+      const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
+      if (!group) return true;
+      const verb = parts[0] === 'add-points' ? 'إعطاء' : 'إزالة';
+      await interaction.showModal(modal(`bonus:modal:manual-points:${parts[0]}:${groupId}`, `${verb} نقاط للقروب`, [
+        { id: 'amount', label: `عدد النقاط (${verb})`, placeholder: '100', maxLength: 8 }
+      ]));
       return true;
     }
 
@@ -749,10 +864,26 @@ async function handleInteraction(interaction, context = {}) {
       const groupId = Number(interaction.values[0]);
       const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
       if (!group) return true;
-      const active = await getDatabase().get(`SELECT COUNT(*) AS count FROM bonus_multipliers WHERE guild_id = ? AND group_id = ? AND active = 1 AND (ends_at IS NULL OR ends_at > ?)`, [interaction.guild.id, groupId, Date.now()]);
-      const buttons = [button(`bonus:double-scope:group:${groupId}`, 'دبل للرول كاملًا', ButtonStyle.Primary), button(`bonus:double-scope:user:${groupId}`, 'دبل لشخص')];
-      if (Number(active?.count) > 0) buttons.push(button(`bonus:double-off:group:${groupId}`, 'إيقاف دبل الرول', ButtonStyle.Danger));
-      await showPrivatePanel(interaction, { content: `اختر نطاق الدبل لقروب <@&${group.role_id}>. الدبل ×2 فقط ولا يتراكم إلى ×4.`, components: [new ActionRowBuilder().addComponents(buttons), new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+      const [groupDouble, userDoubles] = await Promise.all([
+        db.getActiveGroupMultiplier(interaction.guild.id, groupId),
+        db.listActiveUserMultipliers(interaction.guild.id, groupId)
+      ]);
+      const buttons = [
+        groupDouble
+          ? button(`bonus:double-off:group:${groupId}`, 'إيقاف دبل الرول', ButtonStyle.Danger)
+          : button(`bonus:double-scope:group:${groupId}`, 'دبل للرول كاملًا', ButtonStyle.Primary),
+        button(`bonus:double-scope:user:${groupId}`, 'إضافة / إزالة دبل شخص')
+      ];
+      const activePeople = userDoubles.slice(0, 12).map(item => {
+        const end = item.ends_at ? ` — ينتهي <t:${Math.floor(Number(item.ends_at) / 1000)}:R>` : ' — إيقاف يدوي';
+        return `<@${item.user_id}>${end}`;
+      });
+      const status = [
+        `دبل الرول: ${groupDouble ? (groupDouble.ends_at ? `مفعّل حتى <t:${Math.floor(Number(groupDouble.ends_at) / 1000)}:R>` : 'مفعّل حتى الإيقاف اليدوي') : 'متوقف'}`,
+        `الدبل الفردي المحفوظ: ${userDoubles.length ? userDoubles.length.toLocaleString() : 'لا يوجد'}`,
+        ...(activePeople.length ? activePeople : [])
+      ];
+      await showPrivatePanel(interaction, { content: `قروب <@&${group.role_id}>\n${status.join('\n')}\nالدبل ×2 فقط ولا يتراكم إلى ×4. اختيار عضو سبق تفعيل دبل له يوقف دبل ذلك العضو فورًا.`, components: [new ActionRowBuilder().addComponents(buttons), new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
       return true;
     }
 
@@ -819,7 +950,7 @@ async function handleInteraction(interaction, context = {}) {
       const groupId = Number(rawGroupId);
       if (scope === 'group') await db.clearMultiplier(interaction.guild.id, { scope: 'group', groupId }, interaction.user.id);
       scheduleRefresh(interaction.guild, true);
-      await showPrivatePanel(interaction, { content: 'تم إيقاف دبل القروب.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع للإعدادات'))] }, true);
+      await showPrivatePanel(interaction, await buildReturnPayload(interaction, 'تم إيقاف دبل القروب. سجل الدبل الفردي محفوظ ويمكنك اختيار العضو نفسه لإيقافه يدويًا.'), true);
       return true;
     }
 
@@ -836,7 +967,21 @@ async function handleInteraction(interaction, context = {}) {
         await showPrivatePanel(interaction, { content: result ? `تم تصفير نقاط <@${rawUserId}> داخل القروب فقط (${result.points.toLocaleString()} نقطة).` : 'لم يوجد رصيد لهذا العضو داخل القروب.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع للإعدادات'))] }, true);
       } else if (confirmAction === 'archive') {
         const archived = await db.archiveGroup(interaction.guild.id, groupId, interaction.user.id);
-        await showPrivatePanel(interaction, { content: archived ? 'تمت أرشفة القروب.' : 'القروب غير موجود أو مؤرشف.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع للإعدادات'))] }, true);
+        await showPrivatePanel(interaction, await buildReturnPayload(interaction, archived
+          ? 'أزيل القروب من التوب وأُرشف دون حذف الرصيد؛ إعادة إضافة الرول تعيد القروب وتاريخه.'
+          : 'القروب غير موجود أو مؤرشف.'), true);
+      } else if (confirmAction === 'remove-points') {
+        const amount = Number(rawUserId);
+        try {
+          const result = await db.adjustGroupPoints(interaction.guild.id, groupId, -amount, interaction.user.id);
+          const memberDeducted = Math.abs(Number(result.memberDelta) || 0);
+          const manualDeducted = Math.abs(Number(result.manualDelta) || 0);
+          const prompt = `تم خصم ${Math.abs(result.delta).toLocaleString()} نقطة من إجمالي القروب. من الرصيد الإداري: ${manualDeducted.toLocaleString()}، ومن أرصدة الأعضاء: ${memberDeducted.toLocaleString()}.`;
+          await showPrivatePanel(interaction, await buildReturnPayload(interaction, prompt), true);
+        } catch (error) {
+          const prompt = error.message === 'NO_POINTS_TO_REMOVE' ? 'لا توجد نقاط متاحة للخصم.' : 'تعذر خصم النقاط.';
+          await showPrivatePanel(interaction, await buildReturnPayload(interaction, prompt), true);
+        }
       }
       scheduleRefresh(interaction.guild, true);
       return true;
@@ -852,8 +997,16 @@ async function handleInteraction(interaction, context = {}) {
         await deny(interaction, 'انتهت معاينة القاعدة؛ افتح تعديل القاعدة من جديد.');
         return true;
       }
-      await db.setRule(interaction.guild.id, pending.metric, pending.threshold, pending.points, interaction.user.id);
-      await interaction.update({ content: 'تم اعتماد القاعدة. لن تُعاد كتابة النقاط السابقة، لكن التقدم الموجود قد يُحوّل عند النشاط القادم.', components: [] });
+      const result = await db.setRule(interaction.guild.id, pending.metric, pending.threshold, pending.points, interaction.user.id);
+      if (result.newlyActivated && pending.metric === BONUS_METRICS.voice) {
+        const now = Date.now();
+        for (const session of voiceSessions.values()) {
+          if (String(session.guildId) !== String(interaction.guild.id)) continue;
+          session.lastTrackedAt = now;
+          await saveVoiceSession(session).catch(() => {});
+        }
+      }
+      await showPrivatePanel(interaction, await buildReturnPayload(interaction, 'تم اعتماد القاعدة. يبدأ هذا المقياس من الآن فقط، ولا يُعاد احتساب النشاط السابق.'), true);
       scheduleRefresh(interaction.guild, true);
       return true;
     }
@@ -861,16 +1014,16 @@ async function handleInteraction(interaction, context = {}) {
     if (action === 'publish') {
       try {
         const published = await publishBoard(interaction.guild, interaction.user.id);
-        await showPrivatePanel(interaction, { content: `تم نشر/تحديث لوحة التوب في <#${published.channelId}>.`, components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع للإعدادات'))] }, true);
+        await showPrivatePanel(interaction, { content: `تم نشر/تحديث لوحة التوب في <#${published.channelId}>.`, components: buildHomeRows() }, true);
       } catch (error) {
         const messages = {
           CHANNEL_REQUIRED: 'حدد روم التوب أولًا.',
           GROUP_REQUIRED: 'أضف قروبًا واحدًا على الأقل قبل نشر التوب.',
-          RULE_REQUIRED: 'حدد قاعدة الرسائل وقاعدة الساعات الصوتية قبل نشر التوب.',
+          RULE_REQUIRED: 'فعّل قاعدة رسائل أو قاعدة ساعات صوتية واحدة على الأقل قبل نشر التوب.',
           CHANNEL_NOT_FOUND: 'روم العرض لم يعد موجودًا أو البوت لا يستطيع الوصول إليه.',
           MISSING_CHANNEL_PERMISSIONS: 'البوت يحتاج صلاحيات عرض الروم وإرسال الرسائل ورفع الملفات وقراءة سجل الرسائل.'
         };
-        await showPrivatePanel(interaction, { content: `لم يُنشر التوب: ${messages[error.message] || 'حدث خطأ أثناء الإنشاء.'}`, components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+        await showPrivatePanel(interaction, { content: `لم يُنشر التوب: ${messages[error.message] || 'حدث خطأ أثناء الإنشاء.'}`, components: buildHomeRows() }, true);
       }
       return true;
     }
@@ -880,11 +1033,11 @@ async function handleInteraction(interaction, context = {}) {
       if (modalAction === 'color') {
         const color = collectModalValue(interaction, 'hex');
         if (!/^#?[0-9a-f]{6}$/i.test(color)) {
-          await interaction.reply({ content: 'صيغة اللون غير صحيحة. اكتب مثل #D9A441.', ephemeral: true });
+          await showPrivatePanel(interaction, await buildReturnPayload(interaction, 'صيغة اللون غير صحيحة. اكتب مثل #D9A441.'), true);
           return true;
         }
         await db.saveConfig(interaction.guild.id, { autoColor: false, color: normalizeHex(color) }, interaction.user.id);
-        await interaction.reply({ content: `تم اعتماد اللون ${normalizeHex(color)}.`, ephemeral: true });
+        await showPrivatePanel(interaction, await buildReturnPayload(interaction, `تم اعتماد اللون ${normalizeHex(color)}.`), true);
         scheduleRefresh(interaction.guild, true);
         return true;
       }
@@ -895,26 +1048,37 @@ async function handleInteraction(interaction, context = {}) {
         const points = Number(collectModalValue(interaction, 'points').replace(/[,،]/g, '').replace(/\s/g, ''));
         const threshold = metricName === 'voice' ? Math.round(thresholdRaw * 3600000) : thresholdRaw;
         if (!metric || !Number.isSafeInteger(threshold) || threshold <= 0 || !Number.isSafeInteger(points) || points <= 0) {
-          await interaction.reply({ content: 'القيم غير صحيحة. استخدم أرقامًا صحيحة أكبر من صفر.', ephemeral: true });
+          await showPrivatePanel(interaction, await buildReturnPayload(interaction, 'القيم غير صحيحة. استخدم أرقامًا صحيحة أكبر من صفر.'), true);
           return true;
         }
         const progressColumn = metric === BONUS_METRICS.messages ? 'message_progress' : 'voice_progress_ms';
-        const currentProgress = await getDatabase().get(`SELECT MAX(${progressColumn}) AS maximum FROM bonus_balances WHERE guild_id = ?`, [interaction.guild.id]);
-        if (Number(currentProgress?.maximum || 0) >= threshold) {
+        const [activeRules, currentProgress] = await Promise.all([
+          db.getRules(interaction.guild.id),
+          getDatabase().get(`SELECT MAX(${progressColumn}) AS maximum FROM bonus_balances WHERE guild_id = ?`, [interaction.guild.id])
+        ]);
+        if (activeRules[metric] && Number(currentProgress?.maximum || 0) >= threshold) {
           pendingRuleChanges.set(idKey(interaction.guild.id, interaction.user.id), {
             metric, threshold, points, metricName, thresholdRaw, createdAt: Date.now()
           });
-          await interaction.reply({
+          await showPrivatePanel(interaction, {
             content: '⚠️ يوجد تقدم جزئي أعلى من الحد الجديد. عند أول نشاط لاحق قد تُمنح نقاط فورًا وفق القاعدة الجديدة. هل تريد اعتماد هذا التغيير؟',
             components: [new ActionRowBuilder().addComponents(
               button(`bonus:confirm-rule:${metricName}:${threshold}:${points}`, 'اعتماد القاعدة', ButtonStyle.Danger),
               button('bonus:home', 'إلغاء')
-            )],
-            ephemeral: true
-          });
+            )]
+          }, true);
         } else {
-          await db.setRule(interaction.guild.id, metric, threshold, points, interaction.user.id);
-          await interaction.reply({ content: `تم حفظ القاعدة: كل ${metricName === 'voice' ? thresholdRaw + ' ساعة صوتية' : thresholdRaw + ' رسالة'} = ${points} نقطة. التقدم الجزئي يُحفظ، والتعديل لا يعيد احتساب النقاط القديمة.`, ephemeral: true });
+          const result = await db.setRule(interaction.guild.id, metric, threshold, points, interaction.user.id);
+          if (result.newlyActivated && metric === BONUS_METRICS.voice) {
+            const now = Date.now();
+            for (const session of voiceSessions.values()) {
+              if (String(session.guildId) !== String(interaction.guild.id)) continue;
+              session.lastTrackedAt = now;
+              await saveVoiceSession(session).catch(() => {});
+            }
+          }
+          await showPrivatePanel(interaction, await buildReturnPayload(interaction,
+            `تم حفظ قاعدة ${metricName === 'voice' ? 'الصوت' : 'الرسائل'}: كل ${metricName === 'voice' ? thresholdRaw + ' ساعة صوتية' : thresholdRaw + ' رسالة'} = ${points} نقطة. يبدأ التفعيل الجديد الآن؛ وتعديل قاعدة مفعّلة لا يعيد احتساب التاريخ.`), true);
           scheduleRefresh(interaction.guild, true);
         }
         return true;
@@ -923,12 +1087,42 @@ async function handleInteraction(interaction, context = {}) {
         const groupId = Number(parts[1]);
         const url = collectModalValue(interaction, 'url');
         if (url && (!/^https:\/\/(cdn\.discordapp\.com|media\.discordapp\.net)\//i.test(url) || !/\.(png|jpe?g|webp|gif)(\?|$)/i.test(url))) {
-          await interaction.reply({ content: 'استخدم رابط صورة مباشرًا من Discord CDN بصيغة PNG/JPG/WEBP/GIF، أو اتركه فارغًا للصورة الافتراضية.', ephemeral: true });
+          await showPrivatePanel(interaction, await buildReturnPayload(interaction, 'استخدم رابط صورة مباشرًا من Discord CDN بصيغة PNG/JPG/WEBP/GIF، أو اتركه فارغًا للصورة الافتراضية.'), true);
           return true;
         }
         await db.updateGroup(interaction.guild.id, groupId, { avatar_url: url || null }, interaction.user.id);
-        await interaction.reply({ content: url ? 'تم تحديث صورة القروب.' : 'عاد القروب لاستخدام أيقونة السيرفر.', ephemeral: true });
+        await showPrivatePanel(interaction, await buildReturnPayload(interaction, url ? 'تم تحديث صورة القروب.' : 'عاد القروب لاستخدام أيقونة السيرفر.'), true);
         scheduleRefresh(interaction.guild, true);
+        return true;
+      }
+      if (modalAction === 'manual-points') {
+        const [, operation, rawGroupId] = parts;
+        const groupId = Number(rawGroupId);
+        const amount = Number(collectModalValue(interaction, 'amount').replace(/[,،\s]/g, ''));
+        if (!Number.isSafeInteger(amount) || amount <= 0 || amount > 1000000) {
+          await showPrivatePanel(interaction, await buildReturnPayload(interaction, 'اكتب عددًا صحيحًا بين 1 و1,000,000.'), true);
+          return true;
+        }
+        try {
+          if (operation === 'remove-points') {
+            await showPrivatePanel(interaction, {
+              content: `تأكيد خصم حتى ${amount.toLocaleString()} نقطة من إجمالي القروب؟ يُخصم من الرصيد الإداري أولًا، ثم من أرصدة الأعضاء أصحاب النقاط الأعلى. إن كان الإجمالي أقل فسيُخصم المتاح فقط.`,
+              components: [new ActionRowBuilder().addComponents(
+                button(`bonus:confirm:remove-points:${groupId}:${amount}`, 'تأكيد الخصم', ButtonStyle.Danger),
+                button('bonus:home', 'إلغاء')
+              )]
+            }, true);
+          } else {
+            const result = await db.adjustGroupPoints(interaction.guild.id, groupId, amount, interaction.user.id);
+            const changed = Math.abs(result.delta).toLocaleString();
+            await showPrivatePanel(interaction, await buildReturnPayload(interaction,
+              `تمت إضافة ${changed} نقطة إلى إجمالي القروب في رصيد الإدارة؛ لم تتغير أرصدة الأعضاء الفردية.`), true);
+            scheduleRefresh(interaction.guild, true);
+          }
+        } catch (error) {
+          const note = error.message === 'NO_POINTS_TO_REMOVE' ? 'لا توجد نقاط إدارية متاحة للخصم.' : 'تعذر تعديل رصيد النقاط للقروب.';
+          await showPrivatePanel(interaction, await buildReturnPayload(interaction, note), true);
+        }
         return true;
       }
     }
@@ -936,8 +1130,16 @@ async function handleInteraction(interaction, context = {}) {
     return false;
   } catch (error) {
     console.error('[bonus] interaction failed:', error);
-    if (interaction.deferred || interaction.replied) await interaction.followUp({ content: 'حدث خطأ أثناء تنفيذ إعداد البونس. راجع السجل وحاول مجددًا.', ephemeral: true }).catch(() => {});
-    else await interaction.reply({ content: 'حدث خطأ أثناء تنفيذ إعداد البونس.', ephemeral: true }).catch(() => {});
+    if (interaction.message) {
+      await showPrivatePanel(interaction, {
+        content: 'حدث خطأ أثناء تنفيذ الإجراء. لم يُحذف أي رصيد؛ استخدم زر الرجوع ثم أعد المحاولة.',
+        components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))]
+      }, true).catch(() => {});
+    } else if (interaction.deferred || interaction.replied) {
+      await interaction.followUp({ content: 'حدث خطأ أثناء تنفيذ إعداد البونس.', ephemeral: true }).catch(() => {});
+    } else {
+      await interaction.reply({ content: 'حدث خطأ أثناء تنفيذ إعداد البونس.', ephemeral: true }).catch(() => {});
+    }
     return true;
   }
 }
@@ -1164,6 +1366,14 @@ function registerInteractionHandler(client) {
   client.once('ready', () => {
     restoreVoiceSessions(client).catch(error => console.error('[bonus] voice restore failed:', error));
     for (const guild of client.guilds.cache.values()) scheduleRefresh(guild, true);
+    if (!boardRefreshInterval) {
+      boardRefreshInterval = setInterval(() => {
+        for (const guild of client.guilds.cache.values()) {
+          maybeRefreshBoard(guild, false).catch(error => console.error('[bonus] periodic board refresh failed:', error));
+        }
+      }, 30000);
+      boardRefreshInterval.unref?.();
+    }
     if (!voiceInterval) {
       voiceInterval = setInterval(async () => {
         const now = Date.now();
@@ -1185,4 +1395,4 @@ function registerInteractionHandler(client) {
   });
 }
 
-module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildHomeEmbed };
+module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicRows, boardCounter, buildHomeEmbed };

@@ -148,7 +148,11 @@ async function buildBonusTopImage({ guild, groups, config = {}, updatedAt = Date
   ctx.textAlign = 'left';
   ctx.fillStyle = '#B8C0CE';
   ctx.font = '19px Cairo, sans-serif';
-  ctx.fillText(`آخر تحديث  ${new Date(updatedAt).toLocaleString('ar-SA', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' })}`, 86, 184);
+  const updateLabel = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Riyadh', day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+  }).format(new Date(updatedAt));
+  ctx.fillText(`Updated ${updateLabel} (Riyadh)`, 86, 184);
   ctx.textAlign = 'right';
   ctx.fillStyle = accent;
   ctx.font = 'bold 20px Cairo, sans-serif';
@@ -240,7 +244,7 @@ async function buildBonusTopImage({ guild, groups, config = {}, updatedAt = Date
   ctx.textAlign = 'right';
   ctx.fillStyle = '#7E8796';
   ctx.font = '14px Cairo, sans-serif';
-  ctx.fillText('يتم تحديث الترتيب تلقائيًا عند تغيّر النقاط', 1516, 804);
+  ctx.fillText('Automatic refresh every 30 seconds', 1516, 804);
 
   return new AttachmentBuilder(canvas.toBuffer('image/png'), { name: 'bonus-top.png' });
 }

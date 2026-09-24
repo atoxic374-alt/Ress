@@ -436,11 +436,20 @@ class DatabaseManager {
                 UNIQUE (guild_id, role_id)
             )`,
             `CREATE INDEX IF NOT EXISTS idx_bonus_groups_guild_active ON bonus_groups(guild_id, archived_at, created_at)`,
+            `CREATE TABLE IF NOT EXISTS bonus_group_point_balances (
+                guild_id TEXT NOT NULL,
+                group_id INTEGER NOT NULL,
+                points INTEGER NOT NULL DEFAULT 0 CHECK (points >= 0),
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, group_id),
+                FOREIGN KEY (group_id) REFERENCES bonus_groups(id) ON DELETE CASCADE
+            )`,
             `CREATE TABLE IF NOT EXISTS bonus_rules (
                 guild_id TEXT NOT NULL,
                 metric TEXT NOT NULL CHECK (metric IN ('messages', 'voice_ms')),
                 threshold INTEGER NOT NULL CHECK (threshold > 0),
                 points INTEGER NOT NULL CHECK (points > 0),
+                activated_at INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER NOT NULL,
                 updated_by TEXT NOT NULL,
                 PRIMARY KEY (guild_id, metric)
@@ -509,6 +518,11 @@ class DatabaseManager {
         for (const sql of tables) {
             await this.run(sql);
         }
+        const bonusRuleColumns = await this.all('PRAGMA table_info(bonus_rules)');
+        if (!bonusRuleColumns.some(column => column.name === 'activated_at')) {
+            await this.run('ALTER TABLE bonus_rules ADD COLUMN activated_at INTEGER NOT NULL DEFAULT 0');
+        }
+        await this.run('UPDATE bonus_rules SET activated_at = updated_at WHERE activated_at = 0');
     }
 
     // إضافة وظائف الدعوات
