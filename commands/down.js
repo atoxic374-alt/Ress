@@ -110,6 +110,8 @@ async function createPermanentMenu(client, channelId) {
             .addFields([
                 { name: 'Down', value: 'سحب رول إداري من عضو لمدة محددة أو نهائياً', inline: false },
                 { name: 'Record', value: 'عرض تاريخ الداون لعضو معين', inline: false },
+                { name: 'داوناتي', value: 'استخدم الأمر `داوناتي` لعرض سجلك مع الصفحات، ويمكن للمالك استخدام منشن لعرض سجل عضو آخر', inline: false },
+                { name: 'داونات', value: 'للمعتمدين: يعرض جميع سجلات الداون، سجل واحد في كل صفحة', inline: false },
                 { name: 'Change', value: 'تعديل مدة داون حالي', inline: false },
                 { name: 'Active', value: 'عرض جميع الداونات الجارية', inline: false },
                 { name: 'Finish', value: 'إنهاء أو مراجعة داونات عضو معين', inline: false }
@@ -324,6 +326,15 @@ async function handleInteraction(interaction, context) {
         const { client } = context;
         const BOT_OWNERS = getBotOwners(context);
         const customId = interaction.customId;
+
+        if (customId.startsWith('down_my_history_')) {
+            const historyCommand = require('./my-down-history');
+            return historyCommand.handleInteraction(interaction, context);
+        }
+        if (customId.startsWith('down_all_history_')) {
+            const allHistoryCommand = require('./all-downs-history');
+            return allHistoryCommand.handleInteraction(interaction, context);
+        }
 
         // Check interaction validity
         if (interaction.replied || interaction.deferred) {
@@ -968,14 +979,34 @@ async function handleRemoveRole(interaction, context, respond) {
 }
 
 async function handleUserRecords(interaction, context, respond) {
-    const userSelect = new UserSelectMenuBuilder()
+    const historyUserIds = downManager.getUsersWithDownHistory(interaction.guild?.id);
+    const userOptions = [];
+    for (const userId of historyUserIds.slice(0, 25)) {
+        const member = await interaction.guild.members.fetch(userId).catch(() => null);
+        if (!member) continue;
+        const recordCount = downManager.getUserDownHistory(userId, interaction.guild.id).length;
+        if (!recordCount) continue;
+        userOptions.push({
+            label: member.displayName.slice(0, 100),
+            value: userId,
+            description: `${recordCount} سجل داون`.slice(0, 100)
+        });
+    }
+
+    if (!userOptions.length) {
+        await respond({ content: '❌ **لا يوجد أعضاء لديهم سجل داون في هذا السيرفر.**' });
+        return;
+    }
+
+    const userSelect = new StringSelectMenuBuilder()
         .setCustomId('down_show_user_records')
-        .setPlaceholder(' اختر العضو لعرض سجلاته...');
+        .setPlaceholder('اختر عضوًا لديه سجل داون...')
+        .addOptions(userOptions);
 
     const selectRow = new ActionRowBuilder().addComponents(userSelect);
 
     await respond({
-        content: ' **اختر العضو لعرض سجلات الداون الخاصة به:**',
+        content: ' **اختر عضوًا من القائمة لعرض سجل الداون الخاص به:**',
         components: [selectRow]
     });
 }
@@ -1898,7 +1929,7 @@ async function handleDownInteractions(interaction, context) {
     }
 
     // Handle user selection for showing records
-    if (interaction.isUserSelectMenu() && customId === 'down_show_user_records') {
+    if ((interaction.isUserSelectMenu() || interaction.isStringSelectMenu()) && customId === 'down_show_user_records') {
         try {
             if (!interaction.deferred && !interaction.replied) {
                 await interaction.deferReply({ ephemeral: true }).catch(() => {});
@@ -1912,7 +1943,7 @@ async function handleDownInteractions(interaction, context) {
         const activeDowns = downManager.getUserDowns(selectedUserId);
         // Filter out verbal downs from active downs for modification/ending purposes
         const nonVerbalActiveDowns = activeDowns.filter(d => d.roleId !== null);
-        const allLogs = downManager.getUserDownHistory(selectedUserId);
+        const allLogs = downManager.getUserDownHistory(selectedUserId, interaction.guild?.id);
         const userHistory = [];
 
         // تحويل السجلات إلى تنسيق يمكن عرضه
@@ -2049,7 +2080,7 @@ async function handleDownInteractions(interaction, context) {
         const downManager = require('../utils/downManager');
 
         // احصل على السجلات من downManager
-        const allLogs = downManager.getUserDownHistory(userId);
+        const allLogs = downManager.getUserDownHistory(userId, interaction.guild?.id);
         const userHistory = [];
 
         // تحويل السجلات إلى تنسيق يمكن عرضه

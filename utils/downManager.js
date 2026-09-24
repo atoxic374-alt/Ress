@@ -377,6 +377,7 @@ class DownManager {
             this.logAction(isVerbal ? 'DOWN_VERBAL' : 'DOWN_APPLIED', {
                 targetUserId,
                 roleId: isVerbal ? null : roleId,
+                guildId: guild.id,
                 duration,
                 reason,
                 byUserId,
@@ -455,6 +456,7 @@ class DownManager {
             this.logAction('DOWN_ENDED', {
                 targetUserId: downRecord.userId,
                 roleId: downRecord.roleId,
+                guildId: guild.id,
                 reason,
                 originalReason: downRecord.reason,
                 duration: downRecord.duration,
@@ -509,6 +511,7 @@ class DownManager {
             this.logAction('DOWN_MODIFIED', {
                 targetUserId: downRecord.userId,
                 roleId: downRecord.roleId,
+                guildId: guild.id,
                 oldDuration,
                 newDuration,
                 modifiedBy: modifiedById,
@@ -565,16 +568,44 @@ class DownManager {
             .sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
     }
 
-    getUserDownHistory(userId) {
+    getUserDownHistory(userId, guildId = null) {
         const logs = readJson(downLogsPath, []);
         return logs.filter(log =>
             log?.data?.targetUserId === userId &&
+            (!guildId || !log.data.guildId || log.data.guildId === guildId) &&
             (
                 log.type === 'DOWN_APPLIED' ||
                 log.type === 'DOWN_ENDED' ||
                 log.type === 'DOWN_VERBAL'
             )
         );
+    }
+
+    getUsersWithDownHistory(guildId = null) {
+        const userIds = new Set();
+        const logs = readJson(downLogsPath, []);
+        for (const log of logs) {
+            if (!log?.data?.targetUserId) continue;
+            if (guildId && log.data.guildId && log.data.guildId !== guildId) continue;
+            if (['DOWN_APPLIED', 'DOWN_ENDED', 'DOWN_VERBAL'].includes(log.type)) {
+                userIds.add(String(log.data.targetUserId));
+            }
+        }
+        for (const down of Object.values(this.getActiveDowns())) {
+            if (down?.userId && (!guildId || down.guildId === guildId)) {
+                userIds.add(String(down.userId));
+            }
+        }
+        return [...userIds];
+    }
+
+    getGuildDownHistory(guildId = null) {
+        const logs = readJson(downLogsPath, []);
+        return logs.filter(log => {
+            if (!log?.data?.targetUserId) return false;
+            if (!['DOWN_APPLIED', 'DOWN_ENDED', 'DOWN_VERBAL'].includes(log.type)) return false;
+            return !guildId || !log.data.guildId || log.data.guildId === guildId;
+        }).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
     }
 
     getExpiredDowns() {

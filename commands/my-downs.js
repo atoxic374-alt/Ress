@@ -9,6 +9,11 @@ module.exports = {
         try {
             const { BOT_OWNERS, client } = context;
             const isOwner = BOT_OWNERS.includes(message.author.id);
+            const canViewOthers = isOwner || await downManager.hasPermission({
+                user: message.author,
+                member: message.member,
+                guild: message.guild
+            }, BOT_OWNERS);
             const sendResponse = async (payload) => {
                 try {
                     return await message.reply(payload);
@@ -25,7 +30,7 @@ module.exports = {
             let isTargetingOther = false;
 
             // 1. تحسين جلب المستخدم المستهدف (البحث في الكاش أولاً ثم الـ API)
-            if (isOwner && args[0]) {
+            if (canViewOthers && args[0]) {
                 const targetId = args[0].replace(/[<@!>]/g, '');
                 const user = message.mentions.users.first() || 
                              client.users.cache.get(targetId) || 
@@ -42,7 +47,7 @@ module.exports = {
 
             // 2. التعامل مع حالة عدم وجود داونات
             if (activeDowns.length === 0) {
-                if (!isOwner) {
+                if (!canViewOthers) {
                     return await message.react('❌').catch(() => null);
                 }
                 

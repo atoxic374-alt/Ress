@@ -73,9 +73,16 @@ function normalizeComparableWhen(value = '') {
         .trim();
 }
 
+function sameRequestedTime(first, second) {
+    if (normalizeComparableWhen(first) === normalizeComparableWhen(second)) return true;
+    const firstDate = parseScheduleTime(first);
+    const secondDate = parseScheduleTime(second);
+    if (!firstDate || !secondDate) return false;
+    return Math.abs(firstDate.getTime() - secondDate.getTime()) <= 60 * 1000;
+}
+
 function hasConflictingRoomRequest(requests = [], guildId, forWho, when, excludeRequestId = null) {
     const targetUserId = extractTargetUserId(forWho);
-    const normalizedWhen = normalizeComparableWhen(when);
     const normalizedForWho = normalizeComparableText(forWho);
 
     return requests.some(request => {
@@ -83,7 +90,7 @@ function hasConflictingRoomRequest(requests = [], guildId, forWho, when, exclude
         if (excludeRequestId && request.id === excludeRequestId) return false;
         if (!['pending', 'accepted'].includes(request.status)) return false;
 
-        const sameWhen = normalizeComparableWhen(request.when) === normalizedWhen;
+        const sameWhen = sameRequestedTime(request.when, when);
         if (!sameWhen) return false;
 
         const requestTargetId = extractTargetUserId(request.forWho);
@@ -119,6 +126,19 @@ const lastImageErrorLog = new Map();
 // تخزين هاش إعدادات الألوان لكل سيرفر لمعرفة إذا تغيرت الإعدادات
 const colorConfigHash = new Map();
 
+function writeJsonAtomically(filePath, value) {
+    const tempPath = `${filePath}.tmp-${process.pid}`;
+    try {
+        fs.writeFileSync(tempPath, JSON.stringify(value, null, 2), 'utf8');
+        fs.renameSync(tempPath, filePath);
+        return true;
+    } catch (error) {
+        try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch (_) {}
+        console.error(`خطأ في الحفظ الذري للملف ${filePath}:`, error.message);
+        return false;
+    }
+}
+
 // دالة لحساب هاش الإعدادات لمعرفة إذا تغيرت
 function getColorConfigHash(guildConfig) {
     const data = JSON.stringify({
@@ -153,8 +173,7 @@ function saveSchedules() {
                 };
             }
         }
-        fs.writeFileSync(schedulesPath, JSON.stringify(schedulesData, null, 2), 'utf8');
-        return true;
+        return writeJsonAtomically(schedulesPath, schedulesData);
     } catch (error) {
         console.error('خطأ في حفظ الجدولات:', error);
         return false;
@@ -167,8 +186,7 @@ function saveActiveRooms() {
             channelId,
             ...data
         }));
-        fs.writeFileSync(activeRoomsPath, JSON.stringify(roomsData, null, 2), 'utf8');
-        return true;
+        return writeJsonAtomically(activeRoomsPath, roomsData);
     } catch (error) {
         console.error('خطأ في حفظ الرومات النشطة:', error);
         return false;
@@ -199,8 +217,25 @@ function loadActiveRooms() {
 }
 
 // دالة لحفظ الصورة محلياً
+function isAllowedSetroomImageUrl(rawUrl) {
+    try {
+        const parsed = new URL(String(rawUrl || '').trim());
+        return parsed.protocol === 'https:' && new Set([
+            'cdn.discordapp.com',
+            'media.discordapp.net',
+            'images-ext-1.discordapp.net',
+            'images-ext-2.discordapp.net'
+        ]).has(parsed.hostname.toLowerCase());
+    } catch (_) {
+        return false;
+    }
+}
+
 async function saveImageLocally(imageUrl, guildId) {
     try {
+        if (!isAllowedSetroomImageUrl(imageUrl)) {
+            throw new Error('مصدر الصورة غير مسموح؛ استخدم رابط Discord CDN بصيغة HTTPS');
+        }
         // إنشاء المجلد إذا لم يكن موجوداً
         if (!fs.existsSync(setupImagesPath)) {
             fs.mkdirSync(setupImagesPath, { recursive: true });
@@ -211,13 +246,17 @@ async function saveImageLocally(imageUrl, guildId) {
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
+        const contentLength = Number(response.headers.get('content-length') || 0);
+        if (contentLength > 10 * 1024 * 1024) throw new Error('حجم الصورة أكبر من 10MB');
         
         const arrayBuffer = await response.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
+        if (buffer.length > 10 * 1024 * 1024) throw new Error('حجم الصورة أكبر من 10MB');
         
         // تحديد امتداد الملف
         const urlParts = imageUrl.split('.');
-        const extension = urlParts[urlParts.length - 1].split('?')[0] || 'png';
+        const requestedExtension = urlParts[urlParts.length - 1].split('?')[0].toLowerCase();
+        const extension = ['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(requestedExtension) ? requestedExtension : 'png';
         
         // حفظ الصورة
         const imagePath = path.join(setupImagesPath, `setup_${guildId}.${extension}`);
@@ -242,8 +281,11 @@ async function saveEmojiLocally(emojiUrl, guildId, sourceEmojiId, animated = fal
         ensureEmojiAssetsDir();
         const response = await fetch(emojiUrl);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const contentLength = Number(response.headers.get('content-length') || 0);
+        if (contentLength > 4 * 1024 * 1024) throw new Error('حجم الإيموجي أكبر من 4MB');
         const arrayBuffer = await response.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
+        if (buffer.length > 4 * 1024 * 1024) throw new Error('حجم الإيموجي أكبر من 4MB');
         const extension = animated ? 'gif' : 'png';
         const filePath = path.join(localEmojiAssetsPath, `emoji_${guildId}_${sourceEmojiId}.${extension}`);
         fs.writeFileSync(filePath, buffer);
@@ -305,6 +347,11 @@ async function deleteRoom(channelId, client) {
 }
 // جدولة حذف روم وفق الوقت المحدد
 function scheduleRoomDeletion(channelId, client, deleteAfterMs = DEFAULT_ROOM_DELETE_HOURS * 60 * 60 * 1000) {
+    const previousJob = roomDeletionJobs.get(channelId);
+    if (previousJob) {
+        try { previousJob.cancel(); } catch (_) {}
+        roomDeletionJobs.delete(channelId);
+    }
     const deletionTime = new Date(Date.now() + deleteAfterMs);
     const job = schedule.scheduleJob(deletionTime, async () => {
         console.log(`⏰ حان موعد حذف الروم: ${channelId}`);
@@ -312,9 +359,14 @@ function scheduleRoomDeletion(channelId, client, deleteAfterMs = DEFAULT_ROOM_DE
         roomDeletionJobs.delete(channelId);
     });
 
+    if (!job) {
+        console.error(`❌ تعذر جدولة حذف الروم ${channelId}`);
+        return false;
+    }
     roomDeletionJobs.set(channelId, job);
     const deleteAfterHours = (deleteAfterMs / (60 * 60 * 1000)).toFixed(2);
     console.log(`✅ تم جدولة حذف الروم ${channelId} بعد ${deleteAfterHours} ساعة`);
+    return true;
 }
 
 // إعادة إرسال setup embed - مبسط بدون كولداون
@@ -380,14 +432,7 @@ async function checkAndDeleteOldRooms(client) {
         } else {
             const remainingTime = deleteAfterMs - roomAge;
             const deletionTime = new Date(roomData.createdAt + deleteAfterMs);
-
-            const job = schedule.scheduleJob(deletionTime, async () => {
-                console.log(`⏰ حان موعد حذف الروم: ${channelId}`);
-                await deleteRoom(channelId, client);
-                roomDeletionJobs.delete(channelId);
-            });
-
-            roomDeletionJobs.set(channelId, job);
+            scheduleRoomDeletion(channelId, client, remainingTime);
 
             const remainingHours = (remainingTime / (1000 * 60 * 60)).toFixed(2);
             const remainingMinutes = Math.round(remainingTime / (1000 * 60));
@@ -410,33 +455,38 @@ async function checkAndDeleteOldRooms(client) {
 // تحميل واستعادة الجدولات
 function restoreSchedules(client) {
     try {
+        // تحميل الرومات النشطة أولاً؛ otherwise a request whose marker was not
+        // flushed before restart could be scheduled and create a duplicate.
+        const savedRooms = loadActiveRooms();
+        for (const [channelId, roomData] of savedRooms.entries()) {
+            activeRooms.set(channelId, roomData);
+        }
+
         // استعادة جدولات إنشاء الرومات المجدولة
         if (fs.existsSync(schedulesPath)) {
             const schedulesData = JSON.parse(fs.readFileSync(schedulesPath, 'utf8'));
             const requests = loadRoomRequests();
 
             for (const request of requests) {
-                if (request.status === 'accepted' && schedulesData[request.id]) {
-                    const nextRun = new Date(schedulesData[request.id].nextRun);
+                const storedSchedule = schedulesData[request.id] || null;
+                if (request.status === 'accepted' && !isRequestRoomCreated(request) && (storedSchedule || request.scheduledAt)) {
+                    const nextRun = storedSchedule?.nextRun ? new Date(storedSchedule.nextRun) : new Date(request.scheduledAt);
 
                     // إذا كان الموعد في المستقبل، أعد جدولته
-                    if (nextRun > new Date()) {
-                        scheduleRoomCreation(request, client);
+                    if (!Number.isNaN(nextRun.getTime()) && nextRun > new Date()) {
+                        scheduleRoomCreation(request, client, nextRun);
                         console.log(`✅ تم استعادة جدولة الروم: ${request.roomType} - ${request.forWho}`);
                     }
                     // إذا كان الموعد قد مضى، قم بإنشاء الروم فوراً
-                    else {
+                    else if (!Number.isNaN(nextRun.getTime())) {
                         createRoom(request, client, loadRoomConfig()[request.guildId]);
                         console.log(`⚡ تم إنشاء روم متأخر: ${request.roomType} - ${request.forWho}`);
                     }
+                    else {
+                        console.error(`❌ تعذر استعادة موعد الطلب ${request.id}: تاريخ الجدولة غير صالح`);
+                    }
                 }
             }
-        }
-
-        // استعادة جدولات حذف الرومات النشطة
-        const savedRooms = loadActiveRooms();
-        for (const [channelId, roomData] of savedRooms.entries()) {
-            activeRooms.set(channelId, roomData);
         }
 
         if (activeRooms.size > 0) {
@@ -630,6 +680,27 @@ async function checkAndRestoreSetupEmbed(client) {
 
 // تخزين انتظار الإيموجي
 const awaitingEmojis = new Map();
+// أقفال قصيرة العمر لمنع السباقات الناتجة عن الضغط المتكرر أو التفاعلات المتزامنة.
+const requestSubmissionLocks = new Set();
+const requestActionLocks = new Set();
+const roomCreationLocks = new Set();
+
+function getAwaitingEmojisKey(guildId, userId) {
+    return `${guildId}:${userId}`;
+}
+
+function cancelRoomCreationSchedule(requestId) {
+    const job = activeSchedules.get(requestId);
+    if (!job) return false;
+    try {
+        job.cancel();
+    } catch (error) {
+        console.error(`تعذر إلغاء جدولة الطلب ${requestId}:`, error.message);
+    }
+    activeSchedules.delete(requestId);
+    saveSchedules();
+    return true;
+}
 
 // تخزين رسائل الإمبد في الغرف للحماية من الحذف
 const roomEmbedMessages = new Map();
@@ -794,7 +865,8 @@ async function sendSetupMessage(channel, guild, guildConfig) {
 function loadRoomConfig() {
     try {
         if (fs.existsSync(roomConfigPath)) {
-            return JSON.parse(fs.readFileSync(roomConfigPath, 'utf8'));
+            const parsed = JSON.parse(fs.readFileSync(roomConfigPath, 'utf8'));
+            return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
         }
         return {};
     } catch (error) {
@@ -805,8 +877,7 @@ function loadRoomConfig() {
 
 function saveRoomConfig(config) {
     try {
-        fs.writeFileSync(roomConfigPath, JSON.stringify(config, null, 2), 'utf8');
-        return true;
+        return writeJsonAtomically(roomConfigPath, config);
     } catch (error) {
         console.error('خطأ في حفظ إعدادات الغرف:', error);
         return false;
@@ -816,7 +887,8 @@ function saveRoomConfig(config) {
 function loadRoomRequests() {
     try {
         if (fs.existsSync(roomRequestsPath)) {
-            return JSON.parse(fs.readFileSync(roomRequestsPath, 'utf8'));
+            const parsed = JSON.parse(fs.readFileSync(roomRequestsPath, 'utf8'));
+            return Array.isArray(parsed) ? parsed.filter(request => request && typeof request === 'object') : [];
         }
         return [];
     } catch (error) {
@@ -827,8 +899,7 @@ function loadRoomRequests() {
 
 function saveRoomRequests(requests) {
     try {
-        fs.writeFileSync(roomRequestsPath, JSON.stringify(requests, null, 2), 'utf8');
-        return true;
+        return writeJsonAtomically(roomRequestsPath, requests);
     } catch (error) {
         console.error('خطأ في حفظ طلبات الغرف:', error);
         return false;
@@ -1272,7 +1343,12 @@ async function handleRoomRequestMenu(interaction, client) {
 // معالجة إرسال المودال
 async function handleRoomModalSubmit(interaction, client) {
     const modalId = interaction.customId;
-    const roomTypeEn = modalId.includes('condolence') ? 'condolence' : 'birthday';
+    const modalMatch = modalId.match(/^room_modal_(condolence|birthday)_(\d{16,20})$/);
+    if (!modalMatch || modalMatch[2] !== interaction.user.id || !interaction.guild) {
+        await interaction.reply({ content: '❌ **هذا النموذج غير صالح أو ليس مخصصًا لك.**', flags: 64 }).catch(() => {});
+        return;
+    }
+    const roomTypeEn = modalMatch[1];
     const roomType = roomTypeEn === 'condolence' ? 'دعاء' : 'ميلاد';
     const roomEmoji = roomTypeEn === 'condolence' ? '🖤' : '🎂';
 
@@ -1330,6 +1406,15 @@ async function handleRoomModalSubmit(interaction, client) {
     // تحويل الآيدي أو اليوزر إلى منشن
     forWho = await formatUserMention(forWho, interaction.guild);
 
+    const requestedTargetId = extractTargetUserId(forWho);
+    if (requestedTargetId) {
+        const targetMember = await interaction.guild.members.fetch(requestedTargetId).catch(() => null);
+        if (!targetMember) {
+            await interaction.reply({ content: '❌ **المستفيد المحدد ليس عضوًا في هذا السيرفر.**', flags: 64 });
+            return;
+        }
+    }
+
     const config = loadRoomConfig();
     const guildConfig = config[interaction.guild.id];
 
@@ -1338,8 +1423,8 @@ async function handleRoomModalSubmit(interaction, client) {
         return;
     }
 
-    if (!guildConfig.requestsChannelId || !guildConfig.embedChannelId) {
-        await interaction.reply({ content: '❌ **الإعدادات غير مكتملة: يجب تحديد روم الطلبات وروم السيتب أولاً**', flags: 64 });
+    if (!guildConfig.requestsChannelId || !guildConfig.embedChannelId || !guildConfig.roomsCategoryId) {
+        await interaction.reply({ content: '❌ **الإعدادات غير مكتملة: يجب تحديد روم الطلبات وروم السيتب وكاتقوري الرومات أولاً**', flags: 64 });
         return;
     }
 
@@ -1376,7 +1461,8 @@ async function handleRoomModalSubmit(interaction, client) {
     await interaction.reply({ embeds: [emojiPrompt], flags: 64 });
 
     // حفظ بيانات الطلب مؤقتاً في انتظار الإيموجي
-    awaitingEmojis.set(interaction.user.id, {
+    const awaitingKey = getAwaitingEmojisKey(interaction.guild.id, interaction.user.id);
+    awaitingEmojis.set(awaitingKey, {
         roomType,
         roomTypeEn,
         roomEmoji,
@@ -1391,8 +1477,8 @@ async function handleRoomModalSubmit(interaction, client) {
 
     // ضبط timeout لإزالة الانتظار بعد 60 ثانية
     setTimeout(() => {
-        if (awaitingEmojis.has(interaction.user.id)) {
-            awaitingEmojis.delete(interaction.user.id);
+        if (awaitingEmojis.has(awaitingKey)) {
+            awaitingEmojis.delete(awaitingKey);
         }
     }, 60000);
 }
@@ -1400,12 +1486,21 @@ async function handleRoomModalSubmit(interaction, client) {
 // معالج رسائل الإيموجي
 async function handleEmojiMessage(message, client) {
     if (message.author.bot) return;
+    if (!message.guild) return;
 
     const userId = message.author.id;
-    if (!awaitingEmojis.has(userId)) return;
+    const awaitingKey = getAwaitingEmojisKey(message.guild.id, userId);
+    if (!awaitingEmojis.has(awaitingKey)) return;
 
-    const requestData = awaitingEmojis.get(userId);
-    awaitingEmojis.delete(userId);
+    const requestData = awaitingEmojis.get(awaitingKey);
+    if (requestData.channelId !== message.channel.id) return;
+    awaitingEmojis.delete(awaitingKey);
+
+    const submissionLockKey = `${requestData.guildId}:${userId}`;
+    if (requestSubmissionLocks.has(submissionLockKey)) return;
+    requestSubmissionLocks.add(submissionLockKey);
+
+    try {
 
     const parsedEmojiInput = extractEmojisFromText(message.content);
     const disableEmojis = parsedEmojiInput.disableEmojis;
@@ -1438,7 +1533,7 @@ async function handleEmojiMessage(message, client) {
     }
 
     const requestsChannel = await client.channels.fetch(guildConfig.requestsChannelId).catch(() => null);
-    if (!requestsChannel || requestsChannel.type !== ChannelType.GuildText) {
+    if (!requestsChannel || requestsChannel.guild?.id !== requestData.guildId || requestsChannel.type !== ChannelType.GuildText) {
         await message.reply('❌ **روم الطلبات غير صالح أو غير موجود. تواصل مع الإدارة**').then(msg => {
             setTimeout(() => msg.delete().catch(() => {}), 7000);
         });
@@ -1464,7 +1559,10 @@ async function handleEmojiMessage(message, client) {
     // حفظ الطلب
     const requests = existingRequests;
     requests.push(request);
-    saveRoomRequests(requests);
+    if (!saveRoomRequests(requests)) {
+        await message.reply('❌ **تعذر حفظ الطلب، حاول مرة أخرى.**').catch(() => {});
+        return;
+    }
 
     // إرسال الطلب لروم الطلبات
     const requestEmbed = colorManager.createEmbed()
@@ -1499,7 +1597,15 @@ async function handleEmojiMessage(message, client) {
             .setEmoji('<:emoji_39:1430334088924893275>')
     ]);
 
-    await requestsChannel.send({ embeds: [requestEmbed], components: [buttons] });
+    try {
+        await requestsChannel.send({ embeds: [requestEmbed], components: [buttons] });
+    } catch (error) {
+        const rollbackRequests = loadRoomRequests().filter(item => item.id !== request.id);
+        saveRoomRequests(rollbackRequests);
+        console.error('فشل إرسال طلب الروم إلى قناة الطلبات:', error);
+        await message.reply('❌ **تعذر إرسال الطلب للإدارة. لم يتم حفظ الطلب، حاول مرة أخرى.**').catch(() => {});
+        return;
+    }
 
     // تحديث رسالة السيتب لإعادة تعيين جميع المنيوهات (الروم + الألوان)
     try {
@@ -1545,10 +1651,17 @@ async function handleEmojiMessage(message, client) {
     } catch (error) {
         console.error('فشل في إرسال رسالة خاصة للمستخدم:', error);
     }
+    } finally {
+        requestSubmissionLocks.delete(submissionLockKey);
+    }
 }
 
 // معالجة قبول/رفض الطلب
-async function handleRoomRequestAction(interaction, client) {
+async function processRoomRequestAction(interaction, client) {
+    if (!interaction.guild) {
+        await interaction.reply({ content: '❌ **هذا الإجراء متاح داخل السيرفر فقط.**', flags: 64 }).catch(() => {});
+        return;
+    }
     const action = interaction.customId.startsWith('room_accept') ? 'accept' : 'reject';
 
     // استخراج الـ ID بشكل صحيح
@@ -1560,6 +1673,11 @@ async function handleRoomRequestAction(interaction, client) {
     const config = loadRoomConfig();
     const guildConfig = ensureGuildRoomConfig(config, interaction.guild.id);
     const { BOT_OWNERS = [] } = interaction.client || {};
+
+    if (!guildConfig.requestsChannelId || interaction.channelId !== guildConfig.requestsChannelId) {
+        await interaction.reply({ content: '❌ **هذا الزر غير صالح خارج روم الطلبات.**', flags: 64 });
+        return;
+    }
 
     if (!canReviewRoomRequest(interaction.member, guildConfig, action, interaction.user.id, BOT_OWNERS)) {
         await interaction.reply({ content: '❌ **ليس لديك صلاحية لهذا الإجراء**', flags: 64 });
@@ -1589,11 +1707,21 @@ async function handleRoomRequestAction(interaction, client) {
         return;
     }
 
+    const parsedAcceptedTime = action === 'accept' ? parseScheduleTime(request.when) : null;
+    if (action === 'accept' && !parsedAcceptedTime) {
+        await interaction.reply({ content: '❌ **لا يمكن قبول الطلب: الموعد غير مفهوم. عدّل الموعد أولًا إلى صيغة مثل `6:50 مساءً` أو `بعد 10 دقائق`.**', flags: 64 });
+        return;
+    }
+
     // تحديث حالة الطلب
     requests[requestIndex].status = action === 'accept' ? 'accepted' : 'rejected';
     requests[requestIndex].reviewedBy = interaction.user.id;
     requests[requestIndex].reviewedAt = Date.now();
-    saveRoomRequests(requests);
+    if (parsedAcceptedTime) requests[requestIndex].scheduledAt = parsedAcceptedTime.toISOString();
+    if (!saveRoomRequests(requests)) {
+        await interaction.reply({ content: '❌ **تعذر حفظ قرار القبول/الرفض. لم يتم تغيير حالة الطلب.**', flags: 64 });
+        return;
+    }
 
     // تحديث رسالة الطلب
     const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
@@ -1603,7 +1731,9 @@ async function handleRoomRequestAction(interaction, client) {
             { name: 'بواسطة', value: `<@${interaction.user.id}>`, inline: true }
         ]);
 
-    await interaction.update({ embeds: [updatedEmbed], components: [] });
+    await interaction.update({ embeds: [updatedEmbed], components: [] }).catch(error => {
+        console.error(`تعذر تحديث رسالة قرار الطلب ${request.id}:`, error.message);
+    });
 
     // إرسال إشعار لصاحب الطلب
     try {
@@ -1626,29 +1756,59 @@ async function handleRoomRequestAction(interaction, client) {
     }
 }
 
+async function handleRoomRequestAction(interaction, client) {
+    const requestId = String(interaction.customId || '').replace(/^room_(?:accept|reject)_/, '');
+    if (!requestId) {
+        await interaction.reply({ content: '❌ **معرف الطلب غير صالح**', flags: 64 }).catch(() => {});
+        return;
+    }
+    if (requestActionLocks.has(requestId)) {
+        await interaction.reply({ content: '⏳ **الطلب قيد المعالجة، انتظر لحظة.**', flags: 64 }).catch(() => {});
+        return;
+    }
+    requestActionLocks.add(requestId);
+    try {
+        await processRoomRequestAction(interaction, client);
+    } finally {
+        requestActionLocks.delete(requestId);
+    }
+}
+
 // جدولة إنشاء الروم
-async function scheduleRoomCreation(request, client) {
+async function scheduleRoomCreation(request, client, persistedScheduleTime = null) {
     const config = loadRoomConfig();
     const guildConfig = config[request.guildId];
 
     if (!guildConfig) {
         console.error(`❌ لم يتم العثور على إعدادات السيرفر ${request.guildId}`);
-        return;
+        return false;
     }
 
-    // تحليل الوقت
-    const scheduleTime = parseScheduleTime(request.when);
+    if (request.roomChannelId || isRequestRoomCreated(request)) {
+        console.log(`ℹ️ الطلب ${request.id} لديه روم منشأ مسبقًا، لن تتم جدولتُه مرة أخرى`);
+        return true;
+    }
 
-    if (!scheduleTime) {
+    cancelRoomCreationSchedule(request.id);
+
+    // تحليل الوقت
+    const storedScheduleTime = persistedScheduleTime || request.scheduledAt || null;
+    const parsedPersistedTime = storedScheduleTime instanceof Date
+        ? storedScheduleTime
+        : (storedScheduleTime ? new Date(storedScheduleTime) : null);
+    const scheduleTime = parsedPersistedTime && !Number.isNaN(parsedPersistedTime.getTime())
+        ? parsedPersistedTime
+        : parseScheduleTime(request.when);
+
+    if (!scheduleTime || Number.isNaN(scheduleTime.getTime())) {
         console.error('❌ فشل في تحليل الوقت:', request.when);
-        return;
+        return false;
     }
 
     // التحقق من أن الوقت في المستقبل
     if (scheduleTime <= new Date()) {
         console.log(`⚡ الوقت المحدد قد مضى، إنشاء الروم فوراً`);
-        await createRoom(request, client, guildConfig);
-        return;
+        return (await createRoom(request, client, guildConfig)) === true;
     }
 
     // جدولة المهمة
@@ -1659,13 +1819,25 @@ async function scheduleRoomCreation(request, client) {
         saveSchedules(); // حفظ بعد حذف الجدولة
     });
 
+    if (!job) {
+        console.error(`❌ تعذر إنشاء جدولة للطلب ${request.id}`);
+        return false;
+    }
+
     activeSchedules.set(request.id, job);
-    saveSchedules(); // حفظ الجدولة الجديدة
+    if (!saveSchedules()) {
+        activeSchedules.delete(request.id);
+        try { job.cancel(); } catch (_) {}
+        console.error(`❌ تعذر حفظ جدولة الطلب ${request.id}`);
+        return false;
+    }
     console.log(`✅ تم جدولة إنشاء روم ${request.roomType} للوقت: ${scheduleTime.toLocaleString('ar-SA')}`);
+    return true;
 }
 
 // إنشاء الروم
-async function createRoom(request, client, guildConfig) {
+async function processCreateRoom(request, client, guildConfig) {
+    let createdChannel = null;
     try {
         console.log(`🔄 بدء إنشاء روم: ${request.roomType} لـ ${request.forWho}`);
 
@@ -1675,7 +1847,34 @@ async function createRoom(request, client, guildConfig) {
             return;
         }
 
+        if (!guildConfig || !guildConfig.roomsCategoryId) {
+            throw new Error('إعداد كاتقوري الرومات غير مكتمل');
+        }
+
+        const latestRequest = loadRoomRequests().find(item => item.id === request.id && item.guildId === request.guildId);
+        const existingChannelId = latestRequest?.roomChannelId || request.roomChannelId;
+        if (existingChannelId) {
+            const existingChannel = await guild.channels.fetch(existingChannelId).catch(() => null);
+            if (existingChannel) {
+                console.log(`ℹ️ الروم موجود مسبقًا للطلب ${request.id}: ${existingChannel.id}`);
+                return;
+            }
+        }
+        const existingActiveRoom = [...activeRooms.entries()].find(([, roomData]) => roomData.requestId === request.id);
+        if (existingActiveRoom) {
+            const existingChannel = await guild.channels.fetch(existingActiveRoom[0]).catch(() => null);
+            if (existingChannel) {
+                console.log(`ℹ️ الروم النشط موجود مسبقًا للطلب ${request.id}: ${existingChannel.id}`);
+                return;
+            }
+            activeRooms.delete(existingActiveRoom[0]);
+            saveActiveRooms();
+        }
+
         const targetUserId = extractTargetUserId(request.forWho);
+        if (targetUserId && !await guild.members.fetch(targetUserId).catch(() => null)) {
+            throw new Error('المستفيد المحدد ليس عضوًا في السيرفر');
+        }
 
         // استخراج اسم العرض (nickname) من forWho
         let displayName = request.forWho;
@@ -1706,41 +1905,49 @@ async function createRoom(request, client, guildConfig) {
         // إضافة الكاتيجوري إذا كان محدد
         if (guildConfig && guildConfig.roomsCategoryId) {
             const category = guild.channels.cache.get(guildConfig.roomsCategoryId) || await guild.channels.fetch(guildConfig.roomsCategoryId).catch(() => null);
-            if (category && category.type === ChannelType.GuildCategory) {
+            if (category && category.guild?.id === guild.id && category.type === ChannelType.GuildCategory) {
                 channelOptions.parent = guildConfig.roomsCategoryId;
             } else {
-                console.warn(`⚠️ كاتقوري الرومات غير صالح في السيرفر ${guild.id}، سيتم إنشاء الروم بدون كاتقوري`);
+                throw new Error('كاتقوري الرومات غير صالح أو لا ينتمي للسيرفر');
             }
         }
         
         const channel = await guild.channels.create(channelOptions);
+        createdChannel = channel;
 
         console.log(`✅ تم إنشاء القناة: ${channel.name} (${channel.id})`);
 
         const latestRequests = loadRoomRequests();
         const requestIndex = latestRequests.findIndex(r => r.id === request.id && r.guildId === request.guildId);
-        if (requestIndex !== -1) {
-            latestRequests[requestIndex].roomCreatedAt = Date.now();
-            latestRequests[requestIndex].roomChannelId = channel.id;
-            saveRoomRequests(latestRequests);
-        }
+        if (requestIndex === -1) throw new Error('الطلب غير موجود أثناء تسجيل الروم المنشأ');
+        latestRequests[requestIndex].roomCreatedAt = Date.now();
+        latestRequests[requestIndex].roomChannelId = channel.id;
+        if (!saveRoomRequests(latestRequests)) throw new Error('تعذر حفظ معرف الروم المنشأ');
 
         const texts = getSetroomTexts(guildConfig);
         const prefix = (texts.roomContentPrefix || '@here').trim();
         const toLabel = (texts.roomToLabel || 'لـ').trim();
         const byLabel = (texts.roomByLabel || 'بواسطة').trim();
-        const decoratedMessage = getFormattedRoomMessageBody(request.message);
+        const safeForWho = String(request.forWho || '').replace(/@(everyone|here)/gi, '@\u200b$1');
+        const decoratedMessage = getFormattedRoomMessageBody(request.message)
+            .replace(/@(everyone|here)/gi, '@\u200b$1');
         const roomContent = [
             prefix,
             decoratedMessage,
-            `**${toLabel} : ${request.forWho}**`,
+            `**${toLabel} : ${safeForWho}**`,
             `**${byLabel} : <@${request.userId}>**`
         ].filter(Boolean).join('\n\n');
-        const sentMessage = await channel.send({ content: roomContent });
+        const sentMessage = await channel.send({
+            content: roomContent,
+            allowedMentions: {
+                parse: ['@here', '@everyone'].some(token => prefix.trim() === token) ? ['everyone'] : [],
+                users: [request.userId, ...(targetUserId ? [targetUserId] : [])]
+            }
+        });
         console.log(`✅ تم إرسال رسالة عادية في الروم`);
 
         if (request.imageUrl) {
-            await channel.send({ content: request.imageUrl }).catch((error) => {
+            await channel.send({ content: request.imageUrl, allowedMentions: { parse: [] } }).catch((error) => {
                 console.error('فشل في إرسال رابط الصورة داخل الروم:', error.message);
             });
         }
@@ -1787,11 +1994,13 @@ async function createRoom(request, client, guildConfig) {
             requestId: request.id,
             deleteAfterMs: getRoomDeletionMs(guildConfig)
         });
-        saveActiveRooms();
+        if (!saveActiveRooms()) throw new Error('تعذر حفظ بيانات الروم النشط');
 
         const deleteAfterMs = getRoomDeletionMs(guildConfig);
         const deleteAfterHours = (deleteAfterMs / (60 * 60 * 1000)).toFixed(2);
-        scheduleRoomDeletion(channel.id, client, deleteAfterMs);
+        if (!scheduleRoomDeletion(channel.id, client, deleteAfterMs)) {
+            throw new Error('تعذر جدولة حذف الروم تلقائيًا');
+        }
         console.log(`✅ تم إنشاء روم ${request.roomType} بنجاح: ${roomName} (سيتم حذفها تلقائياً بعد ${deleteAfterHours} ساعة)`);
 
         const notifyUserIds = new Set([request.userId]);
@@ -1818,8 +2027,29 @@ async function createRoom(request, client, guildConfig) {
             }
         }
 
+        return true;
+
     } catch (error) {
         console.error('❌ خطأ في إنشاء الروم:', error);
+
+        if (createdChannel) {
+            roomEmbedMessages.delete(createdChannel.id);
+            activeRooms.delete(createdChannel.id);
+            const deletionJob = roomDeletionJobs.get(createdChannel.id);
+            if (deletionJob) {
+                try { deletionJob.cancel(); } catch (_) {}
+                roomDeletionJobs.delete(createdChannel.id);
+            }
+            saveActiveRooms();
+            await createdChannel.delete('تنظيف بعد فشل إنشاء الروم').catch(() => {});
+            const rollbackRequests = loadRoomRequests();
+            const rollbackRequest = rollbackRequests.find(item => item.id === request.id);
+            if (rollbackRequest?.roomChannelId === createdChannel.id) {
+                delete rollbackRequest.roomChannelId;
+                delete rollbackRequest.roomCreatedAt;
+                saveRoomRequests(rollbackRequests);
+            }
+        }
 
         // محاولة إرسال إشعار بالخطأ لصاحب الطلب
         try {
@@ -1837,6 +2067,24 @@ async function createRoom(request, client, guildConfig) {
         } catch (dmError) {
             console.error('فشل في إرسال إشعار الخطأ:', dmError.message);
         }
+        return false;
+    }
+}
+
+async function createRoom(request, client, guildConfig) {
+    if (!request?.id) {
+        console.error('❌ محاولة إنشاء روم بدون معرف طلب');
+        return;
+    }
+    if (roomCreationLocks.has(request.id)) {
+        console.log(`⏳ إنشاء الطلب ${request.id} قيد التنفيذ، تم تجاهل التكرار`);
+        return;
+    }
+    roomCreationLocks.add(request.id);
+    try {
+        return await processCreateRoom(request, client, guildConfig);
+    } finally {
+        roomCreationLocks.delete(request.id);
     }
 }
 
@@ -1849,7 +2097,15 @@ function parseScheduleTime(timeString) {
     const now = moment().tz('Asia/Riyadh');
 
     // تنظيف المدخل
-    const cleanTime = timeString.trim().toLowerCase();
+    const cleanTime = String(timeString || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[٠-٩]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
+    if (!cleanTime) return null;
+
+    if (/^(بعد\s+)?نص\s+ساع[هة]$/.test(cleanTime) || /^(بعد\s+)?نصف\s+ساع[هة]$/.test(cleanTime)) {
+        return now.clone().add(30, 'minutes').toDate();
+    }
 
     // الآن أو فوراً أو دحين أو الحين
     if (cleanTime.includes('الآن') || cleanTime.includes('فوراً') || cleanTime.includes('فورا') || 
@@ -1873,9 +2129,9 @@ function parseScheduleTime(timeString) {
     }
 
     // بعد X ساعات
-    const hoursMatch = cleanTime.match(/بعد\s+(\d+)\s*ساعات?|بعد\s+ساعة/);
+    const hoursMatch = cleanTime.match(/بعد\s+(\d+)\s*ساعات?|بعد\s+ساعتين|بعد\s+ساعة/);
     if (hoursMatch) {
-        const hours = parseInt(hoursMatch[1] || 1);
+        const hours = hoursMatch[0].includes('ساعتين') ? 2 : parseInt(hoursMatch[1] || 1);
         return now.clone().add(hours, 'hours').toDate();
     }
 
@@ -1886,28 +2142,47 @@ function parseScheduleTime(timeString) {
         return now.clone().add(days, 'days').toDate();
     }
 
-    // بكره (غداً) أو غدوة
-    if (cleanTime.includes('بكره') || cleanTime.includes('بكرة') || cleanTime.includes('غدوة')) {
-        const tomorrowMatch = cleanTime.match(/(\d+)\s*(صباحاً|مساءً|ص|م)?/);
-        if (tomorrowMatch) {
-            const hour = parseInt(tomorrowMatch[1]);
-            const isPM = tomorrowMatch[2] && (tomorrowMatch[2].includes('مساء') || tomorrowMatch[2] === 'م');
-            const targetHour = isPM && hour < 12 ? hour + 12 : hour;
-            return now.clone().add(1, 'day').hour(targetHour).minute(0).second(0).millisecond(0).toDate();
-        }
-        return now.clone().add(1, 'day').hour(12).minute(0).second(0).millisecond(0).toDate();
+    const clockPattern = '(?:الساعة\\s*)?(\\d{1,2})(?:\\s*[:.]\\s*(\\d{1,2}))?\\s*(صباحاً|صباحًا|مساءً|مساءً|ص|م)?';
+
+    function buildClockDate(baseDate, clockMatch) {
+        const hour = Number(clockMatch[1]);
+        const minute = Number(clockMatch[2] || 0);
+        const meridiem = clockMatch[3] || '';
+        if (minute > 59) return null;
+        if (meridiem && (hour < 1 || hour > 12)) return null;
+        if (!meridiem && hour > 23) return null;
+        const isPM = meridiem.includes('مساء') || meridiem === 'م';
+        const isAM = meridiem.includes('صباح') || meridiem === 'ص';
+        const candidateHours = meridiem
+            ? [isPM ? (hour % 12) + 12 : (isAM ? hour % 12 : hour)]
+            : (hour <= 12 ? [hour % 12, (hour % 12) + 12] : [hour]);
+        const candidates = candidateHours.map(targetHour => baseDate.clone()
+            .hour(targetHour).minute(minute).second(0).millisecond(0));
+        candidates.sort((a, b) => a.valueOf() - b.valueOf());
+        return candidates[0];
     }
 
-    // غداً أو غدا
-    if (cleanTime.includes('غداً') || cleanTime.includes('غدا')) {
-        const tomorrowMatch = cleanTime.match(/(\d+)\s*(صباحاً|مساءً|ص|م)?/);
-        if (tomorrowMatch) {
-            const hour = parseInt(tomorrowMatch[1]);
-            const isPM = tomorrowMatch[2] && (tomorrowMatch[2].includes('مساء') || tomorrowMatch[2] === 'م');
-            const targetHour = isPM && hour < 12 ? hour + 12 : hour;
-            return now.clone().add(1, 'day').hour(targetHour).minute(0).second(0).millisecond(0).toDate();
-        }
-        return now.clone().add(1, 'day').hour(12).minute(0).second(0).millisecond(0).toDate();
+    // تاريخ صريح: 2026-09-22 18:30 أو 2026/09/22 6:30 مساءً
+    const dateMatch = cleanTime.match(/(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\s*(.*)$/);
+    if (dateMatch) {
+        const dateBase = moment.tz({ year: Number(dateMatch[1]), month: Number(dateMatch[2]) - 1, date: Number(dateMatch[3]) }, 'Asia/Riyadh');
+        const dateClock = dateMatch[4].match(new RegExp(`^${clockPattern}$`));
+        if (!dateClock) return null;
+        const result = buildClockDate(dateBase, dateClock);
+        return result && result.isValid() && result.isAfter(now) ? result.toDate() : null;
+    }
+
+    // اليوم / بكره / غداً مع وقت اختياري.
+    const dayMatch = cleanTime.match(/^(اليوم|بكره|بكرة|غدوة|غداً|غدا|غدًا)(?:\s+|،\s*)?(.*)$/);
+    if (dayMatch) {
+        const isTomorrow = !dayMatch[1].startsWith('اليوم');
+        const baseDate = now.clone().add(isTomorrow ? 1 : 0, 'day');
+        const dayClock = dayMatch[2].match(new RegExp(`^${clockPattern}$`));
+        if (!dayClock) return baseDate.hour(12).minute(0).second(0).millisecond(0).toDate();
+        const result = buildClockDate(baseDate, dayClock);
+        if (!result) return null;
+        if (!isTomorrow && result.isSameOrBefore(now)) result.add(1, 'day');
+        return result.toDate();
     }
 
     // قبل شوي (بعد ساعة - كترجمة معكوسة)
@@ -1915,25 +2190,26 @@ function parseScheduleTime(timeString) {
         return now.clone().add(10, 'minutes').toDate();
     }
 
-    // الساعة X
-    const hourMatch = cleanTime.match(/(\d+)\s*(صباحاً|مساءً|ص|م)?/);
-    if (hourMatch) {
-        const hour = parseInt(hourMatch[1]);
-        const isPM = hourMatch[2] && (hourMatch[2].includes('مساء') || hourMatch[2] === 'م');
-        const targetHour = isPM && hour < 12 ? hour + 12 : hour;
-
-        const targetDate = now.clone().hour(targetHour).minute(0).second(0).millisecond(0);
-
-        // إذا كان الوقت قد مضى، اجعله غداً
-        if (targetDate.isSameOrBefore(now)) {
-            targetDate.add(1, 'day');
+    // الساعة X أو X:MM. عند عدم كتابة صباحاً/مساءً نختار أقرب موعد قادم
+    // بين AM و PM بدل افتراض أن الوقت صباحي دائمًا.
+    const clockMatch = cleanTime.match(new RegExp(`^${clockPattern}$`));
+    if (clockMatch) {
+        const result = buildClockDate(now, clockMatch);
+        if (!result) return null;
+        if (clockMatch[3]) {
+            if (result.isSameOrBefore(now)) result.add(1, 'day');
+            return result.toDate();
         }
-
-        return targetDate.toDate();
+        const candidates = [result, result.clone().add(12, 'hours')].map(candidate => {
+            if (candidate.isSameOrBefore(now)) candidate.add(1, 'day');
+            return candidate;
+        });
+        candidates.sort((a, b) => a.valueOf() - b.valueOf());
+        return candidates[0].toDate();
     }
 
-    // افتراضياً: بعد ساعة
-    return now.clone().add(1, 'hour').toDate();
+    // لا نحول النص غير المفهوم إلى موعد عشوائي.
+    return null;
 }
 
 // معالجة اختيار الألوان
@@ -2286,8 +2562,10 @@ function createSetroomPreviewRows(guildConfig = {}) {
 }
 
 function memberHasAnyRole(member, roleIds = []) {
-    if (!member || !roleIds.length) return false;
-    return roleIds.some(roleId => member.roles.cache.has(roleId));
+    if (!member || !Array.isArray(roleIds) || !roleIds.length) return false;
+    const memberRoleCache = member.roles?.cache;
+    if (!memberRoleCache?.has) return false;
+    return roleIds.some(roleId => memberRoleCache.has(String(roleId)));
 }
 
 function canManageSetroom(member, userId, botOwners = []) {
@@ -2295,9 +2573,15 @@ function canManageSetroom(member, userId, botOwners = []) {
 }
 
 function canReviewRoomRequest(member, guildConfig, action, userId, botOwners = []) {
-    if (canManageSetroom(member, userId, botOwners)) return true;
-    const roleIds = action === 'accept' ? (guildConfig.reviewAcceptRoleIds || []) : (guildConfig.reviewRejectRoleIds || []);
-    return memberHasAnyRole(member, roleIds);
+    // Bot owners remain able to review requests. For everyone else, once
+    // action-specific roles are configured they are the source of truth;
+    // Administrator must not bypass the selected accept/reject roles.
+    if (botOwners.includes(userId)) return true;
+    const roleIds = action === 'accept'
+        ? (guildConfig.reviewAcceptRoleIds || [])
+        : (guildConfig.reviewRejectRoleIds || []);
+    if (roleIds.length > 0) return memberHasAnyRole(member, roleIds);
+    return Boolean(member?.permissions?.has?.(PermissionFlagsBits.Administrator));
 }
 
 function getRoomRequestStatusLabel(status = 'pending') {
@@ -2348,6 +2632,7 @@ function getSetroomRequestsManagerData(guildId) {
 function buildSetroomRequestsManagerPayload(guildId, token, state = null) {
     const { allRequests, pendingRequests } = getSetroomRequestsManagerData(guildId);
     const deletableRequests = allRequests.filter(r => ['pending', 'accepted'].includes(r.status) && !isRequestRoomCreated(r));
+    const editableRequests = allRequests.filter(r => !isRequestRoomCreated(r));
     const acceptedCount = allRequests.filter(r => r.status === 'accepted').length;
     const rejectedCount = allRequests.filter(r => r.status === 'rejected').length;
     const latest = allRequests.slice(0, 6);
@@ -2366,7 +2651,7 @@ function buildSetroomRequestsManagerPayload(guildId, token, state = null) {
             `**Selected for delete : ${selectedDeleteCount}**`,
             `**Selected for edit : ${selectedEditId ? `\`${selectedEditId}\`` : 'None'}**`,
             '',
-            '**Use the selectors below, then run Delete or Edit.**'
+            '**اختر طلبًا ثم استخدم: تعديل الموعد فقط أو تعديل كامل.**'
         ].join('\n'), 4096))
         .setFooter({ text: 'SetRoom Requests Control' })
         .setTimestamp();
@@ -2384,7 +2669,7 @@ function buildSetroomRequestsManagerPayload(guildId, token, state = null) {
         description: `ID: ${req.id}`.slice(0, 100),
         value: req.id
     }));
-    const allOptions = allRequests.slice(0, 25).map(req => ({
+    const allOptions = editableRequests.slice(0, 25).map(req => ({
         label: `${getRoomRequestStatusLabel(req.status)} • ${String(req.forWho || 'غير محدد').slice(0, 60)}`.slice(0, 100),
         description: `ID: ${req.id}`.slice(0, 100),
         value: req.id
@@ -2411,6 +2696,7 @@ function buildSetroomRequestsManagerPayload(guildId, token, state = null) {
         components: [
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`setroom_requests_delete_${token}`).setLabel('Delete Selected').setStyle(ButtonStyle.Danger).setDisabled(!deletableOptions.length),
+                new ButtonBuilder().setCustomId(`setroom_requests_edit_time_${token}`).setLabel('Edit Time Only').setStyle(ButtonStyle.Success).setDisabled(!allOptions.length),
                 new ButtonBuilder().setCustomId(`setroom_requests_edit_${token}`).setLabel('Edit Selected').setStyle(ButtonStyle.Primary).setDisabled(!allOptions.length),
                 new ButtonBuilder().setCustomId(`setroom_requests_close_${token}`).setLabel('Close').setStyle(ButtonStyle.Secondary)
             ),
@@ -2532,7 +2818,11 @@ async function handleSetroomDeleteRequests(message) {
             const selectedIds = [...selected];
             const toDelete = latestRequests.filter(r => r.guildId === message.guild.id && ['pending', 'accepted'].includes(r.status) && !isRequestRoomCreated(r) && selectedIds.includes(r.id));
             const updated = latestRequests.filter(r => !toDelete.some(d => d.id === r.id));
-            saveRoomRequests(updated);
+            if (!saveRoomRequests(updated)) {
+                await interaction.reply({ content: '❌ فشل حفظ الحذف. لم يتم إلغاء أي جدولة.', flags: 64 });
+                return;
+            }
+            for (const request of toDelete) cancelRoomCreationSchedule(request.id);
             collector.stop('done');
             await interaction.update({ content: `✅ تم حذف ${toDelete.length} طلب/طلبات بنجاح.`, embeds: [], components: [] });
         }
@@ -2750,11 +3040,42 @@ function registerHandlers(client) {
                             await interaction.reply({ content: '❌ **فشل حفظ التغييرات أثناء الحذف. حاول مرة أخرى.**', flags: 64 });
                             return;
                         }
+                        for (const request of toDelete) cancelRoomCreationSchedule(request.id);
                         state.selectedDeleteIds = [];
                         setroomRequestsUiState.set(token, state);
 
                         await interaction.update(buildSetroomRequestsManagerPayload(interaction.guild.id, token, state));
                         await interaction.followUp({ content: `✅ **تم حذف ${toDelete.length} طلب/طلبات بنجاح.**`, flags: 64 });
+                        return;
+                    }
+
+                    if (customId.startsWith('setroom_requests_edit_time_')) {
+                        if (!state.selectedEditId) {
+                            await interaction.reply({ content: '❌ **اختر طلبًا أولًا من قائمة التعديل.**', flags: 64 });
+                            return;
+                        }
+                        const request = loadRoomRequests().find(r => r.id === state.selectedEditId && r.guildId === interaction.guild.id);
+                        if (!request) {
+                            await interaction.reply({ content: '❌ **الطلب المختار غير موجود.**', flags: 64 });
+                            return;
+                        }
+                        if (isRequestRoomCreated(request)) {
+                            await interaction.reply({ content: '❌ **لا يمكن تعديل موعد بعد إنشاء الروم.**', flags: 64 });
+                            return;
+                        }
+                        const modal = new ModalBuilder()
+                            .setCustomId(`setroom_edit_time_modal_${request.id}_${interaction.user.id}`)
+                            .setTitle('تعديل موعد إنشاء الروم');
+                        modal.addComponents(new ActionRowBuilder().addComponents(
+                            new TextInputBuilder()
+                                .setCustomId('when')
+                                .setLabel('الموعد الجديد')
+                                .setPlaceholder('مثال: 6:50 مساءً أو بعد 10 دقائق')
+                                .setStyle(TextInputStyle.Short)
+                                .setRequired(true)
+                                .setValue(String(request.when || '').slice(0, 100))
+                        ));
+                        await interaction.showModal(modal);
                         return;
                     }
 
@@ -2772,13 +3093,13 @@ function registerHandlers(client) {
 
                         const modal = new ModalBuilder()
                             .setCustomId(`setroom_edit_modal_${request.id}_${interaction.user.id}`)
-                            .setTitle('تعديل طلب SetRoom');
+                            .setTitle('تعديل طلب الروم');
                         modal.addComponents(
-                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('for_who').setLabel('الطلب لمن؟').setStyle(TextInputStyle.Short).setRequired(true).setValue(String(request.forWho || '').slice(0, 100))),
-                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('when').setLabel('موعد الإنشاء').setStyle(TextInputStyle.Short).setRequired(true).setValue(String(request.when || '').slice(0, 100))),
-                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('message').setLabel('الرسالة').setStyle(TextInputStyle.Paragraph).setRequired(true).setValue(String(request.message || '').slice(0, 1000))),
-                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('image_url').setLabel('رابط الصورة (اختياري - 0 للإزالة)').setStyle(TextInputStyle.Short).setRequired(false).setValue(String(request.imageUrl || '').slice(0, 200))),
-                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('emojis').setLabel('الإيموجيات (0 = بدون)').setStyle(TextInputStyle.Short).setRequired(false).setValue(Array.isArray(request.emojis) && request.emojis.length ? request.emojis.join(' ') : '0').setMaxLength(200))
+                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('for_who').setLabel('لمن؟ (اسم أو منشن)').setStyle(TextInputStyle.Short).setRequired(true).setValue(String(request.forWho || '').slice(0, 100))),
+                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('when').setLabel('الموعد — مثال: 6:50 مساءً').setPlaceholder('6:50 مساءً | بعد 10 دقائق | غدًا 9 صباحًا').setStyle(TextInputStyle.Short).setRequired(true).setValue(String(request.when || '').slice(0, 100))),
+                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('message').setLabel('نص الرسالة').setStyle(TextInputStyle.Paragraph).setRequired(true).setValue(String(request.message || '').slice(0, 1000))),
+                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('image_url').setLabel('رابط صورة (اختياري، 0 للحذف)').setStyle(TextInputStyle.Short).setRequired(false).setValue(String(request.imageUrl || '').slice(0, 200))),
+                            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('emojis').setLabel('إيموجيات (اختياري، 0 للإزالة)').setStyle(TextInputStyle.Short).setRequired(false).setValue(Array.isArray(request.emojis) && request.emojis.length ? request.emojis.join(' ') : '0').setMaxLength(200))
                         );
                         await interaction.showModal(modal);
                         return;
@@ -2968,10 +3289,25 @@ function registerHandlers(client) {
             }
 
             if (interaction.isChannelSelectMenu()) {
-                if (interaction.customId === 'setroom_select_requests_channel') guildConfig.requestsChannelId = interaction.values[0] || null;
-                if (interaction.customId === 'setroom_select_embed_channel') guildConfig.embedChannelId = interaction.values[0] || null;
-                if (interaction.customId === 'setroom_select_category') guildConfig.roomsCategoryId = interaction.values[0] || null;
-                saveRoomConfig(config);
+                const selectedChannelId = interaction.values[0] || null;
+                const selectedChannel = selectedChannelId
+                    ? await interaction.guild.channels.fetch(selectedChannelId).catch(() => null)
+                    : null;
+                const isCategory = interaction.customId === 'setroom_select_category';
+                const validType = isCategory
+                    ? selectedChannel?.type === ChannelType.GuildCategory
+                    : selectedChannel?.type === ChannelType.GuildText;
+                if (selectedChannelId && !validType) {
+                    await interaction.reply({ content: '❌ نوع القناة المختارة غير صالح لهذا الإعداد.', flags: 64 });
+                    return;
+                }
+                if (interaction.customId === 'setroom_select_requests_channel') guildConfig.requestsChannelId = selectedChannelId;
+                if (interaction.customId === 'setroom_select_embed_channel') guildConfig.embedChannelId = selectedChannelId;
+                if (interaction.customId === 'setroom_select_category') guildConfig.roomsCategoryId = selectedChannelId;
+                if (!saveRoomConfig(config)) {
+                    await interaction.reply({ content: '❌ تعذر حفظ إعدادات القنوات.', flags: 64 });
+                    return;
+                }
                 await refreshSetroomPanelIfPossible(interaction, guildConfig);
                 await interaction.reply({ content: '✅ تم حفظ القناة المطلوبة.', flags: 64 });
                 return;
@@ -2987,6 +3323,56 @@ function registerHandlers(client) {
             }
 
             if (interaction.isModalSubmit()) {
+                if (interaction.customId.startsWith('setroom_edit_time_modal_')) {
+                    const match = interaction.customId.match(/^setroom_edit_time_modal_(.+)_(\d{16,20})$/);
+                    if (!match || interaction.user.id !== match[2]) {
+                        await interaction.reply({ content: '❌ **نموذج تعديل الموعد غير صالح أو ليس لك.**', flags: 64 });
+                        return;
+                    }
+                    const requestId = match[1];
+                    const requests = loadRoomRequests();
+                    const requestIndex = requests.findIndex(r => r.id === requestId && r.guildId === interaction.guild.id);
+                    if (requestIndex === -1) {
+                        await interaction.reply({ content: '❌ **الطلب غير موجود.**', flags: 64 });
+                        return;
+                    }
+                    if (isRequestRoomCreated(requests[requestIndex])) {
+                        await interaction.reply({ content: '❌ **لا يمكن تعديل موعد بعد إنشاء الروم.**', flags: 64 });
+                        return;
+                    }
+                    const newWhen = interaction.fields.getTextInputValue('when').trim();
+                    const parsedWhen = parseScheduleTime(newWhen);
+                    if (!parsedWhen) {
+                        await interaction.reply({ content: '❌ **الموعد غير مفهوم. استخدم مثلًا: `6:50 مساءً` أو `بعد 10 دقائق` أو `غدًا 9 صباحًا`.**', flags: 64 });
+                        return;
+                    }
+                    const wasAccepted = requests[requestIndex].status === 'accepted';
+                    requests[requestIndex] = {
+                        ...requests[requestIndex],
+                        when: newWhen,
+                        updatedAt: Date.now(),
+                        updatedBy: interaction.user.id,
+                        scheduledAt: parsedWhen.toISOString()
+                    };
+                    if (!saveRoomRequests(requests)) {
+                        await interaction.reply({ content: '❌ **تعذر حفظ الموعد الجديد.**', flags: 64 });
+                        return;
+                    }
+                    let rescheduled = true;
+                    if (wasAccepted) {
+                        cancelRoomCreationSchedule(requestId);
+                        rescheduled = await scheduleRoomCreation(requests[requestIndex], interaction.client);
+                    }
+                    const formatted = parsedWhen.toLocaleString('ar-SA', { timeZone: 'Asia/Riyadh' });
+                    await interaction.reply({
+                        content: rescheduled === false
+                            ? `⚠️ **تم حفظ الموعد ${formatted} لكن تعذرت إعادة الجدولة. راجع إعدادات الرومات.**`
+                            : `✅ **تم تحديث الموعد وإعادة الجدولة إلى ${formatted}.**`,
+                        flags: 64
+                    });
+                    return;
+                }
+
                 if (interaction.customId.startsWith('setroom_edit_modal_')) {
                     const match = interaction.customId.match(/^setroom_edit_modal_(.+)_(\d{16,20})$/);
                     if (!match) {
@@ -3008,6 +3394,12 @@ function registerHandlers(client) {
                         return;
                     }
 
+                    const originalRequest = requests[requestIndex];
+                    if (isRequestRoomCreated(originalRequest)) {
+                        await interaction.reply({ content: '❌ لا يمكن تعديل طلب بعد إنشاء الروم المرتبط به.', flags: 64 });
+                        return;
+                    }
+
                     const editedForWho = interaction.fields.getTextInputValue('for_who').trim();
                     const editedWhen = interaction.fields.getTextInputValue('when').trim();
                     const editedMessage = interaction.fields.getTextInputValue('message').trim();
@@ -3020,6 +3412,8 @@ function registerHandlers(client) {
                     if (editedForWho.length < 2 || editedForWho.length > 50) errors.push('حقل "لمن" يجب أن يكون بين 2 و 50 حرف.');
                     if (editedWhen.length < 2 || editedWhen.length > 100) errors.push('حقل "الوقت" يجب أن يكون بين 2 و 100 حرف.');
                     if (editedMessage.length < 5 || editedMessage.length > 1000) errors.push('حقل "الرسالة" يجب أن يكون بين 5 و 1000 حرف.');
+                    const parsedEditedWhen = parseScheduleTime(editedWhen);
+                    if (!parsedEditedWhen) errors.push('حقل "الوقت" غير مفهوم. مثال: 6:50 مساءً أو بعد 10 دقائق.');
                     if (finalImageUrl) {
                         const imageUrlPattern = /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|bmp)/i;
                         if (!imageUrlPattern.test(finalImageUrl)) errors.push('رابط الصورة غير صالح.');
@@ -3034,11 +3428,17 @@ function registerHandlers(client) {
                     }
 
                     const normalizedMention = await formatUserMention(editedForWho, interaction.guild);
+                    const editedTargetId = extractTargetUserId(normalizedMention);
+                    if (editedTargetId && !await interaction.guild.members.fetch(editedTargetId).catch(() => null)) {
+                        await interaction.reply({ content: '❌ **المستفيد المحدد ليس عضوًا في هذا السيرفر.**', flags: 64 });
+                        return;
+                    }
                     if (hasConflictingRoomRequest(requests, interaction.guild.id, normalizedMention, editedWhen, requestId)) {
                         await interaction.reply({ content: '❌ **يوجد طلب معلّق/مقبول بنفس الشخص ونفس الوقت. عدّل الوقت أو الشخص أولاً.**', flags: 64 });
                         return;
                     }
                     const normalizedEmojis = parsed.disableEmojis ? [] : await normalizeRequestedEmojis(interaction.guild, parsed.emojis);
+                    const wasAccepted = originalRequest.status === 'accepted';
                     requests[requestIndex] = {
                         ...requests[requestIndex],
                         forWho: normalizedMention,
@@ -3047,12 +3447,19 @@ function registerHandlers(client) {
                         imageUrl: finalImageUrl || null,
                         emojis: normalizedEmojis,
                         updatedAt: Date.now(),
-                        updatedBy: interaction.user.id
+                        updatedBy: interaction.user.id,
+                        scheduledAt: parsedEditedWhen.toISOString()
                     };
                     const saved = saveRoomRequests(requests);
                     if (!saved) {
                         await interaction.reply({ content: '❌ **فشل حفظ التعديل في قاعدة الطلبات. حاول مرة أخرى.**', flags: 64 });
                         return;
+                    }
+
+                    let rescheduled = true;
+                    if (wasAccepted) {
+                        cancelRoomCreationSchedule(requestId);
+                        rescheduled = await scheduleRoomCreation(requests[requestIndex], interaction.client);
                     }
 
                     const matchingStateEntry = [...setroomRequestsUiState.entries()].find(([, value]) =>
@@ -3073,16 +3480,32 @@ function registerHandlers(client) {
                             }
                         }
                     }
-                    await interaction.reply({ content: `✅ **تم تحديث الطلب \`${requestId}\` بنجاح.**`, flags: 64 });
+                    await interaction.reply({
+                        content: rescheduled === false
+                            ? `⚠️ **تم حفظ التعديل \`${requestId}\` لكن تعذرت إعادة الجدولة. راجع إعدادات الرومات.**`
+                            : `✅ **تم تحديث الطلب \`${requestId}\` وإعادة جدولة موعده بنجاح.**`,
+                        flags: 64
+                    });
                     return;
                 }
 
                 if (interaction.customId === 'setroom_modal_image') {
                     const imageUrl = interaction.fields.getTextInputValue('image_url').trim();
-                    guildConfig.imageUrl = imageUrl;
+                    if (!isAllowedSetroomImageUrl(imageUrl)) {
+                        await interaction.reply({ content: '❌ رابط الصورة غير مسموح. استخدم رابط HTTPS من Discord CDN.', flags: 64 });
+                        return;
+                    }
                     const localPath = await saveImageLocally(imageUrl, interaction.guild.id);
-                    if (localPath) guildConfig.localImagePath = localPath;
-                    saveRoomConfig(config);
+                    if (!localPath) {
+                        await interaction.reply({ content: '❌ تعذر تحميل الصورة والتحقق منها.', flags: 64 });
+                        return;
+                    }
+                    guildConfig.imageUrl = imageUrl;
+                    guildConfig.localImagePath = localPath;
+                    if (!saveRoomConfig(config)) {
+                        await interaction.reply({ content: '❌ تعذر حفظ إعداد الصورة.', flags: 64 });
+                        return;
+                    }
                     await refreshSetroomPanelIfPossible(interaction, guildConfig);
                     await interaction.reply({ content: '✅ تم تحديث الصورة.', flags: 64 });
                     return;
@@ -3172,7 +3595,11 @@ function registerHandlers(client) {
     });
 
     client.on('messageCreate', async (message) => {
-        await handleEmojiMessage(message, client);
+        try {
+            await handleEmojiMessage(message, client);
+        } catch (error) {
+            console.error('❌ خطأ في معالجة إيموجيات طلب الروم:', error.message);
+        }
         if (message.author.bot) return;
 
         const roomData = activeRooms.get(message.channel.id);
@@ -3202,9 +3629,9 @@ function registerHandlers(client) {
                     const channel = await client.channels.fetch(roomData.channelId).catch(() => null);
                     if (!channel) return;
 
-                    const newMessage = await channel.send({ content: roomData.content });
+                    const newMessage = await channel.send({ content: roomData.content, allowedMentions: { parse: [] } });
                     if (roomData.imageUrl) {
-                        await channel.send({ content: roomData.imageUrl }).catch(() => {});
+                        await channel.send({ content: roomData.imageUrl, allowedMentions: { parse: [] } }).catch(() => {});
                     }
 
                     roomEmbedMessages.set(channel.id, { ...roomData, messageId: newMessage.id });

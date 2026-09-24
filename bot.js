@@ -1061,6 +1061,15 @@ if (command.aliases && Array.isArray(command.aliases)) {
   }
 }
 
+// تسجيل سجل الداون العام بشكل صريح لضمان توفر الأمر باسم "داونات"
+try {
+  const allDownsHistoryCommand = require('./commands/all-downs-history.js');
+  client.commands.set('داونات', allDownsHistoryCommand);
+  console.log('Loaded command explicitly: داونات');
+} catch (error) {
+  console.error('Error loading command داونات:', error);
+}
+
 // تسجيل معالجات setroom المستقلة
 try {
   const setroomCommand = require('./commands/setroom.js');
@@ -2985,8 +2994,11 @@ client.on('messageCreate', async message => {
 
   let args, commandName;
 
-    // Handle prefix logic - محسن للأداء
-    if (PREFIX && PREFIX !== null && PREFIX.trim() !== '') {
+    // داونات يعمل بصيغته المباشرة حتى لا يعتمد على اختلاف إعداد البادئة بين النسخ
+    if (message.content.trim().toLowerCase() === 'داونات') {
+      args = [];
+      commandName = 'داونات';
+    } else if (PREFIX && PREFIX !== null && PREFIX.trim() !== '') {
       if (!message.content.startsWith(PREFIX)) return;
       args = message.content.slice(PREFIX.length).trim().split(/ +/);
       commandName = args.shift().toLowerCase();
@@ -2995,7 +3007,18 @@ client.on('messageCreate', async message => {
       commandName = args.shift().toLowerCase();
     }
 
-    const command = client.commands.get(commandName);
+    let command = client.commands.get(commandName);
+    // fallback مباشر لداونات إذا كان البوت يعمل بنسخة لم تُحدّث محمّل الأوامر فيها
+    if (!command && commandName === 'داونات') {
+      try {
+        command = require('./commands/all-downs-history.js');
+        client.commands.set('داونات', command);
+      } catch (error) {
+        console.error('❌ تعذر تحميل أمر داونات:', error);
+        await message.reply('❌ حدث خطأ أثناء تحميل أمر داونات.').catch(() => null);
+        return;
+      }
+    }
     if (!command) return;
 
     // Check permissions - محسن مع الكاش
@@ -3008,7 +3031,7 @@ client.on('messageCreate', async message => {
     const hasAdminRole = CURRENT_ADMIN_ROLES.length > 0 && member.roles.cache.some(role => CURRENT_ADMIN_ROLES.includes(role.id));
 
     // Commands for everyone (help, tops, تفاعلي, ستريكي, profile, myprofile, داوني)
-    if (commandName === 'رولي' || commandName === 'tops' || commandName === 'توب' || commandName === 'تفاعلي' || commandName === 'انهاء' || commandName === 'user' || commandName === 'ستريكي' || commandName === 'profile' || commandName === 'id' || commandName === 'مشاكلي' || commandName === 'myprofile' || commandName === 'داوني') {
+    if (commandName === 'رولي' || commandName === 'tops' || commandName === 'توب' || commandName === 'تفاعلي' || commandName === 'انهاء' || commandName === 'user' || commandName === 'ستريكي' || commandName === 'profile' || commandName === 'id' || commandName === 'مشاكلي' || commandName === 'myprofile' || commandName === 'داوني' || commandName === 'داوناتي' || commandName === 'داونات') {
       if (commandName === 'مسؤولياتي') {
         await showUserResponsibilities(message, message.author, responsibilities, client);
       } else {
