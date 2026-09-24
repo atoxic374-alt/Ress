@@ -7,6 +7,7 @@ const { createBonusManager, calculateAward, chooseOldestGroup, BONUS_METRICS } =
 const { buildBonusTopImage } = require('./utils/bonusTopRenderer');
 const bonusCommand = require('./commands/bonus');
 const interactionRouter = require('./utils/interactionRouter');
+const colorManager = require('./utils/colorManager');
 const { EventEmitter } = require('node:events');
 
 async function main() {
@@ -20,6 +21,19 @@ async function main() {
   ], ['role-a', 'role-b'], { 'role-a': 500, 'role-b': 100 });
   assert.equal(selected.role_id, 'role-b', 'role with earlier grant timestamp is selected');
   assert.equal(bonusCommand.name, 'bonus');
+  assert.deepEqual(bonusCommand.parseBonusCustomId('bonus:select:add-role'), {
+    prefix: 'bonus', action: 'select', parts: ['add-role']
+  });
+  assert.deepEqual(bonusCommand.parseBonusCustomId('bonus:select:add-owner'), {
+    prefix: 'bonus', action: 'select', parts: ['add-owner']
+  });
+  const settingsEmbed = bonusCommand.buildHomeEmbed({ name: 'Test Guild' }, {}, [], {}, false);
+  assert.equal(settingsEmbed.data.color, Number.parseInt(colorManager.getColor().replace('#', ''), 16), 'bonus embed uses the shared bot-avatar color');
+  assert.deepEqual(bonusCommand.buildHomeRows().map(row => row.components.map(component => component.data.label)), [
+    ['المسؤولون', 'نقاط التوب', 'إضافة قروب'],
+    ['روم التوب', 'لون الصورة', 'نشر / تحديث'],
+    ['إدارة القروبات', 'تصفير', 'دبل بونس', 'تحديث اللوحة']
+  ]);
   const fakeClient = new EventEmitter();
   fakeClient.guilds = { cache: new Map() };
   bonusCommand.registerInteractionHandler(fakeClient);

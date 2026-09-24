@@ -1,13 +1,14 @@
 const {
   ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder,
-  AuditLogEvent, ChannelType, EmbedBuilder, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder,
+  AuditLogEvent, ChannelType, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder,
   TextInputBuilder, TextInputStyle, UserSelectMenuBuilder, PermissionsBitField
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const { getDatabase } = require('../utils/database');
 const { createBonusManager, BONUS_METRICS } = require('../utils/bonusManager');
-const { buildBonusTopImage, normalizeHex, FALLBACK_COLOR } = require('../utils/bonusTopRenderer');
+const { buildBonusTopImage, normalizeHex } = require('../utils/bonusTopRenderer');
+const colorManager = require('../utils/colorManager');
 const interactionRouter = require('../utils/interactionRouter');
 
 const name = 'bonus';
@@ -36,6 +37,10 @@ function getManager() {
 }
 
 function idKey(guildId, userId) { return `${guildId}:${userId}`; }
+function parseBonusCustomId(customId) {
+  const [prefix, action, ...parts] = String(customId || '').split(':');
+  return { prefix, action, parts };
+}
 function getRoleIds(member) { return member?.roles?.cache ? Array.from(member.roles.cache.keys(), String) : []; }
 function isGuildText(channel) {
   return Boolean(channel && (channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildAnnouncement));
@@ -147,10 +152,10 @@ function buildHomeEmbed(guild, config, groups, rules, complete) {
     `**قاعدة الرسائل:** ${rules.messages ? `كل ${Number(rules.messages.threshold).toLocaleString()} رسالة = ${rules.messages.points} نقطة` : 'غير محددة'}`,
     `**قاعدة الصوت:** ${rules.voice_ms ? `كل ${Number(rules.voice_ms.threshold) / 3600000} ساعة = ${rules.voice_ms.points} نقطة` : 'غير محددة'}`
   ];
-  return new EmbedBuilder()
+  return colorManager.createEmbed()
     .setTitle(`إعدادات البونس • ${safeName(guild.name)}`)
     .setDescription(lines.join('\n'))
-    .setColor(config.autoColor === false ? normalizeHex(config.color) : FALLBACK_COLOR)
+    .setColor(colorManager.getColor())
     .setFooter({ text: 'التغييرات محفوظة في SQLite • إعدادات مستقلة لكل سيرفر' });
 }
 
@@ -174,13 +179,15 @@ function buildHomeRows() {
   return [
     new ActionRowBuilder().addComponents(
       button('bonus:managers', 'المسؤولون'),
+      button('bonus:rules', 'نقاط التوب'),
+      button('bonus:add-group', 'إضافة قروب')
+    ),
+    new ActionRowBuilder().addComponents(
       button('bonus:channel', 'روم التوب'),
       button('bonus:color', 'لون الصورة'),
-      button('bonus:rules', 'نقاط التوب'),
       button('bonus:publish', 'نشر / تحديث', ButtonStyle.Success)
     ),
     new ActionRowBuilder().addComponents(
-      button('bonus:add-group', 'إضافة قروب'),
       button('bonus:manage-groups', 'إدارة القروبات'),
       button('bonus:reset', 'تصفير'),
       button('bonus:double', 'دبل بونس'),
@@ -204,7 +211,10 @@ function isEphemeralMessage(interaction) {
 
 async function showPrivatePanel(interaction, payload, update = false) {
   if (update && isEphemeralMessage(interaction)) {
-    await interaction.update({ ...payload, ephemeral: undefined });
+    const cleanPayload = { ...payload };
+    delete cleanPayload.ephemeral;
+    if (interaction.deferred || interaction.replied) await interaction.editReply(cleanPayload);
+    else await interaction.update(cleanPayload);
     return;
   }
   if (interaction.deferred || interaction.replied) {
@@ -216,7 +226,7 @@ async function showPrivatePanel(interaction, payload, update = false) {
 
 function buildManagerPayload(guild, config, actorId, responsibilityPage = 0) {
   const managers = config.managers || { userIds: [], roleIds: [], responsibilities: [] };
-  const embed = new EmbedBuilder().setTitle('المسؤولون عن نظام البونس')
+  const embed = colorManager.createEmbed().setTitle('المسؤولون عن نظام البونس')
     .setDescription('اختر المستخدمين والرولات والمسؤوليات المسموح لها بإدارة نظام البونس. مالك السيرفر ومالكو البوت لهم صلاحية دائمة.')
     .addFields(
       { name: 'الأعضاء', value: managers.userIds?.length ? managers.userIds.map(id => `<@${id}>`).join('\n').slice(0, 1000) : 'لا يوجد', inline: true },
@@ -449,11 +459,14 @@ async function handleManagerMenu(interaction, action) {
 async function handleInteraction(interaction, context = {}) {
   if (!interaction.customId?.startsWith('bonus:')) return false;
   try {
-    const [prefix, action, ...parts] = interaction.customId.split(':');
+    const { prefix, action, parts } = parseBonusCustomId(interaction.customId);
     if (prefix !== 'bonus') return false;
     if (!interaction.guild) {
       await deny(interaction, 'هذه التفاعلات تعمل داخل السيرفر فقط.');
       return true;
+    }
+    if (interaction.isAnySelectMenu?.() && !interaction.deferred && !interaction.replied) {
+      await interaction.deferUpdate();
     }
 
     if (action === 'public-settings' || action === 'public-refresh' || action === 'open' || action === 'refresh-home' || action === 'home') {
@@ -572,7 +585,7 @@ async function handleInteraction(interaction, context = {}) {
       return true;
     }
 
-    if (action === 'select:add-role') {
+    if (action === 'select' && parts[0] === 'add-role') {
       const roleId = interaction.values[0];
       if (!interaction.guild.roles.cache.has(roleId)) {
         await showPrivatePanel(interaction, { content: 'الرول غير موجود في هذا السيرفر.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
@@ -584,7 +597,7 @@ async function handleInteraction(interaction, context = {}) {
       return true;
     }
 
-    if (action === 'select:add-owner') {
+    if (action === 'select' && parts[0] === 'add-owner') {
       const key = idKey(interaction.guild.id, interaction.user.id);
       const flow = activeAddFlows.get(key);
       activeAddFlows.delete(key);
@@ -1172,4 +1185,4 @@ function registerInteractionHandler(client) {
   });
 }
 
-module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh };
+module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildHomeEmbed };
