@@ -16,7 +16,8 @@ moment.updateLocale('en', {
 const dbPath = getDatabasePath('discord_bot.db');
 
 class DatabaseManager {
-    constructor() {
+    constructor(databasePath = dbPath) {
+        this.databasePath = databasePath;
         this.db = null;
         this.isInitialized = false;
         this.isDegraded = false;
@@ -40,12 +41,12 @@ class DatabaseManager {
         try {
             // إنشاء مجلد قاعدة البيانات إذا لم يكن موجوداً
             const fs = require('fs');
-            const dbDir = path.dirname(dbPath);
+            const dbDir = path.dirname(this.databasePath);
             if (!fs.existsSync(dbDir)) {
                 fs.mkdirSync(dbDir, { recursive: true });
             }
 
-            this.db = await this.openDatabaseWithFallback(dbPath);
+            this.db = await this.openDatabaseWithFallback(this.databasePath);
             await this.prepareDatabase();
 
             this.isInitialized = true;
@@ -417,7 +418,92 @@ class DatabaseManager {
                 inviter_id TEXT,
                 join_method TEXT, -- 'invite', 'vanity', 'unknown'
                 join_time INTEGER DEFAULT (strftime('%s', 'now'))
-            )`
+            )`,
+            `CREATE TABLE IF NOT EXISTS bonus_guild_config (
+                guild_id TEXT PRIMARY KEY,
+                config_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
+            )`,
+            `CREATE TABLE IF NOT EXISTS bonus_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                role_id TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                avatar_url TEXT,
+                created_at INTEGER NOT NULL,
+                archived_at INTEGER,
+                created_by TEXT NOT NULL,
+                UNIQUE (guild_id, role_id)
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_bonus_groups_guild_active ON bonus_groups(guild_id, archived_at, created_at)`,
+            `CREATE TABLE IF NOT EXISTS bonus_rules (
+                guild_id TEXT NOT NULL,
+                metric TEXT NOT NULL CHECK (metric IN ('messages', 'voice_ms')),
+                threshold INTEGER NOT NULL CHECK (threshold > 0),
+                points INTEGER NOT NULL CHECK (points > 0),
+                updated_at INTEGER NOT NULL,
+                updated_by TEXT NOT NULL,
+                PRIMARY KEY (guild_id, metric)
+            )`,
+            `CREATE TABLE IF NOT EXISTS bonus_balances (
+                guild_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                group_id INTEGER,
+                points INTEGER NOT NULL DEFAULT 0 CHECK (points >= 0),
+                message_progress INTEGER NOT NULL DEFAULT 0 CHECK (message_progress >= 0),
+                voice_progress_ms INTEGER NOT NULL DEFAULT 0 CHECK (voice_progress_ms >= 0),
+                last_message_id TEXT,
+                last_message_at INTEGER,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, user_id),
+                FOREIGN KEY (group_id) REFERENCES bonus_groups(id) ON DELETE SET NULL
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_bonus_balances_group ON bonus_balances(guild_id, group_id, points DESC)`,
+            `CREATE TABLE IF NOT EXISTS bonus_multipliers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                scope TEXT NOT NULL CHECK (scope IN ('group', 'user')),
+                group_id INTEGER,
+                user_id TEXT,
+                starts_at INTEGER NOT NULL,
+                ends_at INTEGER,
+                active INTEGER NOT NULL DEFAULT 1,
+                changed_by TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                CHECK ((scope = 'group' AND group_id IS NOT NULL AND user_id IS NULL) OR
+                       (scope = 'user' AND group_id IS NOT NULL AND user_id IS NOT NULL))
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_bonus_multiplier_lookup ON bonus_multipliers(guild_id, active, scope, group_id, user_id, ends_at)`,
+            `CREATE TABLE IF NOT EXISTS bonus_activity_events (
+                event_id TEXT PRIMARY KEY,
+                guild_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                metric TEXT NOT NULL CHECK (metric IN ('messages', 'voice_ms')),
+                amount INTEGER NOT NULL CHECK (amount > 0),
+                awarded_points INTEGER NOT NULL DEFAULT 0,
+                group_id INTEGER,
+                created_at INTEGER NOT NULL
+            )`,
+            `CREATE TABLE IF NOT EXISTS bonus_voice_sessions (
+                guild_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                last_checkpoint_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            )`,
+            `CREATE TABLE IF NOT EXISTS bonus_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                actor_id TEXT,
+                action TEXT NOT NULL,
+                target_user_id TEXT,
+                source_group_id INTEGER,
+                target_group_id INTEGER,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER NOT NULL
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_bonus_audit_guild_time ON bonus_audit_log(guild_id, created_at DESC)`
         ];
 
         for (const sql of tables) {
@@ -534,9 +620,42 @@ class DatabaseManager {
         return next;
     }
 
+    // معاملات ذرية تمر ضمن طابور الكتابة نفسه؛ يجب أن تستخدم callback.run
+    // داخل العملية ولا تستدعِ this.run منها لتجنب انتظار الطابور على نفسه.
+    transaction(operation, label = 'transaction') {
+        const task = () => this.withBusyRetry(async () => {
+            const runDirect = (sql, params = []) => new Promise((resolve, reject) => {
+                this.db.run(sql, params, function (error) {
+                    if (error) reject(error);
+                    else resolve({ id: this.lastID, changes: this.changes });
+                });
+            });
+            const getDirect = (sql, params = []) => new Promise((resolve, reject) => {
+                this.db.get(sql, params, (error, row) => error ? reject(error) : resolve(row));
+            });
+            const allDirect = (sql, params = []) => new Promise((resolve, reject) => {
+                this.db.all(sql, params, (error, rows) => error ? reject(error) : resolve(rows));
+            });
+
+            await runDirect('BEGIN IMMEDIATE');
+            try {
+                const result = await operation({ run: runDirect, get: getDirect, all: allDirect });
+                await runDirect('COMMIT');
+                return result;
+            } catch (error) {
+                await runDirect('ROLLBACK').catch(() => {});
+                throw error;
+            }
+        }, label);
+
+        const next = this.writeQueue.catch(() => null).then(task);
+        this.writeQueue = next.catch(() => null);
+        return next;
+    }
+
     // جلب سجل واحد
     get(sql, params = []) {
-        return this.withBusyRetry(() => new Promise((resolve, reject) => {
+        const task = () => this.withBusyRetry(() => new Promise((resolve, reject) => {
             this.db.get(sql, params, (err, row) => {
                 if (err) {
                     console.error('خطأ في جلب السجل:', err);
@@ -546,11 +665,12 @@ class DatabaseManager {
                 }
             });
         }), 'get');
+        return this.writeQueue.catch(() => null).then(task);
     }
 
     // جلب عدة سجلات
     all(sql, params = []) {
-        return this.withBusyRetry(() => new Promise((resolve, reject) => {
+        const task = () => this.withBusyRetry(() => new Promise((resolve, reject) => {
             this.db.all(sql, params, (err, rows) => {
                 if (err) {
                     console.error('خطأ في جلب السجلات:', err);
@@ -560,6 +680,7 @@ class DatabaseManager {
                 }
             });
         }), 'all');
+        return this.writeQueue.catch(() => null).then(task);
     }
 
     // حفظ جلسة صوتية
@@ -1355,7 +1476,7 @@ class DatabaseManager {
     async getDatabaseSize() {
         try {
             const fs = require('fs');
-            const stats = fs.statSync(dbPath);
+            const stats = fs.statSync(this.databasePath);
             const sizeInMB = (stats.size / (1024 * 1024)).toFixed(2);
             
             // حساب عدد السجلات
@@ -1511,6 +1632,7 @@ async function updateLastNotified(userId) {
 }
 
 module.exports = {
+    DatabaseManager,
     getDatabase: getDatabase,
     dbManager: dbManager,
     initializeDatabase: initializeDatabase,

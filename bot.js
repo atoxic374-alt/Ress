@@ -2709,6 +2709,13 @@ client.on('messageCreate', async message => {
           timestamp: Date.now()
         });
 
+        try {
+          const bonusCommand = client.commands.get('bonus');
+          if (bonusCommand?.recordMessage) await bonusCommand.recordMessage(message, getCachedPrefix());
+        } catch (bonusError) {
+          console.error('❌ خطأ في تسجيل رسالة نظام البونس:', bonusError);
+        }
+
         // فحص تلقائي للترقية في مستوى الشات
         await checkAutoLevelUp(message.author.id, 'chat', client);
       }
@@ -3035,6 +3042,17 @@ client.on('messageCreate', async message => {
     const member = message.member || await message.guild.members.fetch(message.author.id);
     const hasAdministrator = member.permissions.has('Administrator');
 
+    // صلاحيات نظام البونس تُفحص داخليًا من إعدادات كل سيرفر، لذلك لا يُربط
+    // بصلاحيات المالك العام/الرولات الإدارية المشتركة للأوامر الأخرى.
+    if (commandName === 'bonus' || commandName === 'بونس') {
+      await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, client, colorManager });
+      return;
+    }
+    if (commandName === 'settings' && ['bonus', 'بونس'].includes(String(args[0] || '').toLowerCase())) {
+      await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, client, colorManager });
+      return;
+    }
+
     // تحميل أحدث رولات المشرفين بشكل فوري لضمان الدقة
     const CURRENT_ADMIN_ROLES = getCachedAdminRoles();
     const hasAdminRole = CURRENT_ADMIN_ROLES.length > 0 && member.roles.cache.some(role => CURRENT_ADMIN_ROLES.includes(role.id));
@@ -3136,6 +3154,14 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
         const newRoles = newMember.roles.cache;
         const addedRoles = newRoles.filter(role => !oldRoles.has(role.id));
         const removedRoles = oldRoles.filter(role => !newRoles.has(role.id));
+        if (addedRoles.size > 0 || removedRoles.size > 0) {
+            try {
+                const bonusCommand = client.commands.get('bonus');
+                if (bonusCommand?.checkpointMemberVoice) await bonusCommand.checkpointMemberVoice(oldMember);
+            } catch (bonusVoiceError) {
+                console.error('❌ خطأ في حفظ بونس الصوت قبل تغيير الرول:', bonusVoiceError);
+            }
+        }
         // حماية طلبات التقديم الإداري: أي رول مسجل في adminRoles يُسحب
         // من صاحب الطلب المعلّق، مهما كان مصدر المنح. منح القبول الرسمي
         // يستعمل bypass مؤقتاً حتى لا تُسحب الرولات فور إضافتها.
@@ -3870,6 +3896,19 @@ if (executorMember && !isAllowedExecutor) {
             }
         }
 
+        // تحديث قروب البونس بعد حفظ تاريخ منح/سحب الرول؛ ينقل الرصيد والتقدم
+        // الجزئي إلى القروب الجديد ضمن معاملة SQLite واحدة.
+        if (addedRoles.size > 0 || removedRoles.size > 0) {
+            try {
+                const bonusCommand = client.commands.get('bonus');
+                if (bonusCommand?.handleMemberRoleUpdate) {
+                    await bonusCommand.handleMemberRoleUpdate(oldMember, newMember);
+                }
+            } catch (bonusRoleError) {
+                console.error('❌ خطأ في مزامنة قروب البونس بعد تغيير الرول:', bonusRoleError);
+            }
+        }
+
     } catch (error) {
         console.error('خطأ في نظام الحماية:', error);
     }
@@ -3879,6 +3918,14 @@ if (executorMember && !isAllowedExecutor) {
 client.on('guildMemberRemove', async (member) => {
     try {
         console.log(`📤 عضو غادر السيرفر: ${member.displayName} (${member.id})`);
+
+        try {
+            const bonusCommand = client.commands.get('bonus');
+            if (bonusCommand?.checkpointMemberVoice) await bonusCommand.checkpointMemberVoice(member);
+            if (bonusCommand?.handleMemberLeave) await bonusCommand.handleMemberLeave(member);
+        } catch (bonusLeaveError) {
+            console.error('❌ خطأ في حفظ رصيد البونس عند مغادرة العضو:', bonusLeaveError);
+        }
 
         const tracker = getResponsibilityLeaveTracker();
         if (!tracker.guilds[member.guild.id]) tracker.guilds[member.guild.id] = { leftAtByUser: {}, removedByUser: {} };

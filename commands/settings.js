@@ -53,6 +53,14 @@ async function execute(message, args, { responsibilities, client, scheduleSave, 
     return;
   }
 
+  // إعداد قناة ولون توب البونس من مسار settings الحالي؛ ويتولى أمر البونس
+  // فحص مسؤولي النظام المحددين لكل سيرفر.
+  if (args[0] && ['bonus', 'بونس'].includes(args[0].toLowerCase())) {
+    const bonusCommand = require('./bonus.js');
+    await bonusCommand.execute(message, args.slice(1), { client, BOT_OWNERS });
+    return;
+  }
+
   // تحويل إدارة الرولات الخاصة إذا تم استدعاء settings roles
   if (args[0] && ['roles', 'رولات', 'رول', 'role'].includes(args[0].toLowerCase())) {
     const rolesSettings = require('./roles-settings.js');
