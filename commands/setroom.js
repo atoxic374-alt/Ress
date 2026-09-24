@@ -996,13 +996,13 @@ function createSetupMenus(guild, guildConfig) {
                 {
                     label: texts.condolenceLabel || 'Doaa',
                     description: texts.condolenceDescription || 'طلب روم دعاء',
-                    emoji: '🕊️',
+                    emoji: '<:emoji_83:1442589607639126046>',
                     value: 'condolence',
                 },
                 {
                     label: texts.birthdayLabel || 'Birthday',
                     description: texts.birthdayDescription || 'طلب روم ميلاد',
-                    emoji: '🎂',
+                    emoji: '<:emoji_84:1442589686987227328>',
                     value: 'birthday',
                 }
             ])
