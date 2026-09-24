@@ -42,7 +42,7 @@ const { handleAdminApplicationInteraction } = require('./commands/admin-apply.js
 const { restoreTopSchedules, restorePanelCleanups, handlePanelMessageDelete } = require('./commands/roles-settings.js');
 const { handleChannelDelete, handleRoleDelete } = require('./utils/protectionManager.js');
 const problemCommand = require('./commands/problem.js');
-const { getDataDir } = require('./utils/storagePaths');
+const { getDataDir, getRailwayVolumeMountPath } = require('./utils/storagePaths');
 let interactiveRolesManager;
 
 // مسارات ملفات البيانات
@@ -85,6 +85,15 @@ function ensureDataFiles() {
 
     for (const [key, filePath] of Object.entries(DATA_FILES)) {
         if (!fs.existsSync(filePath)) {
+            // عند استخدام Railway Volume، انقل الإعدادات المرفقة مع المشروع
+            // إلى التخزين الدائم في أول تشغيل فقط، بدلاً من إنشاء ملف فارغ.
+            const bundledPath = path.join(__dirname, 'data', path.basename(filePath));
+            if (getRailwayVolumeMountPath() && bundledPath !== filePath && fs.existsSync(bundledPath)) {
+                fs.copyFileSync(bundledPath, filePath);
+                console.log(`✅ تم ترحيل ملف البيانات إلى التخزين الدائم: ${path.basename(filePath)}`);
+                continue;
+            }
+
             const defaultValue = defaults[key] || (filePath.endsWith('.json') ? (key === 'adminRoles' ? [] : {}) : '');
             fs.writeFileSync(filePath, JSON.stringify(defaultValue, null, 2));
             console.log(`✅ تم إنشاء ملف البيانات المفقود: ${path.basename(filePath)}`);

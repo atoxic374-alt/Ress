@@ -3,11 +3,12 @@ const colorManager = require('../utils/colorManager.js');
 const { logEvent } = require('../utils/logs_system.js');
 const fs = require('fs');
 const path = require('path');
+const { getDataDir } = require('../utils/storagePaths');
 
 const name = 'owners';
 
 // مسار ملف إعدادات البوت
-const botConfigPath = path.join(__dirname, '..', 'data', 'botConfig.json');
+const botConfigPath = path.join(getDataDir(), 'botConfig.json');
 
 // دالة لقراءة إعدادات البوت
 function loadBotConfig() {
