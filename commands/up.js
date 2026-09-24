@@ -8,6 +8,7 @@ const {
 } = require('discord.js');
 const colorManager = require('../utils/colorManager');
 const promoteManager = require('../utils/promoteManager');
+const { resolveQuickPromotion } = require('../utils/quickPromotionResolver');
 const { getRealUserStats } = require('../utils/userStatsCollector');
 const fs = require('fs');
 const path = require('path');
@@ -180,8 +181,6 @@ module.exports = {
 
             else if (interaction.customId.startsWith('level_')) {
                 selectedLevels = parseInt(interaction.customId.split('_')[1]);
-                const finalLevels = selectedAction === 'up' ? selectedLevels : -selectedLevels;
-
                 // قفل الأعضاء لمنع التداخل
                 targets.forEach(m => lockedMembers.add(m.id));
 
@@ -196,33 +195,27 @@ module.exports = {
                 const undoData = [];
                 
                 const sortedAdminRoles = await getSortedAdminRoles(message.guild);
-                const filterTypeRank = selectedType === 'rank';
-                const availableRoles = sortedAdminRoles.filter(r => (r.name.length <= 3) === filterTypeRank);
+                const availableRoles = sortedAdminRoles.filter(r => (r.name.length <= 3) === (selectedType === 'rank'));
 
                 const promoPromises = targets.map(async (target) => {
                     try {
-                        // البحث عن أعلى رتبة يملكها العضو من النوع المختار فقط (حرف أو ظواهر)
-                        const currentRole = target.roles.cache
-                            .filter(r => adminRolesListIds.includes(r.id) && (r.name.length <= 3) === filterTypeRank)
-                            .sort((a, b) => b.position - a.position)
-                            .first();
+                        const resolution = resolveQuickPromotion({
+                            memberRoles: [...target.roles.cache.values()],
+                            adminRoleIds: adminRolesListIds,
+                            availableRoles,
+                            selectedType,
+                            selectedAction,
+                            levels: selectedLevels
+                        });
 
-                        if (!currentRole) return `**❌ ${target.displayName} : لا يملك رول إداري .**`;
-
-                        const currentIndex = availableRoles.findIndex(r => r.id === currentRole.id);
-                        const targetIndex = currentIndex === -1 ? 
-                            availableRoles.findIndex(r => r.position > currentRole.position) + (finalLevels - (selectedAction === 'up' ? 1 : 0)) : 
-                            currentIndex + finalLevels;
-
-                        if (targetIndex < 0 || targetIndex >= availableRoles.length) {
+                        if (resolution.error === 'no-current-role') {
+                            return `**❌ ${target.displayName} : لا يملك رول إداري .**`;
+                        }
+                        if (resolution.error === 'out-of-range') {
                             return `**⚠️ ${target.displayName} : وصل للحد الأقصى/الأدنى .**`;
                         }
 
-                        const newRole = availableRoles[targetIndex];
-                        
-                        const rolesToRemoveBeforePromotion = target.roles.cache
-                            .filter(r => adminRolesListIds.includes(r.id) && (r.name.length <= 3) === (newRole.name.length <= 3))
-                            .map(r => r.id);
+                        const { currentRole, newRole, rolesToRemove: rolesToRemoveBeforePromotion } = resolution;
 
                         const res = await promoteManager.createPromotion(
                             message.guild, client, target.id, newRole.id, 
@@ -231,6 +224,13 @@ module.exports = {
                         );
 
                         if (res.success) {
+                            // عند التحويل بين الحرف والظاهرية، اسحب المصدر من النوع الآخر.
+                            // createPromotion يزيل رتب النوع نفسه فقط وفق تصنيفه الداخلي.
+                            for (const oldRoleId of rolesToRemoveBeforePromotion) {
+                                if (oldRoleId === newRole.id || !target.roles.cache.has(oldRoleId)) continue;
+                                await target.roles.remove(oldRoleId, 'استبدال رتبة النوع الآخر في الترقية السريعة').catch(() => {});
+                            }
+
                             promotionDetails.push(`**الإداري : ${target} - من الرول : ${currentRole} - الى الرول : ${newRole}**`);
                             undoData.push({ 
                                 memberId: target.id, 
