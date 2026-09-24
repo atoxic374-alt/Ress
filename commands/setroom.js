@@ -1307,12 +1307,21 @@ async function handleRoomRequestMenu(interaction, client) {
         .setStyle(TextInputStyle.Short)
         .setRequired(false);
 
+    const emojisInput = new TextInputBuilder()
+        .setCustomId('emojis')
+        .setLabel('الإيموجيات (اختياري، 0 للإزالة)')
+        .setPlaceholder('<a:emoji:123> أو <:emoji:123> أو 😀')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
+        .setMaxLength(200);
+
     const row1 = new ActionRowBuilder().addComponents(forWhoInput);
     const row2 = new ActionRowBuilder().addComponents(whenInput);
     const row3 = new ActionRowBuilder().addComponents(messageInput);
     const row4 = new ActionRowBuilder().addComponents(imageInput);
+    const row5 = new ActionRowBuilder().addComponents(emojisInput);
 
-    modal.addComponents(row1, row2, row3, row4);
+    modal.addComponents(row1, row2, row3, row4, row5);
 
     await interaction.showModal(modal);
 
@@ -1356,6 +1365,7 @@ async function handleRoomModalSubmit(interaction, client) {
     const when = interaction.fields.getTextInputValue('when').trim();
     const message = interaction.fields.getTextInputValue('message').trim();
     let imageUrl = interaction.fields.getTextInputValue('image_url')?.trim() || null;
+    const emojisInput = interaction.fields.getTextInputValue('emojis')?.trim() || '';
 
     // التحقق من الإدخالات
     const validationErrors = [];
@@ -1452,7 +1462,39 @@ async function handleRoomModalSubmit(interaction, client) {
         return;
     }
 
-    // طلب الإيموجي من المستخدم
+    // الإيموجيات تُرسل الآن من النموذج نفسه، مع إبقاء خطوة الرسالة القديمة للتوافق.
+    if (emojisInput) {
+        const parsedEmojiInput = extractEmojisFromText(emojisInput);
+        if (!parsedEmojiInput.disableEmojis && parsedEmojiInput.emojis.length > 20) {
+            await interaction.reply({ content: '❌ **الحد الأقصى للإيموجيات هو 20.**', flags: 64 });
+            return;
+        }
+
+        const awaitingKey = getAwaitingEmojisKey(interaction.guild.id, interaction.user.id);
+        awaitingEmojis.set(awaitingKey, {
+            roomType,
+            roomTypeEn,
+            roomEmoji,
+            forWho,
+            when,
+            message,
+            imageUrl,
+            guildId: interaction.guild.id,
+            channelId: interaction.channel.id,
+            timestamp: Date.now()
+        });
+        await interaction.reply({ content: '✅ **تم استلام طلب الروم والإيموجيات.**', flags: 64 });
+        await handleEmojiMessage({
+            author: interaction.user,
+            guild: interaction.guild,
+            channel: interaction.channel,
+            content: emojisInput,
+            reply: content => interaction.channel.send(content)
+        }, client);
+        return;
+    }
+
+    // طلب الإيموجي من المستخدم — يبقى كخيار بديل إذا ترك الحقل فارغًا
     const emojiPrompt = colorManager.createEmbed()
         .setTitle('**Last Step**')
         .setDescription('**الرجاء إرسال الإيموجيات التي تريد إضافتها للروم**\n\nأرسل إيموجي واحد أو أكثر (يدعم المسافات). اكتب `0` إذا لا تريد إيموجي.')
