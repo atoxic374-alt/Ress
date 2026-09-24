@@ -8,7 +8,7 @@ const {
 } = require('discord.js');
 const colorManager = require('../utils/colorManager');
 const promoteManager = require('../utils/promoteManager');
-const { getQuickPromotionTypes, resolveQuickPromotion } = require('../utils/quickPromotionResolver');
+const { getAvailableQuickRoles, getQuickPromotionTypes, resolveQuickPromotion } = require('../utils/quickPromotionResolver');
 const { getRealUserStats } = require('../utils/userStatsCollector');
 const fs = require('fs');
 const path = require('path');
@@ -215,9 +215,7 @@ module.exports = {
                             const member = await message.guild.members.fetch({ user: target.id, force: true }).catch(() => target);
                             const memberRoles = [...member.roles.cache.values()];
                             const typeName = type === 'rank' ? 'حرف' : 'ظاهرية';
-                            const availableRoles = sortedAdminRoles.filter(role =>
-                                (role.name.length <= 3) === (type === 'rank')
-                            );
+                            const availableRoles = getAvailableQuickRoles(sortedAdminRoles, type);
                             const resolution = resolveQuickPromotion({
                                 memberRoles,
                                 adminRoleIds: adminRolesListIds,

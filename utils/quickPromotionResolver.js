@@ -7,6 +7,10 @@ function matchesPromotionType(role, selectedType) {
     return (role.name.length <= 3) === (selectedType === 'rank');
 }
 
+function getAvailableQuickRoles(adminRoles, selectedType) {
+    return adminRoles.filter((role) => matchesPromotionType(role, selectedType));
+}
+
 function getQuickPromotionTypes(memberRoles, adminRoleIds, selectedType) {
     if (selectedType !== 'both') {
         return { types: [selectedType], missingTypes: [] };
@@ -82,4 +86,4 @@ function resolveQuickPromotion({
     };
 }
 
-module.exports = { getQuickPromotionTypes, resolveQuickPromotion };
+module.exports = { getAvailableQuickRoles, getQuickPromotionTypes, resolveQuickPromotion };
