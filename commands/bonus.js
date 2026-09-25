@@ -699,7 +699,7 @@ async function buildMyGroupPayload(guild, member) {
     .setDescription(`Member : <@${member.id}>\nStatus : ${groupId == null ? 'Unassigned' : 'Assigned'}`);
   if (groupId == null) {
     embed.addFields({ name: 'Group', value: 'You are not assigned to an active bonus group.', inline: false });
-    return { embeds: [embed], components: [new ActionRowBuilder().addComponents(button('bonus:home', 'Close'))] };
+    return { embeds: [embed], components: [new ActionRowBuilder().addComponents(button('bonus:public-close', 'Close'))] };
   }
   const [group, balance, allGroups, groupPoints, userDoubles, groupDouble] = await Promise.all([
     Promise.resolve(resolved.groups.find(item => Number(item.id) === Number(groupId))),
@@ -728,7 +728,7 @@ async function buildMyGroupPayload(guild, member) {
       { name: 'Double Bonus', value: userDouble || groupDouble ? 'Active ×2' : 'Inactive', inline: true },
       { name: 'Owner', value: group?.owner_id ? `<@${group.owner_id}>` : 'Unknown', inline: true }
     );
-  return { embeds: [embed], components: [new ActionRowBuilder().addComponents(button('bonus:home', 'Close'))] };
+  return { embeds: [embed], components: [new ActionRowBuilder().addComponents(button('bonus:public-close', 'Close'))] };
 }
 
 function isBonusBoardMessage(message) {
@@ -738,6 +738,15 @@ function isBonusBoardMessage(message) {
 async function buildReturnPayload(interaction, prompt = '') {
   if (isBonusBoardMessage(interaction.message)) return { ...(await buildHome(interaction.guild)), content: prompt };
   return { ...(await buildHome(interaction.guild)), content: prompt };
+}
+
+function buildOwnerAvatarResult(message, success = false) {
+  return {
+    embeds: [colorManager.createEmbed()
+      .setTitle(success ? 'Group Avatar Updated' : 'Group Avatar Update Failed')
+      .setDescription(message)],
+    components: [new ActionRowBuilder().addComponents(button('bonus:public-close', 'Close'))]
+  };
 }
 
 async function publishBoard(guild, actorId) {
@@ -904,6 +913,12 @@ async function handleInteraction(interaction, context = {}) {
       await showPrivatePanel(interaction, await buildMyGroupPayload(interaction.guild, member), false);
       return true;
     }
+    if (action === 'public-close') {
+      const payload = { content: ' ', embeds: [], components: [] };
+      if (interaction.deferred || interaction.replied) await interaction.editReply(payload).catch(() => {});
+      else await interaction.update(payload).catch(() => {});
+      return true;
+    }
 
     if (action === 'public-settings' || action === 'public-refresh' || action === 'open' || action === 'refresh-home' || action === 'home') {
       if (action === 'public-settings' || action === 'open') {
@@ -1021,17 +1036,19 @@ async function handleInteraction(interaction, context = {}) {
       const lastAvatarChange = ownerAvatarCooldowns.get(avatarKey) || 0;
       if (Date.now() - lastAvatarChange < OWNER_AVATAR_COOLDOWN_MS) {
         const remaining = Math.ceil((OWNER_AVATAR_COOLDOWN_MS - (Date.now() - lastAvatarChange)) / 60000);
-        await showPrivatePanel(interaction, await buildReturnPayload(interaction, `يمكن تغيير أفتار القروب مرة أخرى بعد ${remaining} دقيقة.`), true);
+        await showPrivatePanel(interaction, buildOwnerAvatarResult(`يمكن تغيير أفتار القروب مرة أخرى بعد ${remaining} دقيقة.`), true);
         return true;
       }
       const avatarCheck = await verifyAvatarUrl(url);
       if (!avatarCheck.valid) {
-        await showPrivatePanel(interaction, await buildReturnPayload(interaction, 'استخدم رابط صورة مباشر من Discord CDN بصيغة PNG/JPG/WEBP/GIF، أو اتركه فارغاً.'), true);
+        await showPrivatePanel(interaction, buildOwnerAvatarResult('استخدم رابط صورة مباشر من Discord CDN بصيغة PNG/JPG/WEBP/GIF، أو اتركه فارغاً.'), true);
         return true;
       }
       await getManager().updateGroup(interaction.guild.id, groupId, { avatar_url: avatarCheck.url }, interaction.user.id);
       ownerAvatarCooldowns.set(avatarKey, Date.now());
-      await showPrivatePanel(interaction, await buildReturnPayload(interaction, avatarCheck.url ? 'تم تحديث أفتار قروبك.' : 'عاد القروب لاستخدام أيقونة السيرفر.'), true);
+      await showPrivatePanel(interaction, buildOwnerAvatarResult(
+        avatarCheck.url ? 'تم تحديث أفتار القروب وسيظهر في التوب عند التحديث القادم.' : 'عاد القروب لاستخدام أيقونة السيرفر.', true
+      ), true);
       scheduleRefresh(interaction.guild, true);
       return true;
     }
@@ -2258,4 +2275,4 @@ function registerInteractionHandler(client) {
   });
 }
 
-module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicRows, boardCounter, buildHomeEmbed, buildGroupSelect, isEligibleVoiceState, resolveCurrentGroupForMember, validateAvatarUrl, structurePrivateResponse };
+module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicRows, boardCounter, buildHomeEmbed, buildGroupSelect, buildOwnerAvatarResult, isEligibleVoiceState, resolveCurrentGroupForMember, validateAvatarUrl, structurePrivateResponse };

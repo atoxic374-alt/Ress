@@ -73,6 +73,9 @@ async function main() {
     ['Settings', 'Double Bonus', 'Group Avatar', 'View Rankings', 'My Group']);
   assert.equal(bonusCommand.buildPublicRows()[0].components[0].data.custom_id, 'bonus:public-settings',
     'public board exposes a protected settings entry point');
+  const ownerAvatarResult = bonusCommand.buildOwnerAvatarResult('Avatar updated.', true);
+  assert.equal(ownerAvatarResult.components[0].components[0].data.custom_id, 'bonus:public-close',
+    'owner avatar results close privately without opening manager settings');
   const structuredResponse = bonusCommand.structurePrivateResponse({
     content: 'تأكيد إزالة النقاط\nالإجمالي الحالي: 100\nبعد الإزالة: 50',
     components: []
