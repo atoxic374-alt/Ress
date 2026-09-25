@@ -113,7 +113,7 @@ async function verifyAvatarUrl(value) {
     if (!response.ok && !(response.status >= 300 && response.status < 400) && ![403, 405].includes(response.status)) return { valid: false, reason: 'unreachable' };
     const type = String(response.headers.get('content-type') || '').toLowerCase();
     const length = Number(response.headers.get('content-length') || 0);
-    if (type && !type.startsWith('image/')) return { valid: false, reason: 'content-type' };
+    if (type && !type.startsWith('image/') && ![403, 405].includes(response.status)) return { valid: false, reason: 'content-type' };
     if (length > 5 * 1024 * 1024) return { valid: false, reason: 'size' };
     return checked;
   } catch {

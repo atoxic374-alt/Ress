@@ -67,7 +67,10 @@ function fmtNumber(value) {
   try { return new Intl.NumberFormat('en-US').format(Number(value) || 0); }
   catch { return String(Number(value) || 0); }
 }
-
+function avatarUrlWithCacheBust(url, version) {
+  if (!url) return null;
+  return `${url}${String(url).includes('?') ? '&' : '?'}bonus_avatar=${version}`;
+}
 function drawAvatar(ctx, image, x, y, radius, accent) {
   ctx.save();
   ctx.beginPath();
@@ -111,6 +114,7 @@ function drawMedal(ctx, rank, x, y, accent) {
 async function buildBonusTopImage({ guild, groups, config = {}, updatedAt = Date.now() }) {
   const accent = config.autoColor === false ? normalizeHex(config.color) : await findDominantColor(guild?.iconURL?.({ extension: 'png', size: 256 }));
   const [ar, ag, ab] = rgb(accent);
+  const avatarVersion = Number(updatedAt) || Date.now();
   const canvas = createCanvas(WIDTH, HEIGHT);
   const ctx = canvas.getContext('2d');
   ctx.direction = 'rtl';
@@ -169,7 +173,7 @@ async function buildBonusTopImage({ guild, groups, config = {}, updatedAt = Date
     grad.addColorStop(1, `rgba(${rgb(podiumPalette[item.rank]).join(',')},0.07)`);
     roundedRect(ctx, x, y, item.width, item.height, 18, grad, `rgba(${rgb(podiumPalette[item.rank]).join(',')},0.55)`, 2);
     const medalY = item.base - item.height - 130;
-    const groupIconUrl = group?.avatar_url || guildIconUrl;
+    const groupIconUrl = avatarUrlWithCacheBust(group?.avatar_url, avatarVersion) || guildIconUrl;
     const image = groupIconUrl ? await loadImage(groupIconUrl).catch(() => null) : guildIcon;
     drawAvatar(ctx, image, centerX, medalY + 6, item.rank === 1 ? 58 : 49, podiumPalette[item.rank]);
     drawMedal(ctx, item.rank, centerX, medalY - (item.rank === 1 ? 65 : 55), podiumPalette[item.rank]);
@@ -206,7 +210,7 @@ async function buildBonusTopImage({ guild, groups, config = {}, updatedAt = Date
     ctx.fillStyle = '#AEB6C5';
     ctx.font = 'bold 20px Cairo, sans-serif';
     ctx.fillText(String(index + 4).padStart(2, '0'), 1480, y + 33);
-    const groupIconUrl = group?.avatar_url || guildIconUrl;
+    const groupIconUrl = avatarUrlWithCacheBust(group?.avatar_url, avatarVersion) || guildIconUrl;
     const image = groupIconUrl ? await loadImage(groupIconUrl).catch(() => null) : guildIcon;
     drawAvatar(ctx, image, 1414, y + 33, 23, accent);
     ctx.textAlign = 'right';
