@@ -1711,12 +1711,12 @@ async function handleInteraction(interaction, context = {}) {
           const prompt = confirmAction === 'remove-member'
             ? `تمت إزالة ${Math.abs(result.delta).toLocaleString()} نقطة من <@${userId}> فقط.`
             : `تمت إزالة ${Math.abs(result.delta).toLocaleString()} نقطة من إجمالي القروب وحفظ الخصم؛ لم تتغير نقاط الأعضاء.`;
-          await showPrivatePanel(interaction, await buildReturnPayload(interaction, prompt), true);
+          await showPrivatePanel(interaction, buildActionResult('Points Updated', prompt), true);
         } catch (error) {
           const prompt = error.message === 'NO_POINTS_TO_REMOVE' ? 'لا توجد نقاط متاحة للخصم.'
             : error.message === 'INSUFFICIENT_MEMBER_POINTS' ? 'رصيد العضو أقل من المبلغ المطلوب.'
               : error.message === 'MEMBER_NOT_IN_GROUP' ? 'العضو لم يعد تابعاً لهذا القروب.' : 'تعذر تنفيذ الإزالة.';
-          await showPrivatePanel(interaction, await buildReturnPayload(interaction, prompt), true);
+          await showPrivatePanel(interaction, buildActionResult('Points Update Failed', prompt), true);
         }
       }
       scheduleRefresh(interaction.guild, true);
@@ -1865,7 +1865,7 @@ async function handleInteraction(interaction, context = {}) {
         const groupId = Number(rawGroupId);
         const amount = Number(collectModalValue(interaction, 'amount').replace(/[,،\s]/g, ''));
         if (!Number.isSafeInteger(amount) || amount <= 0 || amount > 1000000) {
-          await showPrivatePanel(interaction, await buildReturnPayload(interaction, 'اكتب عددًا صحيحًا بين 1 و1,000,000.'), true);
+          await showPrivatePanel(interaction, buildActionResult('Points Update Failed', 'اكتب عددًا صحيحًا بين 1 و1,000,000.'), true);
           return true;
         }
         try {
@@ -1909,7 +1909,7 @@ async function handleInteraction(interaction, context = {}) {
           } else {
             const result = await db.adjustGroupPoints(interaction.guild.id, groupId, amount, interaction.user.id);
             const changed = Math.abs(result.delta).toLocaleString();
-            await showPrivatePanel(interaction, await buildReturnPayload(interaction,
+            await showPrivatePanel(interaction, buildActionResult('Points Updated',
               `تمت إضافة ${changed} نقطة إلى إجمالي القروب؛ لم تتغير أرصدة الأعضاء الفردية.`), true);
             scheduleRefresh(interaction.guild, true);
           }
@@ -1917,7 +1917,7 @@ async function handleInteraction(interaction, context = {}) {
           const note = error.message === 'INSUFFICIENT_GROUP_POINTS' ? 'عدد النقاط أكبر من إجمالي القروب.'
             : error.message === 'INSUFFICIENT_MEMBER_POINTS' ? 'عدد النقاط أكبر من رصيد العضو.'
               : error.message === 'MEMBER_NOT_IN_GROUP' ? 'العضو لم يعد تابعاً لهذا القروب.' : 'تعذر تعديل النقاط.';
-          await showPrivatePanel(interaction, await buildReturnPayload(interaction, note), true);
+          await showPrivatePanel(interaction, buildActionResult('Points Update Failed', note), true);
         }
         return true;
       }
