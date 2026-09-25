@@ -24,14 +24,23 @@ const guildRoleAuditCache = new Map();
 const groupSearchCache = new Map();
 const voiceTrackingCache = new Map();
 const displayEntityCache = new Map();
+const boardRefreshLocks = new Map();
+const boardRefreshQueued = new Map();
+const boardPermissionBackoff = new Map();
+const ownerAvatarCooldowns = new Map();
 const DISPLAY_CACHE_TTL_MS = 60 * 1000;
 const DISPLAY_MEMBER_BATCH_SIZE = 100;
+const OWNER_AVATAR_COOLDOWN_MS = 10 * 60 * 1000;
+const BOARD_PERMISSION_BACKOFF_MS = 60 * 1000;
+const VOICE_SESSION_MAX_STALE_MS = 24 * 60 * 60 * 1000;
+let lastCacheCleanupAt = 0;
 let manager;
 let boundClient = null;
 let voiceInterval = null;
 let boardRefreshInterval = null;
 let lastEventPruneAt = 0;
 let roleHistoryCache = { mtime: 0, value: {} };
+let lastVoiceCleanupAt = 0;
 
 function getManager() {
   if (!manager) {
@@ -52,6 +61,46 @@ function isGuildText(channel) {
   return Boolean(channel && (channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildAnnouncement));
 }
 function safeName(value, max = 80) { return String(value || '').replace(/[\u0000-\u001f]/g, '').slice(0, max); }
+
+function validateAvatarUrl(value) {
+  const url = String(value || '').trim();
+  if (!url) return { valid: true, url: null };
+  if (url.length > 500) return { valid: false, reason: 'length' };
+  let parsed;
+  try { parsed = new URL(url); } catch { return { valid: false, reason: 'format' }; }
+  if (parsed.protocol !== 'https:' || !['cdn.discordapp.com', 'media.discordapp.net'].includes(parsed.hostname.toLowerCase())) {
+    return { valid: false, reason: 'host' };
+  }
+  if (!/\.(png|jpe?g|webp|gif)$/i.test(parsed.pathname)) return { valid: false, reason: 'extension' };
+  return { valid: true, url };
+}
+
+async function verifyAvatarUrl(value) {
+  const checked = validateAvatarUrl(value);
+  if (!checked.valid || !checked.url) return checked;
+  if (typeof fetch !== 'function') return checked;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4000);
+  try {
+    const response = await fetch(checked.url, { method: 'HEAD', redirect: 'manual', signal: controller.signal });
+    if (!response.ok && !(response.status >= 300 && response.status < 400)) return { valid: false, reason: 'unreachable' };
+    return checked;
+  } catch {
+    return { valid: false, reason: 'unreachable' };
+  } finally { clearTimeout(timer); }
+}
+
+function cleanupBonusCaches(now = Date.now()) {
+  for (const [key, value] of roleAuditCache) if (!value || now - Number(value.checkedAt || 0) > 5 * 60 * 1000) roleAuditCache.delete(key);
+  for (const [key, value] of guildRoleAuditCache) if (!value || now - Number(value.checkedAt || 0) > 5 * 60 * 1000) guildRoleAuditCache.delete(key);
+  for (const [key, value] of groupSearchCache) if (!value || now - Number(value.createdAt || 0) > 5 * 60 * 1000) groupSearchCache.delete(key);
+  for (const [key, value] of displayEntityCache) if (!value || Number(value.expiresAt || 0) <= now) displayEntityCache.delete(key);
+  for (const [key, value] of voiceTrackingCache) if (!value || Number(value.expiresAt || 0) <= now) voiceTrackingCache.delete(key);
+  for (const [key, value] of ownerAvatarCooldowns) if (now - Number(value || 0) > OWNER_AVATAR_COOLDOWN_MS) ownerAvatarCooldowns.delete(key);
+  for (const [key, value] of boardPermissionBackoff) if (Number(value || 0) <= now) boardPermissionBackoff.delete(key);
+  for (const [key, value] of lastRenderAt) if (now - Number(value || 0) > 15 * 60 * 1000) lastRenderAt.delete(key);
+  for (const [key, value] of activeBoardPanels) if (Number(value || 0) <= now) activeBoardPanels.delete(key);
+}
 
 function readRoleHistory(guildId, userId) {
   try {
@@ -357,8 +406,10 @@ async function resolveCurrentGroupForMember(guild, member) {
   return { groups, targetGroupId: targetGroupId == null ? null : Number(targetGroupId), roleHistory };
 }
 
-async function maybeRefreshBoard(guild, force = false) {
+async function refreshBoardNow(guild, force = false) {
   if (!guild || !boundClient) return;
+  const blockedUntil = boardPermissionBackoff.get(String(guild.id)) || 0;
+  if (!force && blockedUntil > Date.now()) return;
   const db = getManager();
   const config = await db.readConfig(guild.id);
   if (!config.topMessageId || !config.channelId) return;
@@ -377,9 +428,26 @@ async function maybeRefreshBoard(guild, force = false) {
     return;
   }
   lastRenderAt.set(guild.id, now);
-  const channel = await guild.channels.fetch(String(config.channelId)).catch(() => null);
+  const channel = await guild.channels.fetch(String(config.channelId)).catch(error => {
+    if (error?.code === 50001 || error?.code === 50013) boardPermissionBackoff.set(String(guild.id), Date.now() + BOARD_PERMISSION_BACKOFF_MS);
+    return null;
+  });
   if (!isGuildText(channel)) return;
-  const boardMessage = await channel.messages.fetch(String(config.topMessageId)).catch(() => null);
+  const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+  const permissions = botMember ? channel.permissionsFor(botMember) : null;
+  if (!permissions || !permissions.has([
+    PermissionsBitField.Flags.ViewChannel,
+    PermissionsBitField.Flags.SendMessages,
+    PermissionsBitField.Flags.AttachFiles,
+    PermissionsBitField.Flags.ReadMessageHistory
+  ])) {
+    boardPermissionBackoff.set(String(guild.id), Date.now() + BOARD_PERMISSION_BACKOFF_MS);
+    return;
+  }
+  const boardMessage = await channel.messages.fetch(String(config.topMessageId)).catch(error => {
+    if (error?.code === 50001 || error?.code === 50013) boardPermissionBackoff.set(String(guild.id), Date.now() + BOARD_PERMISSION_BACKOFF_MS);
+    return null;
+  });
   if (!boardMessage) return;
   const payload = await buildBoardPayload(guild);
   if (preservePanel) {
@@ -390,7 +458,35 @@ async function maybeRefreshBoard(guild, force = false) {
     payload.components = boardMessage.components;
     if (boardMessage.embeds?.length) payload.embeds = boardMessage.embeds;
   }
-  await boardMessage.edit(payload);
+  try {
+    await boardMessage.edit(payload);
+    boardPermissionBackoff.delete(String(guild.id));
+  } catch (error) {
+    if (error?.code === 50001 || error?.code === 50013) boardPermissionBackoff.set(String(guild.id), Date.now() + BOARD_PERMISSION_BACKOFF_MS);
+    throw error;
+  }
+}
+
+async function maybeRefreshBoard(guild, force = false) {
+  if (!guild) return;
+  const key = String(guild.id);
+  const running = boardRefreshLocks.get(key);
+  if (running) {
+    boardRefreshQueued.set(key, Boolean(force) || Boolean(boardRefreshQueued.get(key)));
+    return running;
+  }
+  const task = refreshBoardNow(guild, force);
+  boardRefreshLocks.set(key, task);
+  try {
+    await task;
+  } finally {
+    if (boardRefreshLocks.get(key) === task) boardRefreshLocks.delete(key);
+    if (boardRefreshQueued.has(key)) {
+      const queuedForce = boardRefreshQueued.get(key);
+      boardRefreshQueued.delete(key);
+      setImmediate(() => maybeRefreshBoard(guild, queuedForce).catch(error => console.error('[bonus] queued board refresh failed:', error)));
+    }
+  }
 }
 
 function buildPublicRows() {
@@ -665,12 +761,21 @@ async function handleInteraction(interaction, context = {}) {
         return true;
       }
       const url = collectModalValue(interaction, 'url');
-      if (url && (!/^https:\/\/(cdn\.discordapp\.com|media\.discordapp\.net)\//i.test(url) || !/\.(png|jpe?g|webp|gif)(\?|$)/i.test(url))) {
+      const avatarKey = `${interaction.guild.id}:${groupId}`;
+      const lastAvatarChange = ownerAvatarCooldowns.get(avatarKey) || 0;
+      if (Date.now() - lastAvatarChange < OWNER_AVATAR_COOLDOWN_MS) {
+        const remaining = Math.ceil((OWNER_AVATAR_COOLDOWN_MS - (Date.now() - lastAvatarChange)) / 60000);
+        await showPrivatePanel(interaction, await buildReturnPayload(interaction, `يمكن تغيير أفتار القروب مرة أخرى بعد ${remaining} دقيقة.`), true);
+        return true;
+      }
+      const avatarCheck = await verifyAvatarUrl(url);
+      if (!avatarCheck.valid) {
         await showPrivatePanel(interaction, await buildReturnPayload(interaction, 'استخدم رابط صورة مباشر من Discord CDN بصيغة PNG/JPG/WEBP/GIF، أو اتركه فارغاً.'), true);
         return true;
       }
-      await getManager().updateGroup(interaction.guild.id, groupId, { avatar_url: url || null }, interaction.user.id);
-      await showPrivatePanel(interaction, await buildReturnPayload(interaction, url ? 'تم تحديث أفتار قروبك.' : 'عاد القروب لاستخدام أيقونة السيرفر.'), true);
+      await getManager().updateGroup(interaction.guild.id, groupId, { avatar_url: avatarCheck.url }, interaction.user.id);
+      ownerAvatarCooldowns.set(avatarKey, Date.now());
+      await showPrivatePanel(interaction, await buildReturnPayload(interaction, avatarCheck.url ? 'تم تحديث أفتار قروبك.' : 'عاد القروب لاستخدام أيقونة السيرفر.'), true);
       scheduleRefresh(interaction.guild, true);
       return true;
     }
@@ -1455,6 +1560,23 @@ async function saveVoiceSession(session) {
 async function removeSavedVoiceSession(guildId, userId) {
   await getDatabase().run('DELETE FROM bonus_voice_sessions WHERE guild_id = ? AND user_id = ?', [String(guildId), String(userId)]);
 }
+
+async function cleanupStaleVoiceSessions(client, now = Date.now()) {
+  for (const session of Array.from(voiceSessions.values())) {
+    const guild = client?.guilds?.cache?.get(String(session.guildId));
+    const member = guild?.members?.cache?.get(String(session.userId));
+    if (member && isEligibleVoiceState(member.voice)) continue;
+    if (now - Number(session.lastTrackedAt || 0) <= VOICE_SESSION_MAX_STALE_MS && !member) continue;
+    voiceSessions.delete(voiceKey(session.guildId, session.userId));
+    await removeSavedVoiceSession(session.guildId, session.userId).catch(() => {});
+  }
+  const cutoff = now - VOICE_SESSION_MAX_STALE_MS;
+  const rows = await getDatabase().all('SELECT guild_id, user_id FROM bonus_voice_sessions WHERE last_checkpoint_at < ?', [cutoff]).catch(() => []);
+  for (const row of rows) {
+    if (voiceSessions.has(voiceKey(row.guild_id, row.user_id))) continue;
+    await removeSavedVoiceSession(row.guild_id, row.user_id).catch(() => {});
+  }
+}
 function isEligibleVoiceState(state) {
   if (!state?.guild || !state.member || state.member.user?.bot || !state.channelId) return false;
   if (state.channel?.type === ChannelType.GuildStageVoice) return false;
@@ -1724,6 +1846,10 @@ function registerInteractionHandler(client) {
     if (!voiceInterval) {
       voiceInterval = setInterval(async () => {
         const now = Date.now();
+        if (now - lastCacheCleanupAt >= 5 * 60 * 1000) {
+          lastCacheCleanupAt = now;
+          cleanupBonusCaches(now);
+        }
         for (const session of voiceSessions.values()) {
           try {
             if (now - session.lastTrackedAt >= 240000) await checkpointVoice(session, now);
@@ -1736,10 +1862,14 @@ function registerInteractionHandler(client) {
           getDatabase().run('DELETE FROM bonus_activity_events WHERE created_at < ?', [now - 7 * 24 * 60 * 60 * 1000])
             .catch(error => console.error('[bonus] event cleanup failed:', error));
         }
+        if (now - lastVoiceCleanupAt >= 10 * 60 * 1000) {
+          lastVoiceCleanupAt = now;
+          cleanupStaleVoiceSessions(client, now).catch(error => console.error('[bonus] stale voice cleanup failed:', error));
+        }
       }, 5 * 60 * 1000);
       voiceInterval.unref?.();
     }
   });
 }
 
-module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicRows, boardCounter, buildHomeEmbed, buildGroupSelect, isEligibleVoiceState, resolveCurrentGroupForMember };
+module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicRows, boardCounter, buildHomeEmbed, buildGroupSelect, isEligibleVoiceState, resolveCurrentGroupForMember, validateAvatarUrl };

@@ -634,8 +634,10 @@ function createBonusManager(dbManager) {
       const setSql = entries.map(([key]) => `${key} = ?`).join(', ');
       const values = entries.map(([, value]) => value);
       await tx.run(`UPDATE bonus_groups SET ${setSql} WHERE guild_id = ? AND id = ?`, [...values, String(guildId), Number(groupId)]);
+      const after = Object.fromEntries(entries);
+      const before = Object.fromEntries(entries.map(([key]) => [key, current[key] ?? null]));
       await insertAudit(tx, guildId, actorId, entries.some(([key]) => key === 'owner_id') ? 'owner_change' : 'group_update', null,
-        Number(groupId), Number(groupId), Object.fromEntries(entries));
+        Number(groupId), Number(groupId), { before, after, changedFields: entries.map(([key]) => key) });
       return tx.get('SELECT * FROM bonus_groups WHERE guild_id = ? AND id = ?', [String(guildId), Number(groupId)]);
     }, 'bonus-group-update');
   }
@@ -648,6 +650,11 @@ function createBonusManager(dbManager) {
       if (!result.changes) return false;
       const members = await tx.all('SELECT user_id, points, message_progress, voice_progress_ms FROM bonus_balances WHERE guild_id = ? AND group_id = ?',
         [String(guildId), Number(groupId)]);
+      const totals = members.reduce((result, member) => ({
+        points: result.points + Number(member.points || 0),
+        messageProgress: result.messageProgress + Number(member.message_progress || 0),
+        voiceProgressMs: result.voiceProgressMs + Number(member.voice_progress_ms || 0)
+      }), { points: 0, messageProgress: 0, voiceProgressMs: 0 });
       await tx.run(`
         UPDATE bonus_balances
         SET group_id = NULL, points = 0, message_progress = 0, voice_progress_ms = 0,
@@ -658,8 +665,10 @@ function createBonusManager(dbManager) {
       await tx.run(`
         INSERT INTO bonus_audit_log (guild_id, actor_id, action, source_group_id, details_json, created_at)
         VALUES (?, ?, 'group_archive', ?, ?, ?)
-      `, [String(guildId), actorId ? String(actorId) : null, Number(groupId), JSON.stringify({ unassignedMembers: members.length,
-        carriedPoints: members.reduce((sum, member) => sum + Number(member.points || 0), 0) }), now]);
+      `, [String(guildId), actorId ? String(actorId) : null, Number(groupId), JSON.stringify({
+        unassignedMembers: members.length, resetApplied: true, before: totals,
+        after: { points: 0, messageProgress: 0, voiceProgressMs: 0 }
+      }), now]);
       return true;
     }, 'bonus-archive-group');
   }

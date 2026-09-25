@@ -31,6 +31,10 @@ async function main() {
   assert.equal(bonusCommand.name, 'bonus');
   assert.deepEqual(bonusCommand.aliases, [], 'Arabic bonus name is no longer an alias for the settings command');
   assert.equal(bonusProfileCommand.name, 'بونس', 'Arabic bonus profile command is registered separately');
+  assert.equal(bonusCommand.validateAvatarUrl('https://cdn.discordapp.com/icons/example.png').valid, true);
+  assert.equal(bonusCommand.validateAvatarUrl('http://example.com/avatar.png').valid, false);
+  assert.equal(bonusCommand.validateAvatarUrl('https://example.com/avatar.png').valid, false);
+  assert.equal(bonusCommand.validateAvatarUrl('https://cdn.discordapp.com/icons/example.exe').valid, false);
   assert.deepEqual(bonusCommand.parseBonusCustomId('bonus:select:add-role'), {
     prefix: 'bonus', action: 'select', parts: ['add-role']
   });
@@ -384,6 +388,17 @@ async function main() {
     }));
     const rollbackCount = await db.get('SELECT COUNT(*) AS count FROM bonus_audit_log WHERE action = ?', ['rollback-test']);
     assert.equal(Number(rollbackCount.count), 0, 'transaction rolls back partial writes');
+
+    const stressGuild = 'bonus-concurrency-guild';
+    const stressGroup = await bonus.addGroup(stressGuild, 'stress-role', 'stress-owner', actorId);
+    await bonus.setRule(stressGuild, BONUS_METRICS.messages, 1, 1, actorId);
+    await Promise.all(Array.from({ length: 40 }, (_, index) => bonus.addActivity({
+      guildId: stressGuild, userId: 'stress-user', metric: BONUS_METRICS.messages, amount: 1,
+      eventId: `message:stress:${index}`, roleIds: ['stress-role']
+    })));
+    const stressBalance = await bonus.getBalance(stressGuild, 'stress-user');
+    assert.equal(Number(stressBalance.points), 40, 'concurrent events are counted exactly once under load');
+    assert.equal(Number(stressBalance.message_progress), 0);
 
     const fakeGuild = {
       name: 'Test Server',
