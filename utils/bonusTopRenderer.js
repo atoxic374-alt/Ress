@@ -144,10 +144,10 @@ async function buildBonusTopImage({ guild, groups, config = {}, updatedAt = Date
   ctx.textAlign = 'right';
   ctx.fillStyle = '#FFFFFF';
   ctx.font = 'bold 42px Cairo, sans-serif';
-  ctx.fillText('توب القروبات', 1384, 78);
+  ctx.fillText('Top Bonus', 1384, 78);
   ctx.fillStyle = '#AEB6C5';
   ctx.font = '22px Cairo, sans-serif';
-  ctx.fillText(safeText(guild?.name, 'السيرفر') + '  •  أفضل 10 قروبات', 1384, 122);
+  ctx.fillText(safeText(guild?.name, 'Server') + '  •  Top 10 Groups', 1384, 122);
 
   ctx.textAlign = 'right';
   ctx.fillStyle = accent;
@@ -231,11 +231,6 @@ async function buildBonusTopImage({ guild, groups, config = {}, updatedAt = Date
       roundedRect(ctx, 824, y + 54, Math.max(3, 90 * progress), 4, 2, accent, null);
     }
   }
-
-  ctx.textAlign = 'right';
-  ctx.fillStyle = '#7E8796';
-  ctx.font = '14px Cairo, sans-serif';
-  ctx.fillText('Automatic refresh every 30 seconds', 1516, 804);
 
   return new AttachmentBuilder(canvas.toBuffer('image/png'), { name: 'bonus-top.png' });
 }

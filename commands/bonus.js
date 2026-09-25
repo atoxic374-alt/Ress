@@ -888,7 +888,10 @@ async function handleInteraction(interaction, context = {}) {
     }
     if (interaction.isButton?.() && !opensModal && !fromBoard && !interaction.deferred && !interaction.replied) await interaction.deferUpdate();
     if (interaction.isModalSubmit?.() && action === 'modal' && !interaction.deferred && !interaction.replied) {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.reply({
+        embeds: [colorManager.createEmbed().setTitle('Loading...').setDescription('Processing your request. Please wait.')],
+        ephemeral: true
+      });
     }
 
     if (action === 'private-top' || action === 'private-top-page') {
