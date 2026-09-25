@@ -247,7 +247,7 @@ function buildHomeEmbed(guild, config, groups, rules, complete) {
     .setTitle(`Bonus Settings • ${safeName(guild.name)}`)
     .setDescription(lines.join('\n'))
     .setColor(colorManager.getColor())
-    .setFooter({ text: 'التغييرات محفوظة في SQLite • إعدادات مستقلة لكل سيرفر' });
+    .setFooter({ text: 'by Ahmed' });
 }
 
 function button(customId, label, style = ButtonStyle.Secondary) {
@@ -315,7 +315,18 @@ function structurePrivateResponse(payload) {
     const rawName = separator ? separator[1].trim() : `Details ${index + 1}`;
     fields.push({ name: fieldNames[rawName] || rawName, value: (separator ? separator[2] : line).slice(0, 1024), inline: false });
   }
-  const embed = colorManager.createEmbed().setTitle(title).setDescription(first.slice(0, 4000));
+  const mentions = [...raw.matchAll(/<@!?\d+>|<@&\d+>|<#\d+>/g)].map(match => match[0]);
+  if (title === 'Action Completed') {
+    if (mentions.length) fields.unshift({ name: 'Target', value: [...new Set(mentions)].join(' • '), inline: true });
+    if (/إيقاف|disabled|deactivated/i.test(raw)) fields.push({ name: 'Status', value: 'Disabled', inline: true });
+    else if (/تفعيل|activated|enabled/i.test(raw)) fields.push({ name: 'Status', value: 'Enabled', inline: true });
+    else if (/تحديث|updated|saved|اعتماد|نشر|published/i.test(raw)) fields.push({ name: 'Status', value: 'Updated', inline: true });
+    if (/دبل|double/i.test(raw)) fields.push({ name: 'Feature', value: 'Double Bonus ×2', inline: true });
+  }
+  const description = title === 'Action Completed'
+    ? 'The requested action was completed successfully.'
+    : first.slice(0, 4000);
+  const embed = colorManager.createEmbed().setTitle(title).setDescription(description);
   if (fields.length) embed.addFields(fields.slice(0, 25));
   const normalized = { ...payload, embeds: [embed] };
   delete normalized.content;
@@ -353,6 +364,20 @@ async function showPrivatePanel(interaction, payload, update = false) {
   const boardMessage = isBonusBoardMessage(interaction.message);
   const shouldUpdateBoard = boardMessage && Array.isArray(payload.files) && payload.files.length > 0;
   payload = (!boardMessage || !shouldUpdateBoard) ? structurePrivateResponse(payload) : payload;
+  const completedResult = payload?.embeds?.[0]?.data?.title === 'Action Completed';
+  if (update && completedResult && !boardMessage) {
+    const resultPayload = { ...payload, ephemeral: true };
+    delete resultPayload.components;
+    const originalPayload = await buildHome(interaction.guild);
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp(resultPayload).catch(() => {});
+      await interaction.editReply(originalPayload).catch(() => {});
+    } else {
+      await interaction.update(originalPayload).catch(() => {});
+      await interaction.followUp(resultPayload).catch(() => {});
+    }
+    return;
+  }
   if (update && (interaction.message || interaction.deferred || interaction.replied) && (!boardMessage || shouldUpdateBoard)) {
     const cleanPayload = { ...payload };
     delete cleanPayload.ephemeral;
@@ -660,7 +685,7 @@ async function buildPrivateTopPayload(guild, requestedPage = 0) {
   return {
     content: `${boardCounter(summary)}\nPage : ${page + 1} / ${pageCount}`,
     files: [attachment], attachments: [],
-    components: nav.length ? [new ActionRowBuilder().addComponents(nav)] : [new ActionRowBuilder().addComponents(button('bonus:home', 'Back'))]
+    components: nav.length ? [new ActionRowBuilder().addComponents(nav)] : []
   };
 }
 
