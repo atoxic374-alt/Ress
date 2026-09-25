@@ -261,10 +261,10 @@ function button(customId, label, style = ButtonStyle.Secondary) {
 
 function durationButtons(scope, groupId, userId = null) {
   const choices = [
-    { token: '3600000', label: 'ساعة' },
-    { token: '86400000', label: '24 ساعة' },
-    { token: '604800000', label: '7 أيام' },
-    { token: 'forever', label: 'حتى الإيقاف اليدوي' }
+    { token: '3600000', label: '1 Hour' },
+    { token: '86400000', label: '1 Day' },
+    { token: '604800000', label: '1 Week' },
+    { token: 'forever', label: 'Until Manual Stop' }
   ];
   return new ActionRowBuilder().addComponents(choices.map(choice => button(
     `bonus:double-on:${scope}:${groupId}:${userId || '0'}:${choice.token}`, choice.label, choice.token === 'forever' ? ButtonStyle.Primary : ButtonStyle.Secondary
