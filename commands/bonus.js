@@ -745,7 +745,7 @@ function buildOwnerAvatarResult(message, success = false) {
     embeds: [colorManager.createEmbed()
       .setTitle(success ? 'Group Avatar Updated' : 'Group Avatar Update Failed')
       .setDescription(message)],
-    components: [new ActionRowBuilder().addComponents(button('bonus:public-close', 'Close'))]
+    components: []
   };
 }
 
