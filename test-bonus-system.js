@@ -44,6 +44,17 @@ async function main() {
   assert.deepEqual(bonusCommand.parseBonusCustomId('bonus:select:add-owner'), {
     prefix: 'bonus', action: 'select', parts: ['add-owner']
   });
+  assert.equal(bonusCommand.closeButton('إلغاء').data.custom_id, 'bonus:close',
+    'generic cancel controls close the transient panel');
+  assert.equal(bonusCommand.closeButton('رجوع').data.custom_id, 'bonus:close',
+    'generic back controls do not reopen the settings home');
+  assert.deepEqual(bonusCommand.safeJsonParse('{"ok":true}'), { ok: true });
+  assert.deepEqual(bonusCommand.safeJsonParse('{broken', { fallback: true }), { fallback: true },
+    'audit publishing tolerates malformed JSON details');
+  assert.equal(bonusCommand.isModalOpeningAction('group-search', ['remove-points']), true,
+    'search buttons open a modal without a prior deferUpdate');
+  assert.equal(bonusCommand.isModalOpeningAction('page', ['remove-points']), false,
+    'pagination buttons remain eligible for deferUpdate');
   const voiceState = {
     guild: { afkChannelId: 'afk-channel' }, member: { user: { bot: false } },
     channelId: 'voice-channel', channel: { type: ChannelType.GuildVoice },
@@ -62,6 +73,8 @@ async function main() {
   assert.match(groupPage.content, /صفحة 3\/3/, 'group pagination supports more than 25 groups');
   assert.ok(groupPage.components[1].components.some(component => component.data.custom_id === 'bonus:page:remove-points:1'),
     'previous page navigation is available');
+  assert.equal(groupPage.components[1].components.at(-1).data.custom_id, 'bonus:close',
+    'group selection cancel closes instead of returning to settings');
   const settingsEmbed = bonusCommand.buildHomeEmbed({ name: 'Test Guild' }, {}, [], {}, false);
   assert.equal(settingsEmbed.data.color, Number.parseInt(colorManager.getColor().replace('#', ''), 16), 'bonus embed uses the shared bot-avatar color');
   const settingsWithAudit = bonusCommand.buildHomeEmbed({ name: 'Test Guild' }, { auditChannelId: 'audit-123' }, [], {}, false);

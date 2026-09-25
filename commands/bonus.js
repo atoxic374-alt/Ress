@@ -86,6 +86,20 @@ function isGuildText(channel) {
   return Boolean(channel && (channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildAnnouncement));
 }
 function safeName(value, max = 80) { return String(value || '').replace(/[\u0000-\u001f]/g, '').slice(0, max); }
+function safeJsonParse(value, fallback = {}) {
+  try {
+    const parsed = JSON.parse(value || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function isModalOpeningAction(action, parts = []) {
+  return action === 'color-manual' || action === 'rule' || action === 'audit-filter'
+    || action === 'group-search' || action === 'owner-avatar'
+    || (action === 'select' && parts[0] === 'owner-avatar')
+    || (action === 'group-action' && parts[0] === 'avatar');
+}
 
 function validateAvatarUrl(value) {
   const url = String(value || '').trim();
@@ -259,6 +273,13 @@ function button(customId, label, style = ButtonStyle.Secondary) {
   return new ButtonBuilder().setCustomId(customId).setLabel(label).setStyle(ButtonStyle.Secondary);
 }
 
+// Generic cancel/back actions must close the transient panel instead of reopening
+// the full Bonus Settings home panel. Use an explicit "رجوع للإعدادات" button
+// when returning to the settings home is actually intended.
+function closeButton(label = 'إلغاء') {
+  return button('bonus:close', label);
+}
+
 function durationButtons(scope, groupId, userId = null) {
   const choices = [
     { token: '3600000', label: '1 Hour' },
@@ -370,7 +391,7 @@ async function buildAuditPayload(guild, page = 0) {
   if (result.page + 1 < pageCount) nav.push(button(`bonus:audit-page:${result.page + 1}`, 'التالي'));
   const rows = [];
   if (nav.length) rows.push(new ActionRowBuilder().addComponents(nav));
-  rows.push(new ActionRowBuilder().addComponents(button('bonus:audit-filter', 'فلترة'), button('bonus:home', 'رجوع')));
+  rows.push(new ActionRowBuilder().addComponents(button('bonus:audit-filter', 'فلترة'), closeButton('رجوع')));
   const embed = colorManager.createEmbed().setTitle('Bonus Audit Log')
     .setDescription(`Page : ${result.page + 1} / ${pageCount}\nTotal Records : ${result.total}\nFilters : ${Object.keys(filter).length ? 'Applied' : 'None'}`)
     .addFields(fields.length ? fields : [{ name: 'No Records', value: 'No audit records found.', inline: false }]);
@@ -458,7 +479,7 @@ function buildManagerPayload(guild, config, actorId, responsibilityPage = 0) {
     if (safeResponsibilityPage + 1 < responsibilityPages) pageButtons.push(button(`bonus:manager-resp-page:${actorId}:${safeResponsibilityPage + 1}`, 'المسؤوليات التالية'));
     rows.push(new ActionRowBuilder().addComponents(pageButtons));
   }
-  rows.push(new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع')));
+  rows.push(new ActionRowBuilder().addComponents(closeButton('رجوع')));
   return { embeds: [embed], components: rows };
 }
 
@@ -474,14 +495,14 @@ function buildGroupSelect(action, groups, page = 0) {
   if (safePage === 0 && ['add-points', 'remove-points'].includes(action)) {
     options.unshift({ label: 'All Groups', value: 'all', description: 'تطبيق نفس العدد على جميع القروبات النشطة' });
   }
-  if (!options.length) return { content: 'لا توجد قروبات نشطة.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] };
+  if (!options.length) return { content: 'لا توجد قروبات نشطة.', components: [new ActionRowBuilder().addComponents(closeButton('رجوع'))] };
   const menu = new StringSelectMenuBuilder().setCustomId(`bonus:select:${action}:${safePage}`).setPlaceholder('اختر القروب').setMinValues(1).setMaxValues(1).addOptions(options);
   const rows = [new ActionRowBuilder().addComponents(menu)];
   const nav = [];
   if (safePage > 0) nav.push(button(`bonus:page:${action}:${safePage - 1}`, 'السابق'));
   if (safePage + 1 < pageCount) nav.push(button(`bonus:page:${action}:${safePage + 1}`, 'التالي'));
   nav.push(button(`bonus:group-search:${action}`, 'بحث'));
-  nav.push(button('bonus:home', 'إلغاء / رجوع'));
+  nav.push(closeButton('إلغاء / رجوع'));
   rows.push(new ActionRowBuilder().addComponents(nav));
   return { content: `اختر القروب المطلوب (صفحة ${safePage + 1}/${pageCount}):`, components: rows };
 }
@@ -637,13 +658,13 @@ function buildMemberSelect(action, group, members, page = 0) {
     value: String(member.id),
     description: `@${safeName(member.user?.username || member.id, 80)}`
   }));
-  if (!options.length) return { content: 'لا يوجد أعضاء حاليًا داخل رول هذا القروب.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] };
+  if (!options.length) return { content: 'لا يوجد أعضاء حاليًا داخل رول هذا القروب.', components: [new ActionRowBuilder().addComponents(closeButton('رجوع'))] };
   const menu = new StringSelectMenuBuilder().setCustomId(`bonus:select:${action}:${group.id}:${safePage}`)
     .setPlaceholder(`اختر عضوًا من الرول (${safePage + 1}/${pageCount})`).setMinValues(1).setMaxValues(1).addOptions(options);
   const nav = [];
   if (safePage > 0) nav.push(button(`bonus:page:${action}:${group.id}:${safePage - 1}`, 'السابق'));
   if (safePage + 1 < pageCount) nav.push(button(`bonus:page:${action}:${group.id}:${safePage + 1}`, 'التالي'));
-  nav.push(button('bonus:home', 'رجوع'));
+  nav.push(closeButton('رجوع'));
   return {
     embeds: [colorManager.createEmbed().setTitle('Double Bonus • Select Member')
       .setDescription(`القروب: <@&${group.role_id}>\nالاختيار محصور بأعضاء رول القروب فقط.`)],
@@ -866,7 +887,7 @@ async function confirmComponent(interaction, action, groupId, userId = null) {
     content: `⚠️ ${message}\nهل تريد المتابعة؟`,
     components: [new ActionRowBuilder().addComponents(
       button(`bonus:confirm:${action}:${suffix}`, 'تأكيد', ButtonStyle.Danger),
-      button('bonus:home', 'إلغاء')
+      closeButton('إلغاء')
     )]
   };
 }
@@ -914,9 +935,7 @@ async function handleInteraction(interaction, context = {}) {
     if (isBonusBoardMessage(interaction.message)) activeBoardPanels.set(String(interaction.guild.id), Date.now() + 10 * 60 * 1000);
     const manualPointsSelection = action === 'select' && ['add-points', 'remove-points'].includes(parts[0]);
     const fromBoard = isBonusBoardMessage(interaction.message);
-    const opensModal = action === 'color-manual' || action === 'rule' || action === 'audit-filter'
-      || action === 'owner-avatar' || (action === 'select' && parts[0] === 'owner-avatar')
-      || (action === 'group-action' && parts[0] === 'avatar');
+    const opensModal = isModalOpeningAction(action, parts);
     if (interaction.isAnySelectMenu?.() && !manualPointsSelection && !opensModal && !fromBoard && !interaction.deferred && !interaction.replied) {
       await interaction.deferUpdate();
     }
@@ -936,6 +955,12 @@ async function handleInteraction(interaction, context = {}) {
     if (action === 'my-group') {
       const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
       await showPrivatePanel(interaction, await buildMyGroupPayload(interaction.guild, member), false);
+      return true;
+    }
+    if (action === 'close') {
+      const payload = { content: ' ', embeds: [], components: [], attachments: [] };
+      if (interaction.deferred || interaction.replied) await interaction.editReply(payload).catch(() => {});
+      else await interaction.update(payload).catch(() => {});
       return true;
     }
     if (action === 'public-close') {
@@ -1000,7 +1025,7 @@ async function handleInteraction(interaction, context = {}) {
       const ownGroups = await getGroupsForDisplay(interaction.guild);
       const ownedGroups = ownGroups.filter(group => String(group.owner_id) === String(interaction.user.id));
       if (!ownedGroups.length) {
-        await showPrivatePanel(interaction, { content: 'لا يوجد قروب مملوك لك.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+        await showPrivatePanel(interaction, { content: 'لا يوجد قروب مملوك لك.', components: [new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
       } else if (ownedGroups.length === 1) {
         await interaction.showModal(modal(`bonus:modal:owner-avatar:${ownedGroups[0].id}`, 'صورة القروب', [
           { id: 'url', label: 'رابط صورة من Discord CDN (اختياري)', required: false, maxLength: 300,
@@ -1049,7 +1074,7 @@ async function handleInteraction(interaction, context = {}) {
         .some(value => String(value || '').toLowerCase().includes(query))) : ownedGroups;
       groupSearchCache.set(`${interaction.guild.id}:${interaction.user.id}:owner-avatar`, { createdAt: Date.now(), groups: filtered });
       await showPrivatePanel(interaction, filtered.length ? buildGroupSelect('owner-avatar', filtered, 0)
-        : { content: 'لا يوجد قروب مطابق تملكه.', components: [new ActionRowBuilder().addComponents(button('bonus:owner-avatar', 'بحث جديد'), button('bonus:home', 'رجوع'))] }, true);
+        : { content: 'لا يوجد قروب مطابق تملكه.', components: [new ActionRowBuilder().addComponents(button('bonus:owner-avatar', 'بحث جديد'), closeButton('رجوع'))] }, true);
       return true;
     }
 
@@ -1115,7 +1140,7 @@ async function handleInteraction(interaction, context = {}) {
     if (action === 'channel') {
       const menu = new ChannelSelectMenuBuilder().setCustomId('bonus:select-channel').setPlaceholder('اختر روم عرض التوب')
         .setMinValues(1).setMaxValues(1).addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
-      await showPrivatePanel(interaction, { content: 'حدد رومًا نصيًا لرسالة توب البونس:', components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+      await showPrivatePanel(interaction, { content: 'حدد رومًا نصيًا لرسالة توب البونس:', components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
       return true;
     }
 
@@ -1124,7 +1149,7 @@ async function handleInteraction(interaction, context = {}) {
         .setMinValues(1).setMaxValues(1).addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
       await showPrivatePanel(interaction, {
         embeds: [colorManager.createEmbed().setTitle('Audit Channel').setDescription('اختر رومًا مستقلًا لاستقبال سجلات إعدادات وعمليات البونس.')],
-        components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(button('bonus:home', 'Back'))]
+        components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(closeButton('Back'))]
       }, true);
       return true;
     }
@@ -1132,7 +1157,7 @@ async function handleInteraction(interaction, context = {}) {
     if (action === 'select-channel') {
       const channel = interaction.guild.channels.cache.get(interaction.values[0]);
       if (!isGuildText(channel)) {
-        await showPrivatePanel(interaction, { content: 'الروم غير صالح. اختر رومًا نصيًا من السيرفر.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+        await showPrivatePanel(interaction, { content: 'الروم غير صالح. اختر رومًا نصيًا من السيرفر.', components: [new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
         return true;
       }
       const currentConfig = await db.readConfig(interaction.guild.id);
@@ -1151,13 +1176,13 @@ async function handleInteraction(interaction, context = {}) {
     if (action === 'select-audit-channel') {
       const channel = interaction.guild.channels.cache.get(interaction.values[0]);
       if (!isGuildText(channel)) {
-        await showPrivatePanel(interaction, { content: 'The audit channel must be a text channel.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'Back'))] }, true);
+        await showPrivatePanel(interaction, { content: 'The audit channel must be a text channel.', components: [new ActionRowBuilder().addComponents(closeButton('Back'))] }, true);
         return true;
       }
       await primeAuditCursor(interaction.guild);
       await db.saveConfig(interaction.guild.id, { auditChannelId: channel.id }, interaction.user.id);
       await publishAuditLogs(interaction.guild).catch(error => console.error('[bonus] immediate audit publish failed:', error));
-      await showPrivatePanel(interaction, { embeds: [colorManager.createEmbed().setTitle('Audit Channel Updated').setDescription(`Logs will be organized in <#${channel.id}>.`)], components: [new ActionRowBuilder().addComponents(button('bonus:home', 'Back'))] }, true);
+      await showPrivatePanel(interaction, { embeds: [colorManager.createEmbed().setTitle('Audit Channel Updated').setDescription(`Logs will be organized in <#${channel.id}>.`)], components: [new ActionRowBuilder().addComponents(closeButton('Back'))] }, true);
       return true;
     }
 
@@ -1166,7 +1191,7 @@ async function handleInteraction(interaction, context = {}) {
         button('bonus:color-auto', 'تلقائي من أيقونة السيرفر', ButtonStyle.Primary),
         button('bonus:color-manual', 'تحديد لون يدوي')
       );
-      await showPrivatePanel(interaction, { content: 'اختر مصدر لون صورة التوب:', components: [row, new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+      await showPrivatePanel(interaction, { content: 'اختر مصدر لون صورة التوب:', components: [row, new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
       return true;
     }
 
@@ -1194,7 +1219,7 @@ async function handleInteraction(interaction, context = {}) {
       if (currentRules.voice_ms) disableButtons.push(button('bonus:rule-off:voice', 'إيقاف الصوت', ButtonStyle.Danger));
       const rows = [row];
       if (disableButtons.length) rows.push(new ActionRowBuilder().addComponents(disableButtons));
-      rows.push(new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع')));
+      rows.push(new ActionRowBuilder().addComponents(closeButton('رجوع')));
       const status = [
         `الرسائل: ${currentRules.messages ? `مفعّلة (${Number(currentRules.messages.threshold).toLocaleString()} رسالة = ${currentRules.messages.points} نقطة)` : 'متوقفة'}`,
         `الصوت: ${currentRules.voice_ms ? `مفعّلة (${Number(currentRules.voice_ms.threshold) / 3600000} ساعة = ${currentRules.voice_ms.points} نقطة)` : 'متوقف'}`
@@ -1242,7 +1267,7 @@ async function handleInteraction(interaction, context = {}) {
 
     if (action === 'add-group') {
       const menu = new RoleSelectMenuBuilder().setCustomId('bonus:select:add-role').setPlaceholder('ابحث واختر رول القروب').setMinValues(1).setMaxValues(1);
-      await showPrivatePanel(interaction, { content: 'اختر رول القروب. بعده اختر الـOwner من قائمة الأعضاء.', components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(button('bonus:home', 'إلغاء'))] }, true);
+      await showPrivatePanel(interaction, { content: 'اختر رول القروب. بعده اختر الـOwner من قائمة الأعضاء.', components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(closeButton('إلغاء'))] }, true);
       return true;
     }
 
@@ -1259,14 +1284,14 @@ async function handleInteraction(interaction, context = {}) {
     if (action === 'select' && parts[0] === 'add-role') {
       const roleId = interaction.values[0];
       if (!interaction.guild.roles.cache.has(roleId)) {
-        await showPrivatePanel(interaction, { content: 'الرول غير موجود في هذا السيرفر.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+        await showPrivatePanel(interaction, { content: 'الرول غير موجود في هذا السيرفر.', components: [new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
         return true;
       }
       activeAddFlows.set(idKey(interaction.guild.id, interaction.user.id), {
         roleId, createdAt: Date.now(), fromBoard: interaction.message?.attachments?.some(attachment => attachment.name === 'bonus-top.png') || false
       });
       const menu = new UserSelectMenuBuilder().setCustomId('bonus:select:add-owner').setPlaceholder('ابحث واختر Owner القروب').setMinValues(1).setMaxValues(1);
-      await showPrivatePanel(interaction, { content: `الرول: <@&${roleId}>\nاختر Owner القروب:`, components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(button('bonus:home', 'إلغاء'))] }, true);
+      await showPrivatePanel(interaction, { content: `الرول: <@&${roleId}>\nاختر Owner القروب:`, components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(closeButton('إلغاء'))] }, true);
       return true;
     }
 
@@ -1275,13 +1300,13 @@ async function handleInteraction(interaction, context = {}) {
       const flow = activeAddFlows.get(key);
       activeAddFlows.delete(key);
       if (!flow || Date.now() - flow.createdAt > 5 * 60 * 1000) {
-        await showPrivatePanel(interaction, { content: 'انتهت جلسة الإضافة. ابدأ من جديد.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+        await showPrivatePanel(interaction, { content: 'انتهت جلسة الإضافة. ابدأ من جديد.', components: [new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
         return true;
       }
       const ownerId = interaction.values[0];
       const member = await interaction.guild.members.fetch(ownerId).catch(() => null);
       if (!member || member.user.bot) {
-        await showPrivatePanel(interaction, { content: 'اختر عضوًا حقيقيًا من هذا السيرفر ليكون Owner للقروب.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+        await showPrivatePanel(interaction, { content: 'اختر عضوًا حقيقيًا من هذا السيرفر ليكون Owner للقروب.', components: [new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
         return true;
       }
       try {
@@ -1296,7 +1321,7 @@ async function handleInteraction(interaction, context = {}) {
         const text = error.message === 'ROLE_ALREADY_REGISTERED' ? 'هذا الرول مسجل كقروب بالفعل.'
           : error.message === 'OWNER_ALREADY_ASSIGNED' ? 'هذا العضو مرتبط بمالك قروب نشط آخر. يجب اختيار عضو مختلف.'
             : 'تعذرت إضافة القروب.';
-        await showPrivatePanel(interaction, { content: text, components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+        await showPrivatePanel(interaction, { content: text, components: [new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
       }
       return true;
     }
@@ -1332,7 +1357,7 @@ async function handleInteraction(interaction, context = {}) {
           .setPlaceholder('ابحث عن عضو يحمل رول القروب').setMinValues(1).setMaxValues(1);
         await showPrivatePanel(interaction, {
           content: `اختر عضواً من رول القروب <@&${group.role_id}>. البحث في Discord متاح، وسيُعاد التحقق من الرول والرصيد عند التأكيد.`,
-          components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(button('bonus:home', 'إلغاء / رجوع'))]
+          components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(closeButton('إلغاء / رجوع'))]
         }, true);
       }
       return true;
@@ -1371,7 +1396,7 @@ async function handleInteraction(interaction, context = {}) {
           components: [new ActionRowBuilder().addComponents(
             button(`bonus:remove-mode:group:${groupId}`, 'إزالة من إجمالي القروب', ButtonStyle.Danger),
             button(`bonus:remove-mode:member:${groupId}`, 'إزالة من عضو محدد', ButtonStyle.Secondary)
-          ), new ActionRowBuilder().addComponents(button('bonus:home', 'إلغاء / رجوع'))]
+          ), new ActionRowBuilder().addComponents(closeButton('إلغاء / رجوع'))]
         }, true);
         return true;
       }
@@ -1385,7 +1410,7 @@ async function handleInteraction(interaction, context = {}) {
     if (action === 'manage-groups') {
       const groups = await getGroupsForDisplay(interaction.guild);
       if (!groups.length) {
-        await showPrivatePanel(interaction, { content: 'لا توجد قروبات نشطة.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+        await showPrivatePanel(interaction, { content: 'لا توجد قروبات نشطة.', components: [new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
         return true;
       }
       await showPrivatePanel(interaction, buildGroupSelect('manage-group', groups), true);
@@ -1402,7 +1427,7 @@ async function handleInteraction(interaction, context = {}) {
         button(`bonus:group-action:archive:${groupId}`, 'إزالة القروب', ButtonStyle.Danger)
       );
       const role = interaction.guild.roles.cache.get(String(group.role_id));
-      await showPrivatePanel(interaction, { content: `القروب: **${safeName(role?.name || 'رول محذوف')}**\nالـOwner الحالي: <@${group.owner_id}>`, components: [row1, new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+      await showPrivatePanel(interaction, { content: `القروب: **${safeName(role?.name || 'رول محذوف')}**\nالـOwner الحالي: <@${group.owner_id}>`, components: [row1, new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
       return true;
     }
 
@@ -1412,12 +1437,12 @@ async function handleInteraction(interaction, context = {}) {
       const groups = await db.listGroups(interaction.guild.id);
       const group = groups.find(item => Number(item.id) === groupId);
       if (!group) {
-        await showPrivatePanel(interaction, { content: 'القروب لم يعد موجودًا.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+        await showPrivatePanel(interaction, { content: 'القروب لم يعد موجودًا.', components: [new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
         return true;
       }
       if (operation === 'owner') {
         const menu = new UserSelectMenuBuilder().setCustomId(`bonus:select-owner:${groupId}`).setPlaceholder('اختر الـOwner الجديد').setMinValues(1).setMaxValues(1);
-        await showPrivatePanel(interaction, { content: 'اختر الـOwner الجديد للقروب:', components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(button('bonus:home', 'إلغاء'))] }, true);
+        await showPrivatePanel(interaction, { content: 'اختر الـOwner الجديد للقروب:', components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(closeButton('إلغاء'))] }, true);
         return true;
       }
       if (operation === 'avatar') {
@@ -1438,14 +1463,14 @@ async function handleInteraction(interaction, context = {}) {
       const newOwnerId = interaction.values[0];
       const newOwner = await interaction.guild.members.fetch(newOwnerId).catch(() => null);
       if (!newOwner || newOwner.user.bot) {
-        await showPrivatePanel(interaction, { content: 'اختر عضوًا حقيقيًا من هذا السيرفر.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+        await showPrivatePanel(interaction, { content: 'اختر عضوًا حقيقيًا من هذا السيرفر.', components: [new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
         return true;
       }
       try {
         await db.updateGroup(interaction.guild.id, groupId, { owner_id: newOwnerId }, interaction.user.id);
       } catch (error) {
         if (error.message === 'OWNER_ALREADY_ASSIGNED') {
-          await showPrivatePanel(interaction, { content: 'هذا العضو مرتبط بمالك قروب نشط آخر. يجب اختيار عضو مختلف.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+          await showPrivatePanel(interaction, { content: 'هذا العضو مرتبط بمالك قروب نشط آخر. يجب اختيار عضو مختلف.', components: [new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
           return true;
         }
         throw error;
@@ -1460,7 +1485,7 @@ async function handleInteraction(interaction, context = {}) {
         button('bonus:reset-group', 'تصفير قروب كامل', ButtonStyle.Danger),
         button('bonus:reset-user', 'تصفير شخص داخل قروب', ButtonStyle.Danger)
       );
-      await showPrivatePanel(interaction, { content: 'اختر نوع التصفير:', components: [row, new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+      await showPrivatePanel(interaction, { content: 'اختر نوع التصفير:', components: [row, new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
       return true;
     }
 
@@ -1487,7 +1512,7 @@ async function handleInteraction(interaction, context = {}) {
       if (!group) return true;
       const role = interaction.guild.roles.cache.get(String(group.role_id));
       const menu = new UserSelectMenuBuilder().setCustomId(`bonus:select:reset-user:${groupId}`).setPlaceholder('اختر عضوًا لتصفير نقاطه').setMinValues(1).setMaxValues(1);
-      await showPrivatePanel(interaction, { content: `اختر شخصًا من قروب <@&${group.role_id}>.`, components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+      await showPrivatePanel(interaction, { content: `اختر شخصًا من قروب <@&${group.role_id}>.`, components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
       return true;
     }
 
@@ -1498,7 +1523,7 @@ async function handleInteraction(interaction, context = {}) {
       const member = await interaction.guild.members.fetch(userId).catch(() => null);
       const balance = await db.getBalance(interaction.guild.id, userId);
       if (!group || !member || !member.roles.cache.has(String(group.role_id)) || Number(balance?.group_id) !== groupId) {
-        await showPrivatePanel(interaction, { content: 'هذا العضو ليس مسندًا حاليًا لهذا القروب.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+        await showPrivatePanel(interaction, { content: 'هذا العضو ليس مسندًا حاليًا لهذا القروب.', components: [new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
         return true;
       }
       await showPrivatePanel(interaction, await confirmComponent(interaction, 'user-reset', groupId, userId), true);
@@ -1541,14 +1566,14 @@ async function handleInteraction(interaction, context = {}) {
         `الدبل الفردي المحفوظ: ${userDoubles.length ? userDoubles.length.toLocaleString() : 'لا يوجد'}`,
         ...(activePeople.length ? activePeople : [])
       ];
-      await showPrivatePanel(interaction, { content: `قروب <@&${group.role_id}>\n${status.join('\n')}\nالدبل ×2 فقط ولا يتراكم إلى ×4. اختيار عضو سبق تفعيل دبل له يوقف دبل ذلك العضو فورًا.`, components: [new ActionRowBuilder().addComponents(buttons), new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+      await showPrivatePanel(interaction, { content: `قروب <@&${group.role_id}>\n${status.join('\n')}\nالدبل ×2 فقط ولا يتراكم إلى ×4. اختيار عضو سبق تفعيل دبل له يوقف دبل ذلك العضو فورًا.`, components: [new ActionRowBuilder().addComponents(buttons), new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
       return true;
     }
 
     if (action === 'global-double-on') {
       await showPrivatePanel(interaction, {
         content: 'اختر مدة Global Double Bonus. سيطبّق على كل القروبات الحالية وأي قروب جديد حتى انتهاء المدة أو الإيقاف اليدوي.',
-        components: [durationButtons('global', 0), new ActionRowBuilder().addComponents(button('bonus:home', 'Cancel'))]
+        components: [durationButtons('global', 0), new ActionRowBuilder().addComponents(closeButton('Cancel'))]
       }, true);
       return true;
     }
@@ -1573,7 +1598,7 @@ async function handleInteraction(interaction, context = {}) {
       if (scope === 'group') {
         const group = await getDatabase().get('SELECT role_id FROM bonus_groups WHERE guild_id = ? AND id = ?', [interaction.guild.id, groupId]);
         if (!group) return true;
-        await showPrivatePanel(interaction, { content: `اختر مدة دبل ×2 للرول <@&${group.role_id}>:`, components: [durationButtons(scope, groupId), new ActionRowBuilder().addComponents(button('bonus:home', 'إلغاء'))] }, true);
+        await showPrivatePanel(interaction, { content: `اختر مدة دبل ×2 للرول <@&${group.role_id}>:`, components: [durationButtons(scope, groupId), new ActionRowBuilder().addComponents(closeButton('إلغاء'))] }, true);
       } else {
         const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
         const role = group ? await interaction.guild.roles.fetch(String(group.role_id)).catch(() => null) : null;
@@ -1599,7 +1624,7 @@ async function handleInteraction(interaction, context = {}) {
         await publishAuditLogs(interaction.guild).catch(() => {});
         await showPrivatePanel(interaction, buildActionResult('Double Bonus Updated', `تم إيقاف الدبل عن <@${userId}>.`), true);
       } else {
-        await showPrivatePanel(interaction, { content: `اختر مدة دبل ×2 للعضو <@${userId}> داخل <@&${group.role_id}>:`, components: [durationButtons('user', groupId, userId), new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+        await showPrivatePanel(interaction, { content: `اختر مدة دبل ×2 للعضو <@${userId}> داخل <@&${group.role_id}>:`, components: [durationButtons('user', groupId, userId), new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
       }
       return true;
     }
@@ -1610,7 +1635,7 @@ async function handleInteraction(interaction, context = {}) {
       const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
       const member = await interaction.guild.members.fetch(userId).catch(() => null);
       if (!group || !member || !member.roles.cache.has(String(group.role_id))) {
-        await showPrivatePanel(interaction, { content: 'اختر عضوًا يحمل رول القروب الحالي.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+        await showPrivatePanel(interaction, { content: 'اختر عضوًا يحمل رول القروب الحالي.', components: [new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
         return true;
       }
       const existing = await getDatabase().get(`SELECT id FROM bonus_multipliers WHERE guild_id = ? AND scope = 'user' AND group_id = ? AND user_id = ? AND active = 1 AND (ends_at IS NULL OR ends_at > ?)`, [interaction.guild.id, groupId, userId, Date.now()]);
@@ -1619,7 +1644,7 @@ async function handleInteraction(interaction, context = {}) {
         scheduleRefresh(interaction.guild, true);
         await showPrivatePanel(interaction, { content: `تم إيقاف الدبل عن <@${userId}>.`, components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع للإعدادات'))] }, true);
       } else {
-        await showPrivatePanel(interaction, { content: `اختر مدة دبل ×2 للعضو <@${userId}>:`, components: [durationButtons('user', groupId, userId), new ActionRowBuilder().addComponents(button('bonus:home', 'إلغاء'))] }, true);
+        await showPrivatePanel(interaction, { content: `اختر مدة دبل ×2 للعضو <@${userId}>:`, components: [durationButtons('user', groupId, userId), new ActionRowBuilder().addComponents(closeButton('إلغاء'))] }, true);
       }
       return true;
     }
@@ -1819,7 +1844,7 @@ async function handleInteraction(interaction, context = {}) {
         groupSearchCache.set(`${interaction.guild.id}:${interaction.user.id}:${searchAction}`, { createdAt: Date.now(), groups: filtered });
         await showPrivatePanel(interaction, filtered.length
           ? buildGroupSelect(searchAction, filtered, 0)
-          : { content: 'لم توجد قروبات مطابقة للبحث.', components: [new ActionRowBuilder().addComponents(button(`bonus:group-search:${searchAction}`, 'بحث جديد'), button('bonus:home', 'رجوع'))] }, true);
+          : { content: 'لم توجد قروبات مطابقة للبحث.', components: [new ActionRowBuilder().addComponents(button(`bonus:group-search:${searchAction}`, 'بحث جديد'), closeButton('رجوع'))] }, true);
         return true;
       }
       if (modalAction === 'rule') {
@@ -1845,7 +1870,7 @@ async function handleInteraction(interaction, context = {}) {
             content: '⚠️ يوجد تقدم جزئي أعلى من الحد الجديد. عند أول نشاط لاحق قد تُمنح نقاط فورًا وفق القاعدة الجديدة. هل تريد اعتماد هذا التغيير؟',
             components: [new ActionRowBuilder().addComponents(
               button(`bonus:confirm-rule:${metricName}:${threshold}:${points}`, 'اعتماد القاعدة', ButtonStyle.Danger),
-              button('bonus:home', 'إلغاء')
+              closeButton('إلغاء')
             )]
           }, true);
         } else {
@@ -1903,7 +1928,7 @@ async function handleInteraction(interaction, context = {}) {
               content: `تأكيد إزالة ${amount.toLocaleString()} نقطة من إجمالي القروب؟\nالإجمالي الحالي: ${current.toLocaleString()}\nالإجمالي بعد الإزالة: ${(current - amount).toLocaleString()}\nلن تتغير نقاط أي عضو، وسيبقى الخصم محفوظاً.`,
               components: [new ActionRowBuilder().addComponents(
                 button(`bonus:confirm:remove-group:${groupId}:${amount}`, 'تأكيد الإزالة', ButtonStyle.Danger),
-                button('bonus:home', 'إلغاء')
+                closeButton('إلغاء')
               )]
             }, true);
           } else if (operation === 'remove-member') {
@@ -1919,7 +1944,7 @@ async function handleInteraction(interaction, context = {}) {
               content: `تأكيد إزالة ${amount.toLocaleString()} نقطة من <@${rawUserId}>؟\nرصيده الحالي: ${current.toLocaleString()}\nرصيده بعد الإزالة: ${(current - amount).toLocaleString()}`,
               components: [new ActionRowBuilder().addComponents(
                 button(`bonus:confirm:remove-member:${groupId}:${rawUserId}:${amount}`, 'تأكيد الإزالة', ButtonStyle.Danger),
-                button('bonus:home', 'إلغاء')
+                closeButton('إلغاء')
               )]
             }, true);
           } else {
@@ -1945,7 +1970,7 @@ async function handleInteraction(interaction, context = {}) {
     if (interaction.message) {
       await showPrivatePanel(interaction, {
         content: 'حدث خطأ أثناء تنفيذ الإجراء. لم يُحذف أي رصيد؛ استخدم زر الرجوع ثم أعد المحاولة.',
-        components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))]
+        components: [new ActionRowBuilder().addComponents(closeButton('رجوع'))]
       }, true).catch(() => {});
     } else if (interaction.deferred || interaction.replied) {
       await interaction.followUp({ embeds: [colorManager.createEmbed().setTitle('Bonus Settings Error').setDescription('تعذر تنفيذ إعداد البونس. لم يتم حفظ تغيير غير مكتمل.')], ephemeral: true }).catch(() => {});
@@ -2382,4 +2407,4 @@ function registerInteractionHandler(client) {
   });
 }
 
-module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicSettingsRows, buildPublicRows, boardCounter, buildHomeEmbed, buildGroupSelect, buildOwnerAvatarResult, buildActionResult, isEligibleVoiceState, resolveCurrentGroupForMember, validateAvatarUrl, structurePrivateResponse };
+module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicSettingsRows, buildPublicRows, boardCounter, buildHomeEmbed, buildGroupSelect, buildOwnerAvatarResult, buildActionResult, closeButton, safeJsonParse, isModalOpeningAction, isEligibleVoiceState, resolveCurrentGroupForMember, validateAvatarUrl, structurePrivateResponse };
