@@ -108,7 +108,9 @@ async function verifyAvatarUrl(value) {
   const timer = setTimeout(() => controller.abort(), 4000);
   try {
     const response = await fetch(checked.url, { method: 'HEAD', redirect: 'manual', signal: controller.signal });
-    if (!response.ok && !(response.status >= 300 && response.status < 400)) return { valid: false, reason: 'unreachable' };
+    // بعض روابط Discord CDN ترفض HEAD أو تتطلب صلاحية مؤقتة رغم أن GET يعمل.
+    // التحقق المحلي من المضيف والامتداد كافٍ في حالتي 403/405.
+    if (!response.ok && !(response.status >= 300 && response.status < 400) && ![403, 405].includes(response.status)) return { valid: false, reason: 'unreachable' };
     const type = String(response.headers.get('content-type') || '').toLowerCase();
     const length = Number(response.headers.get('content-length') || 0);
     if (type && !type.startsWith('image/')) return { valid: false, reason: 'content-type' };
@@ -382,11 +384,11 @@ async function showPrivatePanel(interaction, payload, update = false) {
     const cleanPayload = { ...payload };
     delete cleanPayload.ephemeral;
     const currentContent = String(interaction.message?.content || '');
-    const currentCounter = currentContent.match(/^\*\*[^\n]*Groups\s+•\s+[^\n]*Points\*\*/)?.[0];
+    const currentCounter = currentContent.match(/^\*\*[^\n]*(?:Groups|Points)[^\n]*\*\*/)?.[0];
     if (currentCounter) {
       const content = String(cleanPayload.content || '');
-      const newCounter = content.match(/^\*\*[^\n]*Groups\s+•\s+[^\n]*Points\*\*/)?.[0];
-      const nextContent = content.replace(/^\*\*[^\n]*Groups\s+•\s+[^\n]*Points\*\*\n?/, '');
+      const newCounter = content.match(/^\*\*[^\n]*(?:Groups|Points)[^\n]*\*\*/)?.[0];
+      const nextContent = content.replace(/^\*\*[^\n]*(?:Groups|Points)[^\n]*\*\*\n?/, '');
       cleanPayload.content = [newCounter || currentCounter, nextContent].filter(Boolean).join('\n');
     }
     if (!('files' in cleanPayload) && !('attachments' in cleanPayload) && interaction.message?.attachments?.size) {
@@ -567,9 +569,9 @@ async function refreshBoardNow(guild, force = false) {
   if (!boardMessage) return;
   const payload = await buildBoardPayload(guild, '', boardPageState.get(String(guild.id)) || 0);
   if (preservePanel) {
-    const currentCounter = String(boardMessage.content || '').match(/^\*\*[^\n]*Groups\s+•\s+[^\n]*Points\*\*/)?.[0];
-    const newCounter = String(payload.content || '').match(/^\*\*[^\n]*Groups\s+•\s+[^\n]*Points\*\*/)?.[0];
-    const prompt = String(boardMessage.content || '').replace(/^\*\*[^\n]*Groups\s+•\s+[^\n]*Points\*\*\n?/, '').trim();
+    const currentCounter = String(boardMessage.content || '').match(/^\*\*[^\n]*(?:Groups|Points)[^\n]*\*\*/)?.[0];
+    const newCounter = String(payload.content || '').match(/^\*\*[^\n]*(?:Groups|Points)[^\n]*\*\*/)?.[0];
+    const prompt = String(boardMessage.content || '').replace(/^\*\*[^\n]*(?:Groups|Points)[^\n]*\*\*\n?/, '').trim();
     payload.content = [newCounter || currentCounter, prompt].filter(Boolean).join('\n');
     payload.components = boardMessage.components;
     if (boardMessage.embeds?.length) payload.embeds = boardMessage.embeds;
@@ -645,7 +647,7 @@ function buildPublicRows() {
 function boardCounter(summary) {
   const groups = Number(summary?.groups) || 0;
   const points = Number(summary?.points) || 0;
-  return `**${groups.toLocaleString('en-US')} Groups  •  ${points.toLocaleString('en-US')} Points**`;
+  return `**Total Groups : ${groups.toLocaleString('en-US')}  •  Total Points : ${points.toLocaleString('en-US')}**`;
 }
 
 async function buildBoardPayload(guild, prompt = '', requestedPage = 0) {
@@ -885,7 +887,9 @@ async function handleInteraction(interaction, context = {}) {
       await interaction.deferUpdate();
     }
     if (interaction.isButton?.() && !opensModal && !fromBoard && !interaction.deferred && !interaction.replied) await interaction.deferUpdate();
-    if (interaction.isModalSubmit?.() && action === 'modal' && !interaction.deferred && !interaction.replied) await interaction.deferUpdate();
+    if (interaction.isModalSubmit?.() && action === 'modal' && !interaction.deferred && !interaction.replied) {
+      await interaction.deferReply({ ephemeral: true });
+    }
 
     if (action === 'private-top' || action === 'private-top-page') {
       const page = action === 'private-top-page' ? Number(parts[0]) || 0 : 0;

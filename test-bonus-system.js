@@ -80,7 +80,7 @@ async function main() {
   assert.equal(structuredResponse.content, undefined, 'private action responses do not use raw content');
   assert.equal(structuredResponse.embeds[0].data.title, 'Confirmation Required');
   assert.equal(structuredResponse.embeds[0].data.fields.length, 2, 'private responses expose labeled fields');
-  assert.match(bonusCommand.boardCounter({ groups: 3, points: 725 }), /3 Groups\s+•\s+725 Points/);
+  assert.match(bonusCommand.boardCounter({ groups: 3, points: 725 }), /Total Groups\s*:\s*3\s+•\s+Total Points\s*:\s*725/);
   const fakeClient = new EventEmitter();
   fakeClient.guilds = { cache: new Map() };
   bonusCommand.registerInteractionHandler(fakeClient);
