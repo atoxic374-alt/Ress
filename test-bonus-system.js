@@ -64,6 +64,8 @@ async function main() {
     'previous page navigation is available');
   const settingsEmbed = bonusCommand.buildHomeEmbed({ name: 'Test Guild' }, {}, [], {}, false);
   assert.equal(settingsEmbed.data.color, Number.parseInt(colorManager.getColor().replace('#', ''), 16), 'bonus embed uses the shared bot-avatar color');
+  const settingsWithAudit = bonusCommand.buildHomeEmbed({ name: 'Test Guild' }, { auditChannelId: 'audit-123' }, [], {}, false);
+  assert.match(settingsWithAudit.data.description, /Audit Channel :\*\* <#audit-123>/, 'settings embed shows the configured audit channel');
   assert.deepEqual(bonusCommand.buildHomeRows().map(row => row.components.map(component => component.data.label)), [
     ['Managers', 'Rules', 'Board Channel', 'Audit Channel', 'Board Color'],
     ['Add Group', 'Manage Groups', 'Reset', 'Double Bonus', 'Publish / Update'],
@@ -75,6 +77,7 @@ async function main() {
     'public board exposes a protected settings entry point');
   const ownerAvatarResult = bonusCommand.buildOwnerAvatarResult('Avatar updated.', true);
   assert.deepEqual(ownerAvatarResult.components, [], 'owner avatar results contain no buttons');
+  assert.deepEqual(bonusCommand.buildActionResult('Double Bonus Updated', 'Done').components, [], 'double results do not reopen settings');
   const structuredResponse = bonusCommand.structurePrivateResponse({
     content: 'تأكيد إزالة النقاط\nالإجمالي الحالي: 100\nبعد الإزالة: 50',
     components: []

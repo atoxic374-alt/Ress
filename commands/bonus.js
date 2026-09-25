@@ -749,6 +749,13 @@ function buildOwnerAvatarResult(message, success = false) {
   };
 }
 
+function buildActionResult(title, message) {
+  return {
+    embeds: [colorManager.createEmbed().setTitle(title).setDescription(message)],
+    components: []
+  };
+}
+
 async function publishBoard(guild, actorId) {
   const db = getManager();
   const config = await db.readConfig(guild.id);
@@ -1124,7 +1131,9 @@ async function handleInteraction(interaction, context = {}) {
         await showPrivatePanel(interaction, { content: 'The audit channel must be a text channel.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'Back'))] }, true);
         return true;
       }
+      await primeAuditCursor(interaction.guild);
       await db.saveConfig(interaction.guild.id, { auditChannelId: channel.id }, interaction.user.id);
+      await publishAuditLogs(interaction.guild).catch(error => console.error('[bonus] immediate audit publish failed:', error));
       await showPrivatePanel(interaction, { embeds: [colorManager.createEmbed().setTitle('Audit Channel Updated').setDescription(`Logs will be organized in <#${channel.id}>.`)], components: [new ActionRowBuilder().addComponents(button('bonus:home', 'Back'))] }, true);
       return true;
     }
@@ -1528,7 +1537,8 @@ async function handleInteraction(interaction, context = {}) {
       const existing = await getDatabase().get(`SELECT id FROM bonus_multipliers WHERE guild_id = ? AND scope = 'user' AND group_id = ? AND user_id = ? AND active = 1 AND (ends_at IS NULL OR ends_at > ?)`, [interaction.guild.id, groupId, userId, Date.now()]);
       if (existing) {
         await db.clearMultiplier(interaction.guild.id, { scope: 'user', groupId, userId }, interaction.user.id);
-        await showPrivatePanel(interaction, await buildReturnPayload(interaction, `تم إيقاف الدبل عن <@${userId}>.`), true);
+        await publishAuditLogs(interaction.guild).catch(() => {});
+        await showPrivatePanel(interaction, buildActionResult('Double Bonus Updated', `تم إيقاف الدبل عن <@${userId}>.`), true);
       } else {
         await showPrivatePanel(interaction, { content: `اختر مدة دبل ×2 للعضو <@${userId}> داخل <@&${group.role_id}>:`, components: [durationButtons('user', groupId, userId), new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
       }
@@ -1584,7 +1594,8 @@ async function handleInteraction(interaction, context = {}) {
         ? `القروب المرتبط بالرول <@&${(await getDatabase().get('SELECT role_id FROM bonus_groups WHERE guild_id = ? AND id = ?', [interaction.guild.id, groupId]))?.role_id}>`
         : `<@${userId}>`;
       const expiry = result.endsAt ? ` حتى <t:${Math.floor(result.endsAt / 1000)}:R>` : ' حتى إيقافه يدويًا';
-      await showPrivatePanel(interaction, { content: `تم تفعيل دبل ×2 على ${target}${expiry}.`, components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع للإعدادات'))] }, true);
+      await publishAuditLogs(interaction.guild).catch(() => {});
+      await showPrivatePanel(interaction, buildActionResult('Double Bonus Updated', `تم تفعيل دبل ×2 على ${target}${expiry}.`), true);
       return true;
     }
 
@@ -1593,7 +1604,8 @@ async function handleInteraction(interaction, context = {}) {
       const groupId = Number(rawGroupId);
       if (scope === 'group') await db.clearMultiplier(interaction.guild.id, { scope: 'group', groupId }, interaction.user.id);
       scheduleRefresh(interaction.guild, true);
-      await showPrivatePanel(interaction, await buildReturnPayload(interaction, 'تم إيقاف دبل القروب. سجل الدبل الفردي محفوظ ويمكنك اختيار العضو نفسه لإيقافه يدويًا.'), true);
+      await publishAuditLogs(interaction.guild).catch(() => {});
+      await showPrivatePanel(interaction, buildActionResult('Double Bonus Updated', 'تم إيقاف دبل القروب. سجل الدبل الفردي محفوظ ويمكنك اختيار العضو نفسه لإيقافه يدويًا.'), true);
       return true;
     }
 
@@ -2184,6 +2196,14 @@ async function settleVoiceBeforeReset(guild, groupId, userId = null) {
   }
 }
 
+async function primeAuditCursor(guild) {
+  if (!guild) return;
+  const cursorKey = String(guild.id);
+  if (auditPublishCursor.has(cursorKey)) return;
+  const latest = await getDatabase().get('SELECT COALESCE(MAX(id), 0) AS id FROM bonus_audit_log WHERE guild_id = ?', [cursorKey]).catch(() => null);
+  auditPublishCursor.set(cursorKey, Number(latest?.id) || 0);
+}
+
 async function publishAuditLogs(guild, initialize = false) {
   if (!guild) return;
   const database = getDatabase();
@@ -2210,7 +2230,8 @@ async function publishAuditLogs(guild, initialize = false) {
         { name: 'Groups', value: `Source : ${row.source_group_id ?? '—'}\nTarget : ${row.target_group_id ?? '—'}`, inline: true },
         { name: 'Details', value: `\`\`\`${JSON.stringify(details).slice(0, 900)}\`\`\`` }
       ).setTimestamp(Number(row.created_at) || Date.now());
-    await channel.send({ embeds: [embed] }).catch(() => {});
+    const sent = await channel.send({ embeds: [embed] }).then(() => true).catch(() => false);
+    if (!sent) break;
     lastId = Number(row.id) || lastId;
   }
   if (rows.length) auditPublishCursor.set(cursorKey, lastId);
@@ -2275,4 +2296,4 @@ function registerInteractionHandler(client) {
   });
 }
 
-module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicRows, boardCounter, buildHomeEmbed, buildGroupSelect, buildOwnerAvatarResult, isEligibleVoiceState, resolveCurrentGroupForMember, validateAvatarUrl, structurePrivateResponse };
+module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicRows, boardCounter, buildHomeEmbed, buildGroupSelect, buildOwnerAvatarResult, buildActionResult, isEligibleVoiceState, resolveCurrentGroupForMember, validateAvatarUrl, structurePrivateResponse };
