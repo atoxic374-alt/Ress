@@ -545,7 +545,11 @@ class DatabaseManager {
                 details_json TEXT NOT NULL DEFAULT '{}',
                 created_at INTEGER NOT NULL
             )`,
-            `CREATE INDEX IF NOT EXISTS idx_bonus_audit_guild_time ON bonus_audit_log(guild_id, created_at DESC)`
+            `CREATE INDEX IF NOT EXISTS idx_bonus_audit_guild_time ON bonus_audit_log(guild_id, created_at DESC)`,
+            `CREATE TABLE IF NOT EXISTS bonus_migrations (
+                migration_key TEXT PRIMARY KEY,
+                applied_at INTEGER NOT NULL
+            )`
         ];
 
         for (const sql of tables) {
@@ -556,6 +560,26 @@ class DatabaseManager {
             await this.run('ALTER TABLE bonus_rules ADD COLUMN activated_at INTEGER NOT NULL DEFAULT 0');
         }
         await this.run('UPDATE bonus_rules SET activated_at = updated_at WHERE activated_at = 0');
+        const migrationKey = 'bonus-consistency-v1';
+        const migration = await this.get('SELECT migration_key FROM bonus_migrations WHERE migration_key = ?', [migrationKey]);
+        if (!migration) {
+            const now = Date.now();
+            await this.run(`
+              UPDATE bonus_balances SET points = 0, message_progress = 0, voice_progress_ms = 0,
+                last_message_id = NULL, last_message_at = NULL, group_id = NULL, updated_at = ?
+              WHERE group_id IS NULL OR group_id NOT IN (
+                SELECT id FROM bonus_groups WHERE archived_at IS NULL
+              )
+            `, [now]);
+            await this.run(`
+              DELETE FROM bonus_voice_sessions
+              WHERE last_checkpoint_at < ? OR NOT EXISTS (
+                SELECT 1 FROM bonus_groups g
+                WHERE g.guild_id = bonus_voice_sessions.guild_id AND g.archived_at IS NULL
+              )
+            `, [now - 24 * 60 * 60 * 1000]);
+            await this.run('INSERT OR IGNORE INTO bonus_migrations (migration_key, applied_at) VALUES (?, ?)', [migrationKey, now]);
+        }
     }
 
     // إضافة وظائف الدعوات

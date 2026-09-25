@@ -28,6 +28,9 @@ const boardRefreshLocks = new Map();
 const boardRefreshQueued = new Map();
 const boardPermissionBackoff = new Map();
 const ownerAvatarCooldowns = new Map();
+const boardPageState = new Map();
+const auditFilterState = new Map();
+const memberOperationLocks = new Map();
 const DISPLAY_CACHE_TTL_MS = 60 * 1000;
 const DISPLAY_MEMBER_BATCH_SIZE = 100;
 const OWNER_AVATAR_COOLDOWN_MS = 10 * 60 * 1000;
@@ -41,6 +44,20 @@ let boardRefreshInterval = null;
 let lastEventPruneAt = 0;
 let roleHistoryCache = { mtime: 0, value: {} };
 let lastVoiceCleanupAt = 0;
+
+async function withMemberLock(guildId, userId, operation) {
+  const key = `${String(guildId)}:${String(userId)}`;
+  const previous = memberOperationLocks.get(key) || Promise.resolve();
+  let release;
+  const current = new Promise(resolve => { release = resolve; });
+  memberOperationLocks.set(key, current);
+  await previous.catch(() => {});
+  try { return await operation(); }
+  finally {
+    release();
+    if (memberOperationLocks.get(key) === current) memberOperationLocks.delete(key);
+  }
+}
 
 function getManager() {
   if (!manager) {
@@ -84,6 +101,10 @@ async function verifyAvatarUrl(value) {
   try {
     const response = await fetch(checked.url, { method: 'HEAD', redirect: 'manual', signal: controller.signal });
     if (!response.ok && !(response.status >= 300 && response.status < 400)) return { valid: false, reason: 'unreachable' };
+    const type = String(response.headers.get('content-type') || '').toLowerCase();
+    const length = Number(response.headers.get('content-length') || 0);
+    if (type && !type.startsWith('image/')) return { valid: false, reason: 'content-type' };
+    if (length > 5 * 1024 * 1024) return { valid: false, reason: 'size' };
     return checked;
   } catch {
     return { valid: false, reason: 'unreachable' };
@@ -100,6 +121,7 @@ function cleanupBonusCaches(now = Date.now()) {
   for (const [key, value] of boardPermissionBackoff) if (Number(value || 0) <= now) boardPermissionBackoff.delete(key);
   for (const [key, value] of lastRenderAt) if (now - Number(value || 0) > 15 * 60 * 1000) lastRenderAt.delete(key);
   for (const [key, value] of activeBoardPanels) if (Number(value || 0) <= now) activeBoardPanels.delete(key);
+  if (auditFilterState.size > 500) auditFilterState.clear();
 }
 
 function readRoleHistory(guildId, userId) {
@@ -242,6 +264,7 @@ function buildHomeRows() {
       button('bonus:rules', 'قواعد النقاط'),
       button('bonus:channel', 'روم التوب'),
       button('bonus:color', 'لون الصورة'),
+      button('bonus:audit', 'سجل التدقيق'),
       button('bonus:publish', 'نشر / تحديث', ButtonStyle.Success)
     ),
     new ActionRowBuilder().addComponents(
@@ -259,6 +282,26 @@ async function buildHome(guild) {
     db.readConfig(guild.id), db.listGroups(guild.id), db.getRules(guild.id), db.isReady(guild.id)
   ]);
   return { embeds: [buildHomeEmbed(guild, config, groups, rules, ready)], components: buildHomeRows() };
+}
+
+async function buildAuditPayload(guild, page = 0) {
+  const filter = auditFilterState.get(String(guild.id)) || {};
+  const result = await getManager().listAuditLog(guild.id, { page, limit: 10, ...filter });
+  const lines = result.rows.length ? result.rows.map((row, index) => {
+    let details = {};
+    try { details = JSON.parse(row.details_json || '{}'); } catch { details = {}; }
+    const before = details.before ? ` | قبل: ${JSON.stringify(details.before).slice(0, 180)}` : '';
+    const after = details.after ? ` | بعد: ${JSON.stringify(details.after).slice(0, 180)}` : '';
+    return `**${result.page * result.limit + index + 1}. ${safeName(row.action, 50)}**\nالمنفذ: ${row.actor_id ? `<@${row.actor_id}>` : 'النظام'}${row.target_user_id ? ` | العضو: <@${row.target_user_id}>` : ''}${before}${after}`;
+  }).join('\n\n') : 'لا توجد عمليات مسجلة.';
+  const pageCount = Math.max(1, Math.ceil(result.total / result.limit));
+  const nav = [];
+  if (result.page > 0) nav.push(button(`bonus:audit-page:${result.page - 1}`, 'السابق'));
+  if (result.page + 1 < pageCount) nav.push(button(`bonus:audit-page:${result.page + 1}`, 'التالي'));
+  const rows = [];
+  if (nav.length) rows.push(new ActionRowBuilder().addComponents(nav));
+  rows.push(new ActionRowBuilder().addComponents(button('bonus:audit-filter', 'فلترة'), button('bonus:home', 'رجوع')));
+  return { content: `## سجل تدقيق البونس (صفحة ${result.page + 1}/${pageCount})\n\n${lines}`, components: rows };
 }
 
 async function showPrivatePanel(interaction, payload, update = false) {
@@ -449,7 +492,7 @@ async function refreshBoardNow(guild, force = false) {
     return null;
   });
   if (!boardMessage) return;
-  const payload = await buildBoardPayload(guild);
+  const payload = await buildBoardPayload(guild, '', boardPageState.get(String(guild.id)) || 0);
   if (preservePanel) {
     const currentCounter = String(boardMessage.content || '').match(/^\*\*[^\n]*Groups\s+•\s+[^\n]*Points\*\*/)?.[0];
     const newCounter = String(payload.content || '').match(/^\*\*[^\n]*Groups\s+•\s+[^\n]*Points\*\*/)?.[0];
@@ -489,14 +532,19 @@ async function maybeRefreshBoard(guild, force = false) {
   }
 }
 
-function buildPublicRows() {
-  return [new ActionRowBuilder().addComponents(
+function buildPublicRows(page = 0, pageCount = 1) {
+  const rows = [new ActionRowBuilder().addComponents(
     button('bonus:add-group', 'إضافة قروب', ButtonStyle.Success),
     button('bonus:remove-group', 'إزالة قروب', ButtonStyle.Danger),
     button('bonus:add-points', 'إعطاء نقاط'),
     button('bonus:remove-points', 'إزالة نقاط', ButtonStyle.Danger),
     button('bonus:double', 'دبل بونس')
   ), new ActionRowBuilder().addComponents(button('bonus:owner-avatar', 'تغيير أفتار قروبي'))];
+  const navigation = [];
+  if (page > 0) navigation.push(button(`bonus:top-page:${page - 1}`, 'السابق'));
+  if (page + 1 < pageCount) navigation.push(button(`bonus:top-page:${page + 1}`, 'التالي'));
+  if (navigation.length) rows.push(new ActionRowBuilder().addComponents(navigation));
+  return rows;
 }
 
 function boardCounter(summary) {
@@ -505,19 +553,23 @@ function boardCounter(summary) {
   return `**${groups.toLocaleString('en-US')} Groups  •  ${points.toLocaleString('en-US')} Points**`;
 }
 
-async function buildBoardPayload(guild, prompt = '') {
+async function buildBoardPayload(guild, prompt = '', requestedPage = 0) {
   const db = getManager();
   const config = await db.readConfig(guild.id);
-  const [summary, leaderboard] = await Promise.all([
-    db.getLeaderboardSummary(guild.id), db.getLeaderboard(guild.id, 10)
+  const [summary, totalGroups] = await Promise.all([
+    db.getLeaderboardSummary(guild.id), db.listGroups(guild.id, false)
   ]);
+  const pageCount = Math.max(1, Math.ceil(totalGroups.length / 10));
+  const page = Math.max(0, Math.min(pageCount - 1, Number(requestedPage) || 0));
+  boardPageState.set(String(guild.id), page);
+  const leaderboard = await db.getLeaderboard(guild.id, 10, page * 10);
   const groups = await getGroupsForDisplay(guild, leaderboard);
   groups.forEach((group, index) => {
     if (!group.role_name || group.role_name === 'رول محذوف') group.role_name = `قروب ${index + 1}`;
     if (!group.owner_name || group.owner_name === 'مالك غير موجود') group.owner_name = 'مالك غير محدد';
   });
   const attachment = await buildBonusTopImage({ guild, groups, config, updatedAt: Date.now() });
-  return { content: [boardCounter(summary), prompt].filter(Boolean).join('\n'), files: [attachment], attachments: [], components: buildPublicRows() };
+  return { content: [boardCounter(summary), prompt].filter(Boolean).join('\n'), files: [attachment], attachments: [], components: buildPublicRows(page, pageCount) };
 }
 
 function isBonusBoardMessage(message) {
@@ -669,7 +721,7 @@ async function handleInteraction(interaction, context = {}) {
     if (interaction.isAnySelectMenu?.() && !manualPointsSelection && !interaction.deferred && !interaction.replied) {
       await interaction.deferUpdate();
     }
-    const opensModal = action === 'color-manual' || action === 'rule' || (action === 'group-action' && parts[0] === 'avatar');
+    const opensModal = action === 'color-manual' || action === 'rule' || action === 'audit-filter' || (action === 'group-action' && parts[0] === 'avatar');
     if (interaction.isButton?.() && !opensModal && !interaction.deferred && !interaction.replied) await interaction.deferUpdate();
     if (interaction.isModalSubmit?.() && action === 'modal' && !interaction.deferred && !interaction.replied) await interaction.deferUpdate();
 
@@ -683,6 +735,29 @@ async function handleInteraction(interaction, context = {}) {
         if (!await requireManager(interaction, context)) return true;
         await refreshEphemeralHome(interaction);
       }
+      return true;
+    }
+
+    if (action === 'top-page') {
+      const page = Math.max(0, Number(parts[0]) || 0);
+      const payload = await buildBoardPayload(interaction.guild, '', page);
+      await interaction.editReply(payload);
+      return true;
+    }
+
+    if (action === 'audit-filter') {
+      await interaction.showModal(modal('bonus:modal:audit-filter', 'فلترة سجل التدقيق', [
+        { id: 'action', label: 'نوع العملية (اختياري)', required: false, maxLength: 50, placeholder: 'member_transfer' },
+        { id: 'user', label: 'معرف العضو (اختياري)', required: false, maxLength: 30 },
+        { id: 'group', label: 'معرف القروب (اختياري)', required: false, maxLength: 20 }
+      ]));
+      return true;
+    }
+
+    if (action === 'audit' || action === 'audit-page') {
+      if (!await requireManager(interaction, context)) return true;
+      const page = action === 'audit-page' ? Number(parts[0]) || 0 : 0;
+      await showPrivatePanel(interaction, await buildAuditPayload(interaction.guild, page), true);
       return true;
     }
 
@@ -1369,6 +1444,23 @@ async function handleInteraction(interaction, context = {}) {
         scheduleRefresh(interaction.guild, true);
         return true;
       }
+      if (modalAction === 'audit-filter') {
+        if (!await requireManager(interaction, context)) return true;
+        const actionFilter = collectModalValue(interaction, 'action');
+        const userFilter = collectModalValue(interaction, 'user');
+        const groupValue = collectModalValue(interaction, 'group');
+        if (groupValue && !/^\d+$/.test(groupValue)) {
+          await showPrivatePanel(interaction, await buildReturnPayload(interaction, 'معرف القروب يجب أن يكون رقماً.'), true);
+          return true;
+        }
+        auditFilterState.set(String(interaction.guild.id), {
+          ...(actionFilter ? { action: actionFilter } : {}),
+          ...(userFilter ? { userId: userFilter } : {}),
+          ...(groupValue ? { groupId: Number(groupValue) } : {})
+        });
+        await showPrivatePanel(interaction, await buildAuditPayload(interaction.guild, 0), true);
+        return true;
+      }
       if (modalAction === 'group-search') {
         const searchAction = parts[1];
         const query = collectModalValue(interaction, 'query').trim().toLowerCase();
@@ -1523,19 +1615,21 @@ async function recordActivity(guild, member, metric, amount, eventId, voiceSessi
   try { db = getDatabase(); } catch { return { ignored: true }; }
   if (!db?.isInitialized || db.isDegraded) return { ignored: true, degraded: true };
   try {
-    const roleGrantHistory = await readRoleHistoryForMember(guild, member);
-    const result = await getManager().addActivity({
-      guildId: guild.id,
-      userId: member.id,
-      metric,
-      amount,
-      eventId,
-      roleIds: roleIdsOverride || getRoleIds(member),
-      roleGrantHistory,
-      voiceSession
+    return await withMemberLock(guild.id, member.id, async () => {
+      const roleGrantHistory = await readRoleHistoryForMember(guild, member);
+      const result = await getManager().addActivity({
+        guildId: guild.id,
+        userId: member.id,
+        metric,
+        amount,
+        eventId,
+        roleIds: roleIdsOverride || getRoleIds(member),
+        roleGrantHistory,
+        voiceSession
+      });
+      if (result.awardedPoints > 0) scheduleRefresh(guild, false);
+      return result;
     });
-    if (result.awardedPoints > 0) scheduleRefresh(guild, false);
-    return result;
   } catch (error) {
     console.error('[bonus] activity recording failed:', error);
     return { error: true };
@@ -1685,6 +1779,9 @@ async function restoreVoiceSessions(client) {
     if (!await isBonusVoiceTrackingEnabled(guild.id)) continue;
     for (const state of guild.voiceStates.cache.values()) {
       if (!isEligibleVoiceState(state)) continue;
+      const roleHistory = await readRoleHistoryForMember(guild, state.member);
+      const targetGroup = await getManager().resolveTargetGroup(guild.id, state.member.id, getRoleIds(state.member), roleHistory);
+      if (targetGroup == null) continue;
       const key = voiceKey(guild.id, state.member.id);
       activeKeys.add(key);
       if (!voiceSessions.has(key)) {
@@ -1705,7 +1802,7 @@ async function restoreVoiceSessions(client) {
   }
 }
 
-async function handleMemberRoleUpdate(oldMember, newMember) {
+async function handleMemberRoleUpdateUnsafe(oldMember, newMember) {
   if (!newMember?.guild || newMember.user?.bot) return;
   const key = voiceKey(newMember.guild.id, newMember.id);
   roleAuditCache.delete(idKey(newMember.guild.id, newMember.id));
@@ -1750,7 +1847,12 @@ async function handleMemberRoleUpdate(oldMember, newMember) {
   scheduleRefresh(newMember.guild, false);
 }
 
-async function handleMemberLeave(member) {
+async function handleMemberRoleUpdate(oldMember, newMember) {
+  if (!newMember?.guild || !newMember.id) return;
+  return withMemberLock(newMember.guild.id, newMember.id, () => handleMemberRoleUpdateUnsafe(oldMember, newMember));
+}
+
+async function handleMemberLeaveUnsafe(member) {
   if (!member?.guild || member.user?.bot) return;
   const key = voiceKey(member.guild.id, member.id);
   const session = voiceSessions.get(key);
@@ -1767,6 +1869,11 @@ async function handleMemberLeave(member) {
     voiceSessions.delete(key);
     await removeSavedVoiceSession(member.guild.id, member.id).catch(() => {});
   }
+}
+
+async function handleMemberLeave(member) {
+  if (!member?.guild || !member.id) return;
+  return withMemberLock(member.guild.id, member.id, () => handleMemberLeaveUnsafe(member));
 }
 
 async function handleRoleDelete(role) {

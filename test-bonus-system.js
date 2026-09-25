@@ -35,6 +35,8 @@ async function main() {
   assert.equal(bonusCommand.validateAvatarUrl('http://example.com/avatar.png').valid, false);
   assert.equal(bonusCommand.validateAvatarUrl('https://example.com/avatar.png').valid, false);
   assert.equal(bonusCommand.validateAvatarUrl('https://cdn.discordapp.com/icons/example.exe').valid, false);
+  const topRows = bonusCommand.buildPublicRows(1, 3);
+  assert.equal(topRows.at(-1).components[0].data.custom_id, 'bonus:top-page:0', 'top navigation is a message component outside the PNG');
   assert.deepEqual(bonusCommand.parseBonusCustomId('bonus:select:add-role'), {
     prefix: 'bonus', action: 'select', parts: ['add-role']
   });
@@ -62,7 +64,7 @@ async function main() {
   const settingsEmbed = bonusCommand.buildHomeEmbed({ name: 'Test Guild' }, {}, [], {}, false);
   assert.equal(settingsEmbed.data.color, Number.parseInt(colorManager.getColor().replace('#', ''), 16), 'bonus embed uses the shared bot-avatar color');
   assert.deepEqual(bonusCommand.buildHomeRows().map(row => row.components.map(component => component.data.label)), [
-    ['المسؤولون', 'قواعد النقاط', 'روم التوب', 'لون الصورة', 'نشر / تحديث'],
+    ['المسؤولون', 'قواعد النقاط', 'روم التوب', 'لون الصورة', 'سجل التدقيق', 'نشر / تحديث'],
     ['إضافة قروب', 'إدارة القروبات', 'تصفير', 'دبل بونس']
   ]);
   assert.deepEqual(bonusCommand.buildPublicRows()[0].components.map(component => component.data.label),
@@ -399,6 +401,10 @@ async function main() {
     const stressBalance = await bonus.getBalance(stressGuild, 'stress-user');
     assert.equal(Number(stressBalance.points), 40, 'concurrent events are counted exactly once under load');
     assert.equal(Number(stressBalance.message_progress), 0);
+    const auditPage = await bonus.listAuditLog(guildId, { page: 0, limit: 5, action: 'member_transfer' });
+    assert.ok(Array.isArray(auditPage.rows) && auditPage.rows.length > 0, 'audit log supports paginated filtered reads');
+    const migrationRow = await db.get('SELECT migration_key FROM bonus_migrations WHERE migration_key = ?', ['bonus-consistency-v1']);
+    assert.ok(migrationRow, 'bonus consistency migration is recorded idempotently');
 
     const fakeGuild = {
       name: 'Test Server',

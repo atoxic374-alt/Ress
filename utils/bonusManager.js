@@ -78,6 +78,21 @@ function createBonusManager(dbManager) {
     await insertAudit(dbManager, guildId, actorId, action, targetUserId, sourceGroupId, targetGroupId, details);
   }
 
+  async function listAuditLog(guildId, { page = 0, limit = 10, action = null, userId = null, groupId = null } = {}) {
+    const safeLimit = Math.max(1, Math.min(25, Number(limit) || 10));
+    const safePage = Math.max(0, Number(page) || 0);
+    const filters = ['guild_id = ?'];
+    const params = [String(guildId)];
+    if (action) { filters.push('action = ?'); params.push(String(action)); }
+    if (userId) { filters.push('target_user_id = ?'); params.push(String(userId)); }
+    if (groupId != null) { filters.push('(source_group_id = ? OR target_group_id = ?)'); params.push(Number(groupId), Number(groupId)); }
+    const where = filters.join(' AND ');
+    const total = await dbManager.get(`SELECT COUNT(*) AS count FROM bonus_audit_log WHERE ${where}`, params);
+    const rows = await dbManager.all(`SELECT * FROM bonus_audit_log WHERE ${where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
+      [...params, safeLimit, safePage * safeLimit]);
+    return { rows, total: Number(total?.count) || 0, page: safePage, limit: safeLimit };
+  }
+
   async function listGroups(guildId, includeArchived = false) {
     const sql = includeArchived
       ? 'SELECT * FROM bonus_groups WHERE guild_id = ? ORDER BY created_at ASC, id ASC'
@@ -673,7 +688,7 @@ function createBonusManager(dbManager) {
     }, 'bonus-archive-group');
   }
 
-  async function getLeaderboard(guildId, limit = 10) {
+  async function getLeaderboard(guildId, limit = 10, offset = 0) {
     return dbManager.all(`
       SELECT g.id, g.role_id, g.owner_id, g.avatar_url, g.created_at,
         COALESCE(SUM(b.points), 0) + COALESCE(MAX(gp.points), 0) + COALESCE(MAX(ga.points), 0) AS points,
@@ -686,8 +701,8 @@ function createBonusManager(dbManager) {
       WHERE g.guild_id = ? AND g.archived_at IS NULL
       GROUP BY g.id
       ORDER BY points DESC, g.created_at ASC, g.id ASC
-      LIMIT ?
-    `, [String(guildId), Math.max(1, Math.min(25, Number(limit) || 10))]);
+      LIMIT ? OFFSET ?
+    `, [String(guildId), Math.max(1, Math.min(25, Number(limit) || 10)), Math.max(0, Number(offset) || 0)]);
   }
 
   async function getLeaderboardSummary(guildId) {
@@ -725,7 +740,7 @@ function createBonusManager(dbManager) {
   }
 
   return {
-    readConfig, saveConfig, audit, listGroups, getRules, setRule, disableRule, addGroup, resolveTargetGroup,
+    readConfig, saveConfig, audit, listAuditLog, listGroups, getRules, setRule, disableRule, addGroup, resolveTargetGroup,
     getRoleGrantHistory, recordRoleChanges, seedRoleGrantHistory,
     syncAssignment, addActivity, setMultiplier, clearMultiplier, listActiveUserMultipliers, getActiveGroupMultiplier,
     adjustGroupPoints, adjustUserPoints, resetGroup, listGroupResetSnapshots, restoreGroupReset, resetUser, updateGroup, archiveGroup,
