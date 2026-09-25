@@ -472,6 +472,38 @@ function createBonusManager(dbManager) {
     }, 'bonus-multiplier-clear');
   }
 
+  async function setMultiplierForMembers(guildId, groupId, userIds, durationMs = null, actorId) {
+    if (!Number.isSafeInteger(Number(groupId)) || Number(groupId) < 1) throw new Error('INVALID_MULTIPLIER_SCOPE');
+    if (durationMs != null && (!Number.isSafeInteger(Number(durationMs)) || Number(durationMs) <= 0)) throw new Error('INVALID_MULTIPLIER_DURATION');
+    const ids = [...new Set((userIds || []).map(String).filter(Boolean))];
+    const now = Date.now();
+    const endsAt = durationMs ? now + Math.max(60000, Math.min(Number(durationMs), 30 * 24 * 60 * 60 * 1000)) : null;
+    return dbManager.transaction(async tx => {
+      const group = await tx.get('SELECT id FROM bonus_groups WHERE guild_id = ? AND id = ? AND archived_at IS NULL', [String(guildId), Number(groupId)]);
+      if (!group) throw new Error('GROUP_NOT_FOUND');
+      for (const userId of ids) {
+        await tx.run(`UPDATE bonus_multipliers SET active = 0 WHERE guild_id = ? AND scope = 'user' AND group_id = ? AND user_id = ? AND active = 1`, [String(guildId), Number(groupId), userId]);
+        await tx.run(`INSERT INTO bonus_multipliers (guild_id, scope, group_id, user_id, starts_at, ends_at, active, changed_by, created_at) VALUES (?, 'user', ?, ?, ?, ?, 1, ?, ?)`,
+          [String(guildId), Number(groupId), userId, now, endsAt, String(actorId), now]);
+      }
+      await tx.run(`INSERT INTO bonus_audit_log (guild_id, actor_id, action, target_group_id, details_json, created_at) VALUES (?, ?, 'double_bonus_on_all', ?, ?, ?)`,
+        [String(guildId), String(actorId), Number(groupId), JSON.stringify({ scope: 'all', count: ids.length, userIds: ids, endsAt }), now]);
+      return { count: ids.length, groupId: Number(groupId), endsAt };
+    }, 'bonus-multiplier-all');
+  }
+
+  async function clearMultiplierForMembers(guildId, groupId, actorId) {
+    if (!Number.isSafeInteger(Number(groupId)) || Number(groupId) < 1) throw new Error('INVALID_MULTIPLIER_SCOPE');
+    return dbManager.transaction(async tx => {
+      const group = await tx.get('SELECT id FROM bonus_groups WHERE guild_id = ? AND id = ? AND archived_at IS NULL', [String(guildId), Number(groupId)]);
+      if (!group) throw new Error('GROUP_NOT_FOUND');
+      const result = await tx.run(`UPDATE bonus_multipliers SET active = 0 WHERE guild_id = ? AND scope = 'user' AND group_id = ? AND active = 1`, [String(guildId), Number(groupId)]);
+      await tx.run(`INSERT INTO bonus_audit_log (guild_id, actor_id, action, target_group_id, details_json, created_at) VALUES (?, ?, 'double_bonus_off_all', ?, ?, ?)`,
+        [String(guildId), actorId ? String(actorId) : null, Number(groupId), JSON.stringify({ scope: 'all', count: result.changes }), Date.now()]);
+      return result.changes;
+    }, 'bonus-multiplier-all-clear');
+  }
+
   async function listActiveUserMultipliers(guildId, groupId) {
     const now = Date.now();
     return dbManager.all(`
@@ -760,7 +792,7 @@ function createBonusManager(dbManager) {
   return {
     readConfig, saveConfig, audit, listAuditLog, listGroups, getRules, setRule, disableRule, addGroup, resolveTargetGroup,
     getRoleGrantHistory, recordRoleChanges, seedRoleGrantHistory,
-    syncAssignment, addActivity, setMultiplier, clearMultiplier, listActiveUserMultipliers, getActiveGroupMultiplier,
+    syncAssignment, addActivity, setMultiplier, clearMultiplier, setMultiplierForMembers, clearMultiplierForMembers, listActiveUserMultipliers, getActiveGroupMultiplier,
     adjustGroupPoints, adjustUserPoints, resetGroup, listGroupResetSnapshots, restoreGroupReset, resetUser, updateGroup, archiveGroup,
     getLeaderboard, getLeaderboardSummary, getGroupPoints, getBalance, isReady
   };

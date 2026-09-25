@@ -270,6 +270,11 @@ async function main() {
     assert.ok(activeGroupDouble, 'group double is queryable for status and manual stop');
     assert.equal(await bonus.clearMultiplier(guildId, { scope: 'user', groupId: Number(groupA.id), userId }, actorId), 1);
     assert.equal((await bonus.listActiveUserMultipliers(guildId, Number(groupA.id))).length, 0, 'manual stop disables but retains the multiplier history');
+    const bulkOn = await bonus.setMultiplierForMembers(guildId, Number(groupA.id), ['bulk-user-a', 'bulk-user-b'], 3600000, actorId);
+    assert.equal(bulkOn.count, 2, 'all-members double enables one multiplier per selected member');
+    assert.equal((await bonus.listActiveUserMultipliers(guildId, Number(groupA.id))).length, 2, 'all-members double is visible in active user multipliers');
+    assert.equal(await bonus.clearMultiplierForMembers(guildId, Number(groupA.id), actorId), 2, 'all-members double disables every active user multiplier');
+    assert.equal((await bonus.listActiveUserMultipliers(guildId, Number(groupA.id))).length, 0, 'all-members double leaves no active user multipliers');
 
     const reset = await bonus.resetUser(guildId, Number(groupA.id), userId, actorId);
     assert.ok(reset.points > 0);

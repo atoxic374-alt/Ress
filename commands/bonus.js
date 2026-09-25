@@ -1493,7 +1493,10 @@ async function handleInteraction(interaction, context = {}) {
         groupDouble
           ? button(`bonus:double-off:group:${groupId}`, 'إيقاف دبل الرول', ButtonStyle.Danger)
           : button(`bonus:double-scope:group:${groupId}`, 'دبل للرول كاملًا', ButtonStyle.Primary),
-        button(`bonus:double-scope:user:${groupId}`, 'إضافة / إزالة دبل شخص')
+        button(`bonus:double-scope:user:${groupId}`, 'إضافة / إزالة دبل شخص'),
+        userDoubles.length
+          ? button(`bonus:double-off:all:${groupId}`, 'إيقاف الدبل عن الكل', ButtonStyle.Danger)
+          : button(`bonus:double-scope:all:${groupId}`, 'تفعيل الدبل للكل', ButtonStyle.Primary)
       ];
       const activePeople = userDoubles.slice(0, 12).map(item => {
         const end = item.ends_at ? ` — ينتهي <t:${Math.floor(Number(item.ends_at) / 1000)}:R>` : ' — إيقاف يدوي';
@@ -1511,10 +1514,11 @@ async function handleInteraction(interaction, context = {}) {
     if (action === 'double-scope') {
       const [scope, rawGroupId] = parts;
       const groupId = Number(rawGroupId);
-      if (scope === 'group') {
+      if (scope === 'group' || scope === 'all') {
         const group = await getDatabase().get('SELECT role_id FROM bonus_groups WHERE guild_id = ? AND id = ?', [interaction.guild.id, groupId]);
         if (!group) return true;
-        await showPrivatePanel(interaction, { content: `اختر مدة دبل ×2 للرول <@&${group.role_id}>:`, components: [durationButtons('group', groupId), new ActionRowBuilder().addComponents(button('bonus:home', 'إلغاء'))] }, true);
+        const target = scope === 'all' ? 'جميع أعضاء الرول' : `الرول <@&${group.role_id}>`;
+        await showPrivatePanel(interaction, { content: `اختر مدة دبل ×2 لـ${target}:`, components: [durationButtons(scope, groupId), new ActionRowBuilder().addComponents(button('bonus:home', 'إلغاء'))] }, true);
       } else {
         const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
         const role = group ? await interaction.guild.roles.fetch(String(group.role_id)).catch(() => null) : null;
@@ -1568,7 +1572,7 @@ async function handleInteraction(interaction, context = {}) {
     if (action === 'double-on') {
       const [scope, rawGroupId, rawUserId, durationToken] = parts;
       const groupId = Number(rawGroupId);
-      if (!['group', 'user'].includes(scope)) return true;
+      if (!['group', 'user', 'all'].includes(scope)) return true;
       const userId = scope === 'user' ? rawUserId : null;
       const durationMs = durationToken === 'forever' ? null : Number(durationToken);
       const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
@@ -1579,6 +1583,14 @@ async function handleInteraction(interaction, context = {}) {
       const role = await interaction.guild.roles.fetch(String(group.role_id)).catch(() => null);
       if (!role) {
         await deny(interaction, 'رول القروب غير موجود في السيرفر حالياً.');
+        return true;
+      }
+      if (scope === 'all') {
+        const members = [...role.members.values()].filter(member => !member.user?.bot);
+        const result = await db.setMultiplierForMembers(interaction.guild.id, groupId, members.map(member => member.id), durationMs, interaction.user.id);
+        scheduleRefresh(interaction.guild, true);
+        await publishAuditLogs(interaction.guild).catch(() => {});
+        await showPrivatePanel(interaction, buildActionResult('Double Bonus Updated', `تم تفعيل الدبل ×2 على ${result.count.toLocaleString()} عضو من أعضاء القروب.`), true);
         return true;
       }
       if (scope === 'user') {
@@ -1603,9 +1615,13 @@ async function handleInteraction(interaction, context = {}) {
       const [scope, rawGroupId] = parts;
       const groupId = Number(rawGroupId);
       if (scope === 'group') await db.clearMultiplier(interaction.guild.id, { scope: 'group', groupId }, interaction.user.id);
+      if (scope === 'all') await db.clearMultiplierForMembers(interaction.guild.id, groupId, interaction.user.id);
       scheduleRefresh(interaction.guild, true);
       await publishAuditLogs(interaction.guild).catch(() => {});
-      await showPrivatePanel(interaction, buildActionResult('Double Bonus Updated', 'تم إيقاف دبل القروب. سجل الدبل الفردي محفوظ ويمكنك اختيار العضو نفسه لإيقافه يدويًا.'), true);
+      const message = scope === 'all'
+        ? 'تم إيقاف الدبل عن جميع الأعضاء الذين كان الدبل الفردي مفعّلًا لهم.'
+        : 'تم إيقاف دبل القروب. سجل الدبل الفردي محفوظ ويمكنك اختيار العضو نفسه لإيقافه يدويًا.';
+      await showPrivatePanel(interaction, buildActionResult('Double Bonus Updated', message), true);
       return true;
     }
 
