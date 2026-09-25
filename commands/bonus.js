@@ -250,6 +250,16 @@ async function requireManager(interaction, context = {}) {
   return true;
 }
 
+function isBonusPublicOrOwnerAction(action, parts = []) {
+  if (['close', 'public-close', 'public-refresh', 'top-page', 'private-top', 'private-top-page', 'my-group'].includes(action)) return true;
+  if (action === 'owner-avatar') return true;
+  if (action === 'page' && parts[0] === 'owner-avatar') return true;
+  if (action === 'select' && parts[0] === 'owner-avatar') return true;
+  if (action === 'group-search' && parts[0] === 'owner-avatar') return true;
+  if (action === 'modal' && (parts[0] === 'owner-avatar' || (parts[0] === 'group-search' && parts[1] === 'owner-avatar'))) return true;
+  return false;
+}
+
 function buildHomeEmbed(guild, config, groups, rules, complete) {
   const globalDouble = config.globalDoubleBonus?.active === true
     && (config.globalDoubleBonus.endsAt == null || Number(config.globalDoubleBonus.endsAt) > Date.now());
@@ -970,6 +980,10 @@ async function handleInteraction(interaction, context = {}) {
       return true;
     }
     await ensureBonusDatabase();
+    // جميع تفاعلات نظام البونس، بما فيها الأزرار والقوائم والمودالات،
+    // مخصصة للمسؤولين المحددين فقط. لا نعتمد على صلاحية الرسالة الأصلية
+    // لأن Discord يسمح لأي عضو بالضغط على مكونات الرسالة العامة.
+    if (!isBonusPublicOrOwnerAction(action, parts) && !await requireManager(interaction, context)) return true;
     if (isBonusBoardMessage(interaction.message)) activeBoardPanels.set(String(interaction.guild.id), Date.now() + 10 * 60 * 1000);
     const manualPointsSelection = action === 'select' && ['add-points', 'remove-points'].includes(parts[0]);
     const fromBoard = isBonusBoardMessage(interaction.message);

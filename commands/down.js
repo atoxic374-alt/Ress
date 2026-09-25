@@ -1403,7 +1403,7 @@ async function handleDownInteractions(interaction, context) {
             const isVerbal = duration === 'شفوي' || duration === 'verbal';
             
             if (isVerbal) {
-                const result = await downManager.createDown(interaction.guild, client, userId, null, duration, reason, interaction.user.id);
+                const result = await downManager.createDown(interaction.guild, client, userId, null, duration, reason, interaction.user.id, BOT_OWNERS);
                 if (result.success) {
                     const successEmbed = colorManager.createEmbed()
                         .setTitle('✅ تم تسجيل تنبيه شفوي')
@@ -1441,7 +1441,7 @@ async function handleDownInteractions(interaction, context) {
                 const results = [];
                 const batchId = Date.now().toString();
                 for (const roleId of roleIds) {
-                    const res = await downManager.createDown(interaction.guild, client, userId, roleId, duration, reason, interaction.user.id);
+                    const res = await downManager.createDown(interaction.guild, client, userId, roleId, duration, reason, interaction.user.id, BOT_OWNERS);
                     if (res.success) {
                         // Mark as batch in activeDowns
                         const activeDownsPath = path.join(__dirname, '..', 'data', 'activeDowns.json');

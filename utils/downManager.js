@@ -216,13 +216,14 @@ class DownManager {
     // Permission Checking
     async hasPermission(interaction, botOwners) {
         const settings = this.getSettings() || {};
-        const userId = interaction?.user?.id;
-        const owners = Array.isArray(botOwners) ? botOwners : [];
+        const userId = String(interaction?.user?.id || '');
+        const owners = Array.isArray(botOwners) ? botOwners.map(String) : [];
+        const guild = interaction?.member?.guild || interaction?.guild;
 
         if (!userId) return false;
 
         // Bot owners always have permission
-        if (owners.includes(userId)) return true;
+        if (owners.includes(userId) || guild?.ownerId === userId) return true;
 
         const allowedUsers = settings.allowedUsers || { type: null, targets: [] };
         const allowedTargets = Array.isArray(allowedUsers.targets) ? allowedUsers.targets : [];
@@ -232,7 +233,7 @@ class DownManager {
 
         switch (allowedUsers.type) {
             case 'owners':
-                return owners.includes(userId);
+                return owners.includes(userId) || guild?.ownerId === userId;
 
             case 'roles': {
                 const roleCache = interaction?.member?.roles?.cache;
@@ -284,7 +285,7 @@ class DownManager {
     }
 
     // Down Operations
-    async createDown(guild, client, targetUserId, roleId, duration, reason, byUserId) {
+    async createDown(guild, client, targetUserId, roleId, duration, reason, byUserId, botOwners = []) {
         try {
             duration = normalizeDuration(duration);
             const isVerbal = duration === 'شفوي' || duration === 'verbal';
@@ -303,9 +304,17 @@ class DownManager {
                 return { success: false, error: 'الرول المحدد ليس من الرولات الإدارية' };
             }
 
+            // المعتمدون يستخدمون نفس استثناء المالك للرولات الحساسة، مع بقاء
+            // فحص صلاحية البوت وهرمية الرول فعالين دائماً.
+            const actorMember = await guild.members.fetch(byUserId).catch(() => null);
+            const actorIsAuthorized = actorMember && await this.hasPermission(
+                { user: { id: byUserId }, member: actorMember },
+                botOwners
+            );
+
             // التحقق من صلاحيات البوت وأمان الرول - تخطي للشفوي
             if (!isVerbal) {
-                const validation = await this.validateBotPermissions(guild, roleId);
+                const validation = await this.validateBotPermissions(guild, roleId, actorIsAuthorized);
                 if (!validation.valid) {
                     return { success: false, error: validation.error };
                 }
@@ -812,16 +821,16 @@ class DownManager {
                 const member = await guild.members.fetch(down.userId).catch(() => null);
                 if (!member) continue;
 
-                if (!member.roles.cache.has(down.roleId)) {
-                    continue;
+                const adminRoleIds = new Set(this.getAdminRoles().map(String));
+                const rolesToRemove = member.roles.cache.filter(role => adminRoleIds.has(String(role.id)));
+                if (!rolesToRemove.size) continue;
+
+                for (const role of rolesToRemove.values()) {
+                    if (this.isBotRestoring(guild.id, member.id, role.id)) continue;
+                    await member.roles.remove(role, 'فحص تكاملي تلقائي: حماية جميع الرولات الإدارية أثناء الداون');
+                    fixedCount++;
+                    console.log(`🔒 Integrity check removed admin role ${role.name} from ${member.displayName}`);
                 }
-
-                const role = await guild.roles.fetch(down.roleId).catch(() => null);
-                if (!role) continue;
-
-                await member.roles.remove(role, 'فحص تكاملي تلقائي لنظام الداون');
-                fixedCount++;
-                console.log(`🔒 Integrity check removed restored role ${role.name} from ${member.displayName}`);
 
                 if (settings.logChannel) {
                     const logChannel = await guild.channels.fetch(settings.logChannel).catch(() => null);
@@ -831,7 +840,7 @@ class DownManager {
                             .setDescription('تم اكتشاف أن العضو استرجع رولاً وهو ما زال تحت داون نشط، وتمت إزالته تلقائياً بواسطة فحص التكامل الدوري.')
                             .addFields([
                                 { name: ' العضو', value: `<@${member.id}>`, inline: true },
-                                { name: ' الرول', value: `<@&${role.id}>`, inline: true },
+                                { name: ' الرولات المحمية', value: rolesToRemove.map(role => `<@&${role.id}>`).join(' , ').slice(0, 1024), inline: true },
                                 { name: ' نوع الفحص', value: 'دوري كل دقيقتين', inline: true },
                                 { name: ' سبب الداون', value: down.reason || 'غير محدد', inline: false },
                                 { name: ' ينتهي الداون', value: down.endTime ? `<t:${Math.floor(down.endTime / 1000)}:R>` : 'نهائي', inline: true }
@@ -979,7 +988,7 @@ class DownManager {
     }
 
     // التحقق من صلاحيات البوت وأمان الرولات (الأصلي - محفوظ)
-    async validateBotPermissions(guild, roleId) {
+    async validateBotPermissions(guild, roleId, allowDangerousRole = false) {
         try {
             const role = await guild.roles.fetch(roleId);
             if (!role) {
@@ -988,8 +997,14 @@ class DownManager {
 
             const botMember = await guild.members.fetch(guild.client.user.id);
 
-            // التحقق من الرولات الخطرة
-            if (this.isDangerousRole(role, guild)) {
+            // @everyone والرولات المُدارة محمية دائماً ولا يمكن سحبها حتى
+            // للمعتمدين؛ الاستثناء يخص فقط الرولات الحساسة ذات الصلاحيات.
+            if (role.id === guild.id || role.managed) {
+                return { valid: false, error: 'لا يمكن سحب هذا الرول - رول حساس' };
+            }
+
+            // المعتمدون يمكنهم سحب الرولات الحساسة ذات الصلاحيات الخطرة.
+            if (!allowDangerousRole && this.isDangerousRole(role, guild)) {
                 return { valid: false, error: 'لا يمكن سحب هذا الرول - رول حساس' };
             }
 

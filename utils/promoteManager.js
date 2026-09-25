@@ -243,20 +243,22 @@ isBotPromotion(guildId, userId, roleId) {
     // Permission Checking
     async hasPermission(interaction, botOwners) {
         const settings = this.getSettings();
-        const userId = interaction.user.id;
+        const userId = String(interaction.user.id);
+        const owners = Array.isArray(botOwners) ? botOwners.map(String) : [];
+        const guild = interaction.member?.guild || interaction.guild;
 
-        // Bot owners always have permission
-        if (botOwners.includes(userId)) return true;
+        // مالك البوت ومالك السيرفر يملكان نفس صلاحيات المالك في هذا النظام.
+        if (owners.includes(userId) || guild?.ownerId === userId) return true;
 
         // Check configured permissions
         if (!settings.allowedUsers.type) return false;
 
         switch (settings.allowedUsers.type) {
             case 'owners':
-                return botOwners.includes(userId);
+                return owners.includes(userId) || guild?.ownerId === userId;
 
             case 'roles':
-                const userRoles = interaction.member.roles.cache.map(role => role.id);
+                const userRoles = interaction.member?.roles?.cache?.map(role => role.id) || [];
                 return settings.allowedUsers.targets.some(roleId => userRoles.includes(roleId));
 
             case 'responsibility':
@@ -265,7 +267,7 @@ isBotPromotion(guildId, userId, roleId) {
 
                 for (const respName of settings.allowedUsers.targets) {
                     const respData = responsibilities[respName];
-                    if (respData && respData.responsibles && respData.responsibles.includes(userId)) {
+                    if (respData && respData.responsibles && respData.responsibles.map(String).includes(userId)) {
                         return true;
                     }
                 }
@@ -309,10 +311,21 @@ isBotPromotion(guildId, userId, roleId) {
 
             // تحسين منطق التحقق: إذا كان الشخص المعين مالك البوت، يُسمح بالترقية بغض النظر عن الهرمية
             const botOwnersData = readJson(getBotConfigPath(), {});
-            const botOwners = botOwnersData.owners || [];
+            const botOwners = Array.isArray(botOwnersData.owners)
+                ? botOwnersData.owners.map(String)
+                : [];
 
-            if (botOwners.includes(promoterUserId)) {
-                // المالكون يمكنهم ترقية أي شخص لأي رول (طالما أن البوت يملك الصلاحية)
+            // استخدم نفس مسار الصلاحيات الذي يستخدمه الأمر نفسه. بهذا يصبح
+            // المعتمد (رول/مسؤولية) مثل المالك في فحص هرمية الرتب، بدلاً من
+            // السماح له بفتح الأمر ثم رفض العملية داخل createPromotion.
+            const promoterIsAuthorized = await this.hasPermission(
+                { user: { id: promoterUserId }, member: promoterMember },
+                botOwners
+            );
+
+            if (promoterIsAuthorized) {
+                // المالك والمعتمدون يمكنهم التعامل مع أي رول إداري، طالما أن
+                // الرول نفسه يقع أسفل أعلى رول للبوت (يُفحص بشكل مستقل).
                 return { valid: true };
             }
 

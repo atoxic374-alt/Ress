@@ -3358,11 +3358,16 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
 
         // 1. حماية نظام الداون
         const activeDowns = downManager.getActiveDowns();
-        const userActiveDowns = Object.values(activeDowns).filter(down => down.userId === userId);
+        const userActiveDowns = Object.values(activeDowns).filter(down =>
+            String(down.userId) === String(userId) && down.status === 'active' &&
+            (!down.endTime || Number(down.endTime) > Date.now())
+        );
+        const adminRoleIds = new Set(getCachedAdminRoles().map(String));
 
         // التحقق من الرولات المضافة حديثاً للداون
         for (const [roleId, role] of addedRoles) {
-            const activeDown = userActiveDowns.find(down => down.roleId === roleId);
+            if (!userActiveDowns.length || !adminRoleIds.has(String(roleId))) continue;
+            const activeDown = userActiveDowns.find(down => String(down.roleId) === String(roleId)) || userActiveDowns[0];
             if (activeDown) {
                 // فحص إذا كان البوت في عملية استعادة الرول (استعادة شرعية)
                 if (downManager.isBotRestoring(newMember.guild.id, userId, roleId)) {
