@@ -214,6 +214,8 @@ async function main() {
       eventId: 'message:test-guild:101', roleIds: ['role-a', 'role-b'], roleGrantHistory: { 'role-a': 200, 'role-b': 100 } });
     assert.equal(result.awardedPoints, 1);
     assert.equal(result.assignedGroupId, Number(groupB.id));
+    assert.equal(await bonus.resolveTargetGroup(guildId, userId, ['role-a', 'role-b'], { 'role-a': 1, 'role-b': 2 }), Number(groupB.id),
+      'holding a second group role cannot move an already-assigned member');
     const oldReplay = await bonus.addActivity({ guildId, userId, metric: BONUS_METRICS.messages, amount: 1,
       eventId: 'message:test-guild:100', roleIds: ['role-a', 'role-b'], roleGrantHistory: { 'role-a': 200, 'role-b': 100 } });
     assert.equal(oldReplay.duplicate, true, 'an older message arriving late cannot replay a point');
@@ -229,6 +231,8 @@ async function main() {
       eventId: `voice:test-guild:test-user:${voiceFirstStart}:${voiceFirstEnd}`, roleIds: ['role-a', 'role-b'], roleGrantHistory: { 'role-a': 200, 'role-b': 100 } });
     assert.equal(duplicateVoice.duplicate, true, 'voice checkpoint retry cannot double-count');
 
+    const beforeTransferLeaderboard = await bonus.getLeaderboard(guildId, 10);
+    const beforeTransferPointsB = Number(beforeTransferLeaderboard.find(row => Number(row.id) === Number(groupB.id)).points);
     await bonus.syncAssignment(guildId, userId, Number(groupA.id), actorId, 'test-transfer');
     let balance = await bonus.getBalance(guildId, userId);
     assert.equal(Number(balance.group_id), Number(groupA.id));
@@ -240,7 +244,29 @@ async function main() {
     const pointsA = Number(leaderboard.find(row => Number(row.id) === Number(groupA.id)).points);
     const pointsB = Number(leaderboard.find(row => Number(row.id) === Number(groupB.id)).points);
     assert.equal(pointsA, 0);
-    assert.equal(pointsB, 0, 'old group has no duplicate balance');
+    assert.equal(pointsB, beforeTransferPointsB, 'old group total is unaffected by member transfer');
+
+    const graceGuild = 'bonus-grace-guild';
+    const graceGroup = await bonus.addGroup(graceGuild, 'grace-role', 'grace-owner', actorId);
+    await db.run(`INSERT INTO bonus_balances
+      (guild_id, user_id, group_id, points, message_progress, voice_progress_ms, updated_at)
+      VALUES (?, ?, ?, 20, 12, 3600000, ?)`, [graceGuild, 'grace-user', Number(graceGroup.id), Date.now()]);
+    assert.equal(await bonus.getGroupPoints(graceGuild, Number(graceGroup.id)), 20);
+    const graceExit = await bonus.syncAssignment(graceGuild, 'grace-user', null, actorId, 'role_removed');
+    assert.ok(graceExit.graceExpiresAt, 'role removal creates a 30-minute grace window');
+    assert.equal(Number((await bonus.getBalance(graceGuild, 'grace-user')).points), 0, 'member-facing points are zero during grace');
+    assert.equal(await bonus.getGroupPoints(graceGuild, Number(graceGroup.id)), 20, 'group total remains unchanged during grace');
+    await bonus.syncAssignment(graceGuild, 'grace-user', Number(graceGroup.id), actorId, 'role_restored');
+    const restoredGraceBalance = await bonus.getBalance(graceGuild, 'grace-user');
+    assert.equal(Number(restoredGraceBalance.points), 20, 'returning within grace restores points');
+    assert.equal(Number(restoredGraceBalance.message_progress), 12);
+    await bonus.syncAssignment(graceGuild, 'grace-user', null, actorId, 'role_removed_again');
+    await db.run('UPDATE bonus_balances SET grace_expires_at = ? WHERE guild_id = ? AND user_id = ?', [Date.now() - 1, graceGuild, 'grace-user']);
+    await bonus.expireGraceBalances();
+    assert.equal(await bonus.getGroupPoints(graceGuild, Number(graceGroup.id)), 20, 'expired member points become permanent group points');
+    const expiredGraceBalance = await bonus.getBalance(graceGuild, 'grace-user');
+    assert.equal(Number(expiredGraceBalance.points), 0, 'expired member balance remains zero');
+    assert.equal(expiredGraceBalance.grace_group_id, null, 'expired grace data is cleared after commitment');
 
     const archivedDoubleGroup = await bonus.addGroup(guildId, 'role-double-archived', 'owner-double', actorId);
     await db.run(`INSERT INTO bonus_balances
@@ -300,16 +326,17 @@ async function main() {
     balance = await bonus.getBalance(guildId, userId);
     assert.equal(Number(balance.points), 0, 'a transfer after a reset cannot resurrect cleared points');
 
+    const groupBBeforeManual = Number(await bonus.getGroupPoints(guildId, Number(groupB.id)));
     const manualAdd = await bonus.adjustGroupPoints(guildId, Number(groupB.id), 15, actorId);
-    assert.deepEqual({ before: manualAdd.before, after: manualAdd.after, delta: manualAdd.delta }, { before: 0, after: 15, delta: 15 });
+    assert.deepEqual({ before: manualAdd.before, after: manualAdd.after, delta: manualAdd.delta }, { before: groupBBeforeManual, after: groupBBeforeManual + 15, delta: 15 });
     const manualRemove = await bonus.adjustGroupPoints(guildId, Number(groupB.id), -6, actorId);
-    assert.deepEqual({ before: manualRemove.before, after: manualRemove.after, delta: manualRemove.delta }, { before: 15, after: 9, delta: -6 });
+    assert.deepEqual({ before: manualRemove.before, after: manualRemove.after, delta: manualRemove.delta }, { before: groupBBeforeManual + 15, after: groupBBeforeManual + 9, delta: -6 });
     let groupBTop = await bonus.getLeaderboard(guildId, 10);
-    assert.equal(Number(groupBTop.find(row => Number(row.id) === Number(groupB.id)).points), 9,
+    assert.equal(Number(groupBTop.find(row => Number(row.id) === Number(groupB.id)).points), groupBBeforeManual + 9,
       'manual group points contribute to the leaderboard separately from member balances');
     const cappedManualRemove = await bonus.adjustGroupPoints(guildId, Number(groupB.id), -10, actorId);
     assert.equal(cappedManualRemove.after, 0, 'manual deductions cannot take the administrative ledger below zero');
-    assert.equal(cappedManualRemove.delta, -9, 'oversized deductions are capped to available manual points');
+    assert.equal(cappedManualRemove.delta, -(groupBBeforeManual + 9), 'oversized deductions are capped to available group points');
     await bonus.adjustGroupPoints(guildId, Number(groupB.id), 9, actorId);
 
     await bonus.archiveGroup(guildId, Number(groupB.id), actorId);
@@ -320,7 +347,7 @@ async function main() {
     groupBTop = await bonus.getLeaderboard(guildId, 10);
     assert.equal(Number(groupBTop.find(row => Number(row.id) === Number(groupB.id)).points), 9, 'archiving and reactivation retain the manual group ledger');
     const resetGroup = await bonus.resetGroup(guildId, Number(groupB.id), actorId);
-    assert.equal(resetGroup.manualPoints, 24, 'reset snapshot preserves the separate add-points ledger');
+    assert.equal(resetGroup.manualPoints, 24 + groupBBeforeManual, 'reset snapshot preserves the group point ledger');
     groupBTop = await bonus.getLeaderboard(guildId, 10);
     assert.equal(Number(groupBTop.find(row => Number(row.id) === Number(groupB.id)).points), 0, 'group reset also clears manual points');
     await bonus.setGlobalMultiplier(guildId, null, actorId);

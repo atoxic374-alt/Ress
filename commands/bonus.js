@@ -2235,6 +2235,11 @@ async function handleMemberRoleUpdate(oldMember, newMember) {
   return withMemberLock(newMember.guild.id, newMember.id, () => handleMemberRoleUpdateUnsafe(oldMember, newMember));
 }
 
+async function handleMemberJoin(member) {
+  if (!member?.guild || !member.id) return;
+  return withMemberLock(member.guild.id, member.id, () => handleMemberRoleUpdateUnsafe(null, member));
+}
+
 async function handleMemberLeaveUnsafe(member) {
   if (!member?.guild || member.user?.bot) return;
   const key = voiceKey(member.guild.id, member.id);
@@ -2381,6 +2386,7 @@ function registerInteractionHandler(client) {
     if (!voiceInterval) {
       voiceInterval = setInterval(async () => {
         const now = Date.now();
+        await getManager().expireGraceBalances(now).catch(error => console.error('[bonus] grace expiry failed:', error));
         if (now - lastCacheCleanupAt >= 5 * 60 * 1000) {
           lastCacheCleanupAt = now;
           cleanupBonusCaches(now);
@@ -2407,4 +2413,4 @@ function registerInteractionHandler(client) {
   });
 }
 
-module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicSettingsRows, buildPublicRows, boardCounter, buildHomeEmbed, buildGroupSelect, buildOwnerAvatarResult, buildActionResult, closeButton, safeJsonParse, isModalOpeningAction, isEligibleVoiceState, resolveCurrentGroupForMember, validateAvatarUrl, structurePrivateResponse };
+module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberJoin, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicSettingsRows, buildPublicRows, boardCounter, buildHomeEmbed, buildGroupSelect, buildOwnerAvatarResult, buildActionResult, closeButton, safeJsonParse, isModalOpeningAction, isEligibleVoiceState, resolveCurrentGroupForMember, validateAvatarUrl, structurePrivateResponse };

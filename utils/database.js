@@ -506,6 +506,14 @@ class DatabaseManager {
                 voice_progress_ms INTEGER NOT NULL DEFAULT 0 CHECK (voice_progress_ms >= 0),
                 last_message_id TEXT,
                 last_message_at INTEGER,
+                grace_group_id INTEGER,
+                grace_points INTEGER NOT NULL DEFAULT 0 CHECK (grace_points >= 0),
+                grace_message_progress INTEGER NOT NULL DEFAULT 0 CHECK (grace_message_progress >= 0),
+                grace_voice_progress_ms INTEGER NOT NULL DEFAULT 0 CHECK (grace_voice_progress_ms >= 0),
+                grace_last_message_id TEXT,
+                grace_last_message_at INTEGER,
+                grace_expires_at INTEGER,
+                grace_reason TEXT,
                 updated_at INTEGER NOT NULL,
                 PRIMARY KEY (guild_id, user_id),
                 FOREIGN KEY (group_id) REFERENCES bonus_groups(id) ON DELETE SET NULL
@@ -570,6 +578,22 @@ class DatabaseManager {
             await this.run('ALTER TABLE bonus_rules ADD COLUMN activated_at INTEGER NOT NULL DEFAULT 0');
         }
         await this.run('UPDATE bonus_rules SET activated_at = updated_at WHERE activated_at = 0');
+        const bonusBalanceColumns = await this.all('PRAGMA table_info(bonus_balances)');
+        const graceColumns = [
+            ['grace_group_id', 'INTEGER'],
+            ['grace_points', 'INTEGER NOT NULL DEFAULT 0'],
+            ['grace_message_progress', 'INTEGER NOT NULL DEFAULT 0'],
+            ['grace_voice_progress_ms', 'INTEGER NOT NULL DEFAULT 0'],
+            ['grace_last_message_id', 'TEXT'],
+            ['grace_last_message_at', 'INTEGER'],
+            ['grace_expires_at', 'INTEGER'],
+            ['grace_reason', 'TEXT']
+        ];
+        for (const [column, definition] of graceColumns) {
+            if (!bonusBalanceColumns.some(item => item.name === column)) {
+                await this.run(`ALTER TABLE bonus_balances ADD COLUMN ${column} ${definition}`);
+            }
+        }
         const migrationKey = 'bonus-consistency-v1';
         const migration = await this.get('SELECT migration_key FROM bonus_migrations WHERE migration_key = ?', [migrationKey]);
         if (!migration) {

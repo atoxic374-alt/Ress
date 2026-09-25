@@ -3979,7 +3979,12 @@ client.on('guildMemberRemove', async (member) => {
 client.on('guildMemberAdd', async (member) => {
     try {
         console.log(`📥 عضو انضم للسيرفر: ${member.displayName} (${member.id})`);
-
+        try {
+            const bonusCommand = client.commands.get('bonus');
+            if (bonusCommand?.handleMemberJoin) await bonusCommand.handleMemberJoin(member);
+        } catch (bonusJoinError) {
+            console.error('❌ خطأ في استعادة رصيد البونس عند عودة العضو:', bonusJoinError);
+        }
         const tracker = getResponsibilityLeaveTracker();
         const guildTracker = tracker.guilds?.[member.guild.id];
         const removalInfo = guildTracker?.removedByUser?.[member.id] || null;

@@ -1,5 +1,6 @@
 const BONUS_METRICS = Object.freeze({ messages: 'messages', voice: 'voice_ms' });
 const MAX_POINTS_PER_EVENT = 1000000;
+const BONUS_GRACE_PERIOD_MS = 30 * 60 * 1000;
 
 function safeJsonParse(value, fallback = {}) {
   try {
@@ -181,6 +182,11 @@ function createBonusManager(dbManager) {
 
   async function resolveTargetGroup(guildId, userId, roleIds, grantHistory = {}) {
     const groups = await listGroups(guildId, false);
+    const current = await dbManager.get('SELECT group_id FROM bonus_balances WHERE guild_id = ? AND user_id = ?', [String(guildId), String(userId)]);
+    const heldGroupIds = new Set(groups.filter(group => new Set(Array.from(roleIds || [], String)).has(String(group.role_id))).map(group => Number(group.id)));
+    const currentGroupId = current?.group_id == null ? null : Number(current.group_id);
+    if (currentGroupId != null && heldGroupIds.has(currentGroupId)) return currentGroupId;
+    if (currentGroupId != null && heldGroupIds.size > 1) return null;
     const target = chooseOldestGroup(groups, roleIds, grantHistory);
     return target ? Number(target.id) : null;
   }
@@ -254,13 +260,66 @@ function createBonusManager(dbManager) {
       if (oldGroupId === nextGroupId) return { changed: false, balance: current || null };
 
       const now = Date.now();
-      await tx.run(`
-        INSERT INTO bonus_balances
-          (guild_id, user_id, group_id, points, message_progress, voice_progress_ms, last_message_id, last_message_at, updated_at)
-        VALUES (?, ?, ?, 0, 0, 0, NULL, NULL, ?)
-        ON CONFLICT(guild_id, user_id) DO UPDATE SET group_id = excluded.group_id, points = 0,
-          message_progress = 0, voice_progress_ms = 0, last_message_id = NULL, last_message_at = NULL, updated_at = excluded.updated_at
-      `, [guild, user, nextGroupId, now]);
+      const graceGroupId = current?.grace_group_id == null ? null : Number(current.grace_group_id);
+      const graceActive = graceGroupId != null && Number(current?.grace_expires_at || 0) > now;
+      if (nextGroupId != null && graceActive && graceGroupId === nextGroupId) {
+        await tx.run(`
+          UPDATE bonus_balances SET group_id = ?, points = ?, message_progress = ?, voice_progress_ms = ?,
+            last_message_id = ?, last_message_at = ?, grace_group_id = NULL, grace_points = 0,
+            grace_message_progress = 0, grace_voice_progress_ms = 0, grace_last_message_id = NULL,
+            grace_last_message_at = NULL, grace_expires_at = NULL, grace_reason = NULL, updated_at = ?
+          WHERE guild_id = ? AND user_id = ?
+        `, [nextGroupId, Number(current.grace_points) || 0, Number(current.grace_message_progress) || 0,
+          Number(current.grace_voice_progress_ms) || 0, current.grace_last_message_id || null,
+          current.grace_last_message_at || null, now, guild, user]);
+        await tx.run(`
+          INSERT INTO bonus_audit_log
+            (guild_id, actor_id, action, target_user_id, target_group_id, details_json, created_at)
+          VALUES (?, ?, 'member_grace_restore', ?, ?, ?, ?)
+        `, [guild, actorId ? String(actorId) : null, user, nextGroupId,
+          JSON.stringify({ reason, points: Number(current.grace_points) || 0 }), now]);
+        return { changed: true, restored: true, sourceGroupId: null, targetGroupId: nextGroupId,
+          balance: { ...current, group_id: nextGroupId, points: Number(current.grace_points) || 0,
+            message_progress: Number(current.grace_message_progress) || 0,
+            voice_progress_ms: Number(current.grace_voice_progress_ms) || 0,
+            last_message_id: current.grace_last_message_id || null,
+            last_message_at: current.grace_last_message_at || null, grace_group_id: null,
+            grace_points: 0, grace_expires_at: null } };
+      }
+      if (current && graceGroupId != null && Number(current.grace_points) > 0) {
+        const pendingPoints = Number(current.grace_points) || 0;
+        await tx.run(`
+          INSERT INTO bonus_group_point_balances (guild_id, group_id, points, updated_at)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(guild_id, group_id) DO UPDATE SET points = bonus_group_point_balances.points + excluded.points,
+            updated_at = excluded.updated_at
+        `, [guild, graceGroupId, pendingPoints, now]);
+      }
+
+      if (oldGroupId != null && current && (nextGroupId == null || oldGroupId !== nextGroupId)) {
+        await tx.run(`
+          UPDATE bonus_balances SET group_id = ?, points = 0, message_progress = 0, voice_progress_ms = 0,
+            last_message_id = NULL, last_message_at = NULL, grace_group_id = ?, grace_points = ?,
+            grace_message_progress = ?, grace_voice_progress_ms = ?, grace_last_message_id = ?,
+            grace_last_message_at = ?, grace_expires_at = ?, grace_reason = ?, updated_at = ?
+          WHERE guild_id = ? AND user_id = ?
+        `, [nextGroupId, oldGroupId, Number(current.points) || 0, Number(current.message_progress) || 0,
+          Number(current.voice_progress_ms) || 0, current.last_message_id || null, current.last_message_at || null,
+          now + BONUS_GRACE_PERIOD_MS, reason, now, guild, user]);
+      } else {
+        await tx.run(`
+          INSERT INTO bonus_balances
+            (guild_id, user_id, group_id, points, message_progress, voice_progress_ms, last_message_id, last_message_at,
+             grace_group_id, grace_points, grace_message_progress, grace_voice_progress_ms, grace_last_message_id,
+             grace_last_message_at, grace_expires_at, grace_reason, updated_at)
+          VALUES (?, ?, ?, 0, 0, 0, NULL, NULL, NULL, 0, 0, 0, NULL, NULL, NULL, NULL, ?)
+          ON CONFLICT(guild_id, user_id) DO UPDATE SET group_id = excluded.group_id, points = 0,
+            message_progress = 0, voice_progress_ms = 0, last_message_id = NULL, last_message_at = NULL,
+            grace_group_id = NULL, grace_points = 0, grace_message_progress = 0, grace_voice_progress_ms = 0,
+            grace_last_message_id = NULL, grace_last_message_at = NULL, grace_expires_at = NULL,
+            grace_reason = NULL, updated_at = excluded.updated_at
+        `, [guild, user, nextGroupId, now]);
+      }
 
       if (current) {
         if (oldGroupId != null) {
@@ -272,13 +331,49 @@ function createBonusManager(dbManager) {
             (guild_id, actor_id, action, target_user_id, source_group_id, target_group_id, details_json, created_at)
           VALUES (?, ?, 'member_transfer', ?, ?, ?, ?, ?)
         `, [guild, actorId ? String(actorId) : null, user, oldGroupId, nextGroupId,
-          JSON.stringify({ reason, points: Number(current.points) || 0, messageProgress: Number(current.message_progress) || 0,
-            voiceProgressMs: Number(current.voice_progress_ms) || 0 }), now]);
+          JSON.stringify({ reason, points: Number(current.points) || Number(current.grace_points) || 0,
+            messageProgress: Number(current.message_progress) || Number(current.grace_message_progress) || 0,
+            voiceProgressMs: Number(current.voice_progress_ms) || Number(current.grace_voice_progress_ms) || 0 }), now]);
       }
-      return { changed: true, sourceGroupId: oldGroupId, targetGroupId: nextGroupId,
+      return { changed: true, graceExpiresAt: oldGroupId != null && oldGroupId !== nextGroupId ? now + BONUS_GRACE_PERIOD_MS : null,
+        sourceGroupId: oldGroupId, targetGroupId: nextGroupId,
         balance: { ...(current || {}), group_id: nextGroupId, points: 0, message_progress: 0, voice_progress_ms: 0,
           last_message_id: null, last_message_at: null } };
     }, 'bonus-assignment');
+  }
+
+  async function expireGraceBalances(now = Date.now()) {
+    return dbManager.transaction(async tx => {
+      const expired = await tx.all(`
+        SELECT guild_id, user_id, grace_group_id, grace_points
+        FROM bonus_balances
+        WHERE grace_group_id IS NOT NULL AND grace_expires_at IS NOT NULL AND grace_expires_at <= ?
+      `, [now]);
+      for (const row of expired) {
+        const points = Math.max(0, Number(row.grace_points) || 0);
+        if (points > 0) {
+          await tx.run(`
+            INSERT INTO bonus_group_point_balances (guild_id, group_id, points, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(guild_id, group_id) DO UPDATE SET points = bonus_group_point_balances.points + excluded.points,
+              updated_at = excluded.updated_at
+          `, [String(row.guild_id), Number(row.grace_group_id), points, now]);
+          await tx.run(`
+            INSERT INTO bonus_audit_log
+              (guild_id, action, target_user_id, target_group_id, details_json, created_at)
+            VALUES (?, 'member_points_committed_to_group', ?, ?, ?, ?)
+          `, [String(row.guild_id), String(row.user_id), Number(row.grace_group_id),
+            JSON.stringify({ points, reason: 'grace_expired' }), now]);
+        }
+      }
+      const result = await tx.run(`
+        UPDATE bonus_balances SET grace_group_id = NULL, grace_points = 0, grace_message_progress = 0,
+          grace_voice_progress_ms = 0, grace_last_message_id = NULL, grace_last_message_at = NULL,
+          grace_expires_at = NULL, grace_reason = NULL, updated_at = ?
+        WHERE grace_group_id IS NOT NULL AND grace_expires_at IS NOT NULL AND grace_expires_at <= ?
+      `, [now, now]);
+      return { expired: result.changes, committedPoints: expired.reduce((sum, row) => sum + Math.max(0, Number(row.grace_points) || 0), 0) };
+    }, 'bonus-grace-expiry');
   }
 
   async function addActivity({ guildId, userId, metric, amount, eventId, roleIds = [], roleGrantHistory = {}, voiceSession = null }) {
@@ -654,6 +749,10 @@ function createBonusManager(dbManager) {
         VALUES (?, ?, ?, ?, ?)
       `, [String(guildId), Number(groupId), JSON.stringify(snapshot), actorId ? String(actorId) : null, snapshotAt]);
       await tx.run(`UPDATE bonus_balances SET points = 0, message_progress = 0, voice_progress_ms = 0, updated_at = ? WHERE guild_id = ? AND group_id = ?`, [Date.now(), String(guildId), Number(groupId)]);
+      await tx.run(`UPDATE bonus_balances SET grace_group_id = NULL, grace_points = 0, grace_message_progress = 0,
+        grace_voice_progress_ms = 0, grace_last_message_id = NULL, grace_last_message_at = NULL,
+        grace_expires_at = NULL, grace_reason = NULL, updated_at = ?
+        WHERE guild_id = ? AND grace_group_id = ?`, [Date.now(), String(guildId), Number(groupId)]);
       await tx.run('UPDATE bonus_group_point_balances SET points = 0, updated_at = ? WHERE guild_id = ? AND group_id = ?', [Date.now(), String(guildId), Number(groupId)]);
       await tx.run('UPDATE bonus_group_adjustments SET active = 0 WHERE guild_id = ? AND group_id = ? AND active = 1', [String(guildId), Number(groupId)]);
       await tx.run(`
@@ -710,11 +809,23 @@ function createBonusManager(dbManager) {
 
   async function resetUser(guildId, groupId, userId, actorId) {
     return dbManager.transaction(async tx => {
-      const row = await tx.get('SELECT points, message_progress, voice_progress_ms FROM bonus_balances WHERE guild_id = ? AND group_id = ? AND user_id = ?', [String(guildId), Number(groupId), String(userId)]);
+      const row = await tx.get('SELECT * FROM bonus_balances WHERE guild_id = ? AND group_id = ? AND user_id = ?', [String(guildId), Number(groupId), String(userId)]);
       if (!row) return null;
       const before = { points: Number(row.points) || 0, messageProgress: Number(row.message_progress) || 0,
         voiceProgressMs: Number(row.voice_progress_ms) || 0 };
-      await tx.run(`UPDATE bonus_balances SET points = 0, message_progress = 0, voice_progress_ms = 0, updated_at = ? WHERE guild_id = ? AND group_id = ? AND user_id = ?`,
+      if (Number(row.grace_points) > 0 && row.grace_group_id != null) {
+        const pendingPoints = Number(row.grace_points) || 0;
+        await tx.run(`
+          INSERT INTO bonus_group_point_balances (guild_id, group_id, points, updated_at)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(guild_id, group_id) DO UPDATE SET points = bonus_group_point_balances.points + excluded.points,
+            updated_at = excluded.updated_at
+        `, [String(guildId), Number(row.grace_group_id), pendingPoints, Date.now()]);
+      }
+      await tx.run(`UPDATE bonus_balances SET points = 0, message_progress = 0, voice_progress_ms = 0,
+        grace_group_id = NULL, grace_points = 0, grace_message_progress = 0, grace_voice_progress_ms = 0,
+        grace_last_message_id = NULL, grace_last_message_at = NULL, grace_expires_at = NULL, grace_reason = NULL,
+        updated_at = ? WHERE guild_id = ? AND group_id = ? AND user_id = ?`,
         [Date.now(), String(guildId), Number(groupId), String(userId)]);
       await tx.run(`
         INSERT INTO bonus_audit_log (guild_id, actor_id, action, target_user_id, source_group_id, target_group_id, details_json, created_at)
@@ -765,9 +876,15 @@ function createBonusManager(dbManager) {
       await tx.run(`
         UPDATE bonus_balances
         SET group_id = NULL, points = 0, message_progress = 0, voice_progress_ms = 0,
-          last_message_id = NULL, last_message_at = NULL, updated_at = ?
+          last_message_id = NULL, last_message_at = NULL, grace_group_id = NULL, grace_points = 0,
+          grace_message_progress = 0, grace_voice_progress_ms = 0, grace_last_message_id = NULL,
+          grace_last_message_at = NULL, grace_expires_at = NULL, grace_reason = NULL, updated_at = ?
         WHERE guild_id = ? AND group_id = ?
       `, [now, String(guildId), Number(groupId)]);
+      await tx.run(`UPDATE bonus_balances SET grace_group_id = NULL, grace_points = 0, grace_message_progress = 0,
+        grace_voice_progress_ms = 0, grace_last_message_id = NULL, grace_last_message_at = NULL,
+        grace_expires_at = NULL, grace_reason = NULL, updated_at = ?
+        WHERE guild_id = ? AND grace_group_id = ?`, [now, String(guildId), Number(groupId)]);
       await tx.run('UPDATE bonus_multipliers SET active = 0 WHERE guild_id = ? AND group_id = ?', [String(guildId), Number(groupId)]);
       await tx.run(`
         INSERT INTO bonus_audit_log (guild_id, actor_id, action, source_group_id, details_json, created_at)
@@ -781,12 +898,16 @@ function createBonusManager(dbManager) {
   }
 
   async function getLeaderboard(guildId, limit = 10, offset = 0) {
+    const now = Date.now();
     return dbManager.all(`
       SELECT g.id, g.role_id, g.owner_id, g.avatar_url, g.created_at,
-        COALESCE(SUM(b.points), 0) + COALESCE(MAX(gp.points), 0) + COALESCE(MAX(ga.points), 0) AS points,
-        COUNT(DISTINCT CASE WHEN b.points > 0 THEN b.user_id END) AS contributors
+        COALESCE(SUM(CASE WHEN b.group_id = g.id THEN b.points ELSE 0 END), 0)
+          + COALESCE(SUM(CASE WHEN b.grace_group_id = g.id AND b.grace_expires_at > ? THEN b.grace_points ELSE 0 END), 0)
+          + COALESCE(MAX(gp.points), 0) + COALESCE(MAX(ga.points), 0) AS points,
+        COUNT(DISTINCT CASE WHEN (b.group_id = g.id AND b.points > 0)
+          OR (b.grace_group_id = g.id AND b.grace_expires_at > ? AND b.grace_points > 0) THEN b.user_id END) AS contributors
       FROM bonus_groups g
-      LEFT JOIN bonus_balances b ON b.guild_id = g.guild_id AND b.group_id = g.id
+      LEFT JOIN bonus_balances b ON b.guild_id = g.guild_id AND (b.group_id = g.id OR b.grace_group_id = g.id)
       LEFT JOIN bonus_group_point_balances gp ON gp.guild_id = g.guild_id AND gp.group_id = g.id
       LEFT JOIN (SELECT guild_id, group_id, SUM(delta) AS points FROM bonus_group_adjustments WHERE active = 1 GROUP BY guild_id, group_id) ga
         ON ga.guild_id = g.guild_id AND ga.group_id = g.id
@@ -794,31 +915,37 @@ function createBonusManager(dbManager) {
       GROUP BY g.id
       ORDER BY points DESC, g.created_at ASC, g.id ASC
       LIMIT ? OFFSET ?
-    `, [String(guildId), Math.max(1, Math.min(25, Number(limit) || 10)), Math.max(0, Number(offset) || 0)]);
+    `, [now, now, String(guildId), Math.max(1, Math.min(25, Number(limit) || 10)), Math.max(0, Number(offset) || 0)]);
   }
 
   async function getLeaderboardSummary(guildId) {
+    const now = Date.now();
     return dbManager.get(`
       SELECT COUNT(*) AS groups, COALESCE(SUM(points), 0) AS points FROM (
-        SELECT g.id, COALESCE(SUM(b.points), 0) + COALESCE(MAX(gp.points), 0) + COALESCE(MAX(ga.points), 0) AS points
+        SELECT g.id,
+          COALESCE(SUM(CASE WHEN b.group_id = g.id THEN b.points ELSE 0 END), 0)
+            + COALESCE(SUM(CASE WHEN b.grace_group_id = g.id AND b.grace_expires_at > ? THEN b.grace_points ELSE 0 END), 0)
+            + COALESCE(MAX(gp.points), 0) + COALESCE(MAX(ga.points), 0) AS points
         FROM bonus_groups g
-        LEFT JOIN bonus_balances b ON b.guild_id = g.guild_id AND b.group_id = g.id
+        LEFT JOIN bonus_balances b ON b.guild_id = g.guild_id AND (b.group_id = g.id OR b.grace_group_id = g.id)
         LEFT JOIN bonus_group_point_balances gp ON gp.guild_id = g.guild_id AND gp.group_id = g.id
         LEFT JOIN (SELECT guild_id, group_id, SUM(delta) AS points FROM bonus_group_adjustments WHERE active = 1 GROUP BY guild_id, group_id) ga
           ON ga.guild_id = g.guild_id AND ga.group_id = g.id
         WHERE g.guild_id = ? AND g.archived_at IS NULL
         GROUP BY g.id
       )
-    `, [String(guildId)]);
+    `, [now, String(guildId)]);
   }
 
   async function getGroupPoints(guildId, groupId) {
+    const now = Date.now();
     const row = await dbManager.get(`
       SELECT COALESCE((SELECT SUM(points) FROM bonus_balances WHERE guild_id = ? AND group_id = ?), 0)
+        + COALESCE((SELECT SUM(grace_points) FROM bonus_balances WHERE guild_id = ? AND grace_group_id = ? AND grace_expires_at > ?), 0)
         + COALESCE((SELECT points FROM bonus_group_point_balances WHERE guild_id = ? AND group_id = ?), 0)
         + COALESCE((SELECT SUM(delta) FROM bonus_group_adjustments WHERE guild_id = ? AND group_id = ? AND active = 1), 0) AS points
       FROM bonus_groups WHERE guild_id = ? AND id = ? AND archived_at IS NULL
-    `, [String(guildId), Number(groupId), String(guildId), Number(groupId), String(guildId), Number(groupId), String(guildId), Number(groupId)]);
+    `, [String(guildId), Number(groupId), String(guildId), Number(groupId), now, String(guildId), Number(groupId), String(guildId), Number(groupId), String(guildId), Number(groupId)]);
     return row ? Number(row.points) || 0 : null;
   }
 
@@ -835,7 +962,7 @@ function createBonusManager(dbManager) {
     readConfig, saveConfig, audit, listAuditLog, listGroups, getRules, setRule, disableRule, addGroup, resolveTargetGroup,
     getRoleGrantHistory, recordRoleChanges, seedRoleGrantHistory,
     syncAssignment, addActivity, setMultiplier, clearMultiplier, setGlobalMultiplier, clearGlobalMultiplier, getGlobalMultiplier, listActiveUserMultipliers, getActiveGroupMultiplier,
-    adjustGroupPoints, adjustAllGroupPoints, adjustUserPoints, resetGroup, listGroupResetSnapshots, restoreGroupReset, resetUser, updateGroup, archiveGroup,
+    adjustGroupPoints, adjustAllGroupPoints, adjustUserPoints, resetGroup, listGroupResetSnapshots, restoreGroupReset, resetUser, updateGroup, archiveGroup, expireGraceBalances,
     getLeaderboard, getLeaderboardSummary, getGroupPoints, getBalance, isReady
   };
 }
