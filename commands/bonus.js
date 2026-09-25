@@ -30,6 +30,7 @@ const boardPermissionBackoff = new Map();
 const ownerAvatarCooldowns = new Map();
 const boardPageState = new Map();
 const auditFilterState = new Map();
+const panelHistory = new Map();
 const auditPublishCursor = new Map();
 const memberOperationLocks = new Map();
 const DISPLAY_CACHE_TTL_MS = 60 * 1000;
@@ -273,11 +274,47 @@ function button(customId, label, style = ButtonStyle.Secondary) {
   return new ButtonBuilder().setCustomId(customId).setLabel(label).setStyle(ButtonStyle.Secondary);
 }
 
-// Generic cancel/back actions must close the transient panel instead of reopening
-// the full Bonus Settings home panel. Use an explicit "رجوع للإعدادات" button
-// when returning to the settings home is actually intended.
+// Generic cancel/back actions return to the previous transient panel. Use an
+// explicit "رجوع للإعدادات" button when returning to the settings home is intended.
 function closeButton(label = 'إلغاء') {
   return button('bonus:close', label);
+}
+
+function panelHistoryKey(interaction) {
+  return interaction?.guild?.id && interaction?.user?.id
+    ? `${interaction.guild.id}:${interaction.user.id}` : null;
+}
+
+function snapshotPanelMessage(message) {
+  if (!message) return null;
+  return {
+    content: message.content || ' ',
+    embeds: message.embeds?.map(embed => embed.toJSON()) || [],
+    components: message.components?.map(row => row.toJSON()) || [],
+    attachments: message.attachments?.size
+      ? Array.from(message.attachments.values(), attachment => ({ id: attachment.id, filename: attachment.name, description: attachment.description || undefined }))
+      : []
+  };
+}
+
+function rememberPreviousPanel(interaction) {
+  const key = panelHistoryKey(interaction);
+  const snapshot = snapshotPanelMessage(interaction?.message);
+  if (!key || !snapshot) return;
+  const history = panelHistory.get(key) || [];
+  history.push(snapshot);
+  if (history.length > 20) history.splice(0, history.length - 20);
+  panelHistory.set(key, history);
+}
+
+function takePreviousPanel(interaction) {
+  const key = panelHistoryKey(interaction);
+  const history = key ? panelHistory.get(key) : null;
+  if (!history?.length) return null;
+  const previous = history.pop();
+  if (history.length) panelHistory.set(key, history);
+  else panelHistory.delete(key);
+  return previous;
 }
 
 function durationButtons(scope, groupId, userId = null) {
@@ -399,6 +436,7 @@ async function buildAuditPayload(guild, page = 0) {
 }
 
 async function showPrivatePanel(interaction, payload, update = false) {
+  if (update && interaction?.message) rememberPreviousPanel(interaction);
   const boardMessage = isBonusBoardMessage(interaction.message);
   const shouldUpdateBoard = boardMessage && Array.isArray(payload.files) && payload.files.length > 0;
   payload = (!boardMessage || !shouldUpdateBoard) ? structurePrivateResponse(payload) : payload;
@@ -958,7 +996,8 @@ async function handleInteraction(interaction, context = {}) {
       return true;
     }
     if (action === 'close') {
-      const payload = { content: ' ', embeds: [], components: [], attachments: [] };
+      const previous = takePreviousPanel(interaction);
+      const payload = previous || { content: ' ', embeds: [], components: [], attachments: [] };
       if (interaction.deferred || interaction.replied) await interaction.editReply(payload).catch(() => {});
       else await interaction.update(payload).catch(() => {});
       return true;

@@ -209,11 +209,16 @@ async function main() {
     const duplicate = await bonus.addActivity({ guildId, userId, metric: BONUS_METRICS.messages, amount: 1,
       eventId: 'message:test-guild:100', roleIds: ['role-a', 'role-b'], roleGrantHistory: { 'role-a': 200, 'role-b': 100 } });
     assert.equal(duplicate.duplicate, true, 'duplicate message event cannot count twice');
+    await db.run('UPDATE bonus_balances SET last_message_at = ? WHERE guild_id = ? AND user_id = ?', [Date.now() - 60001, guildId, userId]);
 
     result = await bonus.addActivity({ guildId, userId, metric: BONUS_METRICS.messages, amount: 50,
       eventId: 'message:test-guild:101', roleIds: ['role-a', 'role-b'], roleGrantHistory: { 'role-a': 200, 'role-b': 100 } });
     assert.equal(result.awardedPoints, 1);
     assert.equal(result.assignedGroupId, Number(groupB.id));
+    const burstMessage = await bonus.addActivity({ guildId, userId, metric: BONUS_METRICS.messages, amount: 1,
+      eventId: 'message:test-guild:burst-1', roleIds: ['role-a', 'role-b'], roleGrantHistory: { 'role-a': 200, 'role-b': 100 } });
+    assert.equal(burstMessage.rateLimited, true, 'message bursts are limited to one counted message per minute');
+    assert.equal(burstMessage.awardedPoints, 0);
     assert.equal(await bonus.resolveTargetGroup(guildId, userId, ['role-a', 'role-b'], { 'role-a': 1, 'role-b': 2 }), Number(groupB.id),
       'holding a second group role cannot move an already-assigned member');
     const oldReplay = await bonus.addActivity({ guildId, userId, metric: BONUS_METRICS.messages, amount: 1,
@@ -363,7 +368,7 @@ async function main() {
     const baselineGroup = await bonus.addGroup(baselineGuild, 'baseline-role', 'baseline-owner', actorId);
     await db.run(`INSERT INTO bonus_balances
       (guild_id, user_id, group_id, points, message_progress, voice_progress_ms, last_message_id, last_message_at, updated_at)
-      VALUES (?, ?, ?, 0, 250, 0, '999999', ?, ?)`, [baselineGuild, 'baseline-user', baselineGroup.id, Date.now(), Date.now()]);
+      VALUES (?, ?, ?, 0, 250, 0, '999999', ?, ?)`, [baselineGuild, 'baseline-user', baselineGroup.id, Date.now() - 60001, Date.now()]);
     const activatedBaseline = await bonus.setRule(baselineGuild, BONUS_METRICS.messages, 300, 1, actorId);
     assert.equal(activatedBaseline.newlyActivated, true);
     let baselineBalance = await bonus.getBalance(baselineGuild, 'baseline-user');
@@ -371,6 +376,7 @@ async function main() {
     result = await bonus.addActivity({ guildId: baselineGuild, userId: 'baseline-user', metric: BONUS_METRICS.messages, amount: 299,
       eventId: 'message:activation-baseline-guild:1000000', roleIds: ['baseline-role'] });
     assert.equal(result.awardedPoints, 0);
+    await db.run('UPDATE bonus_balances SET last_message_at = ? WHERE guild_id = ? AND user_id = ?', [Date.now() - 60001, baselineGuild, 'baseline-user']);
     const editedBaselineRule = await bonus.setRule(baselineGuild, BONUS_METRICS.messages, 300, 2, actorId);
     assert.equal(editedBaselineRule.newlyActivated, false, 'editing an enabled rule keeps its original activation');
     baselineBalance = await bonus.getBalance(baselineGuild, 'baseline-user');
@@ -378,6 +384,7 @@ async function main() {
     result = await bonus.addActivity({ guildId: baselineGuild, userId: 'baseline-user', metric: BONUS_METRICS.messages, amount: 1,
       eventId: 'message:activation-baseline-guild:1000001', roleIds: ['baseline-role'] });
     assert.equal(result.awardedPoints, 2, 'only new messages after activation count, using the edited active rule');
+    await db.run('UPDATE bonus_balances SET last_message_at = ? WHERE guild_id = ? AND user_id = ?', [Date.now() - 60001, baselineGuild, 'baseline-user']);
     await bonus.addActivity({ guildId: baselineGuild, userId: 'baseline-user', metric: BONUS_METRICS.messages, amount: 299,
       eventId: 'message:activation-baseline-guild:1000002', roleIds: ['baseline-role'] });
     const disabledBaseline = await bonus.disableRule(baselineGuild, BONUS_METRICS.messages, actorId);
@@ -389,9 +396,11 @@ async function main() {
     assert.equal(result.noRule, true, 'messages received while the rule is disabled do not count');
     const reactivatedBaseline = await bonus.setRule(baselineGuild, BONUS_METRICS.messages, 300, 1, actorId);
     assert.equal(reactivatedBaseline.newlyActivated, true, 'turning the rule back on starts a new measurement window');
+    await db.run('UPDATE bonus_balances SET last_message_at = ? WHERE guild_id = ? AND user_id = ?', [Date.now() - 60001, baselineGuild, 'baseline-user']);
     result = await bonus.addActivity({ guildId: baselineGuild, userId: 'baseline-user', metric: BONUS_METRICS.messages, amount: 299,
       eventId: 'message:activation-baseline-guild:1000004', roleIds: ['baseline-role'] });
     assert.equal(result.awardedPoints, 0);
+    await db.run('UPDATE bonus_balances SET last_message_at = ? WHERE guild_id = ? AND user_id = ?', [Date.now() - 60001, baselineGuild, 'baseline-user']);
     result = await bonus.addActivity({ guildId: baselineGuild, userId: 'baseline-user', metric: BONUS_METRICS.messages, amount: 1,
       eventId: 'message:activation-baseline-guild:1000005', roleIds: ['baseline-role'] });
     assert.equal(result.awardedPoints, 1, 'post-reactivation messages begin at zero and earn a fresh step');
@@ -472,7 +481,7 @@ async function main() {
       eventId: `message:stress:${index}`, roleIds: ['stress-role']
     })));
     const stressBalance = await bonus.getBalance(stressGuild, 'stress-user');
-    assert.equal(Number(stressBalance.points), 40, 'concurrent events are counted exactly once under load');
+    assert.equal(Number(stressBalance.points), 1, 'concurrent message bursts count only one message per minute');
     assert.equal(Number(stressBalance.message_progress), 0);
     const auditPage = await bonus.listAuditLog(guildId, { page: 0, limit: 5, action: 'member_transfer' });
     assert.ok(Array.isArray(auditPage.rows) && auditPage.rows.length > 0, 'audit log supports paginated filtered reads');

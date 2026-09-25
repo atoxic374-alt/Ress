@@ -1,6 +1,7 @@
 const BONUS_METRICS = Object.freeze({ messages: 'messages', voice: 'voice_ms' });
 const MAX_POINTS_PER_EVENT = 1000000;
 const BONUS_GRACE_PERIOD_MS = 30 * 60 * 1000;
+const MESSAGE_COUNT_COOLDOWN_MS = 60 * 1000;
 
 function safeJsonParse(value, fallback = {}) {
   try {
@@ -453,14 +454,25 @@ function createBonusManager(dbManager) {
       if (!rule) {
         if (metric === BONUS_METRICS.messages) {
           if (shouldAdvanceMessageCursor) {
-            await tx.run('UPDATE bonus_balances SET last_message_id = ?, last_message_at = ?, updated_at = ? WHERE guild_id = ? AND user_id = ?',
-              [currentMessageId, Date.now(), Date.now(), guild, user]);
+            await tx.run('UPDATE bonus_balances SET last_message_id = ?, updated_at = ? WHERE guild_id = ? AND user_id = ?',
+              [currentMessageId, Date.now(), guild, user]);
           }
         } else {
           await tx.run('UPDATE bonus_activity_events SET group_id = ? WHERE event_id = ?', [targetGroupId, String(eventId)]);
           await persistVoiceCursor();
         }
         return { noRule: true, assignedGroupId: targetGroupId, awardedPoints: 0 };
+      }
+
+      if (metric === BONUS_METRICS.messages && Number(balance.last_message_at) > 0
+        && Date.now() - Number(balance.last_message_at) < MESSAGE_COUNT_COOLDOWN_MS) {
+        if (shouldAdvanceMessageCursor) {
+          await tx.run('UPDATE bonus_balances SET last_message_id = ?, updated_at = ? WHERE guild_id = ? AND user_id = ?',
+            [currentMessageId, Date.now(), guild, user]);
+        }
+        await tx.run('UPDATE bonus_activity_events SET group_id = ? WHERE event_id = ?', [targetGroupId, String(eventId)]);
+        return { rateLimited: true, assignedGroupId: targetGroupId, awardedPoints: 0, countedAmount: 0,
+          cooldownMs: MESSAGE_COUNT_COOLDOWN_MS };
       }
 
       const progressColumn = metric === BONUS_METRICS.messages ? 'message_progress' : 'voice_progress_ms';

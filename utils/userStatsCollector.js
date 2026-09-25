@@ -13,6 +13,8 @@ function getUserStatsMention(userStats, member = null) {
 const vacationsPath = path.join(__dirname, '..', 'data', 'vacations.json');
 const activeDownsPath = path.join(__dirname, '..', 'data', 'activeDowns.json');
 const userActivityPath = path.join(__dirname, '..', 'data', 'userActivity.json');
+const MESSAGE_ACTIVITY_COOLDOWN_MS = 60 * 1000;
+const lastCountedMessageAt = new Map();
 
 // دالة لقراءة ملف JSON مع معالجة الأخطاء
 function readJsonFile(filePath, defaultValue = {}) {
@@ -83,6 +85,21 @@ async function trackUserActivity(userId, activityType, data = {}) {
         const { getDatabase } = require('./database');
         const dbManager = getDatabase();
         const guildId = data.guildId || null;
+
+        if (activityType === 'message' && guildId) {
+            const key = `${String(guildId)}:${String(userId)}`;
+            const now = Date.now();
+            const lastCountedAt = Number(lastCountedMessageAt.get(key) || 0);
+            if (lastCountedAt > 0 && now - lastCountedAt < MESSAGE_ACTIVITY_COOLDOWN_MS) {
+                return false;
+            }
+            lastCountedMessageAt.set(key, now);
+            if (lastCountedMessageAt.size > 10000) {
+                for (const [entryKey, timestamp] of lastCountedMessageAt) {
+                    if (now - timestamp >= MESSAGE_ACTIVITY_COOLDOWN_MS) lastCountedMessageAt.delete(entryKey);
+                }
+            }
+        }
 
         // تحديث آخر نشاط (استخدام توقيت الرياض)
         const today = moment().tz('Asia/Riyadh').format('YYYY-MM-DD');
