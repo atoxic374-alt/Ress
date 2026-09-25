@@ -1,3 +1,4 @@
+const { getBotConfigPath } = require('../utils/storagePaths');
 const { EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ChannelSelectMenuBuilder, ChannelType } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
@@ -135,7 +136,7 @@ function hasPermission(member) {
     const isGuildOwner = member.guild.ownerId === member.id;
 
     // فحص إذا كان من مالكي البوت - تحميل من ملف botConfig مباشرة
-    const botConfigPath = path.join(__dirname, '..', 'data', 'botConfig.json');
+    const botConfigPath = getBotConfigPath();
     let BOT_OWNERS = [];
 
     // محاولة تحميل من global أولاً
@@ -1013,7 +1014,7 @@ function canApproveApplication(member, settings) {
     if (global.BOT_OWNERS && Array.isArray(global.BOT_OWNERS)) {
         BOT_OWNERS = global.BOT_OWNERS;
     } else {
-        const botConfigPath = path.join(__dirname, '..', 'data', 'botConfig.json');
+        const botConfigPath = getBotConfigPath();
         try {
             if (fs.existsSync(botConfigPath)) {
                 const botConfig = JSON.parse(fs.readFileSync(botConfigPath, 'utf8'));

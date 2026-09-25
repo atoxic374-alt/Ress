@@ -47,6 +47,29 @@ function getDatabasePath(fileName = 'discord_bot.db') {
   return ensureParentDirSync(path.join(getDatabaseDir(), fileName));
 }
 
+/**
+ * botConfig contains runtime settings and must not live in the tracked project
+ * tree, because some hosts restore tracked files when a project is stopped.
+ * An explicit BOT_CONFIG_PATH can be used when the host provides its own
+ * persistent volume; otherwise the ignored database directory is used.
+ */
+function getBotConfigPath() {
+  const configuredPath = process.env.BOT_CONFIG_PATH;
+  const targetPath = isRailwayVolumePath(configuredPath)
+    ? configuredPath.trim()
+    : path.join(getDatabaseDir(), 'botConfig.json');
+  ensureParentDirSync(targetPath);
+
+  // data/botConfig.json is only the bundled default. Copy it once, never on
+  // every restart, so an existing persistent configuration cannot be reset.
+  const bundledPath = path.join(projectRoot, 'data', 'botConfig.json');
+  if (!fs.existsSync(targetPath) && targetPath !== bundledPath && fs.existsSync(bundledPath)) {
+    fs.copyFileSync(bundledPath, targetPath);
+  }
+
+  return targetPath;
+}
+
 function getDataDir() {
   return ensureDirSync(resolveStoragePath('data'));
 }
@@ -63,6 +86,7 @@ module.exports = {
   ensureParentDirSync,
   getDatabaseDir,
   getDatabasePath,
+  getBotConfigPath,
   getDataDir,
   getBackupsDir,
 };

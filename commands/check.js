@@ -3,7 +3,7 @@ const colorManager = require('../utils/colorManager.js');
 const { isUserBlocked } = require('./block.js');
 const moment = require('moment-timezone');
 const path = require('path');
-const { getDataDir } = require('../utils/storagePaths');
+const { getDataDir, getBotConfigPath } = require('../utils/storagePaths');
 
 const name = 'check';
 
@@ -56,7 +56,7 @@ async function execute(message, args, { client, BOT_OWNERS, ADMIN_ROLES }) {
     const isOwner = BOT_OWNERS.includes(message.author.id);
     
     const fs = require('fs');
-    const botConfigPath = path.join(getDataDir(), 'botConfig.json');
+    const botConfigPath = getBotConfigPath();
     const botConfig = JSON.parse(fs.readFileSync(botConfigPath, 'utf8'));
     const allowedRoles = botConfig.checkAllowedRoles || [];
     const hasAllowedRole = member.roles.cache.some(role => allowedRoles.includes(role.id));

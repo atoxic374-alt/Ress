@@ -1,3 +1,4 @@
+const { getBotConfigPath } = require('../utils/storagePaths');
 const { EmbedBuilder, StringSelectMenuBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
@@ -29,7 +30,7 @@ const DATA_FILES = {
     responsibilities: path.join(dataDir, 'responsibilities.json'),
     logConfig: path.join(dataDir, 'logConfig.json'),
     adminRoles: path.join(dataDir, 'adminRoles.json'),
-    botConfig: path.join(dataDir, 'botConfig.json'),
+    botConfig: getBotConfigPath(),
     cooldowns: path.join(dataDir, 'cooldowns.json'),
     notifications: path.join(dataDir, 'notifications.json')
 };

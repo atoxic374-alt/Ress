@@ -4,7 +4,7 @@ const { isUserBlocked } = require('./block.js');
 const moment = require('moment-timezone');
 const fs = require('fs');
 const path = require('path');
-const { getDataDir } = require('../utils/storagePaths');
+const { getDataDir, getBotConfigPath } = require('../utils/storagePaths');
 
 const name = 'rooms';
 
@@ -150,7 +150,7 @@ async function execute(message, args, { client, BOT_OWNERS, ADMIN_ROLES }) {
     const isOwner = BOT_OWNERS.includes(message.author.id);
     
     // Check if user has an allowed role
-    const botConfig = JSON.parse(fs.readFileSync(path.join(getDataDir(), 'botConfig.json'), 'utf8'));
+    const botConfig = JSON.parse(fs.readFileSync(getBotConfigPath(), 'utf8'));
     const allowedRoles = botConfig.roomsAllowedRoles || [];
     const hasAllowedRole = member.roles.cache.some(role => allowedRoles.includes(role.id));
 
@@ -163,7 +163,7 @@ async function execute(message, args, { client, BOT_OWNERS, ADMIN_ROLES }) {
         if (!botConfig.roomsAllowedRoles) botConfig.roomsAllowedRoles = [];
         if (!botConfig.roomsAllowedRoles.includes(roleToAllow.id)) {
             botConfig.roomsAllowedRoles.push(roleToAllow.id);
-            fs.writeFileSync(path.join(getDataDir(), 'botConfig.json'), JSON.stringify(botConfig, null, 2));
+            fs.writeFileSync(getBotConfigPath(), JSON.stringify(botConfig, null, 2));
             return message.reply(`**✅ تم السماح للرول ${roleToAllow.name} باستخدام أمر rooms**`);
         } else {
             return message.reply(`**⚠️ الرول ${roleToAllow.name} مسموح له بالفعل**`);

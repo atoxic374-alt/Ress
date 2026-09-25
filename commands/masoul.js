@@ -10,6 +10,7 @@ const {
   TextInputBuilder,
   TextInputStyle
 } = require('discord.js');
+const { getBotConfigPath } = require('../utils/storagePaths');
 const colorManager = require('../utils/colorManager.js');
 const { logEvent } = require('../utils/logs_system.js');
 const { checkCooldown, startCooldown } = require('./cooldown.js');
@@ -23,7 +24,7 @@ const DEBUG = false;
 const dataDir = path.join(__dirname, '..', 'data');
 const DATA_FILES = {
   points: path.join(dataDir, 'points.json'),
-  botConfig: path.join(dataDir, 'botConfig.json')
+  botConfig: getBotConfigPath()
 };
 const MAX_CONCURRENT_OPERATIONS = 5;
 const CLAIM_ID_HARD_LIMIT = 95; // الهامش أقل من 100 تجنباً لأي زيادات عشوائية

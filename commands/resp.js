@@ -1,3 +1,4 @@
+const { getBotConfigPath } = require('../utils/storagePaths');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ComponentType, StringSelectMenuBuilder, ChannelSelectMenuBuilder, RoleSelectMenuBuilder, UserSelectMenuBuilder, AttachmentBuilder, ChannelType } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
@@ -272,7 +273,7 @@ function isRespManager(interactionLike) {
     const userId = interactionLike?.user?.id || interactionLike?.author?.id;
     if (!guild || !userId) return false;
 
-    const botConfig = readJSONFile(path.join(__dirname, '..', 'data', 'botConfig.json'), {});
+    const botConfig = readJSONFile(getBotConfigPath(), {});
     const owners = Array.isArray(botConfig.owners) ? botConfig.owners.map(String) : [];
     if (owners.includes(String(userId)) || guild.ownerId === String(userId)) return true;
 
@@ -1619,7 +1620,7 @@ module.exports = {
     async execute(message, args, context) {
         const { client } = context;
 
-        const botConfig = readJSONFile(path.join(__dirname, '..', 'data', 'botConfig.json'), {});
+        const botConfig = readJSONFile(getBotConfigPath(), {});
         const BOT_OWNERS = botConfig.owners || [];
         const isOwner = BOT_OWNERS.includes(message.author.id) || message.guild.ownerId === message.author.id;
 

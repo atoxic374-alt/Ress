@@ -1,3 +1,4 @@
+const { getBotConfigPath } = require('../utils/storagePaths');
 const fs = require('fs');
 const path = require('path');
 // EmbedBuilder now handled by colorManager
@@ -307,7 +308,7 @@ isBotPromotion(guildId, userId, roleId) {
                 .first();
 
             // تحسين منطق التحقق: إذا كان الشخص المعين مالك البوت، يُسمح بالترقية بغض النظر عن الهرمية
-            const botOwnersData = readJson(path.join(__dirname, '..', 'data', 'botConfig.json'), {});
+            const botOwnersData = readJson(getBotConfigPath(), {});
             const botOwners = botOwnersData.owners || [];
 
             if (botOwners.includes(promoterUserId)) {

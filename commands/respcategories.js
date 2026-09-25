@@ -1,3 +1,4 @@
+const { getBotConfigPath } = require('../utils/storagePaths');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
@@ -33,7 +34,7 @@ function writeJSONFile(filePath, data) {
 
 function isAuthorizedCategoryManager(interaction) {
     try {
-        const botConfig = readJSONFile(path.join(__dirname, '..', 'data', 'botConfig.json'), {});
+        const botConfig = readJSONFile(getBotConfigPath(), {});
         const BOT_OWNERS = botConfig.owners || [];
         return BOT_OWNERS.includes(interaction.user.id) || interaction.guild?.ownerId === interaction.user.id;
     } catch (error) {
@@ -620,7 +621,7 @@ module.exports = {
     async execute(message, args, context) {
         const { client } = context;
 
-        const botConfig = readJSONFile(path.join(__dirname, '..', 'data', 'botConfig.json'), {});
+        const botConfig = readJSONFile(getBotConfigPath(), {});
         const BOT_OWNERS = botConfig.owners || [];
         const isOwner = BOT_OWNERS.includes(message.author.id) || message.guild.ownerId === message.author.id;
 

@@ -3,4 +3,5 @@ node_modules/
 database/*.db
 database/*.db-wal
 database/*.db-shm
+database/botConfig.json
 .env

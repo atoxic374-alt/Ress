@@ -1,3 +1,4 @@
+const { getBotConfigPath } = require('../utils/storagePaths');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ChannelType, RoleSelectMenuBuilder, ChannelSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, AttachmentBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
@@ -73,7 +74,7 @@ function saveSettings(data) {
 
 function hasPermission(member) {
     const isGuildOwner = member.guild.ownerId === member.id;
-    const botConfigPath = path.join(__dirname, '..', 'data', 'botConfig.json');
+    const botConfigPath = getBotConfigPath();
     let BOT_OWNERS = global.BOT_OWNERS || [];
     if (BOT_OWNERS.length === 0) {
         try {

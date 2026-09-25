@@ -1,3 +1,4 @@
+const { getBotConfigPath } = require('../utils/storagePaths');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ChannelType, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelSelectMenuBuilder, RoleSelectMenuBuilder } = require('discord.js');
 const colorManager = require('../utils/colorManager.js');
 const fs = require('fs');
@@ -1861,7 +1862,7 @@ function registerInteractionHandler(client) {
         try {
             // إعادة تحميل البيانات من الملفات
             const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
-            const botConfigPath = path.join(__dirname, '..', 'data', 'botConfig.json');
+            const botConfigPath = getBotConfigPath();
 
             let responsibilities = {};
             let points = ticketState.loadPoints();

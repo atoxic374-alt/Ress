@@ -1,3 +1,4 @@
+const { getBotConfigPath } = require('../utils/storagePaths');
 const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ActivityType } = require('discord.js');
 const colorManager = require('../utils/colorManager');
 const { logEvent } = require('../utils/logs_system');
@@ -73,7 +74,7 @@ async function execute(message, args, { responsibilities, BOT_OWNERS, client, sa
     const owners = BOT_OWNERS.length;
 
     // قراءة البرفكس الحالي من ملف التكوين
-    const botConfigFile = path.join(__dirname, '..', 'data', 'botConfig.json');
+    const botConfigFile = getBotConfigPath();
     let currentPrefix = null;
     let currentActivityText = null;
 
@@ -687,7 +688,7 @@ async function execute(message, args, { responsibilities, BOT_OWNERS, client, sa
                 // قراءة الكونفق الحالي وتحديثه
                 const fs = require('fs');
                 const path = require('path');
-                const botConfigFile = path.join(__dirname, '..', 'data', 'botConfig.json');
+                const botConfigFile = getBotConfigPath();
 
                 try {
                     let botConfig = {};

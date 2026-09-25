@@ -42,7 +42,7 @@ const { handleAdminApplicationInteraction } = require('./commands/admin-apply.js
 const { restoreTopSchedules, restorePanelCleanups, handlePanelMessageDelete } = require('./commands/roles-settings.js');
 const { handleChannelDelete, handleRoleDelete } = require('./utils/protectionManager.js');
 const problemCommand = require('./commands/problem.js');
-const { getDataDir, getRailwayVolumeMountPath } = require('./utils/storagePaths');
+const { getDataDir, getRailwayVolumeMountPath, getBotConfigPath } = require('./utils/storagePaths');
 let interactiveRolesManager;
 
 // مسارات ملفات البيانات
@@ -56,7 +56,7 @@ const DATA_FILES = {
     responsibilities: path.join(dataDir, 'responsibilities.json'),
     logConfig: path.join(dataDir, 'logConfig.json'),
     adminRoles: path.join(dataDir, 'adminRoles.json'),
-    botConfig: path.join(dataDir, 'botConfig.json'),
+    botConfig: getBotConfigPath(),
     cooldowns: path.join(dataDir, 'cooldowns.json'),
     notifications: path.join(dataDir, 'notifications.json'),
     reports: path.join(dataDir, 'reports.json'),
@@ -85,10 +85,10 @@ function ensureDataFiles() {
 
     for (const [key, filePath] of Object.entries(DATA_FILES)) {
         if (!fs.existsSync(filePath)) {
-            // عند استخدام Railway Volume، انقل الإعدادات المرفقة مع المشروع
-            // إلى التخزين الدائم في أول تشغيل فقط، بدلاً من إنشاء ملف فارغ.
+            // انقل النسخة المرفقة إلى المسار الدائم في أول تشغيل فقط.
+            // لا ننسخها إذا كان الملف الدائم موجوداً حتى لا نعيد ضبط إعدادات المستخدم.
             const bundledPath = path.join(__dirname, 'data', path.basename(filePath));
-            if (getRailwayVolumeMountPath() && bundledPath !== filePath && fs.existsSync(bundledPath)) {
+            if (bundledPath !== filePath && fs.existsSync(bundledPath)) {
                 fs.copyFileSync(bundledPath, filePath);
                 console.log(`✅ تم ترحيل ملف البيانات إلى التخزين الدائم: ${path.basename(filePath)}`);
                 continue;

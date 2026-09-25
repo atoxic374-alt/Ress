@@ -1,3 +1,4 @@
+const { getBotConfigPath } = require('../utils/storagePaths');
 const { ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
 const colorManager = require('../utils/colorManager.js');
 
@@ -15,7 +16,7 @@ module.exports = {
 
     const fs = require('fs');
     const path = require('path');
-    const botConfigFile = path.join(__dirname, '..', 'data', 'botConfig.json');
+    const botConfigFile = getBotConfigPath();
     const botConfig = JSON.parse(fs.readFileSync(botConfigFile, 'utf8'));
     
     // قراءة البريفكس الفعلي من الملف
