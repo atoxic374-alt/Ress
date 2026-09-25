@@ -64,8 +64,8 @@ async function main() {
   const settingsEmbed = bonusCommand.buildHomeEmbed({ name: 'Test Guild' }, {}, [], {}, false);
   assert.equal(settingsEmbed.data.color, Number.parseInt(colorManager.getColor().replace('#', ''), 16), 'bonus embed uses the shared bot-avatar color');
   assert.deepEqual(bonusCommand.buildHomeRows().map(row => row.components.map(component => component.data.label)), [
-    ['المسؤولون', 'قواعد النقاط', 'روم التوب', 'لون الصورة', 'سجل التدقيق', 'نشر / تحديث'],
-    ['إضافة قروب', 'إدارة القروبات', 'تصفير', 'دبل بونس']
+    ['المسؤولون', 'قواعد النقاط', 'روم التوب', 'لون الصورة', 'سجل التدقيق'],
+    ['إضافة قروب', 'إدارة القروبات', 'تصفير', 'دبل بونس', 'نشر / تحديث']
   ]);
   assert.deepEqual(bonusCommand.buildPublicRows()[0].components.map(component => component.data.label),
     ['إضافة قروب', 'إزالة قروب', 'إعطاء نقاط', 'إزالة نقاط', 'دبل بونس']);

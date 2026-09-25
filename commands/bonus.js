@@ -271,14 +271,14 @@ function buildHomeRows() {
       button('bonus:rules', 'قواعد النقاط'),
       button('bonus:channel', 'روم التوب'),
       button('bonus:color', 'لون الصورة'),
-      button('bonus:audit', 'سجل التدقيق'),
-      button('bonus:publish', 'نشر / تحديث', ButtonStyle.Success)
+      button('bonus:audit', 'سجل التدقيق')
     ),
     new ActionRowBuilder().addComponents(
       button('bonus:add-group', 'إضافة قروب'),
       button('bonus:manage-groups', 'إدارة القروبات'),
       button('bonus:reset', 'تصفير'),
-      button('bonus:double', 'دبل بونس')
+      button('bonus:double', 'دبل بونس'),
+      button('bonus:publish', 'نشر / تحديث', ButtonStyle.Success)
     )
   ];
 }
