@@ -968,10 +968,16 @@ if (botConfig.owners && Array.isArray(botConfig.owners) && botConfig.owners.leng
         BOT_OWNERS = [envOwner];
         console.log('✅ تم تحميل المالك من متغيرات البيئة:', BOT_OWNERS);
         
-        // حفظه في botConfig للمرات القادمة
+        // استخدم مالك env للجلسة الحالية فقط. لا تكتب إعدادًا ناقصًا فوق
+        // ملف botConfig إذا كان قد فُقد أو تعذر قراءته؛ مسار التخزين يعيد
+        // النسخة الاحتياطية تلقائيًا عند توفرها.
         botConfig.owners = BOT_OWNERS;
-        writeJSONFile(DATA_FILES.botConfig, botConfig);
-        console.log('💾 تم حفظ المالك في botConfig.json');
+        if (fs.existsSync(DATA_FILES.botConfig)) {
+            writeJSONFile(DATA_FILES.botConfig, botConfig);
+            console.log('💾 تم حفظ المالك في botConfig.json');
+        } else {
+            console.warn('⚠️ botConfig غير موجود؛ تم استخدام مالك env مؤقتًا بدون إنشاء إعدادات ناقصة');
+        }
         
         global.BOT_OWNERS = BOT_OWNERS;
     } else {

@@ -60,6 +60,40 @@ function getBotConfigPath() {
     : path.join(resolveStoragePath('data'), 'botConfig.json');
   ensureParentDirSync(targetPath);
 
+  // Keep a local recovery copy. If a deploy/startup step removes the main
+  // file, restore the last real configuration instead of rebuilding it from
+  // OWNER_ID/BOT_OWNERS with only the minimal defaults.
+  const recoveryPath = `${targetPath}.bak`;
+  let targetConfig = null;
+  let recoveryConfig = null;
+  try {
+    if (fs.existsSync(targetPath)) {
+      targetConfig = JSON.parse(fs.readFileSync(targetPath, 'utf8'));
+    }
+  } catch (_) {}
+  try {
+    if (fs.existsSync(recoveryPath)) {
+      recoveryConfig = JSON.parse(fs.readFileSync(recoveryPath, 'utf8'));
+    }
+  } catch (_) {}
+
+  const isMinimalEnvConfig = (config) => {
+    if (!config || !Array.isArray(config.owners) || config.owners.length !== 1) return false;
+    return Object.keys(config).every((key) => ['owners', 'prefix', 'settings', 'activeTasks', 'pendingReports'].includes(key));
+  };
+
+  if (!targetConfig && recoveryConfig) {
+    fs.copyFileSync(recoveryPath, targetPath);
+  } else if (targetConfig && recoveryConfig && isMinimalEnvConfig(targetConfig)
+      && Object.keys(recoveryConfig).length > Object.keys(targetConfig).length) {
+    fs.copyFileSync(recoveryPath, targetPath);
+  } else if (targetConfig) {
+    // Refresh the recovery copy only from a valid, non-minimal configuration.
+    if (!isMinimalEnvConfig(targetConfig)) {
+      fs.copyFileSync(targetPath, recoveryPath);
+    }
+  }
+
   return targetPath;
 }
 

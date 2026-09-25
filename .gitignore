@@ -4,4 +4,5 @@ database/*.db
 database/*.db-wal
 database/*.db-shm
 database/botConfig.json
+data/botConfig.json.bak
 .env
