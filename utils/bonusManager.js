@@ -484,6 +484,8 @@ function createBonusManager(dbManager) {
     return dbManager.transaction(async tx => {
       const row = await tx.get('SELECT config_json FROM bonus_guild_config WHERE guild_id = ?', [String(guildId)]);
       const current = safeJsonParse(row?.config_json, {});
+      const existing = current.globalDoubleBonus;
+      if (existing?.active === true && (existing.endsAt == null || Number(existing.endsAt) > now)) throw new Error('GLOBAL_DOUBLE_ALREADY_ACTIVE');
       const next = { ...current, globalDoubleBonus: { active: true, endsAt, changedBy: String(actorId) } };
       await tx.run(`INSERT INTO bonus_guild_config (guild_id, config_json, updated_at) VALUES (?, ?, ?)
         ON CONFLICT(guild_id) DO UPDATE SET config_json = excluded.config_json, updated_at = excluded.updated_at`,
@@ -497,6 +499,8 @@ function createBonusManager(dbManager) {
     return dbManager.transaction(async tx => {
       const row = await tx.get('SELECT config_json FROM bonus_guild_config WHERE guild_id = ?', [String(guildId)]);
       const current = safeJsonParse(row?.config_json, {});
+      const existing = current.globalDoubleBonus;
+      if (existing?.active !== true || (existing.endsAt != null && Number(existing.endsAt) <= Date.now())) throw new Error('GLOBAL_DOUBLE_NOT_ACTIVE');
       const next = { ...current, globalDoubleBonus: { active: false, endsAt: null, changedBy: actorId ? String(actorId) : null } };
       await tx.run(`INSERT INTO bonus_guild_config (guild_id, config_json, updated_at) VALUES (?, ?, ?)
         ON CONFLICT(guild_id) DO UPDATE SET config_json = excluded.config_json, updated_at = excluded.updated_at`,

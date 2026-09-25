@@ -71,6 +71,16 @@ function avatarUrlWithCacheBust(url, version) {
   if (!url) return null;
   return `${url}${String(url).includes('?') ? '&' : '?'}bonus_avatar=${version}`;
 }
+function formatRemaining(endAt) {
+  if (endAt == null) return 'Until Manual Stop';
+  let seconds = Math.max(0, Math.ceil((Number(endAt) - Date.now()) / 1000));
+  const days = Math.floor(seconds / 86400); seconds %= 86400;
+  const hours = Math.floor(seconds / 3600); seconds %= 3600;
+  const minutes = Math.floor(seconds / 60);
+  if (days) return `${days}d ${hours}h`;
+  if (hours) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
 function drawAvatar(ctx, image, x, y, radius, accent) {
   ctx.save();
   ctx.beginPath();
@@ -113,6 +123,8 @@ function drawMedal(ctx, rank, x, y, accent) {
 
 async function buildBonusTopImage({ guild, groups, config = {}, updatedAt = Date.now() }) {
   const accent = config.autoColor === false ? normalizeHex(config.color) : await findDominantColor(guild?.iconURL?.({ extension: 'png', size: 256 }));
+  const globalDouble = config.globalDoubleBonus?.active === true
+    && (config.globalDoubleBonus.endsAt == null || Number(config.globalDoubleBonus.endsAt) > Date.now());
   const [ar, ag, ab] = rgb(accent);
   const avatarVersion = Number(updatedAt) || Date.now();
   const canvas = createCanvas(WIDTH, HEIGHT);
@@ -148,6 +160,15 @@ async function buildBonusTopImage({ guild, groups, config = {}, updatedAt = Date
   ctx.fillStyle = '#AEB6C5';
   ctx.font = '22px Cairo, sans-serif';
   ctx.fillText(safeText(guild?.name, 'Server') + '  •  Top 10 Groups', 1384, 122);
+  if (globalDouble) {
+    const label = `Double Bonus : ${formatRemaining(config.globalDoubleBonus.endsAt)}`;
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 22px Cairo, sans-serif';
+    const width = Math.min(470, Math.max(270, ctx.measureText(label).width + 54));
+    roundedRect(ctx, (WIDTH - width) / 2, 56, width, 54, 18, `rgba(${ar},${ag},${ab},0.18)`, `rgba(${ar},${ag},${ab},0.65)`, 2);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(label, WIDTH / 2, 83);
+  }
 
   ctx.textAlign = 'right';
   ctx.fillStyle = accent;

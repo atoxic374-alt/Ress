@@ -1553,7 +1553,14 @@ async function handleInteraction(interaction, context = {}) {
       return true;
     }
     if (action === 'global-double-off') {
-      await db.clearGlobalMultiplier(interaction.guild.id, interaction.user.id);
+      try {
+        await db.clearGlobalMultiplier(interaction.guild.id, interaction.user.id);
+      } catch (error) {
+        const message = error.message === 'GLOBAL_DOUBLE_NOT_ACTIVE'
+          ? 'Global Double Bonus is already inactive.' : 'تعذر إيقاف الدبل العام.';
+        await showPrivatePanel(interaction, buildActionResult('Global Double Bonus', message), true);
+        return true;
+      }
       await publishAuditLogs(interaction.guild).catch(() => {});
       await showPrivatePanel(interaction, buildActionResult('Global Double Bonus Updated', 'تم إيقاف الدبل العام عن جميع القروبات الحالية والقروبات التي ستُضاف لاحقًا.'), true);
       scheduleRefresh(interaction.guild, true);
@@ -1624,7 +1631,16 @@ async function handleInteraction(interaction, context = {}) {
       const userId = scope === 'user' ? rawUserId : null;
       const durationMs = durationToken === 'forever' ? null : Number(durationToken);
       if (scope === 'global') {
-        const result = await db.setGlobalMultiplier(interaction.guild.id, durationMs, interaction.user.id);
+        let result;
+        try {
+          result = await db.setGlobalMultiplier(interaction.guild.id, durationMs, interaction.user.id);
+        } catch (error) {
+          const message = error.message === 'GLOBAL_DOUBLE_ALREADY_ACTIVE'
+            ? 'Global Double Bonus is already active. Disable it first or wait for the timer to expire.'
+            : 'تعذر تفعيل الدبل العام.';
+          await showPrivatePanel(interaction, buildActionResult('Global Double Bonus', message), true);
+          return true;
+        }
         await publishAuditLogs(interaction.guild).catch(() => {});
         await showPrivatePanel(interaction, buildActionResult('Global Double Bonus Updated', result.endsAt
           ? `تم تفعيل الدبل العام على كل القروبات الحالية والجديدة حتى <t:${Math.floor(result.endsAt / 1000)}:R>.`

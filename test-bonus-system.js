@@ -312,10 +312,12 @@ async function main() {
     assert.equal(Number(groupBTop.find(row => Number(row.id) === Number(groupB.id)).points), 0, 'group reset also clears manual points');
     await bonus.setGlobalMultiplier(guildId, null, actorId);
     assert.ok(await bonus.getGlobalMultiplier(guildId), 'global double bonus remains active for future groups');
+    await assert.rejects(() => bonus.setGlobalMultiplier(guildId, null, actorId), error => error.message === 'GLOBAL_DOUBLE_ALREADY_ACTIVE');
     const allPoints = await bonus.adjustAllGroupPoints(guildId, 3, actorId);
     assert.ok(allPoints.groups >= 1 && allPoints.delta >= 3, 'all-groups point adjustment applies to active groups');
     await bonus.clearGlobalMultiplier(guildId, actorId);
     assert.equal(await bonus.getGlobalMultiplier(guildId), null, 'global double bonus can be disabled');
+    await assert.rejects(() => bonus.clearGlobalMultiplier(guildId, actorId), error => error.message === 'GLOBAL_DOUBLE_NOT_ACTIVE');
 
     const baselineGuild = 'activation-baseline-guild';
     const baselineGroup = await bonus.addGroup(baselineGuild, 'baseline-role', 'baseline-owner', actorId);
