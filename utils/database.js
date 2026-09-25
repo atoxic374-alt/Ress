@@ -37,6 +37,16 @@ class DatabaseManager {
         return this.initializationPromise;
     }
 
+    async recoverPersistent() {
+        if (!this.isDegraded) return this;
+        if (this.initializationPromise) return this.initializationPromise;
+        await this.closeAsync().catch(() => null);
+        this.db = null;
+        this.isInitialized = false;
+        this.isDegraded = false;
+        return this.initialize();
+    }
+
     async initializeInternal() {
         try {
             // إنشاء مجلد قاعدة البيانات إذا لم يكن موجوداً

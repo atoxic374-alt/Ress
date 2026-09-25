@@ -69,6 +69,7 @@ function getManager() {
 }
 
 async function ensureBonusDatabase() {
+  if (dbManager.isDegraded && typeof dbManager.recoverPersistent === 'function') await dbManager.recoverPersistent();
   if (!dbManager.isInitialized) await dbManager.initialize();
   if (!dbManager.isInitialized || dbManager.isDegraded) throw new Error('BONUS_DATABASE_NOT_PERSISTENT');
   return dbManager;
