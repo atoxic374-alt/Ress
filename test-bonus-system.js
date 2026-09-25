@@ -58,7 +58,7 @@ async function main() {
   const manyGroups = Array.from({ length: 51 }, (_, index) => ({ id: index + 1, role_id: `role-${index + 1}`, role_name: `Role ${index + 1}` }));
   const groupPage = bonusCommand.buildGroupSelect('remove-points', manyGroups, 2);
   const pageMenu = groupPage.components[0].components[0];
-  assert.equal(pageMenu.options.length, 1, 'group pages cap each select at 25 options');
+  assert.equal(pageMenu.options.length, 3, 'point-control pages reserve one option for all groups');
   assert.match(groupPage.content, /صفحة 3\/3/, 'group pagination supports more than 25 groups');
   assert.ok(groupPage.components[1].components.some(component => component.data.custom_id === 'bonus:page:remove-points:1'),
     'previous page navigation is available');
@@ -71,6 +71,12 @@ async function main() {
     ['Add Group', 'Manage Groups', 'Reset', 'Double Bonus', 'Publish / Update'],
     ['Audit Log']
   ]);
+  assert.deepEqual(bonusCommand.buildPublicSettingsRows().slice(0, 2).map(row => row.components.map(component => component.data.label)), [
+    ['Rules', 'Add Group', 'Manage Groups', 'Reset'],
+    ['+ Add Points', '- Remove Points']
+  ]);
+  assert.equal(bonusCommand.buildGroupSelect('add-points', manyGroups).components[0].components[0].options[0].data.value, 'all',
+    'point controls offer an all-groups option');
   assert.deepEqual(bonusCommand.buildPublicRows()[0].components.map(component => component.data.label),
     ['Settings', 'Double Bonus', 'Group Avatar', 'View Rankings', 'My Group']);
   assert.equal(bonusCommand.buildPublicRows()[0].components[0].data.custom_id, 'bonus:public-settings',
@@ -270,11 +276,6 @@ async function main() {
     assert.ok(activeGroupDouble, 'group double is queryable for status and manual stop');
     assert.equal(await bonus.clearMultiplier(guildId, { scope: 'user', groupId: Number(groupA.id), userId }, actorId), 1);
     assert.equal((await bonus.listActiveUserMultipliers(guildId, Number(groupA.id))).length, 0, 'manual stop disables but retains the multiplier history');
-    const bulkOn = await bonus.setMultiplierForMembers(guildId, Number(groupA.id), ['bulk-user-a', 'bulk-user-b'], 3600000, actorId);
-    assert.equal(bulkOn.count, 2, 'all-members double enables one multiplier per selected member');
-    assert.equal((await bonus.listActiveUserMultipliers(guildId, Number(groupA.id))).length, 2, 'all-members double is visible in active user multipliers');
-    assert.equal(await bonus.clearMultiplierForMembers(guildId, Number(groupA.id), actorId), 2, 'all-members double disables every active user multiplier');
-    assert.equal((await bonus.listActiveUserMultipliers(guildId, Number(groupA.id))).length, 0, 'all-members double leaves no active user multipliers');
 
     const reset = await bonus.resetUser(guildId, Number(groupA.id), userId, actorId);
     assert.ok(reset.points > 0);
@@ -309,6 +310,12 @@ async function main() {
     assert.equal(resetGroup.manualPoints, 24, 'reset snapshot preserves the separate add-points ledger');
     groupBTop = await bonus.getLeaderboard(guildId, 10);
     assert.equal(Number(groupBTop.find(row => Number(row.id) === Number(groupB.id)).points), 0, 'group reset also clears manual points');
+    await bonus.setGlobalMultiplier(guildId, null, actorId);
+    assert.ok(await bonus.getGlobalMultiplier(guildId), 'global double bonus remains active for future groups');
+    const allPoints = await bonus.adjustAllGroupPoints(guildId, 3, actorId);
+    assert.ok(allPoints.groups >= 1 && allPoints.delta >= 3, 'all-groups point adjustment applies to active groups');
+    await bonus.clearGlobalMultiplier(guildId, actorId);
+    assert.equal(await bonus.getGlobalMultiplier(guildId), null, 'global double bonus can be disabled');
 
     const baselineGuild = 'activation-baseline-guild';
     const baselineGroup = await bonus.addGroup(baselineGuild, 'baseline-role', 'baseline-owner', actorId);

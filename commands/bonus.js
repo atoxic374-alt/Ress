@@ -236,11 +236,14 @@ async function requireManager(interaction, context = {}) {
 }
 
 function buildHomeEmbed(guild, config, groups, rules, complete) {
+  const globalDouble = config.globalDoubleBonus?.active === true
+    && (config.globalDoubleBonus.endsAt == null || Number(config.globalDoubleBonus.endsAt) > Date.now());
   const lines = [
     `**Status :** ${complete ? 'Ready' : 'Setup Required'}`,
     `**Board Channel :** ${config.channelId ? `<#${config.channelId}>` : 'Not set'}`,
     `**Audit Channel :** ${config.auditChannelId ? `<#${config.auditChannelId}>` : 'Not set'}`,
     `**Board Color :** ${config.autoColor === false ? normalizeHex(config.color) : 'Auto server icon'}`,
+    `**Global Double :** ${globalDouble ? (config.globalDoubleBonus.endsAt ? `Active until <t:${Math.floor(Number(config.globalDoubleBonus.endsAt) / 1000)}:R>` : 'Active until manual stop') : 'Inactive'}`,
     `**Active Groups :** ${groups.length}`,
     `**Message Rule :** ${rules.messages ? `${Number(rules.messages.threshold).toLocaleString()} messages = ${rules.messages.points} points` : 'Not set'}`,
     `**Voice Rule :** ${rules.voice_ms ? `${Number(rules.voice_ms.threshold) / 3600000} hours = ${rules.voice_ms.points} points` : 'Not set'}`
@@ -294,6 +297,18 @@ async function buildHome(guild) {
     db.readConfig(guild.id), db.listGroups(guild.id), db.getRules(guild.id), db.isReady(guild.id)
   ]);
   return { embeds: [buildHomeEmbed(guild, config, groups, rules, ready)], components: buildHomeRows() };
+}
+function buildPublicSettingsRows() {
+  return [
+    new ActionRowBuilder().addComponents(
+      button('bonus:rules', 'Rules'), button('bonus:add-group', 'Add Group'),
+      button('bonus:manage-groups', 'Manage Groups'), button('bonus:reset', 'Reset')
+    ),
+    new ActionRowBuilder().addComponents(
+      button('bonus:add-points', '+ Add Points'), button('bonus:remove-points', '- Remove Points')
+    ),
+    new ActionRowBuilder().addComponents(button('bonus:public-close', 'Close'))
+  ];
 }
 
 function structurePrivateResponse(payload) {
@@ -448,7 +463,7 @@ function buildManagerPayload(guild, config, actorId, responsibilityPage = 0) {
 }
 
 function buildGroupSelect(action, groups, page = 0) {
-  const pageSize = 25;
+  const pageSize = ['add-points', 'remove-points'].includes(action) ? 24 : 25;
   const pageCount = Math.max(1, Math.ceil(groups.length / pageSize));
   const safePage = Math.max(0, Math.min(pageCount - 1, Number(page) || 0));
   const options = groups.slice(safePage * pageSize, (safePage + 1) * pageSize).map(group => ({
@@ -456,6 +471,9 @@ function buildGroupSelect(action, groups, page = 0) {
     value: String(group.id),
     description: `المالك: ${safeName(group.owner_name || 'غير محدد', 80)}`
   }));
+  if (safePage === 0 && ['add-points', 'remove-points'].includes(action)) {
+    options.unshift({ label: 'All Groups', value: 'all', description: 'تطبيق نفس العدد على جميع القروبات النشطة' });
+  }
   if (!options.length) return { content: 'لا توجد قروبات نشطة.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] };
   const menu = new StringSelectMenuBuilder().setCustomId(`bonus:select:${action}:${safePage}`).setPlaceholder('اختر القروب').setMinValues(1).setMaxValues(1).addOptions(options);
   const rows = [new ActionRowBuilder().addComponents(menu)];
@@ -930,7 +948,12 @@ async function handleInteraction(interaction, context = {}) {
     if (action === 'public-settings' || action === 'public-refresh' || action === 'open' || action === 'refresh-home' || action === 'home') {
       if (action === 'public-settings' || action === 'open') {
         if (!await requireManager(interaction, context)) return true;
-        await showPrivatePanel(interaction, await buildHome(interaction.guild), true);
+        if (action === 'public-settings') {
+          const home = await buildHome(interaction.guild);
+          await showPrivatePanel(interaction, { embeds: home.embeds, components: buildPublicSettingsRows() }, true);
+        } else {
+          await showPrivatePanel(interaction, await buildHome(interaction.guild), true);
+        }
       } else if (action === 'public-refresh') {
         await showPrivatePanel(interaction, await buildBoardPayload(interaction.guild), true);
       } else {
@@ -1332,6 +1355,13 @@ async function handleInteraction(interaction, context = {}) {
     }
 
     if (action === 'select' && ['add-points', 'remove-points'].includes(parts[0])) {
+      if (interaction.values[0] === 'all') {
+        const verb = parts[0] === 'add-points' ? 'إضافة' : 'إزالة';
+        await interaction.showModal(modal(`bonus:modal:manual-points:${parts[0]}:all`, `${verb} نقاط لكل القروبات`, [
+          { id: 'amount', label: `عدد النقاط لكل قروب (${verb})`, placeholder: '100', maxLength: 8 }
+        ]));
+        return true;
+      }
       const groupId = Number(interaction.values[0]);
       const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
       if (!group) return true;
@@ -1477,7 +1507,12 @@ async function handleInteraction(interaction, context = {}) {
 
     if (action === 'double') {
       const groups = await getGroupsForDisplay(interaction.guild);
-      await showPrivatePanel(interaction, buildGroupSelect('double', groups), true);
+      const selector = buildGroupSelect('double', groups);
+      selector.components.splice(1, 0, new ActionRowBuilder().addComponents(
+        button('bonus:global-double-on', 'Enable Global Double'),
+        button('bonus:global-double-off', 'Disable Global Double', ButtonStyle.Danger)
+      ));
+      await showPrivatePanel(interaction, selector, true);
       return true;
     }
 
@@ -1485,24 +1520,23 @@ async function handleInteraction(interaction, context = {}) {
       const groupId = Number(interaction.values[0]);
       const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
       if (!group) return true;
-      const [groupDouble, userDoubles] = await Promise.all([
+      const [groupDouble, userDoubles, globalDouble] = await Promise.all([
         db.getActiveGroupMultiplier(interaction.guild.id, groupId),
-        db.listActiveUserMultipliers(interaction.guild.id, groupId)
+        db.listActiveUserMultipliers(interaction.guild.id, groupId),
+        db.getGlobalMultiplier(interaction.guild.id)
       ]);
       const buttons = [
         groupDouble
           ? button(`bonus:double-off:group:${groupId}`, 'إيقاف دبل الرول', ButtonStyle.Danger)
           : button(`bonus:double-scope:group:${groupId}`, 'دبل للرول كاملًا', ButtonStyle.Primary),
-        button(`bonus:double-scope:user:${groupId}`, 'إضافة / إزالة دبل شخص'),
-        userDoubles.length
-          ? button(`bonus:double-off:all:${groupId}`, 'إيقاف الدبل عن الكل', ButtonStyle.Danger)
-          : button(`bonus:double-scope:all:${groupId}`, 'تفعيل الدبل للكل', ButtonStyle.Primary)
+        button(`bonus:double-scope:user:${groupId}`, 'إضافة / إزالة دبل شخص')
       ];
       const activePeople = userDoubles.slice(0, 12).map(item => {
         const end = item.ends_at ? ` — ينتهي <t:${Math.floor(Number(item.ends_at) / 1000)}:R>` : ' — إيقاف يدوي';
         return `<@${item.user_id}>${end}`;
       });
       const status = [
+        `Global Double: ${globalDouble ? (globalDouble.endsAt ? `Active until <t:${Math.floor(Number(globalDouble.endsAt) / 1000)}:R>` : 'Active until manual stop') : 'Inactive'}`,
         `دبل الرول: ${groupDouble ? (groupDouble.ends_at ? `مفعّل حتى <t:${Math.floor(Number(groupDouble.ends_at) / 1000)}:R>` : 'مفعّل حتى الإيقاف اليدوي') : 'متوقف'}`,
         `الدبل الفردي المحفوظ: ${userDoubles.length ? userDoubles.length.toLocaleString() : 'لا يوجد'}`,
         ...(activePeople.length ? activePeople : [])
@@ -1511,14 +1545,28 @@ async function handleInteraction(interaction, context = {}) {
       return true;
     }
 
+    if (action === 'global-double-on') {
+      await showPrivatePanel(interaction, {
+        content: 'اختر مدة Global Double Bonus. سيطبّق على كل القروبات الحالية وأي قروب جديد حتى انتهاء المدة أو الإيقاف اليدوي.',
+        components: [durationButtons('global', 0), new ActionRowBuilder().addComponents(button('bonus:home', 'Cancel'))]
+      }, true);
+      return true;
+    }
+    if (action === 'global-double-off') {
+      await db.clearGlobalMultiplier(interaction.guild.id, interaction.user.id);
+      await publishAuditLogs(interaction.guild).catch(() => {});
+      await showPrivatePanel(interaction, buildActionResult('Global Double Bonus Updated', 'تم إيقاف الدبل العام عن جميع القروبات الحالية والقروبات التي ستُضاف لاحقًا.'), true);
+      scheduleRefresh(interaction.guild, true);
+      return true;
+    }
+
     if (action === 'double-scope') {
       const [scope, rawGroupId] = parts;
       const groupId = Number(rawGroupId);
-      if (scope === 'group' || scope === 'all') {
+      if (scope === 'group') {
         const group = await getDatabase().get('SELECT role_id FROM bonus_groups WHERE guild_id = ? AND id = ?', [interaction.guild.id, groupId]);
         if (!group) return true;
-        const target = scope === 'all' ? 'جميع أعضاء الرول' : `الرول <@&${group.role_id}>`;
-        await showPrivatePanel(interaction, { content: `اختر مدة دبل ×2 لـ${target}:`, components: [durationButtons(scope, groupId), new ActionRowBuilder().addComponents(button('bonus:home', 'إلغاء'))] }, true);
+        await showPrivatePanel(interaction, { content: `اختر مدة دبل ×2 للرول <@&${group.role_id}>:`, components: [durationButtons(scope, groupId), new ActionRowBuilder().addComponents(button('bonus:home', 'إلغاء'))] }, true);
       } else {
         const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
         const role = group ? await interaction.guild.roles.fetch(String(group.role_id)).catch(() => null) : null;
@@ -1572,9 +1620,18 @@ async function handleInteraction(interaction, context = {}) {
     if (action === 'double-on') {
       const [scope, rawGroupId, rawUserId, durationToken] = parts;
       const groupId = Number(rawGroupId);
-      if (!['group', 'user', 'all'].includes(scope)) return true;
+      if (!['group', 'user', 'global'].includes(scope)) return true;
       const userId = scope === 'user' ? rawUserId : null;
       const durationMs = durationToken === 'forever' ? null : Number(durationToken);
+      if (scope === 'global') {
+        const result = await db.setGlobalMultiplier(interaction.guild.id, durationMs, interaction.user.id);
+        await publishAuditLogs(interaction.guild).catch(() => {});
+        await showPrivatePanel(interaction, buildActionResult('Global Double Bonus Updated', result.endsAt
+          ? `تم تفعيل الدبل العام على كل القروبات الحالية والجديدة حتى <t:${Math.floor(result.endsAt / 1000)}:R>.`
+          : 'تم تفعيل الدبل العام على كل القروبات الحالية والجديدة حتى الإيقاف اليدوي.'), true);
+        scheduleRefresh(interaction.guild, true);
+        return true;
+      }
       const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
       if (!group) {
         await deny(interaction, 'القروب غير موجود أو مؤرشف.');
@@ -1583,14 +1640,6 @@ async function handleInteraction(interaction, context = {}) {
       const role = await interaction.guild.roles.fetch(String(group.role_id)).catch(() => null);
       if (!role) {
         await deny(interaction, 'رول القروب غير موجود في السيرفر حالياً.');
-        return true;
-      }
-      if (scope === 'all') {
-        const members = [...role.members.values()].filter(member => !member.user?.bot);
-        const result = await db.setMultiplierForMembers(interaction.guild.id, groupId, members.map(member => member.id), durationMs, interaction.user.id);
-        scheduleRefresh(interaction.guild, true);
-        await publishAuditLogs(interaction.guild).catch(() => {});
-        await showPrivatePanel(interaction, buildActionResult('Double Bonus Updated', `تم تفعيل الدبل ×2 على ${result.count.toLocaleString()} عضو من أعضاء القروب.`), true);
         return true;
       }
       if (scope === 'user') {
@@ -1615,13 +1664,9 @@ async function handleInteraction(interaction, context = {}) {
       const [scope, rawGroupId] = parts;
       const groupId = Number(rawGroupId);
       if (scope === 'group') await db.clearMultiplier(interaction.guild.id, { scope: 'group', groupId }, interaction.user.id);
-      if (scope === 'all') await db.clearMultiplierForMembers(interaction.guild.id, groupId, interaction.user.id);
       scheduleRefresh(interaction.guild, true);
       await publishAuditLogs(interaction.guild).catch(() => {});
-      const message = scope === 'all'
-        ? 'تم إيقاف الدبل عن جميع الأعضاء الذين كان الدبل الفردي مفعّلًا لهم.'
-        : 'تم إيقاف دبل القروب. سجل الدبل الفردي محفوظ ويمكنك اختيار العضو نفسه لإيقافه يدويًا.';
-      await showPrivatePanel(interaction, buildActionResult('Double Bonus Updated', message), true);
+      await showPrivatePanel(interaction, buildActionResult('Double Bonus Updated', 'تم إيقاف دبل القروب. سجل الدبل الفردي محفوظ ويمكنك اختيار العضو نفسه لإيقافه يدويًا.'), true);
       return true;
     }
 
@@ -1824,6 +1869,15 @@ async function handleInteraction(interaction, context = {}) {
           return true;
         }
         try {
+          if (rawGroupId === 'all' && (operation === 'add-points' || operation === 'remove-points')) {
+            const result = await db.adjustAllGroupPoints(interaction.guild.id, operation === 'add-points' ? amount : -amount, interaction.user.id);
+            const verb = operation === 'add-points' ? 'إضافة' : 'إزالة';
+            await showPrivatePanel(interaction, buildActionResult('All Groups Points Updated',
+              `تمت ${verb} ${Math.abs(result.delta).toLocaleString()} نقطة موزعة على ${result.groups.toLocaleString()} قروب نشط.`), true);
+            await publishAuditLogs(interaction.guild).catch(() => {});
+            scheduleRefresh(interaction.guild, true);
+            return true;
+          }
           if (operation === 'remove-group') {
             const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
             const current = await db.getGroupPoints(interaction.guild.id, groupId);
@@ -2312,4 +2366,4 @@ function registerInteractionHandler(client) {
   });
 }
 
-module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicRows, boardCounter, buildHomeEmbed, buildGroupSelect, buildOwnerAvatarResult, buildActionResult, isEligibleVoiceState, resolveCurrentGroupForMember, validateAvatarUrl, structurePrivateResponse };
+module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicSettingsRows, buildPublicRows, boardCounter, buildHomeEmbed, buildGroupSelect, buildOwnerAvatarResult, buildActionResult, isEligibleVoiceState, resolveCurrentGroupForMember, validateAvatarUrl, structurePrivateResponse };

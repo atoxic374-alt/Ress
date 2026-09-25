@@ -389,6 +389,11 @@ function createBonusManager(dbManager) {
       }
       let multiplier = 1;
       if (groupId != null) {
+        const configRow = await tx.get('SELECT config_json FROM bonus_guild_config WHERE guild_id = ?', [guild]);
+        const config = safeJsonParse(configRow?.config_json, {});
+        const globalDouble = config.globalDoubleBonus;
+        const globalActive = globalDouble?.active === true
+          && (globalDouble.endsAt == null || Number(globalDouble.endsAt) > now);
         const userDouble = await tx.get(`
           SELECT id FROM bonus_multipliers
           WHERE guild_id = ? AND scope = 'user' AND group_id = ? AND user_id = ? AND active = 1
@@ -401,7 +406,7 @@ function createBonusManager(dbManager) {
             AND starts_at <= ? AND (ends_at IS NULL OR ends_at > ?)
           ORDER BY created_at DESC LIMIT 1
         `, [guild, groupId, now, now]);
-        if (userDouble || groupDouble) multiplier = 2;
+        if (globalActive || userDouble || groupDouble) multiplier = 2;
       }
 
       const award = calculateAward(previousProgress, eligibleAmount, Number(rule.threshold), Number(rule.points), multiplier);
@@ -472,36 +477,69 @@ function createBonusManager(dbManager) {
     }, 'bonus-multiplier-clear');
   }
 
-  async function setMultiplierForMembers(guildId, groupId, userIds, durationMs = null, actorId) {
-    if (!Number.isSafeInteger(Number(groupId)) || Number(groupId) < 1) throw new Error('INVALID_MULTIPLIER_SCOPE');
+  async function setGlobalMultiplier(guildId, durationMs = null, actorId) {
     if (durationMs != null && (!Number.isSafeInteger(Number(durationMs)) || Number(durationMs) <= 0)) throw new Error('INVALID_MULTIPLIER_DURATION');
-    const ids = [...new Set((userIds || []).map(String).filter(Boolean))];
     const now = Date.now();
     const endsAt = durationMs ? now + Math.max(60000, Math.min(Number(durationMs), 30 * 24 * 60 * 60 * 1000)) : null;
     return dbManager.transaction(async tx => {
-      const group = await tx.get('SELECT id FROM bonus_groups WHERE guild_id = ? AND id = ? AND archived_at IS NULL', [String(guildId), Number(groupId)]);
-      if (!group) throw new Error('GROUP_NOT_FOUND');
-      for (const userId of ids) {
-        await tx.run(`UPDATE bonus_multipliers SET active = 0 WHERE guild_id = ? AND scope = 'user' AND group_id = ? AND user_id = ? AND active = 1`, [String(guildId), Number(groupId), userId]);
-        await tx.run(`INSERT INTO bonus_multipliers (guild_id, scope, group_id, user_id, starts_at, ends_at, active, changed_by, created_at) VALUES (?, 'user', ?, ?, ?, ?, 1, ?, ?)`,
-          [String(guildId), Number(groupId), userId, now, endsAt, String(actorId), now]);
-      }
-      await tx.run(`INSERT INTO bonus_audit_log (guild_id, actor_id, action, target_group_id, details_json, created_at) VALUES (?, ?, 'double_bonus_on_all', ?, ?, ?)`,
-        [String(guildId), String(actorId), Number(groupId), JSON.stringify({ scope: 'all', count: ids.length, userIds: ids, endsAt }), now]);
-      return { count: ids.length, groupId: Number(groupId), endsAt };
+      const row = await tx.get('SELECT config_json FROM bonus_guild_config WHERE guild_id = ?', [String(guildId)]);
+      const current = safeJsonParse(row?.config_json, {});
+      const next = { ...current, globalDoubleBonus: { active: true, endsAt, changedBy: String(actorId) } };
+      await tx.run(`INSERT INTO bonus_guild_config (guild_id, config_json, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(guild_id) DO UPDATE SET config_json = excluded.config_json, updated_at = excluded.updated_at`,
+      [String(guildId), JSON.stringify(next), now]);
+      await insertAudit(tx, guildId, actorId, 'double_bonus_global_on', null, null, null, { endsAt });
+      return { endsAt };
     }, 'bonus-multiplier-all');
   }
 
-  async function clearMultiplierForMembers(guildId, groupId, actorId) {
-    if (!Number.isSafeInteger(Number(groupId)) || Number(groupId) < 1) throw new Error('INVALID_MULTIPLIER_SCOPE');
+  async function clearGlobalMultiplier(guildId, actorId) {
     return dbManager.transaction(async tx => {
-      const group = await tx.get('SELECT id FROM bonus_groups WHERE guild_id = ? AND id = ? AND archived_at IS NULL', [String(guildId), Number(groupId)]);
-      if (!group) throw new Error('GROUP_NOT_FOUND');
-      const result = await tx.run(`UPDATE bonus_multipliers SET active = 0 WHERE guild_id = ? AND scope = 'user' AND group_id = ? AND active = 1`, [String(guildId), Number(groupId)]);
-      await tx.run(`INSERT INTO bonus_audit_log (guild_id, actor_id, action, target_group_id, details_json, created_at) VALUES (?, ?, 'double_bonus_off_all', ?, ?, ?)`,
-        [String(guildId), actorId ? String(actorId) : null, Number(groupId), JSON.stringify({ scope: 'all', count: result.changes }), Date.now()]);
-      return result.changes;
+      const row = await tx.get('SELECT config_json FROM bonus_guild_config WHERE guild_id = ?', [String(guildId)]);
+      const current = safeJsonParse(row?.config_json, {});
+      const next = { ...current, globalDoubleBonus: { active: false, endsAt: null, changedBy: actorId ? String(actorId) : null } };
+      await tx.run(`INSERT INTO bonus_guild_config (guild_id, config_json, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(guild_id) DO UPDATE SET config_json = excluded.config_json, updated_at = excluded.updated_at`,
+      [String(guildId), JSON.stringify(next), Date.now()]);
+      await insertAudit(tx, guildId, actorId, 'double_bonus_global_off', null, null, null, {});
+      return true;
     }, 'bonus-multiplier-all-clear');
+  }
+
+  async function getGlobalMultiplier(guildId) {
+    const config = await readConfig(guildId);
+    const value = config.globalDoubleBonus;
+    return value?.active === true && (value.endsAt == null || Number(value.endsAt) > Date.now()) ? value : null;
+  }
+
+  async function adjustAllGroupPoints(guildId, delta, actorId) {
+    const safeDelta = Number(delta);
+    if (!Number.isSafeInteger(safeDelta) || safeDelta === 0 || Math.abs(safeDelta) > MAX_POINTS_PER_EVENT) throw new Error('INVALID_POINTS_ADJUSTMENT');
+    return dbManager.transaction(async tx => {
+      const groups = await tx.all('SELECT id FROM bonus_groups WHERE guild_id = ? AND archived_at IS NULL ORDER BY id ASC', [String(guildId)]);
+      if (!groups.length) throw new Error('GROUP_NOT_FOUND');
+      let totalDelta = 0;
+      for (const group of groups) {
+        const currentRow = await tx.get('SELECT points FROM bonus_group_point_balances WHERE guild_id = ? AND group_id = ?', [String(guildId), Number(group.id)]);
+        const membersRow = await tx.get('SELECT COALESCE(SUM(points), 0) AS points FROM bonus_balances WHERE guild_id = ? AND group_id = ?', [String(guildId), Number(group.id)]);
+        const adjustmentsRow = await tx.get('SELECT COALESCE(SUM(delta), 0) AS points FROM bonus_group_adjustments WHERE guild_id = ? AND group_id = ? AND active = 1', [String(guildId), Number(group.id)]);
+        const before = Number(currentRow?.points || 0) + Number(membersRow?.points || 0) + Number(adjustmentsRow?.points || 0);
+        const actual = safeDelta > 0 ? safeDelta : -Math.min(Math.abs(safeDelta), Math.max(0, before));
+        if (!actual) continue;
+        if (actual > 0) {
+          await tx.run(`INSERT INTO bonus_group_point_balances (guild_id, group_id, points, updated_at) VALUES (?, ?, ?, ?)
+            ON CONFLICT(guild_id, group_id) DO UPDATE SET points = excluded.points, updated_at = excluded.updated_at`,
+          [String(guildId), Number(group.id), Number(currentRow?.points || 0) + actual, Date.now()]);
+        } else {
+          await tx.run(`INSERT INTO bonus_group_adjustments (guild_id, group_id, delta, reason, actor_id, active, created_at) VALUES (?, ?, ?, 'manual_group_deduction_all', ?, 1, ?)`,
+          [String(guildId), Number(group.id), actual, actorId ? String(actorId) : null, Date.now()]);
+        }
+        totalDelta += actual;
+      }
+      await insertAudit(tx, guildId, actorId, safeDelta > 0 ? 'manual_all_groups_points_add' : 'manual_all_groups_points_remove', null, null, null,
+        { requested: Math.abs(safeDelta), actual: Math.abs(totalDelta), groups: groups.length });
+      return { groups: groups.length, delta: totalDelta };
+    }, 'bonus-manual-all-groups');
   }
 
   async function listActiveUserMultipliers(guildId, groupId) {
@@ -792,8 +830,8 @@ function createBonusManager(dbManager) {
   return {
     readConfig, saveConfig, audit, listAuditLog, listGroups, getRules, setRule, disableRule, addGroup, resolveTargetGroup,
     getRoleGrantHistory, recordRoleChanges, seedRoleGrantHistory,
-    syncAssignment, addActivity, setMultiplier, clearMultiplier, setMultiplierForMembers, clearMultiplierForMembers, listActiveUserMultipliers, getActiveGroupMultiplier,
-    adjustGroupPoints, adjustUserPoints, resetGroup, listGroupResetSnapshots, restoreGroupReset, resetUser, updateGroup, archiveGroup,
+    syncAssignment, addActivity, setMultiplier, clearMultiplier, setGlobalMultiplier, clearGlobalMultiplier, getGlobalMultiplier, listActiveUserMultipliers, getActiveGroupMultiplier,
+    adjustGroupPoints, adjustAllGroupPoints, adjustUserPoints, resetGroup, listGroupResetSnapshots, restoreGroupReset, resetUser, updateGroup, archiveGroup,
     getLeaderboard, getLeaderboardSummary, getGroupPoints, getBalance, isReady
   };
 }
