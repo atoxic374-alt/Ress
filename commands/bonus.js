@@ -30,6 +30,7 @@ const boardPermissionBackoff = new Map();
 const ownerAvatarCooldowns = new Map();
 const boardPageState = new Map();
 const auditFilterState = new Map();
+const auditPublishCursor = new Map();
 const memberOperationLocks = new Map();
 const DISPLAY_CACHE_TTL_MS = 60 * 1000;
 const DISPLAY_MEMBER_BATCH_SIZE = 100;
@@ -219,7 +220,7 @@ async function isManager(guild, member, userId, context = {}) {
 }
 
 async function deny(interaction, text = 'هذه اللوحة للمسؤولين المحددين فقط.') {
-  const payload = { content: `❌ ${text}`, ephemeral: true };
+  const payload = { embeds: [colorManager.createEmbed().setTitle('Access Denied').setDescription(`❌ ${text}`)], ephemeral: true };
   if (interaction.deferred || interaction.replied) await interaction.followUp(payload).catch(() => {});
   else await interaction.reply(payload).catch(() => {});
 }
@@ -234,22 +235,23 @@ async function requireManager(interaction, context = {}) {
 
 function buildHomeEmbed(guild, config, groups, rules, complete) {
   const lines = [
-    `**حالة النظام:** ${complete ? 'جاهز' : 'قيد الإعداد'}`,
-    `**روم التوب:** ${config.channelId ? `<#${config.channelId}>` : 'غير محدد'}`,
-    `**لون الصورة:** ${config.autoColor === false ? normalizeHex(config.color) : 'تلقائي من أيقونة السيرفر'}`,
-    `**القروبات النشطة:** ${groups.length}`,
-    `**قاعدة الرسائل:** ${rules.messages ? `كل ${Number(rules.messages.threshold).toLocaleString()} رسالة = ${rules.messages.points} نقطة` : 'غير محددة'}`,
-    `**قاعدة الصوت:** ${rules.voice_ms ? `كل ${Number(rules.voice_ms.threshold) / 3600000} ساعة = ${rules.voice_ms.points} نقطة` : 'غير محددة'}`
+    `**Status :** ${complete ? 'Ready' : 'Setup Required'}`,
+    `**Board Channel :** ${config.channelId ? `<#${config.channelId}>` : 'Not set'}`,
+    `**Audit Channel :** ${config.auditChannelId ? `<#${config.auditChannelId}>` : 'Not set'}`,
+    `**Board Color :** ${config.autoColor === false ? normalizeHex(config.color) : 'Auto server icon'}`,
+    `**Active Groups :** ${groups.length}`,
+    `**Message Rule :** ${rules.messages ? `${Number(rules.messages.threshold).toLocaleString()} messages = ${rules.messages.points} points` : 'Not set'}`,
+    `**Voice Rule :** ${rules.voice_ms ? `${Number(rules.voice_ms.threshold) / 3600000} hours = ${rules.voice_ms.points} points` : 'Not set'}`
   ];
   return colorManager.createEmbed()
-    .setTitle(`إعدادات البونس • ${safeName(guild.name)}`)
+    .setTitle(`Bonus Settings • ${safeName(guild.name)}`)
     .setDescription(lines.join('\n'))
     .setColor(colorManager.getColor())
     .setFooter({ text: 'التغييرات محفوظة في SQLite • إعدادات مستقلة لكل سيرفر' });
 }
 
 function button(customId, label, style = ButtonStyle.Secondary) {
-  return new ButtonBuilder().setCustomId(customId).setLabel(label).setStyle(style);
+  return new ButtonBuilder().setCustomId(customId).setLabel(label).setStyle(ButtonStyle.Secondary);
 }
 
 function durationButtons(scope, groupId, userId = null) {
@@ -267,19 +269,20 @@ function durationButtons(scope, groupId, userId = null) {
 function buildHomeRows() {
   return [
     new ActionRowBuilder().addComponents(
-      button('bonus:managers', 'المسؤولون'),
-      button('bonus:rules', 'قواعد النقاط'),
-      button('bonus:channel', 'روم التوب'),
-      button('bonus:color', 'لون الصورة'),
-      button('bonus:audit', 'سجل التدقيق')
+      button('bonus:managers', 'Managers'),
+      button('bonus:rules', 'Rules'),
+      button('bonus:channel', 'Board Channel'),
+      button('bonus:audit-channel', 'Audit Channel'),
+      button('bonus:color', 'Board Color')
     ),
     new ActionRowBuilder().addComponents(
-      button('bonus:add-group', 'إضافة قروب'),
-      button('bonus:manage-groups', 'إدارة القروبات'),
-      button('bonus:reset', 'تصفير'),
-      button('bonus:double', 'دبل بونس'),
-      button('bonus:publish', 'نشر / تحديث', ButtonStyle.Success)
-    )
+      button('bonus:add-group', 'Add Group'),
+      button('bonus:manage-groups', 'Manage Groups'),
+      button('bonus:reset', 'Reset'),
+      button('bonus:double', 'Double Bonus'),
+      button('bonus:publish', 'Publish / Update', ButtonStyle.Secondary)
+    ),
+    new ActionRowBuilder().addComponents(button('bonus:audit', 'Audit Log'))
   ];
 }
 
@@ -291,16 +294,48 @@ async function buildHome(guild) {
   return { embeds: [buildHomeEmbed(guild, config, groups, rules, ready)], components: buildHomeRows() };
 }
 
+function structurePrivateResponse(payload) {
+  if (!payload?.content || payload.embeds?.length || payload.files?.length || payload.attachments?.length) return payload;
+  const raw = String(payload.content).trim();
+  if (!raw) return payload;
+  const lines = raw.split(/\n+/).map(line => line.trim()).filter(Boolean);
+  const first = lines.shift() || raw;
+  const lower = raw.toLowerCase();
+  const title = /تأكيد|confirm|هل تريد|سيتم/.test(lower) ? 'Confirmation Required'
+    : /تم |تمت|نجاح|updated|saved|activated|disabled/.test(lower) ? 'Action Completed'
+      : /اختر|select|حدد|choose/.test(lower) ? 'Select Option' : 'Bonus Settings';
+  const fields = [];
+  const fieldNames = {
+    'الإجمالي الحالي': 'Current Total', 'بعد الإزالة': 'After Removal', 'رصيده الحالي': 'Current Balance',
+    'رصيده بعد الإزالة': 'Balance After Removal', 'المنفذ': 'Actor', 'العضو': 'Target User',
+    'القروب': 'Group', 'الرول': 'Role', 'المالك': 'Owner', 'المدة': 'Duration', 'الحالة': 'Status'
+  };
+  for (const [index, line] of lines.entries()) {
+    const separator = line.match(/^([^:：]{1,80})[:：]\s*(.+)$/);
+    const rawName = separator ? separator[1].trim() : `Details ${index + 1}`;
+    fields.push({ name: fieldNames[rawName] || rawName, value: (separator ? separator[2] : line).slice(0, 1024), inline: false });
+  }
+  const embed = colorManager.createEmbed().setTitle(title).setDescription(first.slice(0, 4000));
+  if (fields.length) embed.addFields(fields.slice(0, 25));
+  const normalized = { ...payload, embeds: [embed] };
+  delete normalized.content;
+  return normalized;
+}
+
 async function buildAuditPayload(guild, page = 0) {
   const filter = auditFilterState.get(String(guild.id)) || {};
   const result = await getManager().listAuditLog(guild.id, { page, limit: 10, ...filter });
-  const lines = result.rows.length ? result.rows.map((row, index) => {
+  const fields = result.rows.map((row, index) => {
     let details = {};
     try { details = JSON.parse(row.details_json || '{}'); } catch { details = {}; }
-    const before = details.before ? ` | قبل: ${JSON.stringify(details.before).slice(0, 180)}` : '';
-    const after = details.after ? ` | بعد: ${JSON.stringify(details.after).slice(0, 180)}` : '';
-    return `**${result.page * result.limit + index + 1}. ${safeName(row.action, 50)}**\nالمنفذ: ${row.actor_id ? `<@${row.actor_id}>` : 'النظام'}${row.target_user_id ? ` | العضو: <@${row.target_user_id}>` : ''}${before}${after}`;
-  }).join('\n\n') : 'لا توجد عمليات مسجلة.';
+    const before = details.before ? `\nBefore : ${JSON.stringify(details.before).slice(0, 180)}` : '';
+    const after = details.after ? `\nAfter : ${JSON.stringify(details.after).slice(0, 180)}` : '';
+    return {
+      name: `${result.page * result.limit + index + 1}. ${safeName(row.action, 60)}`,
+      value: `Actor : ${row.actor_id ? `<@${row.actor_id}>` : 'System'}\nTarget : ${row.target_user_id ? `<@${row.target_user_id}>` : '—'}${before}${after}`.slice(0, 1024),
+      inline: false
+    };
+  });
   const pageCount = Math.max(1, Math.ceil(result.total / result.limit));
   const nav = [];
   if (result.page > 0) nav.push(button(`bonus:audit-page:${result.page - 1}`, 'السابق'));
@@ -308,11 +343,17 @@ async function buildAuditPayload(guild, page = 0) {
   const rows = [];
   if (nav.length) rows.push(new ActionRowBuilder().addComponents(nav));
   rows.push(new ActionRowBuilder().addComponents(button('bonus:audit-filter', 'فلترة'), button('bonus:home', 'رجوع')));
-  return { content: `## سجل تدقيق البونس (صفحة ${result.page + 1}/${pageCount})\n\n${lines}`, components: rows };
+  const embed = colorManager.createEmbed().setTitle('Bonus Audit Log')
+    .setDescription(`Page : ${result.page + 1} / ${pageCount}\nTotal Records : ${result.total}\nFilters : ${Object.keys(filter).length ? 'Applied' : 'None'}`)
+    .addFields(fields.length ? fields : [{ name: 'No Records', value: 'No audit records found.', inline: false }]);
+  return { embeds: [embed], components: rows };
 }
 
 async function showPrivatePanel(interaction, payload, update = false) {
-  if (update && (interaction.message || interaction.deferred || interaction.replied)) {
+  const boardMessage = isBonusBoardMessage(interaction.message);
+  const shouldUpdateBoard = boardMessage && Array.isArray(payload.files) && payload.files.length > 0;
+  payload = (!boardMessage || !shouldUpdateBoard) ? structurePrivateResponse(payload) : payload;
+  if (update && (interaction.message || interaction.deferred || interaction.replied) && (!boardMessage || shouldUpdateBoard)) {
     const cleanPayload = { ...payload };
     delete cleanPayload.ephemeral;
     const currentContent = String(interaction.message?.content || '');
@@ -539,18 +580,40 @@ async function maybeRefreshBoard(guild, force = false) {
   }
 }
 
-function buildPublicRows(page = 0, pageCount = 1) {
+function buildMemberSelect(action, group, members, page = 0) {
+  const pageSize = 25;
+  const sorted = Array.from(members || []).sort((a, b) =>
+    String(a.displayName || a.user?.username || a.id).localeCompare(String(b.displayName || b.user?.username || b.id))
+  );
+  const pageCount = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const safePage = Math.max(0, Math.min(pageCount - 1, Number(page) || 0));
+  const options = sorted.slice(safePage * pageSize, (safePage + 1) * pageSize).map(member => ({
+    label: safeName(member.displayName || member.user?.username || member.id, 100),
+    value: String(member.id),
+    description: `@${safeName(member.user?.username || member.id, 80)}`
+  }));
+  if (!options.length) return { content: 'لا يوجد أعضاء حاليًا داخل رول هذا القروب.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] };
+  const menu = new StringSelectMenuBuilder().setCustomId(`bonus:select:${action}:${group.id}:${safePage}`)
+    .setPlaceholder(`اختر عضوًا من الرول (${safePage + 1}/${pageCount})`).setMinValues(1).setMaxValues(1).addOptions(options);
+  const nav = [];
+  if (safePage > 0) nav.push(button(`bonus:page:${action}:${group.id}:${safePage - 1}`, 'السابق'));
+  if (safePage + 1 < pageCount) nav.push(button(`bonus:page:${action}:${group.id}:${safePage + 1}`, 'التالي'));
+  nav.push(button('bonus:home', 'رجوع'));
+  return {
+    embeds: [colorManager.createEmbed().setTitle('Double Bonus • Select Member')
+      .setDescription(`القروب: <@&${group.role_id}>\nالاختيار محصور بأعضاء رول القروب فقط.`)],
+    components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(nav)]
+  };
+}
+
+function buildPublicRows() {
   const rows = [new ActionRowBuilder().addComponents(
-    button('bonus:add-group', 'إضافة قروب', ButtonStyle.Success),
-    button('bonus:remove-group', 'إزالة قروب', ButtonStyle.Danger),
-    button('bonus:add-points', 'إعطاء نقاط'),
-    button('bonus:remove-points', 'إزالة نقاط', ButtonStyle.Danger),
-    button('bonus:double', 'دبل بونس')
-  ), new ActionRowBuilder().addComponents(button('bonus:owner-avatar', 'تغيير أفتار قروبي'))];
-  const navigation = [];
-  if (page > 0) navigation.push(button(`bonus:top-page:${page - 1}`, 'السابق'));
-  if (page + 1 < pageCount) navigation.push(button(`bonus:top-page:${page + 1}`, 'التالي'));
-  if (navigation.length) rows.push(new ActionRowBuilder().addComponents(navigation));
+    button('bonus:public-settings', 'Settings', ButtonStyle.Secondary),
+    button('bonus:double', 'Double Bonus', ButtonStyle.Secondary),
+    button('bonus:owner-avatar', 'Group Avatar', ButtonStyle.Secondary),
+    button('bonus:private-top', 'View Rankings', ButtonStyle.Secondary),
+    button('bonus:my-group', 'My Group', ButtonStyle.Secondary)
+  )];
   return rows;
 }
 
@@ -566,17 +629,79 @@ async function buildBoardPayload(guild, prompt = '', requestedPage = 0) {
   const [summary, totalGroups] = await Promise.all([
     db.getLeaderboardSummary(guild.id), db.listGroups(guild.id, false)
   ]);
-  const pageCount = Math.max(1, Math.ceil(totalGroups.length / 10));
-  const page = Math.max(0, Math.min(pageCount - 1, Number(requestedPage) || 0));
-  boardPageState.set(String(guild.id), page);
-  const leaderboard = await db.getLeaderboard(guild.id, 10, page * 10);
+  const leaderboard = await db.getLeaderboard(guild.id, 10, 0);
   const groups = await getGroupsForDisplay(guild, leaderboard);
   groups.forEach((group, index) => {
     if (!group.role_name || group.role_name === 'رول محذوف') group.role_name = `قروب ${index + 1}`;
     if (!group.owner_name || group.owner_name === 'مالك غير موجود') group.owner_name = 'مالك غير محدد';
   });
   const attachment = await buildBonusTopImage({ guild, groups, config, updatedAt: Date.now() });
-  return { content: [boardCounter(summary), prompt].filter(Boolean).join('\n'), files: [attachment], attachments: [], components: buildPublicRows(page, pageCount) };
+  return { content: [boardCounter(summary), prompt].filter(Boolean).join('\n'), files: [attachment], attachments: [], components: buildPublicRows() };
+}
+
+async function buildPrivateTopPayload(guild, requestedPage = 0) {
+  const db = getManager();
+  const totalGroups = await db.listGroups(guild.id, false);
+  const pageCount = Math.max(1, Math.ceil(totalGroups.length / 10));
+  const page = Math.max(0, Math.min(pageCount - 1, Number(requestedPage) || 0));
+  const [summary, leaderboard] = await Promise.all([
+    db.getLeaderboardSummary(guild.id), db.getLeaderboard(guild.id, 10, page * 10)
+  ]);
+  const config = await db.readConfig(guild.id);
+  const groups = await getGroupsForDisplay(guild, leaderboard);
+  groups.forEach((group, index) => {
+    if (!group.role_name || group.role_name === 'رول محذوف') group.role_name = `Group ${page * 10 + index + 1}`;
+    if (!group.owner_name || group.owner_name === 'مالك غير موجود') group.owner_name = 'Unknown owner';
+  });
+  const attachment = await buildBonusTopImage({ guild, groups, config, updatedAt: Date.now() });
+  const nav = [];
+  if (page > 0) nav.push(button(`bonus:private-top-page:${page - 1}`, 'Previous'));
+  if (page + 1 < pageCount) nav.push(button(`bonus:private-top-page:${page + 1}`, 'Next'));
+  return {
+    content: `${boardCounter(summary)}\nPage : ${page + 1} / ${pageCount}`,
+    files: [attachment], attachments: [],
+    components: nav.length ? [new ActionRowBuilder().addComponents(nav)] : [new ActionRowBuilder().addComponents(button('bonus:home', 'Back'))]
+  };
+}
+
+async function buildMyGroupPayload(guild, member) {
+  const db = getManager();
+  const resolved = await resolveCurrentGroupForMember(guild, member);
+  const groupId = resolved.targetGroupId;
+  const embed = colorManager.createEmbed().setTitle('My Bonus Group')
+    .setDescription(`Member : <@${member.id}>\nStatus : ${groupId == null ? 'Unassigned' : 'Assigned'}`);
+  if (groupId == null) {
+    embed.addFields({ name: 'Group', value: 'You are not assigned to an active bonus group.', inline: false });
+    return { embeds: [embed], components: [new ActionRowBuilder().addComponents(button('bonus:home', 'Close'))] };
+  }
+  const [group, balance, allGroups, groupPoints, userDoubles, groupDouble] = await Promise.all([
+    Promise.resolve(resolved.groups.find(item => Number(item.id) === Number(groupId))),
+    db.getBalance(guild.id, member.id),
+    db.listGroups(guild.id, false),
+    db.getGroupPoints(guild.id, groupId),
+    db.listActiveUserMultipliers(guild.id, groupId),
+    db.getActiveGroupMultiplier(guild.id, groupId)
+  ]);
+  let rank = 0;
+  for (let offset = 0; offset < allGroups.length; offset += 25) {
+    const page = await db.getLeaderboard(guild.id, 25, offset);
+    const index = page.findIndex(row => Number(row.id) === Number(groupId));
+    if (index >= 0) { rank = offset + index + 1; break; }
+  }
+  const role = group ? guild.roles.cache.get(String(group.role_id)) : null;
+  const userDouble = userDoubles.some(row => String(row.user_id) === String(member.id));
+  embed.setThumbnail(group?.avatar_url || guild.iconURL?.({ extension: 'png', size: 256 }) || undefined)
+    .addFields(
+      { name: 'Group', value: group ? `<@&${group.role_id}>\n${safeName(role?.name || 'Unknown role')}` : 'Unknown group', inline: true },
+      { name: 'Rank', value: rank > 0 ? `#${rank} / ${allGroups.length}` : '—', inline: true },
+      { name: 'My Points', value: (Number(balance?.points) || 0).toLocaleString('en-US'), inline: true },
+      { name: 'Group Points', value: (Number(groupPoints) || 0).toLocaleString('en-US'), inline: true },
+      { name: 'Message Progress', value: Number(balance?.message_progress || 0).toLocaleString('en-US'), inline: true },
+      { name: 'Voice Progress', value: `${(Number(balance?.voice_progress_ms || 0) / 3600000).toFixed(2)} hours`, inline: true },
+      { name: 'Double Bonus', value: userDouble || groupDouble ? 'Active ×2' : 'Inactive', inline: true },
+      { name: 'Owner', value: group?.owner_id ? `<@${group.owner_id}>` : 'Unknown', inline: true }
+    );
+  return { embeds: [embed], components: [new ActionRowBuilder().addComponents(button('bonus:home', 'Close'))] };
 }
 
 function isBonusBoardMessage(message) {
@@ -584,7 +709,7 @@ function isBonusBoardMessage(message) {
 }
 
 async function buildReturnPayload(interaction, prompt = '') {
-  if (isBonusBoardMessage(interaction.message)) return buildBoardPayload(interaction.guild, prompt);
+  if (isBonusBoardMessage(interaction.message)) return { ...(await buildHome(interaction.guild)), content: prompt };
   return { ...(await buildHome(interaction.guild)), content: prompt };
 }
 
@@ -727,12 +852,26 @@ async function handleInteraction(interaction, context = {}) {
     await ensureBonusDatabase();
     if (isBonusBoardMessage(interaction.message)) activeBoardPanels.set(String(interaction.guild.id), Date.now() + 10 * 60 * 1000);
     const manualPointsSelection = action === 'select' && ['add-points', 'remove-points'].includes(parts[0]);
-    if (interaction.isAnySelectMenu?.() && !manualPointsSelection && !interaction.deferred && !interaction.replied) {
+    const fromBoard = isBonusBoardMessage(interaction.message);
+    const opensModal = action === 'color-manual' || action === 'rule' || action === 'audit-filter'
+      || action === 'owner-avatar' || (action === 'select' && parts[0] === 'owner-avatar')
+      || (action === 'group-action' && parts[0] === 'avatar');
+    if (interaction.isAnySelectMenu?.() && !manualPointsSelection && !opensModal && !fromBoard && !interaction.deferred && !interaction.replied) {
       await interaction.deferUpdate();
     }
-    const opensModal = action === 'color-manual' || action === 'rule' || action === 'audit-filter' || (action === 'group-action' && parts[0] === 'avatar');
-    if (interaction.isButton?.() && !opensModal && !interaction.deferred && !interaction.replied) await interaction.deferUpdate();
+    if (interaction.isButton?.() && !opensModal && !fromBoard && !interaction.deferred && !interaction.replied) await interaction.deferUpdate();
     if (interaction.isModalSubmit?.() && action === 'modal' && !interaction.deferred && !interaction.replied) await interaction.deferUpdate();
+
+    if (action === 'private-top' || action === 'private-top-page') {
+      const page = action === 'private-top-page' ? Number(parts[0]) || 0 : 0;
+      await showPrivatePanel(interaction, await buildPrivateTopPayload(interaction.guild, page), action === 'private-top-page');
+      return true;
+    }
+    if (action === 'my-group') {
+      const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+      await showPrivatePanel(interaction, await buildMyGroupPayload(interaction.guild, member), false);
+      return true;
+    }
 
     if (action === 'public-settings' || action === 'public-refresh' || action === 'open' || action === 'refresh-home' || action === 'home') {
       if (action === 'public-settings' || action === 'open') {
@@ -750,7 +889,8 @@ async function handleInteraction(interaction, context = {}) {
     if (action === 'top-page') {
       const page = Math.max(0, Number(parts[0]) || 0);
       const payload = await buildBoardPayload(interaction.guild, '', page);
-      await interaction.editReply(payload);
+      if (interaction.deferred || interaction.replied) await interaction.editReply(payload);
+      else await interaction.update(payload);
       return true;
     }
 
@@ -867,6 +1007,15 @@ async function handleInteraction(interaction, context = {}) {
     if (!await requireManager(interaction, context)) return true;
     const db = getManager();
 
+    if (action === 'page' && parts[0] === 'double-user-member') {
+      const groupId = Number(parts[1]);
+      const page = Number(parts[2]) || 0;
+      const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
+      const role = group ? await interaction.guild.roles.fetch(String(group.role_id)).catch(() => null) : null;
+      if (!group || !role) return true;
+      await showPrivatePanel(interaction, buildMemberSelect('double-user-member', group, role.members.values(), page), true);
+      return true;
+    }
     if (action === 'page') {
       const selectAction = parts[0];
       const page = Number(parts[1]);
@@ -891,6 +1040,16 @@ async function handleInteraction(interaction, context = {}) {
       return true;
     }
 
+    if (action === 'audit-channel') {
+      const menu = new ChannelSelectMenuBuilder().setCustomId('bonus:select-audit-channel').setPlaceholder('Select audit log channel')
+        .setMinValues(1).setMaxValues(1).addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
+      await showPrivatePanel(interaction, {
+        embeds: [colorManager.createEmbed().setTitle('Audit Channel').setDescription('اختر رومًا مستقلًا لاستقبال سجلات إعدادات وعمليات البونس.')],
+        components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(button('bonus:home', 'Back'))]
+      }, true);
+      return true;
+    }
+
     if (action === 'select-channel') {
       const channel = interaction.guild.channels.cache.get(interaction.values[0]);
       if (!isGuildText(channel)) {
@@ -907,6 +1066,17 @@ async function handleInteraction(interaction, context = {}) {
         await db.saveConfig(interaction.guild.id, { channelId: channel.id }, interaction.user.id);
       }
       await showPrivatePanel(interaction, { content: `تم تحديد روم التوب: <#${channel.id}>`, components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع للإعدادات'))] }, true);
+      return true;
+    }
+
+    if (action === 'select-audit-channel') {
+      const channel = interaction.guild.channels.cache.get(interaction.values[0]);
+      if (!isGuildText(channel)) {
+        await showPrivatePanel(interaction, { content: 'The audit channel must be a text channel.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'Back'))] }, true);
+        return true;
+      }
+      await db.saveConfig(interaction.guild.id, { auditChannelId: channel.id }, interaction.user.id);
+      await showPrivatePanel(interaction, { embeds: [colorManager.createEmbed().setTitle('Audit Channel Updated').setDescription(`Logs will be organized in <#${channel.id}>.`)], components: [new ActionRowBuilder().addComponents(button('bonus:home', 'Back'))] }, true);
       return true;
     }
 
@@ -1042,7 +1212,9 @@ async function handleInteraction(interaction, context = {}) {
         const payload = flow.fromBoard ? await buildBoardPayload(interaction.guild, confirmation) : { ...(await buildHome(interaction.guild)), content: confirmation };
         await showPrivatePanel(interaction, payload, true);
       } catch (error) {
-        const text = error.message === 'ROLE_ALREADY_REGISTERED' ? 'هذا الرول مسجل كقروب بالفعل.' : 'تعذرت إضافة القروب.';
+        const text = error.message === 'ROLE_ALREADY_REGISTERED' ? 'هذا الرول مسجل كقروب بالفعل.'
+          : error.message === 'OWNER_ALREADY_ASSIGNED' ? 'هذا العضو مرتبط بمالك قروب نشط آخر. يجب اختيار عضو مختلف.'
+            : 'تعذرت إضافة القروب.';
         await showPrivatePanel(interaction, { content: text, components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
       }
       return true;
@@ -1181,7 +1353,15 @@ async function handleInteraction(interaction, context = {}) {
         await showPrivatePanel(interaction, { content: 'اختر عضوًا حقيقيًا من هذا السيرفر.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
         return true;
       }
-      await db.updateGroup(interaction.guild.id, groupId, { owner_id: newOwnerId }, interaction.user.id);
+      try {
+        await db.updateGroup(interaction.guild.id, groupId, { owner_id: newOwnerId }, interaction.user.id);
+      } catch (error) {
+        if (error.message === 'OWNER_ALREADY_ASSIGNED') {
+          await showPrivatePanel(interaction, { content: 'هذا العضو مرتبط بمالك قروب نشط آخر. يجب اختيار عضو مختلف.', components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+          return true;
+        }
+        throw error;
+      }
       scheduleRefresh(interaction.guild, true);
       await showPrivatePanel(interaction, { content: `تم تغيير Owner القروب إلى <@${newOwnerId}> دون تغيير نقاطه.`, components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع للإعدادات'))] }, true);
       return true;
@@ -1278,8 +1458,30 @@ async function handleInteraction(interaction, context = {}) {
         if (!group) return true;
         await showPrivatePanel(interaction, { content: `اختر مدة دبل ×2 للرول <@&${group.role_id}>:`, components: [durationButtons('group', groupId), new ActionRowBuilder().addComponents(button('bonus:home', 'إلغاء'))] }, true);
       } else {
-        const menu = new UserSelectMenuBuilder().setCustomId(`bonus:select:double-user:${groupId}`).setPlaceholder('اختر عضوًا من الرول').setMinValues(1).setMaxValues(1);
-        await showPrivatePanel(interaction, { content: `اختر العضو لتفعيل دبل ×2 داخل <@&${(await getDatabase().get('SELECT role_id FROM bonus_groups WHERE guild_id = ? AND id = ?', [interaction.guild.id, groupId]))?.role_id}>.`, components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
+        const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
+        const role = group ? await interaction.guild.roles.fetch(String(group.role_id)).catch(() => null) : null;
+        if (!group || !role) return true;
+        await showPrivatePanel(interaction, buildMemberSelect('double-user-member', group, role.members.values()), true);
+      }
+      return true;
+    }
+
+    if (action === 'select' && parts[0] === 'double-user-member') {
+      const groupId = Number(parts[1]);
+      const userId = interaction.values[0];
+      const group = (await db.listGroups(interaction.guild.id)).find(item => Number(item.id) === groupId);
+      const member = await interaction.guild.members.fetch(userId).catch(() => null);
+      const role = group ? await interaction.guild.roles.fetch(String(group.role_id)).catch(() => null) : null;
+      if (!group || !role || !member || !member.roles.cache.has(String(group.role_id))) {
+        await deny(interaction, 'العضو المختار لا يحمل رول القروب الحالي.');
+        return true;
+      }
+      const existing = await getDatabase().get(`SELECT id FROM bonus_multipliers WHERE guild_id = ? AND scope = 'user' AND group_id = ? AND user_id = ? AND active = 1 AND (ends_at IS NULL OR ends_at > ?)`, [interaction.guild.id, groupId, userId, Date.now()]);
+      if (existing) {
+        await db.clearMultiplier(interaction.guild.id, { scope: 'user', groupId, userId }, interaction.user.id);
+        await showPrivatePanel(interaction, await buildReturnPayload(interaction, `تم إيقاف الدبل عن <@${userId}>.`), true);
+      } else {
+        await showPrivatePanel(interaction, { content: `اختر مدة دبل ×2 للعضو <@${userId}> داخل <@&${group.role_id}>:`, components: [durationButtons('user', groupId, userId), new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))] }, true);
       }
       return true;
     }
@@ -1599,9 +1801,9 @@ async function handleInteraction(interaction, context = {}) {
         components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع'))]
       }, true).catch(() => {});
     } else if (interaction.deferred || interaction.replied) {
-      await interaction.followUp({ content: 'حدث خطأ أثناء تنفيذ إعداد البونس.', ephemeral: true }).catch(() => {});
+      await interaction.followUp({ embeds: [colorManager.createEmbed().setTitle('Bonus Settings Error').setDescription('تعذر تنفيذ إعداد البونس. لم يتم حفظ تغيير غير مكتمل.')], ephemeral: true }).catch(() => {});
     } else {
-      await interaction.reply({ content: 'حدث خطأ أثناء تنفيذ إعداد البونس.', ephemeral: true }).catch(() => {});
+      await interaction.reply({ embeds: [colorManager.createEmbed().setTitle('Bonus Settings Error').setDescription('تعذر تنفيذ إعداد البونس. لم يتم حفظ تغيير غير مكتمل.')], ephemeral: true }).catch(() => {});
     }
     return true;
   }
@@ -1933,6 +2135,38 @@ async function settleVoiceBeforeReset(guild, groupId, userId = null) {
   }
 }
 
+async function publishAuditLogs(guild, initialize = false) {
+  if (!guild) return;
+  const database = getDatabase();
+  const config = await getManager().readConfig(guild.id).catch(() => ({}));
+  if (!config.auditChannelId) return;
+  const channel = await guild.channels.fetch(String(config.auditChannelId)).catch(() => null);
+  if (!isGuildText(channel)) return;
+  const cursorKey = String(guild.id);
+  if (initialize && !auditPublishCursor.has(cursorKey)) {
+    const latest = await database.get('SELECT COALESCE(MAX(id), 0) AS id FROM bonus_audit_log WHERE guild_id = ?', [cursorKey]).catch(() => null);
+    auditPublishCursor.set(cursorKey, Number(latest?.id) || 0);
+    return;
+  }
+  if (!auditPublishCursor.has(cursorKey)) return;
+  const cursor = Number(auditPublishCursor.get(cursorKey) || 0);
+  const rows = await database.all('SELECT * FROM bonus_audit_log WHERE guild_id = ? AND id > ? ORDER BY id ASC LIMIT 50', [cursorKey, cursor]).catch(() => []);
+  let lastId = cursor;
+  for (const row of rows) {
+    const details = safeJsonParse(row.details_json, {});
+    const embed = colorManager.createEmbed().setTitle(`Bonus Audit • ${safeName(row.action, 80)}`)
+      .addFields(
+        { name: 'Actor', value: row.actor_id ? `<@${row.actor_id}>` : 'System', inline: true },
+        { name: 'Target User', value: row.target_user_id ? `<@${row.target_user_id}>` : '—', inline: true },
+        { name: 'Groups', value: `Source : ${row.source_group_id ?? '—'}\nTarget : ${row.target_group_id ?? '—'}`, inline: true },
+        { name: 'Details', value: `\`\`\`${JSON.stringify(details).slice(0, 900)}\`\`\`` }
+      ).setTimestamp(Number(row.created_at) || Date.now());
+    await channel.send({ embeds: [embed] }).catch(() => {});
+    lastId = Number(row.id) || lastId;
+  }
+  if (rows.length) auditPublishCursor.set(cursorKey, lastId);
+}
+
 function registerInteractionHandler(client) {
   if (boundClient === client) return;
   boundClient = client;
@@ -1950,11 +2184,15 @@ function registerInteractionHandler(client) {
   client.on('guildUpdate', (_oldGuild, newGuild) => scheduleRefresh(newGuild, false));
   client.once('ready', () => {
     restoreVoiceSessions(client).catch(error => console.error('[bonus] voice restore failed:', error));
-    for (const guild of client.guilds.cache.values()) scheduleRefresh(guild, true);
+    for (const guild of client.guilds.cache.values()) {
+      scheduleRefresh(guild, true);
+      publishAuditLogs(guild, true).catch(error => console.error('[bonus] audit cursor init failed:', error));
+    }
     if (!boardRefreshInterval) {
       boardRefreshInterval = setInterval(() => {
         for (const guild of client.guilds.cache.values()) {
           maybeRefreshBoard(guild, false).catch(error => console.error('[bonus] periodic board refresh failed:', error));
+          publishAuditLogs(guild).catch(error => console.error('[bonus] audit publish failed:', error));
         }
       }, 30000);
       boardRefreshInterval.unref?.();
@@ -1988,4 +2226,4 @@ function registerInteractionHandler(client) {
   });
 }
 
-module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicRows, boardCounter, buildHomeEmbed, buildGroupSelect, isEligibleVoiceState, resolveCurrentGroupForMember, validateAvatarUrl };
+module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicRows, boardCounter, buildHomeEmbed, buildGroupSelect, isEligibleVoiceState, resolveCurrentGroupForMember, validateAvatarUrl, structurePrivateResponse };

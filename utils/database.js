@@ -590,6 +590,29 @@ class DatabaseManager {
             `, [now - 24 * 60 * 60 * 1000]);
             await this.run('INSERT OR IGNORE INTO bonus_migrations (migration_key, applied_at) VALUES (?, ?)', [migrationKey, now]);
         }
+        const ownerMigrationKey = 'bonus-one-active-owner-v1';
+        const ownerMigration = await this.get('SELECT migration_key FROM bonus_migrations WHERE migration_key = ?', [ownerMigrationKey]);
+        if (!ownerMigration) {
+            const now = Date.now();
+            // احتفظ بأقدم قروب نشط للمالك وأرشف أي تكرارات قديمة قبل إنشاء القيد.
+            await this.run(`
+              UPDATE bonus_groups AS duplicate
+              SET archived_at = ?
+              WHERE duplicate.archived_at IS NULL
+                AND EXISTS (
+                  SELECT 1 FROM bonus_groups AS original
+                  WHERE original.guild_id = duplicate.guild_id
+                    AND original.owner_id = duplicate.owner_id
+                    AND original.archived_at IS NULL
+                    AND (original.created_at < duplicate.created_at
+                      OR (original.created_at = duplicate.created_at AND original.id < duplicate.id))
+                )
+            `, [now]);
+            await this.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_bonus_one_active_owner ON bonus_groups(guild_id, owner_id) WHERE archived_at IS NULL');
+            await this.run('INSERT OR IGNORE INTO bonus_migrations (migration_key, applied_at) VALUES (?, ?)', [ownerMigrationKey, now]);
+        } else {
+            await this.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_bonus_one_active_owner ON bonus_groups(guild_id, owner_id) WHERE archived_at IS NULL');
+        }
     }
 
     // إضافة وظائف الدعوات

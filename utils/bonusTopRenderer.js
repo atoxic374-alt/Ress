@@ -145,14 +145,6 @@ async function buildBonusTopImage({ guild, groups, config = {}, updatedAt = Date
   ctx.font = '22px Cairo, sans-serif';
   ctx.fillText(safeText(guild?.name, 'السيرفر') + '  •  أفضل 10 قروبات', 1384, 122);
 
-  ctx.textAlign = 'left';
-  ctx.fillStyle = '#B8C0CE';
-  ctx.font = '19px Cairo, sans-serif';
-  const updateLabel = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Riyadh', day: '2-digit', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
-  }).format(new Date(updatedAt));
-  ctx.fillText(`Updated ${updateLabel} (Riyadh)`, 86, 184);
   ctx.textAlign = 'right';
   ctx.fillStyle = accent;
   ctx.font = 'bold 20px Cairo, sans-serif';
@@ -202,11 +194,6 @@ async function buildBonusTopImage({ guild, groups, config = {}, updatedAt = Date
     ctx.font = 'bold 49px Cairo, sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(String(item.rank), centerX, y + 62);
-    if (group) {
-      ctx.fillStyle = '#FFFFFF';
-      ctx.font = 'bold 16px Cairo, sans-serif';
-      ctx.fillText(fmtNumber(group.points), centerX, y + 113);
-    }
   }
 
   // Ranks 4–10 rows

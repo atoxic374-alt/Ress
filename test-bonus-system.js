@@ -36,7 +36,8 @@ async function main() {
   assert.equal(bonusCommand.validateAvatarUrl('https://example.com/avatar.png').valid, false);
   assert.equal(bonusCommand.validateAvatarUrl('https://cdn.discordapp.com/icons/example.exe').valid, false);
   const topRows = bonusCommand.buildPublicRows(1, 3);
-  assert.equal(topRows.at(-1).components[0].data.custom_id, 'bonus:top-page:0', 'top navigation is a message component outside the PNG');
+  assert.equal(topRows.length, 1, 'public board has no shared pagination controls');
+  assert.equal(topRows[0].components.at(-1).data.custom_id, 'bonus:my-group', 'public board exposes a private My Group entry point');
   assert.deepEqual(bonusCommand.parseBonusCustomId('bonus:select:add-role'), {
     prefix: 'bonus', action: 'select', parts: ['add-role']
   });
@@ -64,13 +65,21 @@ async function main() {
   const settingsEmbed = bonusCommand.buildHomeEmbed({ name: 'Test Guild' }, {}, [], {}, false);
   assert.equal(settingsEmbed.data.color, Number.parseInt(colorManager.getColor().replace('#', ''), 16), 'bonus embed uses the shared bot-avatar color');
   assert.deepEqual(bonusCommand.buildHomeRows().map(row => row.components.map(component => component.data.label)), [
-    ['المسؤولون', 'قواعد النقاط', 'روم التوب', 'لون الصورة', 'سجل التدقيق'],
-    ['إضافة قروب', 'إدارة القروبات', 'تصفير', 'دبل بونس', 'نشر / تحديث']
+    ['Managers', 'Rules', 'Board Channel', 'Audit Channel', 'Board Color'],
+    ['Add Group', 'Manage Groups', 'Reset', 'Double Bonus', 'Publish / Update'],
+    ['Audit Log']
   ]);
   assert.deepEqual(bonusCommand.buildPublicRows()[0].components.map(component => component.data.label),
-    ['إضافة قروب', 'إزالة قروب', 'إعطاء نقاط', 'إزالة نقاط', 'دبل بونس']);
-  assert.equal(bonusCommand.buildPublicRows()[1].components[0].data.custom_id, 'bonus:owner-avatar',
-    'public board exposes only the owner-avatar entry point');
+    ['Settings', 'Double Bonus', 'Group Avatar', 'View Rankings', 'My Group']);
+  assert.equal(bonusCommand.buildPublicRows()[0].components[0].data.custom_id, 'bonus:public-settings',
+    'public board exposes a protected settings entry point');
+  const structuredResponse = bonusCommand.structurePrivateResponse({
+    content: 'تأكيد إزالة النقاط\nالإجمالي الحالي: 100\nبعد الإزالة: 50',
+    components: []
+  });
+  assert.equal(structuredResponse.content, undefined, 'private action responses do not use raw content');
+  assert.equal(structuredResponse.embeds[0].data.title, 'Confirmation Required');
+  assert.equal(structuredResponse.embeds[0].data.fields.length, 2, 'private responses expose labeled fields');
   assert.match(bonusCommand.boardCounter({ groups: 3, points: 725 }), /3 Groups\s+•\s+725 Points/);
   const fakeClient = new EventEmitter();
   fakeClient.guilds = { cache: new Map() };
@@ -113,6 +122,11 @@ async function main() {
     const userId = 'test-user';
     const groupA = await bonus.addGroup(guildId, 'role-a', 'owner-a', actorId);
     const groupB = await bonus.addGroup(guildId, 'role-b', 'owner-b', actorId);
+    await assert.rejects(
+      bonus.addGroup(guildId, 'role-c', 'owner-a', actorId),
+      error => error.message === 'OWNER_ALREADY_ASSIGNED',
+      'one owner cannot be assigned to multiple active bonus groups'
+    );
     const groupAddAudit = await db.get(`SELECT action, target_group_id FROM bonus_audit_log WHERE guild_id = ? AND action = 'group_add' AND target_group_id = ?`,
       [guildId, Number(groupA.id)]);
     assert.equal(groupAddAudit.action, 'group_add', 'group creation and its audit record are committed together');
@@ -347,14 +361,14 @@ async function main() {
     const older = await bonus.addActivity({ guildId: outOfOrderGuild, userId: 'out-of-order-user', metric: BONUS_METRICS.messages,
       amount: 1, eventId: 'message:out-of-order-messages-guild:100', roleIds: ['out-of-order-role'] });
     assert.equal(newer.awardedPoints, 0, 'the newer message contributes progress');
-    assert.equal(older.awardedPoints, 1, 'a valid older message is still counted');
+    assert.equal(older.awardedPoints, 0, 'a stale older message cannot award points');
     const outOfOrderBalance = await bonus.getBalance(outOfOrderGuild, 'out-of-order-user');
-    assert.equal(Number(outOfOrderBalance.points), 1, 'out-of-order messages award exactly once');
-    assert.equal(Number(outOfOrderBalance.message_progress), 0, 'both messages complete one two-message step');
+    assert.equal(Number(outOfOrderBalance.points), 0, 'out-of-order messages do not create a retroactive award');
+    assert.equal(Number(outOfOrderBalance.message_progress), 1, 'only messages newer than the cursor advance progress');
     const duplicateEvent = await bonus.addActivity({ guildId: outOfOrderGuild, userId: 'out-of-order-user', metric: BONUS_METRICS.messages,
       amount: 1, eventId: 'message:out-of-order-messages-guild:100', roleIds: ['out-of-order-role'] });
     assert.equal(duplicateEvent.duplicate, true, 'replaying the same event is ignored by event_id');
-    assert.equal(Number((await bonus.getBalance(outOfOrderGuild, 'out-of-order-user')).points), 1);
+    assert.equal(Number((await bonus.getBalance(outOfOrderGuild, 'out-of-order-user')).points), 0);
 
     const deductionGuild = 'deduction-order-guild';
     const deductionGroup = await bonus.addGroup(deductionGuild, 'deduction-role', 'deduction-owner', actorId);

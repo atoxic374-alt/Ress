@@ -158,6 +158,11 @@ function createBonusManager(dbManager) {
     return dbManager.transaction(async tx => {
       const existing = await tx.get('SELECT * FROM bonus_groups WHERE guild_id = ? AND role_id = ?', [String(guildId), String(roleId)]);
       if (existing && existing.archived_at == null) throw new Error('ROLE_ALREADY_REGISTERED');
+      const ownerGroup = await tx.get(
+        'SELECT id FROM bonus_groups WHERE guild_id = ? AND owner_id = ? AND archived_at IS NULL AND role_id <> ?',
+        [String(guildId), String(ownerId), String(roleId)]
+      );
+      if (ownerGroup) throw new Error('OWNER_ALREADY_ASSIGNED');
       if (existing && existing.archived_at != null) {
         await tx.run(`UPDATE bonus_groups SET owner_id = ?, avatar_url = ?, archived_at = NULL WHERE id = ?`,
           [String(ownerId), avatarUrl, Number(existing.id)]);
@@ -315,6 +320,12 @@ function createBonusManager(dbManager) {
       if (metric === BONUS_METRICS.messages && balance?.last_message_id) {
         try { shouldAdvanceMessageCursor = BigInt(currentMessageId) > BigInt(String(balance.last_message_id)); }
         catch { shouldAdvanceMessageCursor = currentMessageId !== String(balance.last_message_id); }
+      }
+      // الرسائل المتأخرة لا يجوز أن تمنح نقاطاً؛ مؤشر الرسالة يمنع تحريك المؤشر
+      // فقط، لذلك يجب إيقاف النشاط القديم قبل حساب التقدم والمكافأة.
+      if (metric === BONUS_METRICS.messages && balance?.last_message_id && !shouldAdvanceMessageCursor) {
+        await tx.run('UPDATE bonus_activity_events SET group_id = ? WHERE event_id = ?', [targetGroupId, String(eventId)]);
+        return { stale: true, assignedGroupId: targetGroupId, awardedPoints: 0, countedAmount: 0 };
       }
       if (!balance || (balance.group_id == null ? null : Number(balance.group_id)) !== targetGroupId) {
         const now = Date.now();
@@ -646,6 +657,13 @@ function createBonusManager(dbManager) {
     return dbManager.transaction(async tx => {
       const current = await tx.get('SELECT * FROM bonus_groups WHERE guild_id = ? AND id = ?', [String(guildId), Number(groupId)]);
       if (!current) throw new Error('GROUP_NOT_FOUND');
+      if (entries.some(([key]) => key === 'owner_id')) {
+        const ownerGroup = await tx.get(
+          'SELECT id FROM bonus_groups WHERE guild_id = ? AND owner_id = ? AND archived_at IS NULL AND id <> ?',
+          [String(guildId), String(patch.owner_id), Number(groupId)]
+        );
+        if (ownerGroup) throw new Error('OWNER_ALREADY_ASSIGNED');
+      }
       const setSql = entries.map(([key]) => `${key} = ?`).join(', ');
       const values = entries.map(([, value]) => value);
       await tx.run(`UPDATE bonus_groups SET ${setSql} WHERE guild_id = ? AND id = ?`, [...values, String(guildId), Number(groupId)]);
