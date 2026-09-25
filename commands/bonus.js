@@ -5,7 +5,7 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
-const { getDatabase } = require('../utils/database');
+const { getDatabase, dbManager } = require('../utils/database');
 const { createBonusManager, BONUS_METRICS } = require('../utils/bonusManager');
 const { buildBonusTopImage, normalizeHex } = require('../utils/bonusTopRenderer');
 const colorManager = require('../utils/colorManager');
@@ -66,6 +66,12 @@ function getManager() {
     manager = createBonusManager(database);
   }
   return manager;
+}
+
+async function ensureBonusDatabase() {
+  if (!dbManager.isInitialized) await dbManager.initialize();
+  if (!dbManager.isInitialized || dbManager.isDegraded) throw new Error('BONUS_DATABASE_NOT_PERSISTENT');
+  return dbManager;
 }
 
 function idKey(guildId, userId) { return `${guildId}:${userId}`; }
@@ -624,6 +630,7 @@ async function checkSetupInitPermissions(message, context) {
 async function execute(message, args = [], context = {}) {
   if (!message.guild) return message.reply('استخدم هذا الأمر داخل السيرفر.').catch(() => {});
   try {
+    await ensureBonusDatabase();
     const allowed = await checkSetupInitPermissions(message, context);
     if (!allowed) return message.react('❌').catch(() => {});
     const payload = await buildHome(message.guild);
@@ -716,6 +723,7 @@ async function handleInteraction(interaction, context = {}) {
       await deny(interaction, 'هذه التفاعلات تعمل داخل السيرفر فقط.');
       return true;
     }
+    await ensureBonusDatabase();
     if (isBonusBoardMessage(interaction.message)) activeBoardPanels.set(String(interaction.guild.id), Date.now() + 10 * 60 * 1000);
     const manualPointsSelection = action === 'select' && ['add-points', 'remove-points'].includes(parts[0]);
     if (interaction.isAnySelectMenu?.() && !manualPointsSelection && !interaction.deferred && !interaction.replied) {
