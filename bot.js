@@ -2779,7 +2779,7 @@ client.on('messageCreate', async message => {
     const commandName = args.shift().toLowerCase();
 
     const command = client.commands.get(commandName);
-    if (command) {
+    if (command && commandName !== 'داونات') {
       // تشغيل الأوامر بشكل غير متزامن لضمان عدم تأثر سرعة البوت الكلية
       setImmediate(async () => {
         try {
@@ -3065,7 +3065,7 @@ client.on('messageCreate', async message => {
     const hasAdminRole = CURRENT_ADMIN_ROLES.length > 0 && member.roles.cache.some(role => CURRENT_ADMIN_ROLES.includes(role.id));
 
     // Commands for everyone (help, tops, تفاعلي, ستريكي, profile, myprofile, داوني)
-    if (commandName === 'رولي' || commandName === 'tops' || commandName === 'توب' || commandName === 'تفاعلي' || commandName === 'انهاء' || commandName === 'user' || commandName === 'ستريكي' || commandName === 'profile' || commandName === 'id' || commandName === 'مشاكلي' || commandName === 'myprofile' || commandName === 'داوني' || commandName === 'داوناتي' || commandName === 'داونات') {
+    if (commandName === 'رولي' || commandName === 'tops' || commandName === 'توب' || commandName === 'تفاعلي' || commandName === 'تواجدي' || commandName === 'انهاء' || commandName === 'user' || commandName === 'ستريكي' || commandName === 'profile' || commandName === 'id' || commandName === 'مشاكلي' || commandName === 'myprofile' || commandName === 'داوني' || commandName === 'داوناتي' || commandName === 'داونات') {
       if (commandName === 'مسؤولياتي') {
         await showUserResponsibilities(message, message.author, responsibilities, client);
       } else {
