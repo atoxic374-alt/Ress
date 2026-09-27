@@ -321,6 +321,7 @@ class DatabaseManager {
             `CREATE TABLE IF NOT EXISTS voice_sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT UNIQUE NOT NULL,
+                guild_id TEXT,
                 user_id TEXT NOT NULL,
                 channel_id TEXT NOT NULL,
                 channel_name TEXT NOT NULL,
@@ -573,6 +574,10 @@ class DatabaseManager {
         for (const sql of tables) {
             await this.run(sql);
         }
+        const voiceSessionColumns = await this.all('PRAGMA table_info(voice_sessions)');
+        if (!voiceSessionColumns.some(column => column.name === 'guild_id')) {
+            await this.run('ALTER TABLE voice_sessions ADD COLUMN guild_id TEXT');
+        }
         const bonusRuleColumns = await this.all('PRAGMA table_info(bonus_rules)');
         if (!bonusRuleColumns.some(column => column.name === 'activated_at')) {
             await this.run('ALTER TABLE bonus_rules ADD COLUMN activated_at INTEGER NOT NULL DEFAULT 0');
@@ -819,10 +824,10 @@ class DatabaseManager {
 
             // حفظ الجلسة
             await this.run(`
-                INSERT INTO voice_sessions 
-                (session_id, user_id, channel_id, channel_name, duration, start_time, end_time, date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            `, [sessionId, userId, channelId, channelName, duration, startTime, endTime, date]);
+                INSERT INTO voice_sessions
+                (session_id, guild_id, user_id, channel_id, channel_name, duration, start_time, end_time, date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [sessionId, guildId, userId, channelId, channelName, duration, startTime, endTime, date]);
 
             // تحديث إجماليات المستخدم
             await this.updateUserTotals(userId, { voiceTime: duration, sessions: 1 });
@@ -982,18 +987,21 @@ class DatabaseManager {
     }
 
     // حساب أيام النشاط الفعلية من قاعدة البيانات
-    async getActiveDaysCount(userId, daysBack = 30) {
+    async getActiveDaysCount(userId, daysBack = 30, guildId = null) {
         try {
             const now = moment().tz('Asia/Riyadh');
             const cutoffDate = now.clone().subtract(daysBack, 'days').format('YYYY-MM-DD');
+            const table = guildId ? 'guild_daily_activity' : 'daily_activity';
+            const scope = guildId ? 'guild_id = ? AND user_id = ?' : 'user_id = ?';
+            const params = guildId ? [guildId, userId, cutoffDate] : [userId, cutoffDate];
 
             const result = await this.get(`
                 SELECT COUNT(DISTINCT date) as activeDays
-                FROM daily_activity 
-                WHERE user_id = ? 
+                FROM ${table}
+                WHERE ${scope}
                 AND date >= ?
                 AND (voice_time > 0 OR messages > 0 OR reactions > 0 OR voice_joins > 0)
-            `, [userId, cutoffDate]);
+            `, params);
 
             return result ? result.activeDays : 0;
         } catch (error) {
@@ -1002,41 +1010,23 @@ class DatabaseManager {
         }
     }
 
-    async getWeeklyActiveDays(userId) {
-        try {
-            const now = moment().tz('Asia/Riyadh');
-            const weekStart = now.clone().startOf('week').format('YYYY-MM-DD');
-
-            const result = await this.get(`
-                SELECT COUNT(DISTINCT date) as activeDays
-                FROM daily_activity 
-                WHERE user_id = ? 
-                AND date >= ?
-                AND (voice_time > 0 OR messages > 0 OR reactions > 0 OR voice_joins > 0)
-            `, [userId, weekStart]);
-
-            return result ? result.activeDays : 0;
-        } catch (error) {
-            console.error('❌ خطأ في حساب أيام النشاط الأسبوعية:', error);
-            return 0;
-        }
-    }
-
     // حساب أيام النشاط الأسبوعية
-    async getWeeklyActiveDays(userId) {
+    async getWeeklyActiveDays(userId, guildId = null) {
         try {
             // حساب بداية الأسبوع (السبت) بتوقيت الرياض
             const now = moment().tz('Asia/Riyadh');
-            const weekStart = now.clone().startOf('week');
-            const weekStartString = weekStart.format('YYYY-MM-DD');
+            const weekStartString = now.clone().startOf('week').format('YYYY-MM-DD');
+            const table = guildId ? 'guild_daily_activity' : 'daily_activity';
+            const scope = guildId ? 'guild_id = ? AND user_id = ?' : 'user_id = ?';
+            const params = guildId ? [guildId, userId, weekStartString] : [userId, weekStartString];
 
             const result = await this.get(`
                 SELECT COUNT(DISTINCT date) as weeklyActiveDays
-                FROM daily_activity 
-                WHERE user_id = ? 
+                FROM ${table}
+                WHERE ${scope}
                 AND date >= ?
                 AND (voice_time > 0 OR messages > 0 OR reactions > 0 OR voice_joins > 0)
-            `, [userId, weekStartString]);
+            `, params);
 
             return result ? result.weeklyActiveDays : 0;
         } catch (error) {
@@ -1085,22 +1075,25 @@ class DatabaseManager {
     }
 
     // جلب النشاط الأسبوعي مع الرسائل والتفاعلات
-    async getWeeklyStats(userId) {
+    async getWeeklyStats(userId, guildId = null) {
         try {
             // حساب بداية الأسبوع (السبت) بتوقيت الرياض
             const now = moment().tz('Asia/Riyadh');
             const weekStart = now.clone().startOf('week');
             const weekStartString = weekStart.format('YYYY-MM-DD');
 
-            // جلب النشاط الأسبوعي من جدول النشاط اليومي لضمان التطابق مع الإحصائيات الأخرى
+            // اقرأ نفس جدول guild_daily_activity الذي يكتب فيه جامع النشاط.
+            const table = guildId ? 'guild_daily_activity' : 'daily_activity';
+            const scope = guildId ? 'guild_id = ? AND user_id = ?' : 'user_id = ?';
+            const params = guildId ? [guildId, userId, weekStartString] : [userId, weekStartString];
             const activity = await this.get(`
                 SELECT SUM(voice_time) as weeklyTime,
-                       SUM(messages) as weeklyMessages, 
+                       SUM(messages) as weeklyMessages,
                        SUM(reactions) as weeklyReactions,
                        SUM(voice_joins) as weeklyVoiceJoins
-                FROM daily_activity 
-                WHERE user_id = ? AND date >= ?
-            `, [userId, weekStartString]);
+                FROM ${table}
+                WHERE ${scope} AND date >= ?
+            `, params);
 
             // جلب عدد الجلسات من voice_sessions (اختياري، لكن سنبقي عليه للتوافق)
             const sessionsCount = await this.get(`
@@ -1199,10 +1192,11 @@ class DatabaseManager {
     }
 
     // الحصول على أكثر قناة صوتية للمستخدم
-    async getMostActiveVoiceChannel(userId, period = 'total') {
+    async getMostActiveVoiceChannel(userId, period = 'total', guildId = null) {
         try {
             let dateFilter = '';
-            let params = [userId];
+            const guildFilter = guildId ? 'AND guild_id = ?' : '';
+            let params = guildId ? [userId, guildId] : [userId];
 
             if (period === 'daily') {
                 const today = moment().tz('Asia/Riyadh').format('YYYY-MM-DD');
@@ -1225,7 +1219,7 @@ class DatabaseManager {
             const result = await this.get(`
                 SELECT channel_id, channel_name, SUM(duration) as total_time, COUNT(*) as session_count
                 FROM voice_sessions
-                WHERE user_id = ? ${dateFilter}
+                WHERE user_id = ? ${guildFilter} ${dateFilter}
                 GROUP BY channel_id
                 ORDER BY total_time DESC
                 LIMIT 1
@@ -1264,22 +1258,25 @@ class DatabaseManager {
     }
 
     // جلب الإحصائيات اليومية
-    async getDailyStats(userId) {
+    async getDailyStats(userId, guildId = null) {
         try {
             const today = moment().tz('Asia/Riyadh').format('YYYY-MM-DD');
+            const table = guildId ? 'guild_daily_activity' : 'daily_activity';
+            const scope = guildId ? 'guild_id = ? AND user_id = ?' : 'user_id = ?';
+            const params = guildId ? [guildId, userId, today] : [userId, today];
 
             const dailyActivity = await this.get(`
                 SELECT voice_time, messages, reactions, voice_joins
-                FROM daily_activity
-                WHERE user_id = ? AND date = ?
-            `, [userId, today]);
+                FROM ${table}
+                WHERE ${scope} AND date = ?
+            `, params);
 
             const activeDays = await this.get(`
                 SELECT COUNT(DISTINCT date) as count
-                FROM daily_activity
-                WHERE user_id = ? AND date = ?
+                FROM ${table}
+                WHERE ${scope} AND date = ?
                 AND (voice_time > 0 OR messages > 0 OR reactions > 0 OR voice_joins > 0)
-            `, [userId, today]);
+            `, params);
 
             return {
                 voiceTime: dailyActivity?.voice_time || 0,

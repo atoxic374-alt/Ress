@@ -1798,8 +1798,9 @@ client.once(Events.ClientReady, async () => {
             
             const sessionStartTime = now;
             // تخزين الجلسة فقط بدون interval لتقليل الضغط
-            client.voiceSessions.set(userId, { 
-                channelId: newChannelId, 
+            client.voiceSessions.set(userId, {
+                guildId: newState.guild.id,
+                channelId: newChannelId,
                 channelName: newChannelName, 
                 sessionStartTime: now, 
                 startTime: now, // Add startTime for compatibility
@@ -1859,9 +1860,10 @@ client.once(Events.ClientReady, async () => {
 
             await checkAutoLevelUp(userId, 'voice', client).catch(() => {});
             await trackUserActivity(userId, 'voice_join', { guildId: newState.guild.id }).catch(() => {});
-            
-            client.voiceSessions.set(userId, { 
-                channelId: newChannelId, 
+
+            client.voiceSessions.set(userId, {
+                guildId: newState.guild.id,
+                channelId: newChannelId,
                 channelName: newChannelName, 
                 sessionStartTime: now, 
                 startTime: now, // Add startTime for compatibility
@@ -1917,7 +1919,7 @@ client.once(Events.ClientReady, async () => {
                             const remaining = limitTime - session.lastTrackedTime;
                             if (remaining > 1000) {
                                 await trackUserActivity(userId, 'voice_time', {
-                        guildId: newState.guild.id,
+                                    guildId: session.guildId,
                                     duration: remaining,
                                     channelId: session.channelId,
                                     channelName: session.channelName,
@@ -1935,7 +1937,7 @@ client.once(Events.ClientReady, async () => {
                     const duration = now - session.lastTrackedTime;
                     if (duration >= 30000) { // حفظ إذا مرّت 30 ثانية على الأقل منذ آخر حفظ
                         await trackUserActivity(userId, 'voice_time', {
-                        guildId: newState.guild.id,
+                            guildId: session.guildId,
                             duration: duration,
                             channelId: session.channelId,
                             channelName: session.channelName,
@@ -1965,7 +1967,7 @@ client.once(Events.ClientReady, async () => {
                     const duration = endTime - session.lastTrackedTime;
                     if (duration > 1000) {
                         await trackUserActivity(userId, 'voice_time', {
-                        guildId: newState.guild.id,
+                            guildId: session.guildId,
                             duration: duration,
                             channelId: session.channelId,
                             channelName: session.channelName,

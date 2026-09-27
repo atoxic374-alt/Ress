@@ -153,15 +153,15 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
 
         let stats, periodLabel, activeDays;
         if (period === 'daily') {
-            stats = await dbManager.getDailyStats(user.id);
+            stats = await dbManager.getDailyStats(user.id, message.guild?.id);
             periodLabel = 'Daily Active';
             activeDays = stats.activeDays;
             // إضافة الوقت الحي لليومي
             const liveDuration = getLiveVoiceDuration(user.id, 0);
             stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
         } else if (period === 'weekly') {
-            stats = await dbManager.getWeeklyStats(user.id);
-            const weeklyActiveDays = await dbManager.getWeeklyActiveDays(user.id);
+            stats = await dbManager.getWeeklyStats(user.id, message.guild?.id);
+            const weeklyActiveDays = await dbManager.getWeeklyActiveDays(user.id, message.guild?.id);
             periodLabel = 'Weekly Active';
             activeDays = weeklyActiveDays;
             // إعادة تسمية المتغيرات للتناسق
@@ -173,7 +173,7 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
             const liveDuration = getLiveVoiceDuration(user.id, 0);
             stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
         } else if (period === 'monthly') {
-            stats = await dbManager.getMonthlyStats(user.id);
+            stats = await dbManager.getMonthlyStats(user.id, message.guild?.id);
             periodLabel = 'Monthly Active';
             activeDays = stats.activeDays;
             // إضافة تعويض للبيانات الشهرية
@@ -195,14 +195,14 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
             };
             periodLabel = 'Total Active';
             // عدد أيام النشاط خلال السنة الماضية على الأقل
-            activeDays = (await dbManager.getActiveDaysCount(user.id, 365)) || 0;
+            activeDays = (await dbManager.getActiveDaysCount(user.id, 365, message.guild?.id)) || 0;
             // إضافة الوقت الحي للكلي
             const liveDuration = getLiveVoiceDuration(user.id, 0);
             stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
         }
 
         // جلب أكثر قناة صوتية مع قيمة افتراضية
-        const topVoiceChannel = await dbManager.getMostActiveVoiceChannel(user.id, period) || { channel_id: null, channel_name: 'No Data', total_time: 0, session_count: 0 };
+        const topVoiceChannel = await dbManager.getMostActiveVoiceChannel(user.id, period, message.guild?.id) || { channel_id: null, channel_name: 'No Data', total_time: 0, session_count: 0 };
         // جلب أكثر قناة رسائل مع قيمة افتراضية
         const topMessageChannel = await dbManager.getMostActiveMessageChannel(user.id, message.guild?.id) || { channel_id: null, channel_name: 'No Data', message_count: 0 };
         // حساب XP (10 رسائل = 1 XP)
@@ -288,14 +288,14 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
                 let stats, periodLabel, activeDays;
                 const liveDuration = getLiveVoiceDuration(user.id, 0);
                 if (newPeriod === 'daily') {
-                    stats = await dbManager.getDailyStats(user.id);
+                    stats = await dbManager.getDailyStats(user.id, interaction.guild?.id);
                     periodLabel = 'Daily Active';
                     activeDays = stats.activeDays;
                     // إضافة الوقت الحي
                     stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
                 } else if (newPeriod === 'weekly') {
-                    stats = await dbManager.getWeeklyStats(user.id);
-                    const weeklyActiveDays = await dbManager.getWeeklyActiveDays(user.id);
+                    stats = await dbManager.getWeeklyStats(user.id, interaction.guild?.id);
+                    const weeklyActiveDays = await dbManager.getWeeklyActiveDays(user.id, interaction.guild?.id);
                     periodLabel = 'Weekly Active';
                     activeDays = weeklyActiveDays;
                     stats.voiceTime = stats.weeklyTime;
@@ -305,7 +305,7 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
                     // إضافة الوقت الحي
                     stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
                 } else if (newPeriod === 'monthly') {
-                    stats = await dbManager.getMonthlyStats(user.id);
+                    stats = await dbManager.getMonthlyStats(user.id, interaction.guild?.id);
                     periodLabel = 'Monthly Active';
                     activeDays = stats.activeDays;
                     stats.voiceTime = stats.voiceTime || 0;
@@ -323,10 +323,10 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
                         voiceJoins: totals.totalVoiceJoins || 0
                     };
                     periodLabel = 'Total Active';
-                    activeDays = (await dbManager.getActiveDaysCount(user.id, 365)) || 0;
+                    activeDays = (await dbManager.getActiveDaysCount(user.id, 365, interaction.guild?.id)) || 0;
                     stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
                 }
-                const topVoiceChannel = await dbManager.getMostActiveVoiceChannel(user.id, newPeriod) || { channel_id: null, channel_name: 'No Active Or Leave Channel', total_time: 0, session_count: 0 };
+                const topVoiceChannel = await dbManager.getMostActiveVoiceChannel(user.id, newPeriod, interaction.guild?.id) || { channel_id: null, channel_name: 'No Active Or Leave Channel', total_time: 0, session_count: 0 };
                 const topMessageChannel = await dbManager.getMostActiveMessageChannel(user.id, interaction.guild?.id) || { channel_id: null, channel_name: 'No Active In Chat', message_count: 0 };
                 const xp = Math.floor((stats.messages || 0) / 10);
                 const voiceChannelMention = formatChannelDisplay(topVoiceChannel, interaction.guild, 'No Active Or Leave Channel');
@@ -426,19 +426,25 @@ module.exports = {
 
         const fromDate = dateMoment.format('YYYY-MM-DD');
         const fromTimestamp = dateMoment.valueOf();
+        const guildId = interaction.guild?.id;
+        const activityTable = guildId ? 'guild_daily_activity' : 'daily_activity';
+        const activityScope = guildId ? 'guild_id = ? AND user_id = ?' : 'user_id = ?';
+        const activityParams = guildId ? [guildId, targetUserId, fromDate] : [targetUserId, fromDate];
+        const voiceScope = guildId ? 'guild_id = ? AND user_id = ?' : 'user_id = ?';
+        const voiceParams = guildId ? [guildId, targetUserId, fromTimestamp] : [targetUserId, fromTimestamp];
         const activityTotals = await dbManager.get(`
             SELECT SUM(messages) as messages,
                    SUM(reactions) as reactions
-            FROM daily_activity
-            WHERE user_id = ? AND date >= ?
-        `, [targetUserId, fromDate]);
+            FROM ${activityTable}
+            WHERE ${activityScope} AND date >= ?
+        `, activityParams);
 
         const voiceSessionStats = await dbManager.get(`
             SELECT SUM(duration) as voiceTime,
                    COUNT(*) as voiceJoins
             FROM voice_sessions
-            WHERE user_id = ? AND start_time >= ?
-        `, [targetUserId, fromTimestamp]);
+            WHERE ${voiceScope} AND start_time >= ?
+        `, voiceParams);
         let voiceTime = voiceSessionStats?.voiceTime || 0;
 
         const liveDuration = getLiveVoiceDuration(targetUserId, fromTimestamp);
@@ -459,21 +465,21 @@ module.exports = {
 
         const activeDaysResult = await dbManager.get(`
             SELECT COUNT(DISTINCT date) as count
-            FROM daily_activity
-            WHERE user_id = ?
+            FROM ${activityTable}
+            WHERE ${activityScope}
             AND date >= ?
             AND (voice_time > 0 OR messages > 0 OR reactions > 0 OR voice_joins > 0)
-        `, [targetUserId, fromDate]);
+        `, activityParams);
         const activeDays = activeDaysResult?.count || 0;
 
         const topVoiceChannel = await dbManager.get(`
             SELECT channel_id, channel_name, SUM(duration) as total_time, COUNT(*) as session_count
             FROM voice_sessions
-            WHERE user_id = ? AND start_time >= ?
+            WHERE ${voiceScope} AND start_time >= ?
             GROUP BY channel_id
             ORDER BY total_time DESC
             LIMIT 1
-        `, [targetUserId, fromTimestamp]) || { channel_id: null, channel_name: 'No Data', total_time: 0, session_count: 0 };
+        `, voiceParams) || { channel_id: null, channel_name: 'No Data', total_time: 0, session_count: 0 };
 
         const voiceChannelMention = formatChannelDisplay(topVoiceChannel, interaction.guild, 'No Data');
         const topMessageChannel = await dbManager.get(`

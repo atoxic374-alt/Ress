@@ -111,7 +111,7 @@ function formatDuration(value) {
 }
 
 // دالة لحفظ جلسة صوتية
-async function saveVoiceSession(userId, channelId, channelName, duration, startTime, endTime) {
+async function saveVoiceSession(userId, channelId, channelName, duration, startTime, endTime, guildId = null) {
     try {
         // حفظ في قاعدة البيانات SQLite (المصدر الرئيسي)
         const dbManager = require('./database');
@@ -124,7 +124,7 @@ async function saveVoiceSession(userId, channelId, channelName, duration, startT
         // حفظ الجلسة في قاعدة البيانات
         let sessionId = null;
         try {
-            sessionId = await dbManager.saveVoiceSession(userId, channelId, channelName, duration, startTime, endTime);
+            sessionId = await dbManager.saveVoiceSession(userId, channelId, channelName, duration, startTime, endTime, guildId);
         } catch (error) {
             console.error(`❌ خطأ في حفظ الجلسة في قاعدة البيانات:`, error);
             // استخدام معرف بديل في حالة الخطأ
