@@ -156,7 +156,7 @@ function shouldShowSeconds(users) {
     return hasDuplicates;
 }
 
-async function getTopUsers(db, category, period, limit = 50) {
+async function getTopUsers(db, category, period, limit = 50, guildId = null) {
     try {
         const now = moment().tz('Asia/Riyadh');
         const nowMs = now.valueOf();
@@ -182,6 +182,10 @@ async function getTopUsers(db, category, period, limit = 50) {
         }
 
         let query = '';
+        const activitySource = guildId
+            ? `(SELECT user_id, date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ?
+               UNION ALL SELECT user_id, date, voice_time, messages, reactions, voice_joins FROM daily_activity)`
+            : 'daily_activity';
 
         if (category === 'voice') {
             if (period === 'total') {
@@ -196,13 +200,13 @@ async function getTopUsers(db, category, period, limit = 50) {
             } else {
                 query = `
                     SELECT user_id, SUM(voice_time) as value
-                    FROM daily_activity
+                    FROM ${activitySource}
                     WHERE voice_time > 0 ${dateFilter}
                     GROUP BY user_id
                     ORDER BY value DESC
                     LIMIT ?
                 `;
-                params.push(limit);
+                params = guildId ? [guildId, ...params, limit] : [...params, limit];
             }
         } else if (category === 'chat') {
             if (period === 'total') {
@@ -217,13 +221,13 @@ async function getTopUsers(db, category, period, limit = 50) {
             } else {
                 query = `
                     SELECT user_id, SUM(messages) as value
-                    FROM daily_activity
+                    FROM ${activitySource}
                     WHERE messages > 0 ${dateFilter}
                     GROUP BY user_id
                     ORDER BY value DESC
                     LIMIT ?
                 `;
-                params.push(limit);
+                params = guildId ? [guildId, ...params, limit] : [...params, limit];
             }
         } else if (category === 'reactions') {
             if (period === 'total') {
@@ -238,13 +242,13 @@ async function getTopUsers(db, category, period, limit = 50) {
             } else {
                 query = `
                     SELECT user_id, SUM(reactions) as value
-                    FROM daily_activity
+                    FROM ${activitySource}
                     WHERE reactions > 0 ${dateFilter}
                     GROUP BY user_id
                     ORDER BY value DESC
                     LIMIT ?
                 `;
-                params.push(limit);
+                params = guildId ? [guildId, ...params, limit] : [...params, limit];
             }
         } else if (category === 'joins') {
             if (period === 'total') {
@@ -259,13 +263,13 @@ async function getTopUsers(db, category, period, limit = 50) {
             } else {
                 query = `
                     SELECT user_id, SUM(voice_joins) as value
-                    FROM daily_activity
+                    FROM ${activitySource}
                     WHERE voice_joins > 0 ${dateFilter}
                     GROUP BY user_id
                     ORDER BY value DESC
                     LIMIT ?
                 `;
-                params.push(limit);
+                params = guildId ? [guildId, ...params, limit] : [...params, limit];
             }
         }
 
@@ -368,8 +372,8 @@ async function execute(message, args, { client }) {
     const pageSize = 10;
 
     async function buildInitialEmbed() {
-        const topVoice = await getTopUsers(db, 'voice', currentPeriod, 5);
-        const topChat = await getTopUsers(db, 'chat', currentPeriod, 5);
+        const topVoice = await getTopUsers(db, 'voice', currentPeriod, 5, message.guild.id);
+        const topChat = await getTopUsers(db, 'chat', currentPeriod, 5, message.guild.id);
 
         const periodNames = {
             daily: 'Daily',
@@ -467,7 +471,7 @@ async function execute(message, args, { client }) {
     }
 
     async function buildCategoryEmbed() {
-        const topUsers = await getTopUsers(db, currentCategory, currentPeriod, 100);
+        const topUsers = await getTopUsers(db, currentCategory, currentPeriod, 100, message.guild.id);
         
         const categoryNames = {
             voice: 'Voice',
@@ -588,7 +592,7 @@ async function execute(message, args, { client }) {
             const allStreaks = await getStreakUsers(message.guild.id);
             totalPages = Math.ceil(allStreaks.length / pageSize);
         } else {
-            const topUsers = await getTopUsers(db, currentCategory, currentPeriod, 100);
+            const topUsers = await getTopUsers(db, currentCategory, currentPeriod, 100, message.guild.id);
             totalPages = Math.ceil(topUsers.length / pageSize);
         }
 
@@ -647,7 +651,7 @@ async function execute(message, args, { client }) {
                     const allStreaks = await getStreakUsers(message.guild.id);
                     totalPages = Math.ceil(allStreaks.length / pageSize);
                 } else {
-                    const topUsers = await getTopUsers(db, currentCategory, currentPeriod, 100);
+                    const topUsers = await getTopUsers(db, currentCategory, currentPeriod, 100, message.guild.id);
                     totalPages = Math.ceil(topUsers.length / pageSize);
                 }
                 if (currentPage < totalPages - 1) {
