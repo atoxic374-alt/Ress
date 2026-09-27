@@ -697,7 +697,9 @@ class DatabaseManager {
             'CREATE INDEX IF NOT EXISTS idx_voice_sessions_start_time ON voice_sessions(start_time)',
             'CREATE INDEX IF NOT EXISTS idx_daily_activity_date ON daily_activity(date)',
             'CREATE INDEX IF NOT EXISTS idx_daily_activity_user_id ON daily_activity(user_id)',
+            'CREATE INDEX IF NOT EXISTS idx_daily_activity_user_date ON daily_activity(user_id, date)',
             'CREATE INDEX IF NOT EXISTS idx_guild_daily_activity_user_date ON guild_daily_activity(guild_id, user_id, date)',
+            'CREATE INDEX IF NOT EXISTS idx_voice_sessions_guild_user_date ON voice_sessions(guild_id, user_id, date)',
             'CREATE INDEX IF NOT EXISTS idx_channel_users_channel_id ON channel_users(channel_id)',
             'CREATE INDEX IF NOT EXISTS idx_user_totals_last_activity ON user_totals(last_activity)',
             'CREATE INDEX IF NOT EXISTS idx_message_channels_user_id ON message_channels(user_id)',
@@ -991,15 +993,16 @@ class DatabaseManager {
         try {
             const now = moment().tz('Asia/Riyadh');
             const cutoffDate = now.clone().subtract(daysBack, 'days').format('YYYY-MM-DD');
-            const table = guildId ? 'guild_daily_activity' : 'daily_activity';
-            const scope = guildId ? 'guild_id = ? AND user_id = ?' : 'user_id = ?';
-            const params = guildId ? [guildId, userId, cutoffDate] : [userId, cutoffDate];
+            const source = guildId
+                ? `(SELECT date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ? AND user_id = ?
+                   UNION ALL SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)`
+                : 'daily_activity';
+            const params = guildId ? [guildId, userId, userId, cutoffDate] : [userId, cutoffDate];
 
             const result = await this.get(`
                 SELECT COUNT(DISTINCT date) as activeDays
-                FROM ${table}
-                WHERE ${scope}
-                AND date >= ?
+                FROM ${source}
+                WHERE date >= ?
                 AND (voice_time > 0 OR messages > 0 OR reactions > 0 OR voice_joins > 0)
             `, params);
 
@@ -1016,15 +1019,16 @@ class DatabaseManager {
             // حساب بداية الأسبوع (السبت) بتوقيت الرياض
             const now = moment().tz('Asia/Riyadh');
             const weekStartString = now.clone().startOf('week').format('YYYY-MM-DD');
-            const table = guildId ? 'guild_daily_activity' : 'daily_activity';
-            const scope = guildId ? 'guild_id = ? AND user_id = ?' : 'user_id = ?';
-            const params = guildId ? [guildId, userId, weekStartString] : [userId, weekStartString];
+            const source = guildId
+                ? `(SELECT date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ? AND user_id = ?
+                   UNION ALL SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)`
+                : 'daily_activity';
+            const params = guildId ? [guildId, userId, userId, weekStartString] : [userId, weekStartString];
 
             const result = await this.get(`
                 SELECT COUNT(DISTINCT date) as weeklyActiveDays
-                FROM ${table}
-                WHERE ${scope}
-                AND date >= ?
+                FROM ${source}
+                WHERE date >= ?
                 AND (voice_time > 0 OR messages > 0 OR reactions > 0 OR voice_joins > 0)
             `, params);
 
@@ -1082,17 +1086,19 @@ class DatabaseManager {
             const weekStart = now.clone().startOf('week');
             const weekStartString = weekStart.format('YYYY-MM-DD');
 
-            // اقرأ نفس جدول guild_daily_activity الذي يكتب فيه جامع النشاط.
-            const table = guildId ? 'guild_daily_activity' : 'daily_activity';
-            const scope = guildId ? 'guild_id = ? AND user_id = ?' : 'user_id = ?';
-            const params = guildId ? [guildId, userId, weekStartString] : [userId, weekStartString];
+            // اجمع legacy مع السجلات الجديدة دون تحميل كامل قاعدة البيانات.
+            const source = guildId
+                ? `(SELECT date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ? AND user_id = ?
+                   UNION ALL SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)`
+                : 'daily_activity';
+            const params = guildId ? [guildId, userId, userId, weekStartString] : [userId, weekStartString];
             const activity = await this.get(`
                 SELECT SUM(voice_time) as weeklyTime,
                        SUM(messages) as weeklyMessages,
                        SUM(reactions) as weeklyReactions,
                        SUM(voice_joins) as weeklyVoiceJoins
-                FROM ${table}
-                WHERE ${scope} AND date >= ?
+                FROM ${source}
+                WHERE date >= ?
             `, params);
 
             // جلب عدد الجلسات من voice_sessions (اختياري، لكن سنبقي عليه للتوافق)
@@ -1195,7 +1201,8 @@ class DatabaseManager {
     async getMostActiveVoiceChannel(userId, period = 'total', guildId = null) {
         try {
             let dateFilter = '';
-            const guildFilter = guildId ? 'AND guild_id = ?' : '';
+            // السجلات القديمة لا تملك guild_id، لذلك تُضم كـ legacy فقط.
+            const guildFilter = guildId ? 'AND (guild_id = ? OR guild_id IS NULL)' : '';
             let params = guildId ? [userId, guildId] : [userId];
 
             if (period === 'daily') {
@@ -1236,12 +1243,21 @@ class DatabaseManager {
     async getMostActiveMessageChannel(userId, guildId = null) {
         try {
             const result = guildId ? await this.get(`
-                SELECT channel_id, channel_name, message_count
-                FROM guild_message_channels
-                WHERE guild_id = ? AND user_id = ?
+                SELECT channel_id, MAX(channel_name) AS channel_name,
+                       SUM(message_count) AS message_count, MAX(last_message) AS last_message
+                FROM (
+                    SELECT channel_id, channel_name, message_count, last_message
+                    FROM guild_message_channels
+                    WHERE guild_id = ? AND user_id = ?
+                    UNION ALL
+                    SELECT channel_id, channel_name, message_count, last_message
+                    FROM message_channels
+                    WHERE user_id = ?
+                )
+                GROUP BY channel_id
                 ORDER BY message_count DESC, last_message DESC
                 LIMIT 1
-            `, [guildId, userId]) : null;
+            `, [guildId, userId, userId]) : null;
             if (result) return result;
             return await this.get(`
                 SELECT channel_id, channel_name, message_count
@@ -1261,20 +1277,23 @@ class DatabaseManager {
     async getDailyStats(userId, guildId = null) {
         try {
             const today = moment().tz('Asia/Riyadh').format('YYYY-MM-DD');
-            const table = guildId ? 'guild_daily_activity' : 'daily_activity';
-            const scope = guildId ? 'guild_id = ? AND user_id = ?' : 'user_id = ?';
-            const params = guildId ? [guildId, userId, today] : [userId, today];
+            const source = guildId
+                ? `(SELECT date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ? AND user_id = ?
+                   UNION ALL SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)`
+                : 'daily_activity';
+            const params = guildId ? [guildId, userId, userId, today] : [userId, today];
 
             const dailyActivity = await this.get(`
-                SELECT voice_time, messages, reactions, voice_joins
-                FROM ${table}
-                WHERE ${scope} AND date = ?
+                SELECT SUM(voice_time) AS voice_time, SUM(messages) AS messages,
+                       SUM(reactions) AS reactions, SUM(voice_joins) AS voice_joins
+                FROM ${source}
+                WHERE date = ?
             `, params);
 
             const activeDays = await this.get(`
                 SELECT COUNT(DISTINCT date) as count
-                FROM ${table}
-                WHERE ${scope} AND date = ?
+                FROM ${source}
+                WHERE date = ?
                 AND (voice_time > 0 OR messages > 0 OR reactions > 0 OR voice_joins > 0)
             `, params);
 
@@ -1298,9 +1317,12 @@ class DatabaseManager {
             const now = moment().tz('Asia/Riyadh');
             const monthStart = now.clone().startOf('month').format('YYYY-MM-DD');
 
-            const activityTable = guildId ? 'guild_daily_activity' : 'daily_activity';
-            const scopeClause = guildId ? 'guild_id = ? AND user_id = ? AND date >= ?' : 'user_id = ? AND date >= ?';
-            const scopeParams = guildId ? [guildId, userId, monthStart] : [userId, monthStart];
+            const activityTable = guildId
+                ? `(SELECT date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ? AND user_id = ?
+                   UNION ALL SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)`
+                : 'daily_activity';
+            const scopeClause = 'date >= ?';
+            const scopeParams = guildId ? [guildId, userId, userId, monthStart] : [userId, monthStart];
 
             const monthlyActivity = await this.all(`
                 SELECT SUM(voice_time) as voiceTime,

@@ -427,10 +427,13 @@ module.exports = {
         const fromDate = dateMoment.format('YYYY-MM-DD');
         const fromTimestamp = dateMoment.valueOf();
         const guildId = interaction.guild?.id;
-        const activityTable = guildId ? 'guild_daily_activity' : 'daily_activity';
-        const activityScope = guildId ? 'guild_id = ? AND user_id = ?' : 'user_id = ?';
-        const activityParams = guildId ? [guildId, targetUserId, fromDate] : [targetUserId, fromDate];
-        const voiceScope = guildId ? 'guild_id = ? AND user_id = ?' : 'user_id = ?';
+        const activityTable = guildId
+            ? `(SELECT date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ? AND user_id = ?
+               UNION ALL SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)`
+            : 'daily_activity';
+        const activityScope = '1 = 1';
+        const activityParams = guildId ? [guildId, targetUserId, targetUserId, fromDate] : [targetUserId, fromDate];
+        const voiceScope = guildId ? '(guild_id = ? OR guild_id IS NULL) AND user_id = ?' : 'user_id = ?';
         const voiceParams = guildId ? [guildId, targetUserId, fromTimestamp] : [targetUserId, fromTimestamp];
         const activityTotals = await dbManager.get(`
             SELECT SUM(messages) as messages,
