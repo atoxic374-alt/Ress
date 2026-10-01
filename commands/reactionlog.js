@@ -5,6 +5,7 @@ const {
   ButtonStyle,
   UserSelectMenuBuilder,
   ChannelSelectMenuBuilder,
+  StringSelectMenuBuilder,
   ChannelType
 } = require('discord.js');
 const colorManager = require('../utils/colorManager.js');
@@ -31,8 +32,8 @@ function isAllowed(interactionOrMessage, BOT_OWNERS = []) {
 }
 
 function getThumbnail(guild, client) {
-  return guild?.iconURL?.({ dynamic: true, size: 256 }) ||
-    client?.user?.displayAvatarURL?.({ dynamic: true, size: 256 }) || null;
+  return client?.user?.displayAvatarURL?.({ dynamic: true, size: 256 }) ||
+    guild?.iconURL?.({ dynamic: true, size: 256 }) || null;
 }
 
 function recipientLines(settings) {
@@ -42,6 +43,10 @@ function recipientLines(settings) {
 
 function channelLine(settings) {
   return settings.channelId ? `<#${settings.channelId}>` : 'All channels';
+}
+
+function eventModeLine(settings) {
+  return { add: 'Added only', remove: 'Removed only', both: 'Added and removed' }[settings.eventMode] || 'Added and removed';
 }
 
 function buildPanel(guild, client) {
@@ -57,7 +62,7 @@ function buildPanel(guild, client) {
       { name: 'Recipients', value: recipientLines(settings), inline: false },
       { name: 'Channel', value: channelLine(settings), inline: true },
       { name: 'Count', value: `\`${settings.recipientIds.length}\``, inline: true },
-      { name: 'Events', value: 'Added and removed', inline: true },
+      { name: 'Events', value: eventModeLine(settings), inline: true },
       { name: 'Delivery', value: 'Private messages', inline: true }
     )
     .setFooter({ text: `${guild.name} • Reaction Log` })
@@ -82,14 +87,22 @@ function buildPanel(guild, client) {
     .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
     .setMinValues(1)
     .setMaxValues(1);
+  const eventSelect = new StringSelectMenuBuilder()
+    .setCustomId(`${PANEL_PREFIX}set_event`)
+    .setPlaceholder('Select events to log')
+    .addOptions(
+      { label: 'Added only', description: 'Log reaction additions only', value: 'add' },
+      { label: 'Removed only', description: 'Log reaction removals only', value: 'remove' },
+      { label: 'Added and removed', description: 'Log both reaction events', value: 'both' }
+    );
   const controls = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`${PANEL_PREFIX}enable`).setLabel('Enable').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`${PANEL_PREFIX}disable`).setLabel('Disable').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`${PANEL_PREFIX}enable`).setLabel('Enable').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`${PANEL_PREFIX}disable`).setLabel('Disable').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`${PANEL_PREFIX}clear`).setLabel('Clear').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId(`${PANEL_PREFIX}all_channels`).setLabel('All Channels').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`${PANEL_PREFIX}all_channels`).setLabel('All Channels').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`${PANEL_PREFIX}refresh`).setLabel('Refresh').setStyle(ButtonStyle.Primary)
   );
-  return { embeds: [embed], components: [new ActionRowBuilder().addComponents(addUsers), new ActionRowBuilder().addComponents(removeUsers), new ActionRowBuilder().addComponents(channelSelect), controls] };
+  return { embeds: [embed], components: [new ActionRowBuilder().addComponents(addUsers), new ActionRowBuilder().addComponents(removeUsers), new ActionRowBuilder().addComponents(channelSelect), new ActionRowBuilder().addComponents(eventSelect), controls] };
 }
 
 async function execute(message, _args, { client, BOT_OWNERS = [] } = {}) {
@@ -130,6 +143,12 @@ async function handleInteraction(interaction, { client, BOT_OWNERS = [] } = {}) 
 
   if (interaction.isChannelSelectMenu() && id === 'set_channel') {
     updateGuildSettings(interaction.guild.id, { channelId: interaction.values[0] || null });
+    await interaction.update(buildPanel(interaction.guild, client));
+    return true;
+  }
+
+  if (interaction.isStringSelectMenu() && id === 'set_event') {
+    updateGuildSettings(interaction.guild.id, { eventMode: interaction.values[0] || 'both' });
     await interaction.update(buildPanel(interaction.guild, client));
     return true;
   }

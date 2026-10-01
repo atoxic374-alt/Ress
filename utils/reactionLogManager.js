@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { EmbedBuilder } = require('discord.js');
+const colorManager = require('./colorManager');
 
 const configPath = path.join(__dirname, '..', 'data', 'reactionLogConfig.json');
 const DEFAULT_CONFIG = { version: 1, guilds: {} };
@@ -37,12 +38,17 @@ function normalizeChannelId(value) {
   return /^\d{15,21}$/.test(id) ? id : null;
 }
 
+function normalizeEventMode(value) {
+  return ['add', 'remove', 'both'].includes(value) ? value : 'both';
+}
+
 function getGuildSettings(guildId) {
   const config = readConfig();
   const current = config.guilds[guildId] || {};
   return {
     enabled: current.enabled !== false,
     channelId: normalizeChannelId(current.channelId),
+    eventMode: normalizeEventMode(current.eventMode),
     recipientIds: Array.isArray(current.recipientIds)
       ? [...new Set(current.recipientIds.map(normalizeId).filter(Boolean))]
       : []
@@ -58,6 +64,9 @@ function updateGuildSettings(guildId, patch) {
     channelId: patch.channelId === undefined
       ? current.channelId
       : normalizeChannelId(patch.channelId),
+    eventMode: patch.eventMode === undefined
+      ? current.eventMode
+      : normalizeEventMode(patch.eventMode),
     recipientIds: [...new Set((patch.recipientIds ?? current.recipientIds).map(normalizeId).filter(Boolean))]
   };
   config.guilds[guildId] = next;
@@ -85,11 +94,9 @@ function buildReactionLogEmbed({ reaction, user, action }) {
   const isAdd = action === 'add';
   const actionText = isAdd ? 'Reaction Added' : 'Reaction Removed';
   const actorLabel = isAdd ? 'Added By' : 'Removed By';
-  const color = isAdd ? '#57F287' : '#ED4245';
   const count = Number.isFinite(reaction.count) ? reaction.count : null;
 
-  const embed = new EmbedBuilder()
-    .setColor(color)
+  const embed = colorManager.createEmbed()
     .setTitle(`Reaction Log • ${actionText}`)
     .setDescription(`A reaction was **${isAdd ? 'added to' : 'removed from'}** a message.`)
     .addFields(
@@ -105,8 +112,9 @@ function buildReactionLogEmbed({ reaction, user, action }) {
     .setFooter({ text: `Reaction Log • ${guild.name}` })
     .setTimestamp(new Date());
 
-  if (messageAuthor?.displayAvatarURL) {
-    embed.setThumbnail(messageAuthor.displayAvatarURL({ size: 128 }));
+  const botAvatar = guild.client?.user?.displayAvatarURL?.({ dynamic: true, size: 256 });
+  if (botAvatar) {
+    embed.setThumbnail(botAvatar);
   }
   return embed;
 }
@@ -116,6 +124,9 @@ async function dispatchReactionLog({ reaction, user, action }) {
   if (!guild || !user || user.bot) return { sent: 0, skipped: true };
   const settings = getGuildSettings(guild.id);
   if (!settings.enabled || settings.recipientIds.length === 0) return { sent: 0, skipped: true };
+  if (settings.eventMode !== 'both' && settings.eventMode !== action) {
+    return { sent: 0, skipped: true };
+  }
   if (settings.channelId && String(reaction.message.channelId) !== String(settings.channelId)) {
     return { sent: 0, skipped: true };
   }
@@ -140,5 +151,6 @@ module.exports = {
   updateGuildSettings,
   dispatchReactionLog,
   normalizeId,
-  normalizeChannelId
+  normalizeChannelId,
+  normalizeEventMode
 };
