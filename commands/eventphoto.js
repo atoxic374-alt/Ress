@@ -17,7 +17,7 @@ const fs = require('fs');
 const path = require('path');
 
 const name = 'eventphoto';
-const aliases = ['eventimages', 'eventpic'];
+const aliases = ['eventimages', 'eventpic', 'rev'];
 const dataPath = path.join(__dirname, '..', 'data', 'eventPhotoSystem.json');
 const runtime = { clients: new Set(), autoLocks: new Set(), voteLocks: new Map() };
 
@@ -298,11 +298,11 @@ async function execute(message, args, { client }) {
   if (!message.guild) return message.reply('❌ هذا الأمر يعمل داخل السيرفر فقط.');
   const panelData = readData();
   const panelGuild = getGuild(panelData, message.guild.id);
-  const wantsRev = (args[0] || '').toLowerCase() === 'rev';
+  const wantsRev = (args[0] || '').toLowerCase() === 'rev' || Boolean(extractUserId(args[0]) && args.length === 1);
   if (wantsRev ? !isManager(message.member, panelGuild) : !isOwner(message.member)) return message.reply('❌ هذا الأمر متاح للأونر أو مسؤول Event Photos عند استخدام Rev.');
   initialize(client);
   if (wantsRev) {
-    const targetId = extractUserId(args.slice(1).join(' '));
+    const targetId = extractUserId((args[0] || '').toLowerCase() === 'rev' ? args.slice(1).join(' ') : args.join(' '));
     if (!targetId) return message.reply('❌ استخدم: `eventphoto rev @user` أو `eventphoto rev userID`');
     const posts = await findPostsForUser(message.guild, panelData, panelGuild, targetId);
     if (!posts.length) return message.reply('❌ لم يتم العثور على صورة محفوظة لهذا الشخص.');
@@ -355,8 +355,7 @@ function initialize(client) {
           if (voters.has(interaction.user.id)) voters.delete(interaction.user.id);
           else voters.add(interaction.user.id);
           post.voters = [...voters];
-          post.baseCount = Math.max(0, Number(post.baseCount) || 0);
-          post.count = post.baseCount + post.voters.length;
+          recalculate(post);
           writeData(fresh);
           await interaction.update({ components: components(interaction.guild.id, postId, freshGuild.settings.emoji, post.count) });
         });
@@ -395,20 +394,6 @@ function initialize(client) {
         writeData(fresh);
         const page = Number(rawPage) || 0;
         return interaction.update({ embeds: [reviewEmbed(post, page)], components: reviewComponents(post.messageId, page, post.voters?.length || 0) });
-      }
-      if (interaction.customId === 'eventphoto_add_manager' || interaction.customId === 'eventphoto_remove_manager') {
-        if (!isOwner(interaction.member)) return interaction.reply({ content: '❌ إضافة وإزالة المسؤولين للأونر فقط.', flags: MessageFlags.Ephemeral });
-        const add = interaction.customId === 'eventphoto_add_manager';
-        return interaction.reply({ content: add ? 'حدد المسؤولين لإضافتهم:' : 'حدد المسؤولين لإزالتهم:', components: userPicker(add ? 'eventphoto_add_manager_select' : 'eventphoto_remove_manager_select', 'حدد المستخدمين'), flags: MessageFlags.Ephemeral });
-      }
-      if (interaction.customId === 'eventphoto_add_manager_select' || interaction.customId === 'eventphoto_remove_manager_select') {
-        if (!isOwner(interaction.member)) return interaction.reply({ content: '❌ للأونر فقط.', flags: MessageFlags.Ephemeral });
-        const add = interaction.customId === 'eventphoto_add_manager_select';
-        const ids = new Set(guild.settings.managerIds);
-        for (const id of interaction.values) add ? ids.add(id) : ids.delete(id);
-        guild.settings.managerIds = [...ids];
-        writeData(data);
-        return interaction.reply({ content: add ? `✅ تمت إضافة ${interaction.values.length} مسؤول.` : `✅ تمت إزالة ${interaction.values.length} مسؤول.`, flags: MessageFlags.Ephemeral });
       }
       if (interaction.customId === 'eventphoto_add_manager' || interaction.customId === 'eventphoto_remove_manager') {
         if (!isOwner(interaction.member)) return interaction.reply({ content: '❌ إضافة وإزالة المسؤولين للأونر فقط.', flags: MessageFlags.Ephemeral });
