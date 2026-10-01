@@ -7,4 +7,5 @@ database/botConfig.json
 data/botConfig.json.bak
 data/eventPhotoSystem.json.bak
 data/eventPhotoSystem.json.tmp
+data/eventPhotoLines/
 .env

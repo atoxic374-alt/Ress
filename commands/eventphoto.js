@@ -20,7 +20,8 @@ const name = 'eventphoto';
 const aliases = ['eventimages', 'eventpic', 'rev'];
 const dataPath = path.join(__dirname, '..', 'data', 'eventPhotoSystem.json');
 const backupPath = `${dataPath}.bak`;
-const runtime = { clients: new WeakSet(), autoLocks: new Set(), voteLocks: new Map(), repostLocks: new Map(), lineUploadWaiters: new Map() };
+const lineImageDir = path.join(__dirname, '..', 'data', 'eventPhotoLines');
+const runtime = { clients: new WeakSet(), handledInteractions: new WeakSet(), autoLocks: new Set(), voteLocks: new Map(), repostLocks: new Map(), lineUploadWaiters: new Map() };
 
 function readData() {
   for (const filePath of [dataPath, backupPath]) {
@@ -52,18 +53,53 @@ function writeData(data) {
   if (fs.existsSync(backupPath)) fs.chmodSync(backupPath, 0o600);
 }
 
+function lineImageFilePath(relativePath) {
+  if (!relativePath || typeof relativePath !== 'string') return null;
+  const root = path.resolve(lineImageDir);
+  const resolved = path.resolve(path.join(path.dirname(lineImageDir), relativePath));
+  return resolved.startsWith(`${root}${path.sep}`) ? resolved : null;
+}
+
+function lineAttachment(settings) {
+  const localPath = lineImageFilePath(settings?.lineImagePath);
+  if (localPath && fs.existsSync(localPath)) return { attachment: localPath, name: 'eventphoto-line.png' };
+  if (settings?.lineImageUrl) return { attachment: settings.lineImageUrl, name: 'eventphoto-line.png' };
+  return null;
+}
+
+async function saveLineImage(url, guildId, originalName = '') {
+  const parsed = new URL(url);
+  if (!['discordapp.com', 'discordapp.net'].some(host => parsed.hostname === host || parsed.hostname.endsWith(`.${host}`))) throw new Error('unsupported-line-image-host');
+  const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  if (!response.ok) throw new Error(`line-image-download-${response.status}`);
+  const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+  if (!contentType.startsWith('image/')) throw new Error('line-image-not-image');
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (!buffer.length || buffer.length > 8 * 1024 * 1024) throw new Error('line-image-size-invalid');
+  const extension = String(originalName).match(/\.(png|jpe?g|gif|webp|bmp)$/i)?.[1]?.toLowerCase() || 'png';
+  const relativePath = path.join('eventPhotoLines', `${guildId}.${extension}`);
+  fs.mkdirSync(lineImageDir, { recursive: true });
+  const target = lineImageFilePath(relativePath);
+  const temporary = `${target}.tmp`;
+  fs.writeFileSync(temporary, buffer, { mode: 0o600 });
+  fs.renameSync(temporary, target);
+  fs.chmodSync(target, 0o600);
+  return relativePath;
+}
+
 function getGuild(data, guildId) {
   if (!data.guilds[guildId]) {
     data.guilds[guildId] = {
-      settings: { channelId: null, emoji: '✅', lineImageUrl: null, managerIds: [] },
+      settings: { channelId: null, emoji: '✅', lineImageUrl: null, lineImagePath: null, managerIds: [] },
       posts: {}
     };
   }
   const guild = data.guilds[guildId];
-  if (!guild.settings || typeof guild.settings !== 'object') guild.settings = { channelId: null, emoji: '✅', lineImageUrl: null, managerIds: [] };
+  if (!guild.settings || typeof guild.settings !== 'object') guild.settings = { channelId: null, emoji: '✅', lineImageUrl: null, lineImagePath: null, managerIds: [] };
   if (!Object.prototype.hasOwnProperty.call(guild.settings, 'channelId')) guild.settings.channelId = null;
   if (!Object.prototype.hasOwnProperty.call(guild.settings, 'emoji')) guild.settings.emoji = '✅';
   if (!Object.prototype.hasOwnProperty.call(guild.settings, 'lineImageUrl')) guild.settings.lineImageUrl = null;
+  if (!Object.prototype.hasOwnProperty.call(guild.settings, 'lineImagePath')) guild.settings.lineImagePath = null;
   guild.settings.managerIds = Array.isArray(guild.settings.managerIds)
     ? [...new Set(guild.settings.managerIds.map(String).filter(id => /^\d{16,20}$/.test(id)))]
     : [];
@@ -92,7 +128,10 @@ function imageAttachments(message) {
 }
 
 async function highestReactionCount(message) {
-  const freshMessage = message?.fetch ? await message.fetch().catch(() => message) : message;
+  const hasReactionCache = Boolean(message?.reactions?.cache);
+  const freshMessage = message?.partial || !hasReactionCache
+    ? await message.fetch().catch(() => message)
+    : message;
   const reactions = freshMessage?.reactions?.cache ? [...freshMessage.reactions.cache.values()] : [];
   return Math.max(0, ...reactions.map(reaction => Number(reaction.count) || 0));
 }
@@ -175,10 +214,11 @@ async function repost(message, initialCount = 0) {
       console.error('eventphoto component verification failed:', error.message);
       return { success: false, reason: 'component-verification-failed', separatorSent: false };
     }
-    let separatorSent = !guild.settings.lineImageUrl;
+    const line = lineAttachment(guild.settings);
+    let separatorSent = !line;
     let separator = null;
-    if (guild.settings.lineImageUrl) {
-      separator = await message.channel.send({ files: [{ attachment: guild.settings.lineImageUrl, name: 'eventphoto-line.png' }] }).catch(error => {
+    if (line) {
+      separator = await message.channel.send({ files: [line] }).catch(error => {
         console.error('eventphoto line image failed:', error.message);
         return null;
       });
@@ -251,20 +291,22 @@ async function autoScan(guild, channelId, interaction = null) {
   runtime.autoLocks.add(lock);
   const stats = { scanned: 0, converted: 0, separators: 0, separatorFailures: 0, deleted: 0, deleteFailures: 0, failed: 0, skippedBots: 0 };
   const startSettings = getGuild(readData(), guild.id).settings;
-  const startLineImageUrl = startSettings.lineImageUrl || null;
+  const startLineImageKey = startSettings.lineImagePath || startSettings.lineImageUrl || null;
   try {
     const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
     if (!channel?.isTextBased?.() || !channel.messages?.fetch) throw new Error('invalid-channel');
     if (!permissionsOk(guild, channel)) throw new Error('missing-permissions');
     const messages = await fetchAll(channel);
+    const eventData = readData();
+    const eventGuild = getGuild(eventData, guild.id);
     for (const message of messages) {
       const liveSettings = getGuild(readData(), guild.id).settings;
-      if (liveSettings.channelId !== channelId || (liveSettings.lineImageUrl || null) !== startLineImageUrl) {
+      if (liveSettings.channelId !== channelId || (liveSettings.lineImagePath || liveSettings.lineImageUrl || null) !== startLineImageKey) {
         stats.reason = 'configuration-changed';
         break;
       }
       stats.scanned += 1;
-      if (message.author?.bot) {
+      if (message.author?.bot || message.webhookId || message.applicationId || message.author?.id === guild.members.me?.id || eventGuild.posts[message.id]) {
         stats.skippedBots += 1;
         continue;
       }
@@ -273,7 +315,7 @@ async function autoScan(guild, channelId, interaction = null) {
         if (result?.success) {
           stats.converted += 1;
           if (result.separatorSent) stats.separators += 1;
-          else if (guild.settings.lineImageUrl) stats.separatorFailures += 1;
+          else if (startLineImageKey) stats.separatorFailures += 1;
         } else {
           stats.failed += 1;
         }
@@ -284,7 +326,7 @@ async function autoScan(guild, channelId, interaction = null) {
       } else {
         stats.deleteFailures += 1;
       }
-      await new Promise(resolve => setTimeout(resolve, 250));
+      await new Promise(resolve => setTimeout(resolve, 75));
     }
     stats.success = !stats.reason;
   } catch (error) {
@@ -296,7 +338,7 @@ async function autoScan(guild, channelId, interaction = null) {
     runtime.autoLocks.delete(lock);
   }
   if (interaction) {
-    const lineSummary = guild.settings.lineImageUrl ? `\nSeparators: ${stats.separators} sent / ${stats.separatorFailures} failed` : '';
+    const lineSummary = startLineImageKey ? `\nSeparators: ${stats.separators} sent / ${stats.separatorFailures} failed` : '';
     const status = stats.reason === 'configuration-changed' ? '⚠️ Auto stopped because its channel setting changed.' : '✅ Auto completed.';
     await interaction.followUp({ content: `${status}\nScanned: ${stats.scanned}\nImages reposted: ${stats.converted}\nNon-images deleted: ${stats.deleted}\nFailures: ${stats.failed + stats.deleteFailures}${lineSummary}`, flags: MessageFlags.Ephemeral }).catch(() => {});
   }
@@ -312,7 +354,7 @@ function settingsPanel(guild) {
     .addFields(
       { name: 'Channel', value: state.settings.channelId ? `<#${state.settings.channelId}>` : 'غير محدد', inline: true },
       { name: 'setEmoji', value: state.settings.emoji || '✅', inline: true },
-      { name: 'Line Image', value: state.settings.lineImageUrl ? 'مفعلة' : 'غير محددة', inline: true },
+      { name: 'Line Image', value: lineAttachment(state.settings) ? 'مفعلة' : 'غير محددة', inline: true },
       { name: 'Managers', value: state.settings.managerIds.length ? state.settings.managerIds.map(id => `<@${id}>`).join(', ').slice(0, 1024) : 'لا يوجد', inline: false },
       { name: 'Auto behavior', value: 'ينقل أعلى عدد رياكشن للصورة ويحذف غير الصور', inline: false },
       { name: 'Rev', value: 'استخدم `eventphoto rev @user` لمراجعة صور شخص محدد', inline: false }
@@ -475,10 +517,19 @@ function initialize(client) {
       else if (message.channel.id === waiter.channelId && isOwner(message.member)) {
         const line = imageAttachments(message)[0];
         if (line) {
-          guild.settings.lineImageUrl = line.url;
-          writeData(data);
-          runtime.lineUploadWaiters.delete(waiterKey);
-          await message.delete().catch(() => {});
+          try {
+            const previousPath = lineImageFilePath(guild.settings.lineImagePath);
+            const localPath = await saveLineImage(line.url, message.guild.id, line.name);
+            guild.settings.lineImageUrl = line.url;
+            guild.settings.lineImagePath = localPath;
+            writeData(data);
+            if (previousPath && previousPath !== lineImageFilePath(localPath)) fs.unlinkSync(previousPath);
+            runtime.lineUploadWaiters.delete(waiterKey);
+            await message.delete().catch(() => {});
+          } catch (error) {
+            console.error('eventphoto line image save failed:', error.message);
+            await message.reply('❌ تعذر حفظ صورة الفاصل. أرسل صورة من Discord مرة أخرى.').catch(() => {});
+          }
           return;
         }
       }
@@ -488,26 +539,37 @@ function initialize(client) {
   });
   client.on('interactionCreate', async interaction => {
     if (!interaction.guild || !interaction.customId?.startsWith('eventphoto_')) return;
+    if (runtime.handledInteractions.has(interaction)) return;
+    runtime.handledInteractions.add(interaction);
     try {
       const data = readData();
       const guild = getGuild(data, interaction.guild.id);
       if (interaction.customId.startsWith('eventphoto_vote:')) {
         const [, guildId, postId] = interaction.customId.split(':');
         if (guildId !== interaction.guild.id || !isSnowflake(postId)) return interaction.reply({ content: '❌ تصويت غير صالح.', flags: MessageFlags.Ephemeral });
+        try { await interaction.deferUpdate(); } catch (error) {
+          console.error('eventphoto vote acknowledgement failed:', error.message);
+          return;
+        }
         const lockKey = `${guildId}:${postId}`;
         const previous = runtime.voteLocks.get(lockKey) || Promise.resolve();
         const current = previous.catch(() => {}).then(async () => {
           const fresh = readData();
           const freshGuild = getGuild(fresh, interaction.guild.id);
           const post = freshGuild.posts[postId];
-          if (!post) return interaction.reply({ content: '❌ المنشور غير موجود.', flags: MessageFlags.Ephemeral });
+          if (!post) return interaction.editReply({ content: '❌ المنشور غير موجود.', components: [] }).catch(() => {});
           const voters = new Set(Array.isArray(post.voters) ? post.voters : []);
           if (voters.has(interaction.user.id)) voters.delete(interaction.user.id);
           else voters.add(interaction.user.id);
           post.voters = [...voters];
           recalculate(post);
-          writeData(fresh);
-          await interaction.update({ components: components(interaction.guild.id, postId, freshGuild.settings.emoji, post.count) });
+          try {
+            writeData(fresh);
+            await interaction.editReply({ components: components(interaction.guild.id, postId, freshGuild.settings.emoji, post.count) });
+          } catch (error) {
+            console.error('eventphoto vote update failed:', error.message);
+            await interaction.editReply({ content: '❌ تعذر حفظ التصويت، حاول مرة أخرى.' }).catch(() => {});
+          }
         });
         const tracked = current.catch(() => {});
         runtime.voteLocks.set(lockKey, tracked);
@@ -587,8 +649,11 @@ function initialize(client) {
       }
       if (interaction.customId === 'eventphoto_clear_line') {
         if (!isOwner(interaction.member)) return interaction.reply({ content: '❌ إدارة صورة الفاصل للأونر فقط.', flags: MessageFlags.Ephemeral });
+        const previousPath = lineImageFilePath(guild.settings.lineImagePath);
         guild.settings.lineImageUrl = null;
+        guild.settings.lineImagePath = null;
         writeData(data);
+        if (previousPath) fs.unlink(previousPath, () => {});
         return interaction.reply({ content: '✅ Line image cleared.', flags: MessageFlags.Ephemeral });
       }
       if (!isOwner(interaction.member)) return interaction.reply({ content: '❌ للأونرز فقط.', flags: MessageFlags.Ephemeral });
@@ -613,13 +678,17 @@ function initialize(client) {
       }
       if (interaction.customId === 'eventphoto_auto') return interaction.reply({ content: 'حدد الروم. سيبدأ من أقدم رسالة، يعيد نشر الصور، ينقل أعلى رياكشن، ويحذف غير الصور.', components: channelPicker('eventphoto_auto_select', 'Select Auto Channel'), flags: MessageFlags.Ephemeral });
       if (interaction.customId === 'eventphoto_auto_select') {
+        try { await interaction.deferReply({ flags: MessageFlags.Ephemeral }); } catch (error) {
+          console.error('eventphoto Auto acknowledgement failed:', error.message);
+          return;
+        }
         const channelId = interaction.values[0];
         const channel = interaction.guild.channels.cache.get(channelId) || await interaction.guild.channels.fetch(channelId).catch(() => null);
-        if (!channel?.isTextBased?.() || !channel.messages?.fetch) return interaction.reply({ content: '❌ الروم المحدد غير صالح أو لا يدعم قراءة الرسائل.', flags: MessageFlags.Ephemeral });
-        if (!permissionsOk(interaction.guild, channel)) return interaction.reply({ content: '❌ صلاحيات البوت ناقصة. يحتاج View Channel وRead Message History وSend Messages وAttach Files وManage Messages.', flags: MessageFlags.Ephemeral });
+        if (!channel?.isTextBased?.() || !channel.messages?.fetch) return interaction.editReply({ content: '❌ الروم المحدد غير صالح أو لا يدعم قراءة الرسائل.' });
+        if (!permissionsOk(interaction.guild, channel)) return interaction.editReply({ content: '❌ صلاحيات البوت ناقصة. يحتاج View Channel وRead Message History وSend Messages وAttach Files وManage Messages.' });
         guild.settings.channelId = channelId;
         writeData(data);
-        await interaction.reply({ content: `✅ بدأ Auto في <#${channelId}>.`, flags: MessageFlags.Ephemeral });
+        await interaction.editReply({ content: `✅ بدأ Auto في <#${channelId}>.` });
         setImmediate(() => autoScan(interaction.guild, channelId, interaction).catch(error => console.error('eventphoto Auto failed:', error)));
         return;
       }
