@@ -359,17 +359,21 @@ async function cloneExternalEmojiToGuild(guild, emojiToken) {
 async function deleteRoom(channelId, client) {
     if (deletingRoomChannels.has(channelId)) return false;
     deletingRoomChannels.add(channelId);
+    const roomData = activeRooms.get(channelId);
     try {
         const channel = await fetchChannelOrNull(client.channels, channelId);
         if (!channel) {
             console.log(`⚠️ الروم ${channelId} غير موجود (ربما تم حذفه مسبقاً)`);
+            if (!await finalizeFailedRoomCleanup(roomData, channelId)) {
+                console.error(`⚠️ تعذر إنهاء حالة الطلب بعد اختفاء الروم ${channelId}؛ ستعاد المحاولة.`);
+                return false;
+            }
             activeRooms.delete(channelId);
             roomEmbedMessages.delete(channelId);
             const saved = saveActiveRooms();
             if (!saved) console.error(`⚠️ تعذر حفظ إزالة الروم المحذوف ${channelId} من activeRooms.json`);
             return saved;
         }
-        const roomData = activeRooms.get(channelId);
         const deleteAfterMs = Number(roomData?.deleteAfterMs) || (DEFAULT_ROOM_DELETE_HOURS * 60 * 60 * 1000);
         const deleteAfterHours = Math.round(deleteAfterMs / (60 * 60 * 1000));
         try {
@@ -378,6 +382,11 @@ async function deleteRoom(channelId, client) {
             if (!isUnknownChannelError(error)) throw error;
         }
         console.log(`🗑️ تم حذف الروم: ${channel.name}`);
+
+        if (!await finalizeFailedRoomCleanup(roomData, channelId)) {
+            console.error(`⚠️ تم حذف الروم ${channelId} لكن تعذر حفظ اكتمال تنظيف الطلب؛ ستعاد المحاولة.`);
+            return false;
+        }
 
         activeRooms.delete(channelId);
         roomEmbedMessages.delete(channelId);
@@ -397,6 +406,24 @@ async function deleteRoom(channelId, client) {
         deletingRoomChannels.delete(channelId);
     }
 }
+
+async function finalizeFailedRoomCleanup(roomData, channelId) {
+    const requestId = roomData?.requestId;
+    if (!requestId) return true;
+    return withRoomRequestsMutation(requests => {
+        const request = requests.find(item => item.id === requestId && item.roomChannelId === channelId);
+        if (!request || !request.roomCreationFailed || request.roomCreationState !== 'cleanup_pending') return true;
+        request.roomCreationState = 'failed';
+        request.roomCreationCleanupCompletedAt = Date.now();
+        delete request.roomChannelId;
+        delete request.roomCreatedAt;
+        delete request.roomMessageId;
+        delete request.imageMessageId;
+        delete request.roomContent;
+        return saveRoomRequests(requests);
+    });
+}
+
 // جدولة حذف روم وفق الوقت المحدد
 function scheduleRoomDeletion(channelId, client, deleteAfterMs = DEFAULT_ROOM_DELETE_HOURS * 60 * 60 * 1000) {
     const delayMs = Number(deleteAfterMs);
@@ -2127,7 +2154,7 @@ async function handleRoomRequestAction(interaction, client) {
 async function retryFailedRoomCreation(request, client) {
     const mutation = await withRoomRequestsMutation(requests => {
         const latest = requests.find(item => item.id === request.id && item.guildId === request.guildId);
-        if (!latest || latest.status !== 'accepted' || latest.roomCreationState === 'created' || isRequestRoomCreated(latest)) {
+        if (!latest || latest.status !== 'accepted' || latest.roomCreationFailed || latest.roomCreationState === 'created' || isRequestRoomCreated(latest)) {
             return { ok: false, reason: 'not-retryable' };
         }
         latest.roomCreationAttempts = (Number(latest.roomCreationAttempts) || 0) + 1;
@@ -2196,6 +2223,11 @@ async function scheduleRoomCreation(request, client, persistedScheduleTime = nul
 
     if (!guildConfig) {
         console.error(`❌ لم يتم العثور على إعدادات السيرفر ${request.guildId}`);
+        return false;
+    }
+
+    if (request.roomCreationFailed) {
+        console.warn(`⚠️ الطلب ${request.id} متوقف بعد خطأ نهائي؛ عدّل الطلب بعد إصلاح السبب لإعادة المحاولة.`);
         return false;
     }
 
@@ -2275,14 +2307,14 @@ async function processCreateRoom(request, client, guildConfig) {
     let createdChannel = null;
     let createStage = 'تهيئة الطلب';
     let rollbackDeletionFailed = false;
+    let roomWasDeletedDuringRollback = false;
     try {
         console.log(`🔄 بدء إنشاء روم: ${request.roomType} لـ ${request.forWho}`);
 
         createStage = 'جلب السيرفر';
         const guild = await client.guilds.fetch(request.guildId);
         if (!guild) {
-            console.error(`❌ السيرفر ${request.guildId} غير موجود`);
-            return;
+            throw new Error(`السيرفر ${request.guildId} غير موجود`);
         }
 
         createStage = 'فحص الطلب والقناة السابقة';
@@ -2604,6 +2636,7 @@ async function processCreateRoom(request, client, guildConfig) {
             }
 
             if (channelDeleted) {
+                roomWasDeletedDuringRollback = true;
                 activeRooms.delete(createdChannel.id);
                 const deletionJob = roomDeletionJobs.get(createdChannel.id);
                 if (deletionJob) {
@@ -2645,12 +2678,25 @@ async function processCreateRoom(request, client, guildConfig) {
             }
         }
 
+        if (!isRetryableRoomCreationError(error)) {
+            const markedFailed = await withRoomRequestsMutation(requests => {
+                const latest = requests.find(item => item.id === request.id && item.guildId === request.guildId);
+                if (!latest) return true;
+                latest.roomCreationFailed = true;
+                latest.roomCreationFailedAt = Date.now();
+                latest.roomCreationError = `${createStage}: ${String(error.message || 'خطأ غير معروف').slice(0, 500)}`;
+                latest.roomCreationState = createdChannel && !roomWasDeletedDuringRollback ? 'cleanup_pending' : 'failed';
+                return saveRoomRequests(requests);
+            });
+            if (!markedFailed) console.error(`⚠️ تعذر حفظ الفشل النهائي للطلب ${request.id}`);
+        }
+
         // محاولة إرسال إشعار بالخطأ لصاحب الطلب
         try {
             const requester = await client.users.fetch(request.userId);
             const errorEmbed = colorManager.createEmbed()
                 .setTitle('❌ فشل في إنشاء الروم')
-                .setDescription(`حدث خطأ أثناء إنشاء روم ${request.roomType}${preserveIncompleteRoom ? `\nتم الاحتفاظ بالقناة مؤقتًا لتجنب إنشاء نسخة مكررة، وسيعيد البوت المحاولة تلقائيًا: <#${createdChannel.id}>` : rollbackDeletionFailed ? `\nبقيت القناة موجودة بعد فشل التنظيف: <#${createdChannel.id}>` : ''}`)
+                .setDescription(`حدث خطأ أثناء إنشاء روم ${request.roomType}${preserveIncompleteRoom ? `\nتم الاحتفاظ بالقناة مؤقتًا لتجنب إنشاء نسخة مكررة، وسيعيد البوت المحاولة تلقائيًا: <#${createdChannel.id}>` : rollbackDeletionFailed ? `\nبقيت القناة موجودة بعد فشل التنظيف: <#${createdChannel.id}>` : isRetryableRoomCreationError(error) ? '\nسيعيد البوت المحاولة تلقائيًا بعد تهدئة مؤقتة.' : '\nتم إيقاف الإعادة التلقائية لأن الخطأ يبدو دائمًا؛ راجع صلاحيات البوت وإعدادات القناة ثم أعد جدولة الطلب.'}`)
                 .addFields([
                     { name: 'المرحلة', value: createStage, inline: true },
                     { name: 'السبب', value: String(error.message || 'خطأ غير معروف').slice(0, 1000), inline: false },
@@ -3947,7 +3993,7 @@ function registerHandlers(client) {
                         await interaction.reply({ content: '❌ **الطلب غير موجود.**', flags: 64 });
                         return;
                     }
-                    if (isRequestRoomCreated(requests[requestIndex]) || requests[requestIndex].roomCreationState === 'creating') {
+                    if (isRequestRoomCreated(requests[requestIndex]) || ['creating', 'cleanup_pending'].includes(requests[requestIndex].roomCreationState)) {
                         await interaction.reply({ content: '❌ **لا يمكن تعديل موعد بعد إنشاء الروم.**', flags: 64 });
                         return;
                     }
@@ -3967,6 +4013,12 @@ function registerHandlers(client) {
                         latest.updatedAt = Date.now();
                         latest.updatedBy = interaction.user.id;
                         latest.scheduledAt = parsedWhen.toISOString();
+                        latest.roomCreationAttempts = 0;
+                        latest.roomCreationFailed = false;
+                        latest.scheduleRecoveryNeeded = false;
+                        delete latest.roomCreationError;
+                        delete latest.roomCreationFailedAt;
+                        if (latest.roomCreationState === 'failed') delete latest.roomCreationState;
                         return saveRoomRequests(latestRequests)
                             ? { ok: true, wasAccepted, request: { ...latest } }
                             : { ok: false, reason: 'save' };
@@ -4094,6 +4146,9 @@ function registerHandlers(client) {
                             roomCreationFailed: false,
                             scheduleRecoveryNeeded: false
                         });
+                        delete latest.roomCreationError;
+                        delete latest.roomCreationFailedAt;
+                        if (latest.roomCreationState === 'failed') delete latest.roomCreationState;
                         return saveRoomRequests(latestRequests)
                             ? { ok: true, wasAccepted, request: { ...latest } }
                             : { ok: false, reason: 'save' };
