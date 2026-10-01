@@ -2357,7 +2357,7 @@ async function prepareReaction(reaction) {
   }
 }
 
-const reactionEventQueues = new Map();
+let reactionEventQueue = Promise.resolve();
 
 function snapshotReactionUser(user) {
   return {
@@ -2368,39 +2368,24 @@ function snapshotReactionUser(user) {
   };
 }
 
-function getReactionQueueKey(reaction) {
-  const message = reaction?.message;
-  const emoji = reaction?.emoji;
-  return [
-    message?.guild?.id || message?.guildId || 'unknown',
-    message?.channelId || message?.channel?.id || 'unknown',
-    message?.id || 'unknown',
-    emoji?.id || emoji?.name || 'unknown'
-  ].join(':');
-}
-
 function enqueueReactionLog(reaction, user, action) {
   const actor = snapshotReactionUser(user);
-  const key = getReactionQueueKey(reaction);
-  const previous = reactionEventQueues.get(key) || Promise.resolve();
-  const task = previous.catch(() => {}).then(async () => {
+  const eventReaction = {
+    message: reaction?.message,
+    emoji: reaction?.emoji,
+    count: reaction?.count
+  };
+  const task = reactionEventQueue.catch(() => {}).then(async () => {
     if (!(await prepareReaction(reaction))) return;
     const message = reaction.message;
-    const eventReaction = {
-      message,
-      emoji: reaction.emoji,
-      count: reaction.count
-    };
+    eventReaction.message = message;
     const { dispatchReactionLog, shouldLogReaction } = require('./utils/reactionLogManager');
     const channelId = message.channelId || message.channel?.id;
     if (!shouldLogReaction({ guildId: message.guild.id, channelId, action }).allowed) return;
     await dispatchReactionLog({ reaction: eventReaction, user: actor, action });
   });
-  const tracked = task.finally(() => {
-    if (reactionEventQueues.get(key) === tracked) reactionEventQueues.delete(key);
-  });
-  reactionEventQueues.set(key, tracked);
-  return tracked;
+  reactionEventQueue = task.catch(() => {});
+  return task;
 }
 
 client.on('messageReactionAdd', async (reaction, user) => {

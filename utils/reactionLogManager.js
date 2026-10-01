@@ -149,14 +149,16 @@ async function dispatchReactionLog({ reaction, user, action }) {
     try {
       const recipient = await guild.client.users.fetch(recipientId);
       let delivered = false;
-      for (let attempt = 0; attempt < 3 && !delivered; attempt += 1) {
+      for (let attempt = 0; attempt < 5 && !delivered; attempt += 1) {
         try {
           await recipient.send({ embeds: [embed], allowedMentions: { parse: [] } });
           delivered = true;
         } catch (sendError) {
           const retryAfter = Number(sendError?.rawError?.retry_after || sendError?.retry_after || 0);
-          if (attempt < 2 && (Number(sendError?.code) === 429 || retryAfter > 0)) {
-            await new Promise(resolve => setTimeout(resolve, Math.min(Math.max(retryAfter * 1000, 250), 5000)));
+          const temporaryError = [429, 500, 502, 503, 504].includes(Number(sendError?.code));
+          if (attempt < 4 && (temporaryError || retryAfter > 0)) {
+            const backoff = retryAfter > 0 ? retryAfter * 1000 : 500 * (attempt + 1);
+            await new Promise(resolve => setTimeout(resolve, Math.min(Math.max(backoff, 250), 15000)));
             continue;
           }
           throw sendError;
