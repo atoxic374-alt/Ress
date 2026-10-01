@@ -39,7 +39,10 @@ function normalizeChannelId(value) {
 }
 
 function normalizeEventMode(value) {
-  return ['add', 'remove', 'both'].includes(value) ? value : 'both';
+  const mode = String(value || '').toLowerCase();
+  if (['add', 'added', 'addition'].includes(mode)) return 'add';
+  if (['remove', 'removed', 'removal'].includes(mode)) return 'remove';
+  return 'both';
 }
 
 function getGuildSettings(guildId) {
@@ -82,7 +85,7 @@ function emojiText(emoji) {
 
 function truncate(value, max = 900) {
   const text = String(value || '').trim();
-  if (!text) return 'بدون محتوى';
+  if (!text) return 'لا يوجد محتوى';
   return text.length > max ? `${text.slice(0, max - 3)}...` : text;
 }
 
@@ -92,24 +95,23 @@ function buildReactionLogEmbed({ reaction, user, action }) {
   const messageAuthor = message.author;
   const messageUrl = message.url || `https://discord.com/channels/${guild.id}/${message.channelId}/${message.id}`;
   const isAdd = action === 'add';
-  const actionText = isAdd ? 'Reaction Added' : 'Reaction Removed';
-  const actorLabel = isAdd ? 'Added By' : 'Removed By';
+  const actionText = isAdd ? 'تمت إضافة رياكشن' : 'تمت إزالة رياكشن';
+  const actorLabel = isAdd ? 'أضافه' : 'أزاله';
   const count = Number.isFinite(reaction.count) ? reaction.count : null;
 
   const embed = colorManager.createEmbed()
-    .setTitle(`Reaction Log • ${actionText}`)
-    .setDescription(`A reaction was **${isAdd ? 'added to' : 'removed from'}** a message.`)
+    .setTitle('سجل التفاعل')
+    .setDescription(`**${actionText}** على رسالة.`)
     .addFields(
-      { name: actorLabel, value: `<@${user.id}>\nID: \`${user.id}\`\n\`${user.tag || user.username || user.id}\``, inline: true },
-      { name: 'Current Count', value: count === null ? 'Unavailable' : `\`${count}\``, inline: true },
-      { name: 'Message Author', value: messageAuthor ? `<@${messageAuthor.id}>\n\`${messageAuthor.tag || messageAuthor.username || messageAuthor.id}\`` : 'Unavailable', inline: true },
-      { name: 'Channel', value: `<#${message.channelId}>`, inline: true },
-      { name: 'Message ID', value: `\`${message.id}\``, inline: true },
-      { name: 'Message', value: `>>> ${truncate(message.content)}`, inline: false },
-      { name: 'Link', value: `[Open message](${messageUrl})`, inline: false },
-      { name: 'Reaction', value: emojiText(reaction.emoji), inline: true }
+      { name: actorLabel, value: `<@${user.id}>\nID: \`${user.id}\``, inline: true },
+      { name: 'صاحب الرسالة', value: messageAuthor ? `<@${messageAuthor.id}>` : 'غير معروف', inline: true },
+      { name: 'الروم', value: `<#${message.channelId}>`, inline: true },
+      { name: 'الرسالة', value: `>>> ${truncate(message.content, 700)}`, inline: false },
+      { name: 'الرابط', value: `[فتح الرسالة](${messageUrl})`, inline: false },
+      { name: 'الإيموجي', value: emojiText(reaction.emoji), inline: true },
+      { name: 'العدد الحالي', value: count === null ? 'غير متاح' : `\`${count}\``, inline: true }
     )
-    .setFooter({ text: `Reaction Log • ${guild.name}` })
+    .setFooter({ text: `${guild.name} • Reaction Log` })
     .setTimestamp(new Date());
 
   const botAvatar = guild.client?.user?.displayAvatarURL?.({ dynamic: true, size: 256 });
@@ -124,7 +126,8 @@ async function dispatchReactionLog({ reaction, user, action }) {
   if (!guild || !user || user.bot) return { sent: 0, skipped: true };
   const settings = getGuildSettings(guild.id);
   if (!settings.enabled || settings.recipientIds.length === 0) return { sent: 0, skipped: true };
-  if (settings.eventMode !== 'both' && settings.eventMode !== action) {
+  const normalizedAction = action === 'remove' ? 'remove' : 'add';
+  if (settings.eventMode !== 'both' && settings.eventMode !== normalizedAction) {
     return { sent: 0, skipped: true };
   }
   if (settings.channelId && String(reaction.message.channelId) !== String(settings.channelId)) {
