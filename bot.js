@@ -2342,102 +2342,54 @@ client.on('roleDelete', role => {
   }
 
 });
-// تتبع التفاعلات - معالج محسن ومحدث
-client.on('messageReactionAdd', async (reaction, user) => {
+// Reaction Log tracking for added and removed reactions
+async function prepareReaction(reaction) {
+  if (!reaction) return false;
   try {
-    // تجاهل البوتات
-    if (user.bot) {
-      return;
-    }
-
-    // التأكد من وجود الـ guild
-    if (!reaction.message.guild) {
-      console.log('❌ تم تجاهل تفاعل - لا يوجد guild');
-      return;
-    }
-
-    console.log(`🎯 تفاعل جديد من ${user.username} (${user.id}) - الإيموجي: ${reaction.emoji.name || reaction.emoji.id || 'custom'}`);
-
-    // التأكد من أن التفاعل مُحمل بالكامل
-    if (reaction.partial) {
-      try {
-        await reaction.fetch();
-        console.log(`🔄 تم جلب التفاعل الجزئي بنجاح: ${user.username}`);
-      } catch (error) {
-        console.error('❌ فشل في جلب التفاعل:', error);
-        return;
-      }
-    }
-
-    // التأكد من أن الرسالة محملة أيضاً
-    if (reaction.message.partial) {
-      try {
-        await reaction.message.fetch();
-        console.log(`📨 تم جلب الرسالة الجزئية بنجاح`);
-      } catch (error) {
-        console.error('❌ فشل في جلب الرسالة:', error);
-        return;
-      }
-    }
-
-    // التحقق من قاعدة البيانات أولاً
-    try {
-      const { getDatabase } = require('./utils/database');
-      const dbManager = getDatabase();
-
-      if (!dbManager || !dbManager.isInitialized) {
-        console.log('⚠️ قاعدة البيانات غير مهيأة - تم تجاهل تتبع التفاعل');
-        return;
-      }
-
-      // تحميل دالة تتبع النشاط
-      const { trackUserActivity } = require('./utils/userStatsCollector');
-
-      // تتبع النشاط مع معلومات مفصلة
-      console.log(`📊 محاولة تتبع تفاعل المستخدم ${user.username} (${user.id})`);
-
-      const success = await trackUserActivity(user.id, 'reaction', {
-        guildId: reaction.message.guild?.id || reaction.message.guildId,
-        messageId: reaction.message.id,
-        channelId: reaction.message.channelId,
-        emoji: reaction.emoji.name || reaction.emoji.id || 'custom_emoji',
-        timestamp: Date.now(),
-        messageAuthorId: reaction.message.author?.id
-      });
-
-      if (success) {
-        console.log(`✅ تم تسجيل تفاعل المستخدم ${user.username} بنجاح`);
-      } else {
-        console.log(`⚠️ فشل في تسجيل تفاعل المستخدم ${user.username}`);
-      }
-    } catch (trackError) {
-      console.error(`❌ خطأ في تتبع التفاعل من ${user.username}:`, trackError);
-    }
+    if (reaction.partial) await reaction.fetch();
+    if (reaction.message?.partial) await reaction.message.fetch();
+    return Boolean(reaction.message?.guild);
   } catch (error) {
-    // تجاهل الأخطاء المعروفة بصمت
-    if (error.code === 10008 || error.code === 50001) {
-      return;
+    if (![10008, 50001].includes(Number(error?.code))) {
+      console.error('Reaction preparation failed:', error?.message || error);
     }
-    console.error(`❌ خطأ عام في تتبع التفاعل من ${user?.username || 'مستخدم غير معروف'}:`, error);
+    return false;
+  }
+}
+
+client.on('messageReactionAdd', async (reaction, user) => {
+  if (user?.bot || !(await prepareReaction(reaction))) return;
+  try {
+    const { dispatchReactionLog } = require('./utils/reactionLogManager');
+    await dispatchReactionLog({ reaction, user, action: 'add' });
+  } catch (error) {
+    console.error('Reaction add log failed:', error?.message || error);
+  }
+  try {
+    const { getDatabase } = require('./utils/database');
+    const dbManager = getDatabase();
+    if (!dbManager?.isInitialized) return;
+    const { trackUserActivity } = require('./utils/userStatsCollector');
+    await trackUserActivity(user.id, 'reaction', {
+      guildId: reaction.message.guild.id,
+      messageId: reaction.message.id,
+      channelId: reaction.message.channelId,
+      emoji: reaction.emoji.name || reaction.emoji.id || 'custom_emoji',
+      timestamp: Date.now(),
+      messageAuthorId: reaction.message.author?.id
+    });
+  } catch (error) {
+    console.error(`Reaction stats tracking failed for ${user?.username || user?.id}:`, error?.message || error);
   }
 });
 
-// تتبع إزالة التفاعلات (اختياري)
 client.on('messageReactionRemove', async (reaction, user) => {
+  if (user?.bot || !(await prepareReaction(reaction))) return;
   try {
-    if (user.bot || !reaction.message.guild) return;
-
-    console.log(`👎 تم إزالة تفاعل: ${user.username} (${user.id}) - الإيموجي: ${reaction.emoji.name || reaction.emoji.id || 'custom'}`);
-
-    // يمكن إضافة منطق لتتبع إزالة التفاعلات هنا إذا أردت
-    // const { trackUserActivity } = require('./utils/userStatsCollector');
-    // await trackUserActivity(user.id, 'reaction_remove', { ... });
-
+    const { dispatchReactionLog } = require('./utils/reactionLogManager');
+    await dispatchReactionLog({ reaction, user, action: 'remove' });
   } catch (error) {
-    if (error.code === 10008 || error.code === 50001) {
-      return;
-    }
-    console.error('خطأ في تتبع إزالة التفاعل:', error);
+    console.error('Reaction remove log failed:', error?.message || error);
   }
 });
 
@@ -5479,6 +5431,22 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
         const vipCommand = client.commands.get('vip');
         if (vipCommand && typeof vipCommand.handleModalSubmit === 'function') {
             await vipCommand.handleModalSubmit(interaction, client);
+        }
+        return;
+    }
+
+    // Handle Reaction Log settings panel interactions
+    if (interaction.customId && interaction.customId.startsWith('reactionlog_')) {
+        try {
+            const reactionLogCommand = client.commands.get('reactionlog');
+            if (reactionLogCommand && typeof reactionLogCommand.handleInteraction === 'function') {
+                await reactionLogCommand.handleInteraction(interaction, { client, BOT_OWNERS });
+            }
+        } catch (error) {
+            console.error('Reaction Log panel failed:', error);
+            if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({ content: 'Reaction Log panel error.', flags: MessageFlags.Ephemeral }).catch(() => {});
+            }
         }
         return;
     }

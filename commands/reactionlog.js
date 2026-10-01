@@ -1,0 +1,125 @@
+const {
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  UserSelectMenuBuilder
+} = require('discord.js');
+const colorManager = require('../utils/colorManager.js');
+const {
+  getGuildSettings,
+  updateGuildSettings,
+  normalizeId
+} = require('../utils/reactionLogManager');
+
+const name = 'reactionlog';
+const aliases = ['لوق-رياكشن', 'لوق_رياكشن', 'رياكشن-لوق'];
+const PANEL_PREFIX = 'reactionlog_';
+
+function isAllowed(interactionOrMessage, BOT_OWNERS = []) {
+  const guild = interactionOrMessage?.guild;
+  const user = interactionOrMessage?.user || interactionOrMessage?.author;
+  const member = interactionOrMessage?.member;
+  return Boolean(
+    guild && user &&
+    (guild.ownerId === user.id ||
+      BOT_OWNERS.map(String).includes(String(user.id)) ||
+      member?.permissions?.has?.('Administrator'))
+  );
+}
+
+function getThumbnail(guild, client) {
+  return guild?.iconURL?.({ dynamic: true, size: 256 }) ||
+    client?.user?.displayAvatarURL?.({ dynamic: true, size: 256 }) || null;
+}
+
+function recipientLines(settings) {
+  if (!settings.recipientIds.length) return 'No recipients configured.';
+  return settings.recipientIds.map((id, index) => `${index + 1}. <@${id}>`).join('\n');
+}
+
+function buildPanel(guild, client) {
+  const settings = getGuildSettings(guild.id);
+  const embed = colorManager.createEmbed()
+    .setTitle('Reaction Log')
+    .setDescription(
+      '**Reaction activity panel**\n\n' +
+      'Private logs are sent when a reaction is added or removed.\n\n' +
+      `Status: **${settings.enabled ? 'Enabled' : 'Disabled'}**`
+    )
+    .addFields(
+      { name: 'Recipients', value: recipientLines(settings), inline: false },
+      { name: 'Count', value: `\`${settings.recipientIds.length}\``, inline: true },
+      { name: 'Events', value: 'Added and removed', inline: true },
+      { name: 'Delivery', value: 'Private messages', inline: true }
+    )
+    .setFooter({ text: `${guild.name} • Reaction Log` })
+    .setTimestamp();
+
+  const thumbnail = getThumbnail(guild, client);
+  if (thumbnail) embed.setThumbnail(thumbnail);
+
+  const addUsers = new UserSelectMenuBuilder()
+    .setCustomId(`${PANEL_PREFIX}add_users`)
+    .setPlaceholder('Select users to add')
+    .setMinValues(1)
+    .setMaxValues(25);
+  const removeUsers = new UserSelectMenuBuilder()
+    .setCustomId(`${PANEL_PREFIX}remove_users`)
+    .setPlaceholder('Select users to remove')
+    .setMinValues(1)
+    .setMaxValues(25);
+  const controls = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`${PANEL_PREFIX}enable`).setLabel('Enable').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`${PANEL_PREFIX}disable`).setLabel('Disable').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`${PANEL_PREFIX}clear`).setLabel('Clear').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`${PANEL_PREFIX}refresh`).setLabel('Refresh').setStyle(ButtonStyle.Primary)
+  );
+  return { embeds: [embed], components: [new ActionRowBuilder().addComponents(addUsers), new ActionRowBuilder().addComponents(removeUsers), controls] };
+}
+
+async function execute(message, _args, { client, BOT_OWNERS = [] } = {}) {
+  if (!isAllowed(message, BOT_OWNERS)) {
+    return;
+  }
+  await message.channel.send(buildPanel(message.guild, client));
+}
+
+async function handleInteraction(interaction, { client, BOT_OWNERS = [] } = {}) {
+  if (!interaction.customId?.startsWith(PANEL_PREFIX)) return false;
+  if (!interaction.guild || !isAllowed(interaction, BOT_OWNERS)) {
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: 'This panel is restricted to server owners and administrators.', ephemeral: true }).catch(() => {});
+    }
+    return true;
+  }
+
+  const id = interaction.customId.slice(PANEL_PREFIX.length);
+  const settings = getGuildSettings(interaction.guild.id);
+
+  if (interaction.isUserSelectMenu()) {
+    const selectedIds = interaction.values.map(normalizeId).filter(Boolean);
+    if (id === 'add_users') {
+      updateGuildSettings(interaction.guild.id, {
+        enabled: true,
+        recipientIds: [...new Set([...settings.recipientIds, ...selectedIds])]
+      });
+    } else if (id === 'remove_users') {
+      const removeSet = new Set(selectedIds);
+      updateGuildSettings(interaction.guild.id, {
+        recipientIds: settings.recipientIds.filter(recipientId => !removeSet.has(recipientId))
+      });
+    }
+    await interaction.update(buildPanel(interaction.guild, client));
+    return true;
+  }
+
+  if (!interaction.isButton()) return true;
+  if (id === 'enable') updateGuildSettings(interaction.guild.id, { enabled: true });
+  if (id === 'disable') updateGuildSettings(interaction.guild.id, { enabled: false });
+  if (id === 'clear') updateGuildSettings(interaction.guild.id, { recipientIds: [] });
+  await interaction.update(buildPanel(interaction.guild, client));
+  return true;
+}
+
+module.exports = { name, aliases, execute, handleInteraction, buildPanel };
