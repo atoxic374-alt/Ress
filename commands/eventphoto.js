@@ -19,7 +19,7 @@ const path = require('path');
 const name = 'eventphoto';
 const aliases = ['eventimages', 'eventpic', 'rev'];
 const dataPath = path.join(__dirname, '..', 'data', 'eventPhotoSystem.json');
-const runtime = { clients: new Set(), autoLocks: new Set(), voteLocks: new Map() };
+const runtime = { clients: new Set(), autoLocks: new Set(), voteLocks: new Map(), repostLocks: new Map(), lineUploadWaiters: new Map() };
 
 function readData() {
   try {
@@ -41,14 +41,15 @@ function writeData(data) {
 function getGuild(data, guildId) {
   if (!data.guilds[guildId]) {
     data.guilds[guildId] = {
-      settings: { channelId: null, emoji: '✅', managerIds: [] },
+      settings: { channelId: null, emoji: '✅', lineImageUrl: null, managerIds: [] },
       posts: {}
     };
   }
   const guild = data.guilds[guildId];
-  if (!guild.settings || typeof guild.settings !== 'object') guild.settings = { channelId: null, emoji: '✅', managerIds: [] };
+  if (!guild.settings || typeof guild.settings !== 'object') guild.settings = { channelId: null, emoji: '✅', lineImageUrl: null, managerIds: [] };
   if (!Object.prototype.hasOwnProperty.call(guild.settings, 'channelId')) guild.settings.channelId = null;
   if (!Object.prototype.hasOwnProperty.call(guild.settings, 'emoji')) guild.settings.emoji = '✅';
+  if (!Object.prototype.hasOwnProperty.call(guild.settings, 'lineImageUrl')) guild.settings.lineImageUrl = null;
   if (!Array.isArray(guild.settings.managerIds)) guild.settings.managerIds = [];
   if (!guild.posts || typeof guild.posts !== 'object') guild.posts = {};
   return guild;
@@ -97,17 +98,26 @@ function components(guildId, postId, emoji, count) {
   )];
 }
 
+function nextSequence(guild, channelId) {
+  return Object.values(guild.posts)
+    .filter(post => post.channelId === channelId)
+    .reduce((max, post) => Math.max(max, Number(post.sequence) || 0), 0) + 1;
+}
+
 async function repost(message, initialCount = 0) {
   const images = imageAttachments(message);
   if (!message.guild || !images.length || !permissionsOk(message.guild, message.channel)) return false;
   const before = readData();
   const beforeGuild = getGuild(before, message.guild.id);
+  const mentionedOwner = message.mentions?.users?.find?.(user => !user.bot);
+  const ownerId = mentionedOwner?.id || message.author.id;
+  const sequence = nextSequence(beforeGuild, message.channel.id);
   const files = images.map((attachment, index) => ({
     attachment: attachment.url,
     name: String(attachment.name || `image-${index + 1}.png`).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100)
   }));
   try {
-    const sent = await message.channel.send({ files, components: components(message.guild.id, 'pending', beforeGuild.settings.emoji, initialCount) });
+    const sent = await message.channel.send({ content: `${sequence} - <@${ownerId}>`, files, components: components(message.guild.id, 'pending', beforeGuild.settings.emoji, initialCount) });
     if (!sent?.id || sent.attachments.size < files.length) {
       await sent?.delete?.().catch(() => {});
       return false;
@@ -120,6 +130,8 @@ async function repost(message, initialCount = 0) {
       channelId: message.channel.id,
       sourceMessageId: message.id,
       sourceAuthorId: message.author.id,
+      sourceOwnerId: ownerId,
+      sequence,
       baseCount: count,
       count,
       voters: [],
@@ -139,10 +151,26 @@ async function repost(message, initialCount = 0) {
       return false;
     }
     await message.delete();
+    if (guild.settings.lineImageUrl) {
+      await message.channel.send({ files: [{ attachment: guild.settings.lineImageUrl, name: 'eventphoto-line.png' }] }).catch(error => console.error('eventphoto line image failed:', error.message));
+    }
     return true;
   } catch (error) {
     console.error('eventphoto repost failed:', error.message);
     return false;
+  }
+}
+
+async function enqueueRepost(message, initialCount = 0) {
+  const key = `${message.guild.id}:${message.channel.id}`;
+  const previous = runtime.repostLocks.get(key) || Promise.resolve();
+  const current = previous.catch(() => {}).then(() => repost(message, initialCount));
+  const tracked = current.catch(() => {});
+  runtime.repostLocks.set(key, tracked);
+  try {
+    return await current;
+  } finally {
+    if (runtime.repostLocks.get(key) === tracked) runtime.repostLocks.delete(key);
   }
 }
 
@@ -177,7 +205,7 @@ async function autoScan(guild, channelId) {
     for (const message of messages) {
       if (message.author?.bot) continue;
       if (imageAttachments(message).length) {
-        await repost(message, highestReactionCount(message));
+        await enqueueRepost(message, highestReactionCount(message));
       } else if (message.deletable) {
         await message.delete().catch(() => {});
       }
@@ -197,6 +225,7 @@ function settingsPanel(guild) {
     .addFields(
       { name: 'Channel', value: state.settings.channelId ? `<#${state.settings.channelId}>` : 'غير محدد', inline: true },
       { name: 'setEmoji', value: state.settings.emoji || '✅', inline: true },
+      { name: 'Line Image', value: state.settings.lineImageUrl ? 'مفعلة' : 'غير محددة', inline: true },
       { name: 'Managers', value: state.settings.managerIds.length ? state.settings.managerIds.map(id => `<@${id}>`).join(', ').slice(0, 1024) : 'لا يوجد', inline: false },
       { name: 'Auto behavior', value: 'ينقل أعلى عدد رياكشن للصورة ويحذف غير الصور', inline: false },
       { name: 'Rev', value: 'استخدم `eventphoto rev @user` لمراجعة صور شخص محدد', inline: false }
@@ -209,7 +238,8 @@ function settingsPanel(guild) {
   );
   const managerRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('eventphoto_add_manager').setLabel('Add Manager').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('eventphoto_remove_manager').setLabel('Remove Manager').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('eventphoto_remove_manager').setLabel('Remove Manager').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('eventphoto_set_line').setLabel('Set Line').setStyle(ButtonStyle.Secondary)
   );
   return { embeds: [embed], components: [row, managerRow] };
 }
@@ -241,17 +271,18 @@ async function findPostsForUser(discordGuild, data, guild, userId) {
   const matches = [];
   let changed = false;
   for (const post of Object.values(guild.posts)) {
-    if (post.sourceAuthorId === userId) {
+    if (post.sourceOwnerId === userId) {
       matches.push(post);
       continue;
     }
-    if (post.sourceAuthorId) continue;
+    if (post.sourceOwnerId) continue;
     const channel = discordGuild.channels.cache.get(post.channelId) || await discordGuild.channels.fetch(post.channelId).catch(() => null);
     const source = channel ? await channel.messages.fetch(post.sourceMessageId).catch(() => null) : null;
     if (source?.author?.id) {
       post.sourceAuthorId = source.author.id;
+      post.sourceOwnerId = source.mentions?.users?.find?.(user => !user.bot)?.id || source.author.id;
       changed = true;
-      if (source.author.id === userId) matches.push(post);
+      if (post.sourceOwnerId === userId) matches.push(post);
     }
   }
   if (changed) writeData(data);
@@ -275,7 +306,7 @@ function reviewEmbed(post, page = 0) {
       { name: 'Real Voters', value: `**${voters.length}**`, inline: true },
       { name: 'Manual + / -', value: `**+${post.manualAdditions || 0} / -${post.manualRemovals || 0}**`, inline: true },
       { name: `Voters ${safePage * pageSize + 1}-${Math.min((safePage + 1) * pageSize, voters.length)}`, value: voterText, inline: false },
-      { name: 'Recent Manager Changes', value: audit.length ? audit.map(item => `${item.action === 'add' ? '+1' : '-1'} by <@${item.by}>`).join('\n') : 'لا توجد تعديلات يدوية.' , inline: false }
+      { name: 'Recent Manager Changes', value: audit.length ? audit.map(item => `${item.action === 'add' ? '+' : '-'}${item.amount || 1} by <@${item.by}>`).join('\n') : 'لا توجد تعديلات يدوية.' , inline: false }
     );
 }
 
@@ -283,8 +314,8 @@ function reviewComponents(postId, page, totalVoters) {
   const pages = Math.max(1, Math.ceil((totalVoters || 0) / 8));
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`eventphoto_rev_add:${postId}:${page}`).setLabel('+1 Vote').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`eventphoto_rev_remove:${postId}:${page}`).setLabel('-1 Vote').setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId(`eventphoto_rev_add:${postId}:${page}`).setLabel('+ Votes').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`eventphoto_rev_remove:${postId}:${page}`).setLabel('- Votes').setStyle(ButtonStyle.Danger),
       new ButtonBuilder().setCustomId(`eventphoto_rev_refresh:${postId}:${page}`).setLabel('Refresh').setStyle(ButtonStyle.Secondary)
     ),
     new ActionRowBuilder().addComponents(
@@ -333,8 +364,23 @@ function initialize(client) {
     if (!message.guild || message.author.bot) return;
     const data = readData();
     const guild = getGuild(data, message.guild.id);
+    const waiterKey = `${message.guild.id}:${message.author.id}`;
+    const waiter = runtime.lineUploadWaiters.get(waiterKey);
+    if (waiter) {
+      if (Date.now() > waiter.expiresAt) runtime.lineUploadWaiters.delete(waiterKey);
+      else if (message.channel.id === waiter.channelId && isOwner(message.member)) {
+        const line = imageAttachments(message)[0];
+        if (line) {
+          guild.settings.lineImageUrl = line.url;
+          writeData(data);
+          runtime.lineUploadWaiters.delete(waiterKey);
+          await message.delete().catch(() => {});
+          return;
+        }
+      }
+    }
     if (guild.settings.channelId !== message.channel.id || !imageAttachments(message).length) return;
-    await repost(message);
+    await enqueueRepost(message);
   });
   client.on('interactionCreate', async interaction => {
     if (!interaction.guild || !interaction.customId?.startsWith('eventphoto_')) return;
@@ -381,19 +427,31 @@ function initialize(client) {
       }
       if (interaction.customId.startsWith('eventphoto_rev_add:') || interaction.customId.startsWith('eventphoto_rev_remove:')) {
         if (!isManager(interaction.member, guild)) return interaction.reply({ content: '❌ لا تملك الصلاحية.', flags: MessageFlags.Ephemeral });
-        const [, postId, rawPage] = interaction.customId.split(':');
+        const [, , postId, rawPage] = interaction.customId.split(':');
+        const action = interaction.customId.startsWith('eventphoto_rev_add:') ? 'add' : 'remove';
+        const modal = new ModalBuilder().setCustomId(`eventphoto_rev_amount:${action}:${postId}:${rawPage}`).setTitle(action === 'add' ? 'Add Votes' : 'Remove Votes');
+        modal.addComponents(new ActionRowBuilder().addComponents(
+          new TextInputBuilder().setCustomId('amount').setLabel('كم عدد الأصوات؟').setStyle(TextInputStyle.Short).setRequired(true).setValue('1').setMaxLength(8)
+        ));
+        return interaction.showModal(modal);
+      }
+      if (interaction.customId.startsWith('eventphoto_rev_amount:')) {
+        if (!isManager(interaction.member, guild)) return interaction.reply({ content: '❌ لا تملك الصلاحية.', flags: MessageFlags.Ephemeral });
+        const [, action, postId, rawPage] = interaction.customId.split(':');
+        const amount = Number(interaction.fields.getTextInputValue('amount'));
+        if (!Number.isInteger(amount) || amount < 1 || amount > 100000) return interaction.reply({ content: '❌ اكتب رقمًا صحيحًا بين 1 و100000.', flags: MessageFlags.Ephemeral });
         const fresh = readData();
         const freshGuild = getGuild(fresh, interaction.guild.id);
         const post = freshGuild.posts[postId];
         if (!post) return interaction.update({ content: '❌ المنشور غير موجود.', embeds: [], components: [] });
         post.managerAudit = Array.isArray(post.managerAudit) ? post.managerAudit : [];
-        if (interaction.customId.startsWith('eventphoto_rev_add:')) post.manualAdditions = (Number(post.manualAdditions) || 0) + 1;
-        else post.manualRemovals = (Number(post.manualRemovals) || 0) + 1;
-        post.managerAudit.push({ action: interaction.customId.startsWith('eventphoto_rev_add:') ? 'add' : 'remove', by: interaction.user.id, at: Date.now() });
+        if (action === 'add') post.manualAdditions = (Number(post.manualAdditions) || 0) + amount;
+        else post.manualRemovals = (Number(post.manualRemovals) || 0) + amount;
+        post.managerAudit.push({ action, amount, by: interaction.user.id, at: Date.now() });
         recalculate(post);
         writeData(fresh);
         const page = Number(rawPage) || 0;
-        return interaction.update({ embeds: [reviewEmbed(post, page)], components: reviewComponents(post.messageId, page, post.voters?.length || 0) });
+        return interaction.reply({ content: `✅ تم ${action === 'add' ? 'إضافة' : 'إزالة'} **${amount}** من العداد.`, embeds: [reviewEmbed(post, page)], components: reviewComponents(post.messageId, page, post.voters?.length || 0), flags: MessageFlags.Ephemeral });
       }
       if (interaction.customId === 'eventphoto_add_manager' || interaction.customId === 'eventphoto_remove_manager') {
         if (!isOwner(interaction.member)) return interaction.reply({ content: '❌ إضافة وإزالة المسؤولين للأونر فقط.', flags: MessageFlags.Ephemeral });
@@ -408,6 +466,11 @@ function initialize(client) {
         guild.settings.managerIds = [...ids];
         writeData(data);
         return interaction.reply({ content: add ? `✅ تمت إضافة ${interaction.values.length} مسؤول.` : `✅ تمت إزالة ${interaction.values.length} مسؤول.`, flags: MessageFlags.Ephemeral });
+      }
+      if (interaction.customId === 'eventphoto_set_line') {
+        if (!isOwner(interaction.member)) return interaction.reply({ content: '❌ إعداد صورة الفاصل للأونر فقط.', flags: MessageFlags.Ephemeral });
+        runtime.lineUploadWaiters.set(`${interaction.guild.id}:${interaction.user.id}`, { channelId: interaction.channelId, expiresAt: Date.now() + 120000 });
+        return interaction.reply({ content: 'أرسل الآن صورة الفاصل كمرفق في نفس الروم خلال دقيقتين. سيتم حفظها ولن تظهر كتصويت.', flags: MessageFlags.Ephemeral });
       }
       if (!isOwner(interaction.member)) return interaction.reply({ content: '❌ للأونرز فقط.', flags: MessageFlags.Ephemeral });
       if (interaction.customId === 'eventphoto_setemoji') {
