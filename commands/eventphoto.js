@@ -20,7 +20,7 @@ const name = 'eventphoto';
 const aliases = ['eventimages', 'eventpic', 'rev'];
 const dataPath = path.join(__dirname, '..', 'data', 'eventPhotoSystem.json');
 const backupPath = `${dataPath}.bak`;
-const runtime = { clients: new Set(), autoLocks: new Set(), voteLocks: new Map(), repostLocks: new Map(), lineUploadWaiters: new Map() };
+const runtime = { clients: new WeakSet(), autoLocks: new Set(), voteLocks: new Map(), repostLocks: new Map(), lineUploadWaiters: new Map() };
 
 function readData() {
   for (const filePath of [dataPath, backupPath]) {
@@ -462,9 +462,8 @@ async function execute(message, args, { client }) {
 }
 
 function initialize(client) {
-  const key = client.user?.id || 'client';
-  if (runtime.clients.has(key)) return;
-  runtime.clients.add(key);
+  if (!client || typeof client !== 'object' || runtime.clients.has(client)) return;
+  runtime.clients.add(client);
   client.on('messageCreate', async message => {
     if (!message.guild || message.author.bot) return;
     const data = readData();
