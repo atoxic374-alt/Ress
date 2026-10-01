@@ -91,8 +91,9 @@ function imageAttachments(message) {
   return [...(message?.attachments?.values?.() || [])].filter(isImageAttachment);
 }
 
-function highestReactionCount(message) {
-  const reactions = message?.reactions?.cache ? [...message.reactions.cache.values()] : [];
+async function highestReactionCount(message) {
+  const freshMessage = message?.fetch ? await message.fetch().catch(() => message) : message;
+  const reactions = freshMessage?.reactions?.cache ? [...freshMessage.reactions.cache.values()] : [];
   return Math.max(0, ...reactions.map(reaction => Number(reaction.count) || 0));
 }
 
@@ -268,7 +269,7 @@ async function autoScan(guild, channelId, interaction = null) {
         continue;
       }
       if (imageAttachments(message).length) {
-        const result = await enqueueRepost(message, highestReactionCount(message));
+        const result = await enqueueRepost(message, await highestReactionCount(message));
         if (result?.success) {
           stats.converted += 1;
           if (result.separatorSent) stats.separators += 1;
