@@ -84,6 +84,7 @@ function buildReactionLogEmbed({ reaction, user, action }) {
   const messageUrl = message.url || `https://discord.com/channels/${guild.id}/${message.channelId}/${message.id}`;
   const isAdd = action === 'add';
   const actionText = isAdd ? 'Reaction Added' : 'Reaction Removed';
+  const actorLabel = isAdd ? 'Added By' : 'Removed By';
   const color = isAdd ? '#57F287' : '#ED4245';
   const count = Number.isFinite(reaction.count) ? reaction.count : null;
 
@@ -92,14 +93,14 @@ function buildReactionLogEmbed({ reaction, user, action }) {
     .setTitle(`Reaction Log • ${actionText}`)
     .setDescription(`A reaction was **${isAdd ? 'added to' : 'removed from'}** a message.`)
     .addFields(
-      { name: 'User', value: `<@${user.id}>\n\`${user.tag || user.username || user.id}\``, inline: true },
-      { name: 'Reaction', value: emojiText(reaction.emoji), inline: true },
+      { name: actorLabel, value: `<@${user.id}>\nID: \`${user.id}\`\n\`${user.tag || user.username || user.id}\``, inline: true },
       { name: 'Current Count', value: count === null ? 'Unavailable' : `\`${count}\``, inline: true },
       { name: 'Message Author', value: messageAuthor ? `<@${messageAuthor.id}>\n\`${messageAuthor.tag || messageAuthor.username || messageAuthor.id}\`` : 'Unavailable', inline: true },
       { name: 'Channel', value: `<#${message.channelId}>`, inline: true },
       { name: 'Message ID', value: `\`${message.id}\``, inline: true },
       { name: 'Message', value: `>>> ${truncate(message.content)}`, inline: false },
-      { name: 'Link', value: `[Open message](${messageUrl})`, inline: false }
+      { name: 'Link', value: `[Open message](${messageUrl})`, inline: false },
+      { name: 'Reaction', value: emojiText(reaction.emoji), inline: true }
     )
     .setFooter({ text: `Reaction Log • ${guild.name}` })
     .setTimestamp(new Date());
