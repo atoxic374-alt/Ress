@@ -85,6 +85,7 @@ function permissionsOk(guild, channel) {
   const permissions = me && channel?.permissionsFor?.(me);
   return Boolean(
     permissions?.has(PermissionsBitField.Flags.ViewChannel) &&
+    permissions?.has(PermissionsBitField.Flags.ReadMessageHistory) &&
     permissions?.has(PermissionsBitField.Flags.SendMessages) &&
     permissions?.has(PermissionsBitField.Flags.AttachFiles) &&
     permissions?.has(PermissionsBitField.Flags.ManageMessages)
@@ -120,7 +121,7 @@ async function repost(message, initialCount = 0) {
     const sent = await message.channel.send({ content: `${sequence} - <@${ownerId}>`, files, components: components(message.guild.id, 'pending', beforeGuild.settings.emoji, initialCount) });
     if (!sent?.id || sent.attachments.size < files.length) {
       await sent?.delete?.().catch(() => {});
-      return false;
+      return { success: false, reason: 'send-verification-failed', separatorSent: false };
     }
     const count = Math.max(0, Number(initialCount) || 0);
     const data = readData();
@@ -148,16 +149,39 @@ async function repost(message, initialCount = 0) {
       writeData(data);
       await sent.delete().catch(() => {});
       console.error('eventphoto component verification failed:', error.message);
-      return false;
+      return { success: false, reason: 'component-verification-failed', separatorSent: false };
     }
-    await message.delete();
+    let separatorSent = !guild.settings.lineImageUrl;
+    let separator = null;
     if (guild.settings.lineImageUrl) {
-      await message.channel.send({ files: [{ attachment: guild.settings.lineImageUrl, name: 'eventphoto-line.png' }] }).catch(error => console.error('eventphoto line image failed:', error.message));
+      separator = await message.channel.send({ files: [{ attachment: guild.settings.lineImageUrl, name: 'eventphoto-line.png' }] }).catch(error => {
+        console.error('eventphoto line image failed:', error.message);
+        return null;
+      });
+      separatorSent = Boolean(separator?.id && separator.attachments?.size);
+      if (!separatorSent) {
+        delete guild.posts[sent.id];
+        writeData(data);
+        await separator?.delete?.().catch(() => {});
+        await sent.delete().catch(() => {});
+        console.error('eventphoto separator verification failed');
+        return { success: false, reason: 'separator-verification-failed', separatorSent: false };
+      }
     }
-    return true;
+    try {
+      await message.delete();
+    } catch (error) {
+      delete guild.posts[sent.id];
+      writeData(data);
+      await separator?.delete?.().catch(() => {});
+      await sent.delete().catch(() => {});
+      console.error('eventphoto source deletion verification failed:', error.message);
+      return { success: false, reason: 'source-delete-failed', separatorSent: false };
+    }
+    return { success: true, separatorSent };
   } catch (error) {
     console.error('eventphoto repost failed:', error.message);
-    return false;
+    return { success: false, reason: error.message, separatorSent: false };
   }
 }
 
@@ -179,7 +203,7 @@ async function fetchAll(channel) {
   const seen = new Set();
   let before;
   while (true) {
-    const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) }).catch(() => null);
+    const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
     if (!batch || !batch.size) break;
     for (const message of batch.values()) {
       if (!seen.has(message.id)) {
@@ -194,26 +218,57 @@ async function fetchAll(channel) {
   return result.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 }
 
-async function autoScan(guild, channelId) {
+async function autoScan(guild, channelId, interaction = null) {
   const lock = `${guild.id}:${channelId}`;
-  if (runtime.autoLocks.has(lock)) return;
+  if (runtime.autoLocks.has(lock)) {
+    if (interaction) await interaction.followUp({ content: '❌ يوجد Auto يعمل حاليًا في هذا الروم.', flags: MessageFlags.Ephemeral }).catch(() => {});
+    return { success: false, reason: 'already-running' };
+  }
   runtime.autoLocks.add(lock);
+  const stats = { scanned: 0, converted: 0, separators: 0, separatorFailures: 0, deleted: 0, deleteFailures: 0, failed: 0, skippedBots: 0 };
   try {
     const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
-    if (!channel || !permissionsOk(guild, channel)) return;
+    if (!channel?.isTextBased?.() || !channel.messages?.fetch) throw new Error('invalid-channel');
+    if (!permissionsOk(guild, channel)) throw new Error('missing-permissions');
     const messages = await fetchAll(channel);
     for (const message of messages) {
-      if (message.author?.bot) continue;
+      stats.scanned += 1;
+      if (message.author?.bot) {
+        stats.skippedBots += 1;
+        continue;
+      }
       if (imageAttachments(message).length) {
-        await enqueueRepost(message, highestReactionCount(message));
+        const result = await enqueueRepost(message, highestReactionCount(message));
+        if (result?.success) {
+          stats.converted += 1;
+          if (result.separatorSent) stats.separators += 1;
+          else if (guild.settings.lineImageUrl) stats.separatorFailures += 1;
+        } else {
+          stats.failed += 1;
+        }
       } else if (message.deletable) {
-        await message.delete().catch(() => {});
+        const deleted = await message.delete().then(() => true).catch(() => false);
+        if (deleted) stats.deleted += 1;
+        else stats.deleteFailures += 1;
+      } else {
+        stats.deleteFailures += 1;
       }
       await new Promise(resolve => setTimeout(resolve, 250));
     }
+    stats.success = true;
+  } catch (error) {
+    stats.success = false;
+    stats.reason = error.message;
+    if (interaction) await interaction.followUp({ content: `❌ Auto توقف قبل الإكمال. السبب: ${error.message === 'missing-permissions' ? 'صلاحيات البوت غير مكتملة.' : error.message === 'invalid-channel' ? 'الروم المحدد غير صالح.' : 'تعذر قراءة رسائل الروم.'}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+    return stats;
   } finally {
     runtime.autoLocks.delete(lock);
   }
+  if (interaction) {
+    const lineSummary = guild.settings.lineImageUrl ? `\nSeparators: ${stats.separators} sent / ${stats.separatorFailures} failed` : '';
+    await interaction.followUp({ content: `✅ Auto completed.\nScanned: ${stats.scanned}\nImages reposted: ${stats.converted}\nNon-images deleted: ${stats.deleted}\nFailures: ${stats.failed + stats.deleteFailures}${lineSummary}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+  }
+  return stats;
 }
 
 function settingsPanel(guild) {
@@ -495,10 +550,13 @@ function initialize(client) {
       if (interaction.customId === 'eventphoto_auto') return interaction.reply({ content: 'حدد الروم. سيبدأ من أقدم رسالة، يعيد نشر الصور، ينقل أعلى رياكشن، ويحذف غير الصور.', components: channelPicker('eventphoto_auto_select', 'حدد روم Auto'), flags: MessageFlags.Ephemeral });
       if (interaction.customId === 'eventphoto_auto_select') {
         const channelId = interaction.values[0];
+        const channel = interaction.guild.channels.cache.get(channelId) || await interaction.guild.channels.fetch(channelId).catch(() => null);
+        if (!channel?.isTextBased?.() || !channel.messages?.fetch) return interaction.reply({ content: '❌ الروم المحدد غير صالح أو لا يدعم قراءة الرسائل.', flags: MessageFlags.Ephemeral });
+        if (!permissionsOk(interaction.guild, channel)) return interaction.reply({ content: '❌ صلاحيات البوت ناقصة. يحتاج View Channel وRead Message History وSend Messages وAttach Files وManage Messages.', flags: MessageFlags.Ephemeral });
         guild.settings.channelId = channelId;
         writeData(data);
         await interaction.reply({ content: `✅ بدأ Auto في <#${channelId}>.`, flags: MessageFlags.Ephemeral });
-        setImmediate(() => autoScan(interaction.guild, channelId).catch(error => console.error('eventphoto Auto failed:', error)));
+        setImmediate(() => autoScan(interaction.guild, channelId, interaction).catch(error => console.error('eventphoto Auto failed:', error)));
         return;
       }
       if (interaction.customId === 'eventphoto_disable') {
