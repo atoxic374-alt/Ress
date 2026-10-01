@@ -5,4 +5,6 @@ database/*.db-wal
 database/*.db-shm
 database/botConfig.json
 data/botConfig.json.bak
+data/eventPhotoSystem.json.bak
+data/eventPhotoSystem.json.tmp
 .env

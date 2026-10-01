@@ -19,23 +19,37 @@ const path = require('path');
 const name = 'eventphoto';
 const aliases = ['eventimages', 'eventpic', 'rev'];
 const dataPath = path.join(__dirname, '..', 'data', 'eventPhotoSystem.json');
+const backupPath = `${dataPath}.bak`;
 const runtime = { clients: new Set(), autoLocks: new Set(), voteLocks: new Map(), repostLocks: new Map(), lineUploadWaiters: new Map() };
 
 function readData() {
-  try {
-    const data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
-    if (!data.guilds || typeof data.guilds !== 'object') data.guilds = {};
-    return data;
-  } catch {
-    return { version: 1, guilds: {} };
+  for (const filePath of [dataPath, backupPath]) {
+    try {
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      if (!data || typeof data !== 'object') throw new Error('invalid-data-root');
+      if (!data.guilds || typeof data.guilds !== 'object' || Array.isArray(data.guilds)) data.guilds = {};
+      if (filePath === backupPath) {
+        try { fs.copyFileSync(backupPath, dataPath); } catch (error) { console.error(`eventphoto backup restore failed: ${error.message}`); }
+      }
+      return data;
+    } catch (error) {
+      if (filePath === dataPath && error.code !== 'ENOENT') console.error(`eventphoto data read failed (${error.message}); trying backup`);
+    }
   }
+  return { version: 1, guilds: {} };
 }
 
 function writeData(data) {
   fs.mkdirSync(path.dirname(dataPath), { recursive: true });
   const temp = `${dataPath}.tmp`;
-  fs.writeFileSync(temp, JSON.stringify(data, null, 2));
+  const serialized = `${JSON.stringify(data, null, 2)}\n`;
+  fs.writeFileSync(temp, serialized, { encoding: 'utf8', mode: 0o600 });
+  const descriptor = fs.openSync(temp, 'r');
+  try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+  if (fs.existsSync(dataPath)) fs.copyFileSync(dataPath, backupPath);
   fs.renameSync(temp, dataPath);
+  fs.chmodSync(dataPath, 0o600);
+  if (fs.existsSync(backupPath)) fs.chmodSync(backupPath, 0o600);
 }
 
 function getGuild(data, guildId) {
@@ -50,8 +64,10 @@ function getGuild(data, guildId) {
   if (!Object.prototype.hasOwnProperty.call(guild.settings, 'channelId')) guild.settings.channelId = null;
   if (!Object.prototype.hasOwnProperty.call(guild.settings, 'emoji')) guild.settings.emoji = '✅';
   if (!Object.prototype.hasOwnProperty.call(guild.settings, 'lineImageUrl')) guild.settings.lineImageUrl = null;
-  if (!Array.isArray(guild.settings.managerIds)) guild.settings.managerIds = [];
-  if (!guild.posts || typeof guild.posts !== 'object') guild.posts = {};
+  guild.settings.managerIds = Array.isArray(guild.settings.managerIds)
+    ? [...new Set(guild.settings.managerIds.map(String).filter(id => /^\d{16,20}$/.test(id)))]
+    : [];
+  if (!guild.posts || typeof guild.posts !== 'object' || Array.isArray(guild.posts)) guild.posts = {};
   return guild;
 }
 
@@ -110,6 +126,7 @@ async function repost(message, initialCount = 0) {
   if (!message.guild || !images.length || !permissionsOk(message.guild, message.channel)) return false;
   const before = readData();
   const beforeGuild = getGuild(before, message.guild.id);
+  if (beforeGuild.settings.channelId !== message.channel.id) return { success: false, reason: 'channel-not-enabled', separatorSent: false };
   const mentionedOwner = message.mentions?.users?.find?.(user => !user.bot);
   const ownerId = mentionedOwner?.id || message.author.id;
   const sequence = nextSequence(beforeGuild, message.channel.id);
@@ -118,7 +135,7 @@ async function repost(message, initialCount = 0) {
     name: String(attachment.name || `image-${index + 1}.png`).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100)
   }));
   try {
-    const sent = await message.channel.send({ content: `${sequence} - <@${ownerId}>`, files, components: components(message.guild.id, 'pending', beforeGuild.settings.emoji, initialCount) });
+    const sent = await message.channel.send({ content: `${sequence} - <@${ownerId}>`, allowedMentions: { users: [ownerId] }, files, components: components(message.guild.id, 'pending', beforeGuild.settings.emoji, initialCount) });
     if (!sent?.id || sent.attachments.size < files.length) {
       await sent?.delete?.().catch(() => {});
       return { success: false, reason: 'send-verification-failed', separatorSent: false };
@@ -141,7 +158,13 @@ async function repost(message, initialCount = 0) {
       managerAudit: [],
       createdAt: Date.now()
     };
-    writeData(data);
+    try {
+      writeData(data);
+    } catch (error) {
+      await sent.delete().catch(() => {});
+      console.error('eventphoto data save failed:', error.message);
+      return { success: false, reason: 'data-save-failed', separatorSent: false };
+    }
     try {
       await sent.edit({ components: components(message.guild.id, sent.id, guild.settings.emoji, count) });
     } catch (error) {
@@ -226,12 +249,19 @@ async function autoScan(guild, channelId, interaction = null) {
   }
   runtime.autoLocks.add(lock);
   const stats = { scanned: 0, converted: 0, separators: 0, separatorFailures: 0, deleted: 0, deleteFailures: 0, failed: 0, skippedBots: 0 };
+  const startSettings = getGuild(readData(), guild.id).settings;
+  const startLineImageUrl = startSettings.lineImageUrl || null;
   try {
     const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
     if (!channel?.isTextBased?.() || !channel.messages?.fetch) throw new Error('invalid-channel');
     if (!permissionsOk(guild, channel)) throw new Error('missing-permissions');
     const messages = await fetchAll(channel);
     for (const message of messages) {
+      const liveSettings = getGuild(readData(), guild.id).settings;
+      if (liveSettings.channelId !== channelId || (liveSettings.lineImageUrl || null) !== startLineImageUrl) {
+        stats.reason = 'configuration-changed';
+        break;
+      }
       stats.scanned += 1;
       if (message.author?.bot) {
         stats.skippedBots += 1;
@@ -255,7 +285,7 @@ async function autoScan(guild, channelId, interaction = null) {
       }
       await new Promise(resolve => setTimeout(resolve, 250));
     }
-    stats.success = true;
+    stats.success = !stats.reason;
   } catch (error) {
     stats.success = false;
     stats.reason = error.message;
@@ -266,7 +296,8 @@ async function autoScan(guild, channelId, interaction = null) {
   }
   if (interaction) {
     const lineSummary = guild.settings.lineImageUrl ? `\nSeparators: ${stats.separators} sent / ${stats.separatorFailures} failed` : '';
-    await interaction.followUp({ content: `✅ Auto completed.\nScanned: ${stats.scanned}\nImages reposted: ${stats.converted}\nNon-images deleted: ${stats.deleted}\nFailures: ${stats.failed + stats.deleteFailures}${lineSummary}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+    const status = stats.reason === 'configuration-changed' ? '⚠️ Auto stopped because its channel setting changed.' : '✅ Auto completed.';
+    await interaction.followUp({ content: `${status}\nScanned: ${stats.scanned}\nImages reposted: ${stats.converted}\nNon-images deleted: ${stats.deleted}\nFailures: ${stats.failed + stats.deleteFailures}${lineSummary}`, flags: MessageFlags.Ephemeral }).catch(() => {});
   }
   return stats;
 }
@@ -294,7 +325,8 @@ function settingsPanel(guild) {
   const managerRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('eventphoto_add_manager').setLabel('Add Manager').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('eventphoto_remove_manager').setLabel('Remove Manager').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('eventphoto_set_line').setLabel('Set Line').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('eventphoto_set_line').setLabel('Set Line').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('eventphoto_clear_line').setLabel('Clear Line').setStyle(ButtonStyle.Danger)
   );
   return { embeds: [embed], components: [row, managerRow] };
 }
@@ -315,7 +347,15 @@ function extractUserId(input) {
   return String(input || '').match(/\d{16,20}/)?.[0] || null;
 }
 
+function isSnowflake(value) {
+  return /^\d{16,20}$/.test(String(value || ''));
+}
+
 function recalculate(post) {
+  post.voters = Array.isArray(post.voters)
+    ? [...new Set(post.voters.map(String).filter(id => /^\d{16,20}$/.test(id)))]
+    : [];
+  post.managerAudit = Array.isArray(post.managerAudit) ? post.managerAudit.filter(item => item && typeof item === 'object') : [];
   post.baseCount = Math.max(0, Number(post.baseCount) || 0);
   post.manualAdditions = Math.max(0, Number(post.manualAdditions) || 0);
   post.manualRemovals = Math.max(0, Number(post.manualRemovals) || 0);
@@ -340,7 +380,16 @@ async function findPostsForUser(discordGuild, data, guild, userId) {
       if (post.sourceOwnerId === userId) matches.push(post);
     }
   }
-  if (changed) writeData(data);
+  if (changed) {
+    const latest = readData();
+    const latestGuild = getGuild(latest, discordGuild.id);
+    for (const post of Object.values(guild.posts)) {
+      const latestPost = latestGuild.posts[post.messageId];
+      if (latestPost && !latestPost.sourceOwnerId && post.sourceOwnerId) latestPost.sourceOwnerId = post.sourceOwnerId;
+      if (latestPost && !latestPost.sourceAuthorId && post.sourceAuthorId) latestPost.sourceAuthorId = post.sourceAuthorId;
+    }
+    writeData(latest);
+  }
   return matches.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 }
 
@@ -397,7 +446,7 @@ async function execute(message, args, { client }) {
       return message.reply({ embeds: [reviewEmbed(post, 0)], components: reviewComponents(post.messageId, 0, post.voters?.length || 0) });
     }
     const options = posts.slice(0, 25).map(post => ({ label: `Post ${post.messageId.slice(-8)} | ${post.count || 0} votes`.slice(0, 100), description: `Voters: ${(post.voters || []).length}`.slice(0, 100), value: post.messageId }));
-    const menu = new StringSelectMenuBuilder().setCustomId(`eventphoto_rev_select:${targetId}`).setPlaceholder('اختر صورة للمراجعة').addOptions(options);
+    const menu = new StringSelectMenuBuilder().setCustomId(`eventphoto_rev_select:${targetId}`).setPlaceholder('Select an image to review').addOptions(options);
     return message.reply({ content: `تم العثور على ${posts.length} صور. اختر الصورة:`, components: [new ActionRowBuilder().addComponents(menu)] });
   }
   if ((args[0] || '').toLowerCase() === 'off') {
@@ -444,7 +493,7 @@ function initialize(client) {
       const guild = getGuild(data, interaction.guild.id);
       if (interaction.customId.startsWith('eventphoto_vote:')) {
         const [, guildId, postId] = interaction.customId.split(':');
-        if (guildId !== interaction.guild.id) return interaction.reply({ content: '❌ تصويت غير صالح.', flags: MessageFlags.Ephemeral });
+        if (guildId !== interaction.guild.id || !isSnowflake(postId)) return interaction.reply({ content: '❌ تصويت غير صالح.', flags: MessageFlags.Ephemeral });
         const lockKey = `${guildId}:${postId}`;
         const previous = runtime.voteLocks.get(lockKey) || Promise.resolve();
         const current = previous.catch(() => {}).then(async () => {
@@ -475,6 +524,7 @@ function initialize(client) {
       if (interaction.customId.startsWith('eventphoto_rev_page:') || interaction.customId.startsWith('eventphoto_rev_refresh:')) {
         if (!isManager(interaction.member, guild)) return interaction.reply({ content: '❌ لا تملك الصلاحية.', flags: MessageFlags.Ephemeral });
         const [, postId, rawPage] = interaction.customId.split(':');
+        if (!isSnowflake(postId) || !Number.isInteger(Number(rawPage)) || Number(rawPage) < 0) return interaction.reply({ content: '❌ Review action is invalid.', flags: MessageFlags.Ephemeral });
         const post = guild.posts[postId];
         if (!post) return interaction.update({ content: '❌ المنشور غير موجود.', embeds: [], components: [] });
         const page = Number(rawPage) || 0;
@@ -483,16 +533,18 @@ function initialize(client) {
       if (interaction.customId.startsWith('eventphoto_rev_add:') || interaction.customId.startsWith('eventphoto_rev_remove:')) {
         if (!isManager(interaction.member, guild)) return interaction.reply({ content: '❌ لا تملك الصلاحية.', flags: MessageFlags.Ephemeral });
         const [, , postId, rawPage] = interaction.customId.split(':');
+        if (!isSnowflake(postId) || !Number.isInteger(Number(rawPage)) || Number(rawPage) < 0) return interaction.reply({ content: '❌ Review action is invalid.', flags: MessageFlags.Ephemeral });
         const action = interaction.customId.startsWith('eventphoto_rev_add:') ? 'add' : 'remove';
         const modal = new ModalBuilder().setCustomId(`eventphoto_rev_amount:${action}:${postId}:${rawPage}`).setTitle(action === 'add' ? 'Add Votes' : 'Remove Votes');
         modal.addComponents(new ActionRowBuilder().addComponents(
-          new TextInputBuilder().setCustomId('amount').setLabel('كم عدد الأصوات؟').setStyle(TextInputStyle.Short).setRequired(true).setValue('1').setMaxLength(8)
+          new TextInputBuilder().setCustomId('amount').setLabel('Vote Amount').setStyle(TextInputStyle.Short).setRequired(true).setValue('1').setMaxLength(8)
         ));
         return interaction.showModal(modal);
       }
       if (interaction.customId.startsWith('eventphoto_rev_amount:')) {
         if (!isManager(interaction.member, guild)) return interaction.reply({ content: '❌ لا تملك الصلاحية.', flags: MessageFlags.Ephemeral });
         const [, action, postId, rawPage] = interaction.customId.split(':');
+        if (!['add', 'remove'].includes(action) || !isSnowflake(postId) || !Number.isInteger(Number(rawPage)) || Number(rawPage) < 0) return interaction.reply({ content: '❌ Review action is invalid.', flags: MessageFlags.Ephemeral });
         const amount = Number(interaction.fields.getTextInputValue('amount'));
         if (!Number.isInteger(amount) || amount < 1 || amount > 100000) return interaction.reply({ content: '❌ اكتب رقمًا صحيحًا بين 1 و100000.', flags: MessageFlags.Ephemeral });
         const fresh = readData();
@@ -511,7 +563,7 @@ function initialize(client) {
       if (interaction.customId === 'eventphoto_add_manager' || interaction.customId === 'eventphoto_remove_manager') {
         if (!isOwner(interaction.member)) return interaction.reply({ content: '❌ إضافة وإزالة المسؤولين للأونر فقط.', flags: MessageFlags.Ephemeral });
         const add = interaction.customId === 'eventphoto_add_manager';
-        return interaction.reply({ content: add ? 'حدد المسؤولين لإضافتهم:' : 'حدد المسؤولين لإزالتهم:', components: userPicker(add ? 'eventphoto_add_manager_select' : 'eventphoto_remove_manager_select', 'حدد المستخدمين'), flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: add ? 'حدد المسؤولين لإضافتهم:' : 'حدد المسؤولين لإزالتهم:', components: userPicker(add ? 'eventphoto_add_manager_select' : 'eventphoto_remove_manager_select', 'Select Users'), flags: MessageFlags.Ephemeral });
       }
       if (interaction.customId === 'eventphoto_add_manager_select' || interaction.customId === 'eventphoto_remove_manager_select') {
         if (!isOwner(interaction.member)) return interaction.reply({ content: '❌ للأونر فقط.', flags: MessageFlags.Ephemeral });
@@ -524,13 +576,25 @@ function initialize(client) {
       }
       if (interaction.customId === 'eventphoto_set_line') {
         if (!isOwner(interaction.member)) return interaction.reply({ content: '❌ إعداد صورة الفاصل للأونر فقط.', flags: MessageFlags.Ephemeral });
-        runtime.lineUploadWaiters.set(`${interaction.guild.id}:${interaction.user.id}`, { channelId: interaction.channelId, expiresAt: Date.now() + 120000 });
+        const waiterKey = `${interaction.guild.id}:${interaction.user.id}`;
+        const waiter = { channelId: interaction.channelId, expiresAt: Date.now() + 120000 };
+        runtime.lineUploadWaiters.set(waiterKey, waiter);
+        const timer = setTimeout(() => {
+          if (runtime.lineUploadWaiters.get(waiterKey) === waiter) runtime.lineUploadWaiters.delete(waiterKey);
+        }, 120000);
+        timer.unref?.();
         return interaction.reply({ content: 'أرسل الآن صورة الفاصل كمرفق في نفس الروم خلال دقيقتين. سيتم حفظها ولن تظهر كتصويت.', flags: MessageFlags.Ephemeral });
+      }
+      if (interaction.customId === 'eventphoto_clear_line') {
+        if (!isOwner(interaction.member)) return interaction.reply({ content: '❌ إدارة صورة الفاصل للأونر فقط.', flags: MessageFlags.Ephemeral });
+        guild.settings.lineImageUrl = null;
+        writeData(data);
+        return interaction.reply({ content: '✅ Line image cleared.', flags: MessageFlags.Ephemeral });
       }
       if (!isOwner(interaction.member)) return interaction.reply({ content: '❌ للأونرز فقط.', flags: MessageFlags.Ephemeral });
       if (interaction.customId === 'eventphoto_setemoji') {
         const modal = new ModalBuilder().setCustomId('eventphoto_setemoji_modal').setTitle('setEmoji');
-        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('emoji').setLabel('ضع الإيموجي').setStyle(TextInputStyle.Short).setRequired(true).setValue(guild.settings.emoji || '✅').setMaxLength(100)));
+        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('emoji').setLabel('Emoji').setStyle(TextInputStyle.Short).setRequired(true).setValue(guild.settings.emoji || '✅').setMaxLength(100)));
         return interaction.showModal(modal);
       }
       if (interaction.customId === 'eventphoto_setemoji_modal') {
@@ -541,13 +605,13 @@ function initialize(client) {
         writeData(data);
         return interaction.reply({ content: `✅ تم حفظ setEmoji: ${emoji}`, flags: MessageFlags.Ephemeral });
       }
-      if (interaction.customId === 'eventphoto_live') return interaction.reply({ content: 'حدد روم الصور الجديدة:', components: channelPicker('eventphoto_live_select', 'حدد روم Live'), flags: MessageFlags.Ephemeral });
+      if (interaction.customId === 'eventphoto_live') return interaction.reply({ content: 'حدد روم الصور الجديدة:', components: channelPicker('eventphoto_live_select', 'Select Live Channel'), flags: MessageFlags.Ephemeral });
       if (interaction.customId === 'eventphoto_live_select') {
         guild.settings.channelId = interaction.values[0];
         writeData(data);
         return interaction.reply({ content: `✅ تم تفعيل Live في <#${guild.settings.channelId}>.`, flags: MessageFlags.Ephemeral });
       }
-      if (interaction.customId === 'eventphoto_auto') return interaction.reply({ content: 'حدد الروم. سيبدأ من أقدم رسالة، يعيد نشر الصور، ينقل أعلى رياكشن، ويحذف غير الصور.', components: channelPicker('eventphoto_auto_select', 'حدد روم Auto'), flags: MessageFlags.Ephemeral });
+      if (interaction.customId === 'eventphoto_auto') return interaction.reply({ content: 'حدد الروم. سيبدأ من أقدم رسالة، يعيد نشر الصور، ينقل أعلى رياكشن، ويحذف غير الصور.', components: channelPicker('eventphoto_auto_select', 'Select Auto Channel'), flags: MessageFlags.Ephemeral });
       if (interaction.customId === 'eventphoto_auto_select') {
         const channelId = interaction.values[0];
         const channel = interaction.guild.channels.cache.get(channelId) || await interaction.guild.channels.fetch(channelId).catch(() => null);
@@ -562,7 +626,7 @@ function initialize(client) {
       if (interaction.customId === 'eventphoto_disable') {
         guild.settings.channelId = null;
         writeData(data);
-        return interaction.reply({ content: '✅ تم إيقاف Live.', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: '✅ Event Photos disabled.', flags: MessageFlags.Ephemeral });
       }
     } catch (error) {
       console.error('eventphoto interaction failed:', error);
