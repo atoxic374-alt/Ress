@@ -2360,8 +2360,11 @@ async function prepareReaction(reaction) {
 client.on('messageReactionAdd', async (reaction, user) => {
   if (user?.bot || !(await prepareReaction(reaction))) return;
   try {
-    const { dispatchReactionLog } = require('./utils/reactionLogManager');
-    await dispatchReactionLog({ reaction, user, action: 'add' });
+    const { dispatchReactionLog, shouldLogReaction } = require('./utils/reactionLogManager');
+    const channelId = reaction.message.channelId || reaction.message.channel?.id;
+    if (shouldLogReaction({ guildId: reaction.message.guild.id, channelId, action: 'add' }).allowed) {
+      await dispatchReactionLog({ reaction, user, action: 'add' });
+    }
   } catch (error) {
     console.error('Reaction add log failed:', error?.message || error);
   }
@@ -2386,8 +2389,11 @@ client.on('messageReactionAdd', async (reaction, user) => {
 client.on('messageReactionRemove', async (reaction, user) => {
   if (user?.bot || !(await prepareReaction(reaction))) return;
   try {
-    const { dispatchReactionLog } = require('./utils/reactionLogManager');
-    await dispatchReactionLog({ reaction, user, action: 'remove' });
+    const { dispatchReactionLog, shouldLogReaction } = require('./utils/reactionLogManager');
+    const channelId = reaction.message.channelId || reaction.message.channel?.id;
+    if (shouldLogReaction({ guildId: reaction.message.guild.id, channelId, action: 'remove' }).allowed) {
+      await dispatchReactionLog({ reaction, user, action: 'remove' });
+    }
   } catch (error) {
     console.error('Reaction remove log failed:', error?.message || error);
   }

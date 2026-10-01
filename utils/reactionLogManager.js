@@ -45,6 +45,19 @@ function normalizeEventMode(value) {
   return 'both';
 }
 
+function shouldLogReaction({ guildId, channelId, action }) {
+  const settings = getGuildSettings(guildId);
+  const normalizedAction = action === 'remove' ? 'remove' : 'add';
+  const normalizedChannelId = normalizeChannelId(channelId);
+  const allowed = Boolean(
+    settings.enabled &&
+    settings.recipientIds.length > 0 &&
+    (settings.eventMode === 'both' || settings.eventMode === normalizedAction) &&
+    (!settings.channelId || settings.channelId === normalizedChannelId)
+  );
+  return { allowed, settings, normalizedAction, normalizedChannelId };
+}
+
 function getGuildSettings(guildId) {
   const config = readConfig();
   const current = config.guilds[guildId] || {};
@@ -126,17 +139,11 @@ function buildReactionLogEmbed({ reaction, user, action }) {
 async function dispatchReactionLog({ reaction, user, action }) {
   const guild = reaction?.message?.guild;
   if (!guild || !user || user.bot) return { sent: 0, skipped: true };
-  const settings = getGuildSettings(guild.id);
-  if (!settings.enabled || settings.recipientIds.length === 0) return { sent: 0, skipped: true };
-  const normalizedAction = action === 'remove' ? 'remove' : 'add';
-  if (settings.eventMode !== 'both' && settings.eventMode !== normalizedAction) {
-    return { sent: 0, skipped: true };
-  }
-  if (settings.channelId && String(reaction.message.channelId) !== String(settings.channelId)) {
-    return { sent: 0, skipped: true };
-  }
+  const channelId = reaction.message.channelId || reaction.message.channel?.id;
+  const { allowed, settings, normalizedAction } = shouldLogReaction({ guildId: guild.id, channelId, action });
+  if (!allowed) return { sent: 0, skipped: true };
 
-  const embed = buildReactionLogEmbed({ reaction, user, action });
+  const embed = buildReactionLogEmbed({ reaction, user, action: normalizedAction });
   let sent = 0;
   for (const recipientId of settings.recipientIds) {
     try {
@@ -157,5 +164,6 @@ module.exports = {
   dispatchReactionLog,
   normalizeId,
   normalizeChannelId,
-  normalizeEventMode
+  normalizeEventMode,
+  shouldLogReaction
 };

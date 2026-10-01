@@ -1,4 +1,13 @@
 {
   "version": 1,
-  "guilds": {}
+  "guilds": {
+    "123456789012345678": {
+      "enabled": true,
+      "channelId": "234567890123456789",
+      "eventMode": "remove",
+      "recipientIds": [
+        "345678901234567890"
+      ]
+    }
+  }
 }
