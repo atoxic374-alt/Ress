@@ -30,8 +30,6 @@ const runtime = {
   eventEndTimers: new Map(),
   reminderTimers: new Map(),
   startTimers: new Map(),
-  photoAutoLocks: new Set(),
-  photoVoteLocks: new Map(),
   answerLocks: new Set(),
   rejectCooldown: new Map(),
   createCooldown: new Map()
@@ -89,14 +87,11 @@ function getGuild(data, guildId) {
         embedEnabled: false,
         lineText: '',
         topImageUrl: '',
-        publicText: '',
-        photoChannelId: null,
-        photoEmoji: '✅'
+        publicText: ''
       },
       activeEvent: null,
       pendingEvent: null,
-      history: [],
-      photoPosts: {}
+      history: []
     };
   }
   const s = data.guilds[guildId].settings;
@@ -106,9 +101,6 @@ function getGuild(data, guildId) {
   if (!Object.prototype.hasOwnProperty.call(s, 'publicText')) s.publicText = '';
   if (!Object.prototype.hasOwnProperty.call(s, 'topImageUrl')) s.topImageUrl = '';
   if (!Object.prototype.hasOwnProperty.call(s, 'mentionMembers')) s.mentionMembers = false;
-  if (!Object.prototype.hasOwnProperty.call(s, 'photoChannelId')) s.photoChannelId = null;
-  if (!Object.prototype.hasOwnProperty.call(s, 'photoEmoji')) s.photoEmoji = '✅';
-  if (!data.guilds[guildId].photoPosts || typeof data.guilds[guildId].photoPosts !== 'object') data.guilds[guildId].photoPosts = {};
   return data.guilds[guildId];
 }
 
@@ -416,138 +408,10 @@ ${notify}
   }, Math.max(0, ev.endAt - now())));
 }
 
-function isImageAttachment(attachment) {
-  const type = String(attachment?.contentType || '').toLowerCase();
-  const name = String(attachment?.name || '').toLowerCase();
-  const url = String(attachment?.url || '').toLowerCase();
-  return type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(name) || /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(url);
-}
-
-function getImageAttachments(message) {
-  return [...(message?.attachments?.values?.() || [])].filter(isImageAttachment);
-}
-
-function getHighestReactionCount(message) {
-  const reactions = message?.reactions?.cache ? [...message.reactions.cache.values()] : [];
-  return Math.max(0, ...reactions.map(reaction => Number(reaction.count) || 0));
-}
-
-function buildPhotoComponents(guildId, postId, emoji, count) {
-  return [new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`event_photo_vote:${guildId}:${postId}`)
-      .setEmoji(emoji || '✅')
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId(`event_photo_count:${guildId}:${postId}`)
-      .setLabel(String(Math.max(0, Number(count) || 0)))
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(true)
-  )];
-}
-
-function hasPhotoPermissions(message) {
-  const me = message.guild?.members?.me;
-  const permissions = me && message.channel?.permissionsFor?.(me);
-  return Boolean(
-    permissions?.has(PermissionsBitField.Flags.ViewChannel) &&
-    permissions?.has(PermissionsBitField.Flags.SendMessages) &&
-    permissions?.has(PermissionsBitField.Flags.AttachFiles) &&
-    permissions?.has(PermissionsBitField.Flags.ManageMessages)
-  );
-}
-
-async function repostPhotoMessage(message, initialCount = 0) {
-  const attachments = getImageAttachments(message);
-  if (!attachments.length || !hasPhotoPermissions(message)) return null;
-  const data = readData();
-  const guildState = getGuild(data, message.guild.id);
-  const files = attachments.map((attachment, index) => ({
-    attachment: attachment.url,
-    name: String(attachment.name || `event-image-${index + 1}.png`).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100)
-  }));
-  try {
-    const sent = await message.channel.send({
-      files,
-      components: buildPhotoComponents(message.guild.id, 'pending', guildState.settings.photoEmoji, initialCount)
-    });
-    if (!sent?.id || sent.attachments.size < files.length) {
-      await sent?.delete?.().catch(() => {});
-      return null;
-    }
-    const baseCount = Math.max(0, Number(initialCount) || 0);
-    const post = { messageId: sent.id, channelId: message.channel.id, voters: [], baseCount, count: baseCount, createdAt: now(), sourceMessageId: message.id };
-    const freshData = readData();
-    const freshGuild = getGuild(freshData, message.guild.id);
-    freshGuild.photoPosts[sent.id] = post;
-    writeData(freshData);
-    await sent.edit({ components: buildPhotoComponents(message.guild.id, sent.id, freshGuild.settings.photoEmoji, baseCount) }).catch(async () => {
-      await sent.delete().catch(() => {});
-      delete freshGuild.photoPosts[sent.id];
-      writeData(freshData);
-      throw new Error('photo-post-component-verification-failed');
-    });
-    await message.delete();
-    return sent;
-  } catch (error) {
-    console.error('Event photo repost failed:', error?.message || error);
-    return null;
-  }
-}
-
-async function collectChannelMessages(channel) {
-  const messages = [];
-  let before;
-  const seen = new Set();
-  while (true) {
-    const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) }).catch(() => null);
-    if (!batch || batch.size === 0) break;
-    for (const message of batch.values()) {
-      if (!seen.has(message.id)) {
-        seen.add(message.id);
-        messages.push(message);
-      }
-    }
-    const oldest = batch.last();
-    if (!oldest?.id || batch.size < 100) break;
-    before = oldest.id;
-  }
-  return messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
-}
-
-async function runPhotoAutoMigration(guild, channelId) {
-  const lockKey = `${guild.id}:${channelId}`;
-  if (runtime.photoAutoLocks.has(lockKey)) return;
-  runtime.photoAutoLocks.add(lockKey);
-  try {
-    const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
-    if (!channel || !hasPhotoPermissions({ guild, channel })) return;
-    const messages = await collectChannelMessages(channel);
-    for (const message of messages) {
-      if (message.author?.bot) continue;
-      if (getImageAttachments(message).length) {
-        await repostPhotoMessage(message, getHighestReactionCount(message));
-      } else if (message.deletable) {
-        await message.delete().catch(() => {});
-      }
-      await new Promise(resolve => setTimeout(resolve, 250));
-    }
-  } finally {
-    runtime.photoAutoLocks.delete(lockKey);
-  }
-}
-
 function ensureEventMessageListener(client) {
   if (runtime.initedClients.has(`msg:${client.user?.id || 'bot'}`)) return;
   client.on('messageCreate', async (message) => {
     if (!message.guild || message.author.bot) return;
-
-    const photoData = readData();
-    const photoGuild = getGuild(photoData, message.guild.id);
-    if (photoGuild.settings.photoChannelId === message.channel.id && getImageAttachments(message).length > 0) {
-      await repostPhotoMessage(message);
-      return;
-    }
 
     if (message.content.trim().toLowerCase() === 'event pause') {
       const data = readData();
@@ -664,12 +528,7 @@ async function execute(message, args, context) {
 
   const settingsEmbed = colorManager.createEmbed()
     .setTitle('إعدادات نظام الفعاليات')
-    .setDescription('التحكم الكامل من هنا.\nأزرار **إنشاء/سجل/توب** تظهر فقط في روم التقديم.')
-    .addFields(
-      { name: 'روم الصور', value: g.settings.photoChannelId ? `<#${g.settings.photoChannelId}>` : 'غير محدد', inline: true },
-      { name: 'setEmoji', value: g.settings.photoEmoji || '✅', inline: true },
-      { name: 'Auto', value: 'يفحص من أقدم رسالة ويعيد نشر الصور فقط', inline: false }
-    );
+    .setDescription('التحكم الكامل من هنا.\nأزرار **إنشاء/سجل/توب** تظهر فقط في روم التقديم.');
 
   const rows = [
     new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('event_settings_request_channel').setPlaceholder('حدد روم الطلبات (يروح له طلب الانشاء)').setChannelTypes(ChannelType.GuildText)),
@@ -679,9 +538,6 @@ async function execute(message, args, context) {
     new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('event_settings_top_channel').setPlaceholder('حدد روم التوب').setChannelTypes(ChannelType.GuildText))
   ];
   const rowButtons = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('event_settings_photo_emoji').setLabel('setEmoji').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('event_settings_photo_channel').setLabel('Live').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('event_settings_photo_auto').setLabel('Auto').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId('event_settings_misc').setLabel('ايموجي/خط/نص').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('event_settings_approvers').setLabel('تحديد المعتمدين').setStyle(ButtonStyle.Secondary)
   );
@@ -706,38 +562,6 @@ async function handleInteraction(interaction, context = {}) {
   const data = readData();
   const g = getGuild(data, interaction.guild.id);
 
-  if (interaction.customId?.startsWith('event_photo_vote:')) {
-    const [, guildId, postId] = interaction.customId.split(':');
-    if (guildId !== interaction.guild.id || !postId) return interaction.reply({ content: '❌ هذا التصويت غير صالح.', flags: MessageFlags.Ephemeral });
-    const lockKey = `${interaction.guild.id}:${postId}`;
-    const previous = runtime.photoVoteLocks.get(lockKey) || Promise.resolve();
-    const voteTask = previous.catch(() => {}).then(async () => {
-      const freshData = readData();
-      const freshGuild = getGuild(freshData, interaction.guild.id);
-      const post = freshGuild.photoPosts[postId];
-      if (!post) throw new Error('photo-post-not-found');
-      const voters = new Set(Array.isArray(post.voters) ? post.voters : []);
-      if (voters.has(interaction.user.id)) voters.delete(interaction.user.id);
-      else voters.add(interaction.user.id);
-      post.voters = [...voters];
-      post.baseCount = Math.max(0, Number(post.baseCount) || 0);
-      post.count = post.baseCount + post.voters.length;
-      writeData(freshData);
-      await interaction.update({ components: buildPhotoComponents(interaction.guild.id, postId, freshGuild.settings.photoEmoji, post.count) });
-    });
-    const trackedVote = voteTask.catch(() => {});
-    runtime.photoVoteLocks.set(lockKey, trackedVote);
-    try {
-      await voteTask;
-    } catch (error) {
-      console.error('Event photo vote failed:', error?.message || error);
-      if (!interaction.replied && !interaction.deferred) await interaction.reply({ content: '❌ تعذر حفظ التصويت.', flags: MessageFlags.Ephemeral }).catch(() => {});
-    } finally {
-      if (runtime.photoVoteLocks.get(lockKey) === trackedVote) runtime.photoVoteLocks.delete(lockKey);
-    }
-    return true;
-  }
-
   if (interaction.customId === 'event_settings_open') {
     if (!isOwner(interaction.member, BOT_OWNERS)) return interaction.reply({ content: '❌ للأونرز فقط', flags: MessageFlags.Ephemeral });
     const rows = [
@@ -748,9 +572,6 @@ async function handleInteraction(interaction, context = {}) {
       new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('event_settings_top_channel').setPlaceholder('حدد روم التوب').setChannelTypes(ChannelType.GuildText))
     ];
     const row2 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('event_settings_photo_emoji').setLabel('setEmoji').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('event_settings_photo_channel').setLabel('Live').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('event_settings_photo_auto').setLabel('Auto').setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId('event_settings_misc').setLabel('ايموجي/خط/نص').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('event_settings_approvers').setLabel('تحديد المعتمدين').setStyle(ButtonStyle.Secondary)
     );
@@ -763,62 +584,6 @@ async function handleInteraction(interaction, context = {}) {
     if (!canManageSettings(interaction.member, BOT_OWNERS)) return interaction.reply({ content: '❌ للأونرز فقط', flags: MessageFlags.Ephemeral });
     g.settings.requestChannelId = interaction.values[0]; persistSettings(data, interaction.guild.id);
     return interaction.reply({ content: '✅ تم تعيين روم الطلبات.', flags: MessageFlags.Ephemeral });
-  }
-
-  if (interaction.customId === 'event_settings_photo_emoji') {
-    if (!canManageSettings(interaction.member, BOT_OWNERS)) return interaction.reply({ content: '❌ للأونرز فقط', flags: MessageFlags.Ephemeral });
-    const modal = new ModalBuilder().setCustomId('event_settings_photo_emoji_modal').setTitle('setEmoji');
-    modal.addComponents(new ActionRowBuilder().addComponents(
-      new TextInputBuilder().setCustomId('emoji').setLabel('ضع الإيموجي').setStyle(TextInputStyle.Short).setRequired(true).setValue(g.settings.photoEmoji || '✅').setMaxLength(100)
-    ));
-    return interaction.showModal(modal);
-  }
-
-  if (interaction.customId === 'event_settings_photo_emoji_modal') {
-    if (!canManageSettings(interaction.member, BOT_OWNERS)) return interaction.reply({ content: '❌ للأونرز فقط', flags: MessageFlags.Ephemeral });
-    const emoji = interaction.fields.getTextInputValue('emoji').trim();
-    if (!emoji) return interaction.reply({ content: '❌ يجب تحديد إيموجي.', flags: MessageFlags.Ephemeral });
-    try {
-      new ButtonBuilder().setCustomId('event_photo_test').setEmoji(emoji);
-    } catch {
-      return interaction.reply({ content: '❌ الإيموجي غير صالح.', flags: MessageFlags.Ephemeral });
-    }
-    g.settings.photoEmoji = emoji;
-    persistSettings(data, interaction.guild.id);
-    return interaction.reply({ content: `✅ تم حفظ setEmoji: ${emoji}`, flags: MessageFlags.Ephemeral });
-  }
-
-  if (interaction.customId === 'event_settings_photo_channel') {
-    if (!canManageSettings(interaction.member, BOT_OWNERS)) return interaction.reply({ content: '❌ للأونرز فقط', flags: MessageFlags.Ephemeral });
-    const row = new ActionRowBuilder().addComponents(
-      new ChannelSelectMenuBuilder().setCustomId('event_settings_photo_channel_select').setPlaceholder('حدد روم الصور').setChannelTypes(ChannelType.GuildText).setMinValues(1).setMaxValues(1)
-    );
-    return interaction.reply({ content: 'حدد الروم الذي يحول الصور تلقائيًا:', components: [row], flags: MessageFlags.Ephemeral });
-  }
-
-  if (interaction.customId === 'event_settings_photo_channel_select') {
-    if (!canManageSettings(interaction.member, BOT_OWNERS)) return interaction.reply({ content: '❌ للأونرز فقط', flags: MessageFlags.Ephemeral });
-    g.settings.photoChannelId = interaction.values[0];
-    persistSettings(data, interaction.guild.id);
-    return interaction.reply({ content: `✅ تم تفعيل تحويل الصور في <#${g.settings.photoChannelId}>.`, flags: MessageFlags.Ephemeral });
-  }
-
-  if (interaction.customId === 'event_settings_photo_auto') {
-    if (!canManageSettings(interaction.member, BOT_OWNERS)) return interaction.reply({ content: '❌ للأونرز فقط', flags: MessageFlags.Ephemeral });
-    const row = new ActionRowBuilder().addComponents(
-      new ChannelSelectMenuBuilder().setCustomId('event_settings_photo_auto_select').setPlaceholder('حدد روم Auto').setChannelTypes(ChannelType.GuildText).setMinValues(1).setMaxValues(1)
-    );
-    return interaction.reply({ content: 'حدد الروم لبدء الفحص من أقدم رسالة. سيتم إعادة نشر الصور وحذف غير الصور بعد نجاح كل عملية.', components: [row], flags: MessageFlags.Ephemeral });
-  }
-
-  if (interaction.customId === 'event_settings_photo_auto_select') {
-    if (!canManageSettings(interaction.member, BOT_OWNERS)) return interaction.reply({ content: '❌ للأونرز فقط', flags: MessageFlags.Ephemeral });
-    const channelId = interaction.values[0];
-    g.settings.photoChannelId = channelId;
-    persistSettings(data, interaction.guild.id);
-    await interaction.reply({ content: `✅ بدأ Auto في <#${channelId}>. سيتم التأكد من إرسال كل صورة قبل حذف أصلها.`, flags: MessageFlags.Ephemeral });
-    setImmediate(() => runPhotoAutoMigration(interaction.guild, channelId).catch(error => console.error('Event photo Auto failed:', error)));
-    return true;
   }
 
   if (interaction.customId === 'event_settings_approvers') {

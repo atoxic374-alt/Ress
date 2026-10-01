@@ -1790,17 +1790,6 @@ client.once(Events.ClientReady, async () => {
         console.error('❌ خطأ في تهيئة نظام Streak:', error);
     }
 
-    // Initialize Event system, including live photo conversion
-    try {
-        const eventCommand = require('./commands/event.js');
-        if (eventCommand && eventCommand.initialize) {
-            await eventCommand.initialize(client);
-            console.log('✅ تم تهيئة نظام Event والصور بنجاح');
-        }
-    } catch (error) {
-        console.error('❌ خطأ في تهيئة نظام Event:', error);
-    }
-
     // تتبع النشاط الصوتي باستخدام client.voiceSessions المحسّن
     client.on('voiceStateUpdate', async (oldState, newState) => {
         try {
