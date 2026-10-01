@@ -3,7 +3,9 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  UserSelectMenuBuilder
+  UserSelectMenuBuilder,
+  ChannelSelectMenuBuilder,
+  ChannelType
 } = require('discord.js');
 const colorManager = require('../utils/colorManager.js');
 const {
@@ -38,6 +40,10 @@ function recipientLines(settings) {
   return settings.recipientIds.map((id, index) => `${index + 1}. <@${id}>`).join('\n');
 }
 
+function channelLine(settings) {
+  return settings.channelId ? `<#${settings.channelId}>` : 'All channels';
+}
+
 function buildPanel(guild, client) {
   const settings = getGuildSettings(guild.id);
   const embed = colorManager.createEmbed()
@@ -49,6 +55,7 @@ function buildPanel(guild, client) {
     )
     .addFields(
       { name: 'Recipients', value: recipientLines(settings), inline: false },
+      { name: 'Channel', value: channelLine(settings), inline: true },
       { name: 'Count', value: `\`${settings.recipientIds.length}\``, inline: true },
       { name: 'Events', value: 'Added and removed', inline: true },
       { name: 'Delivery', value: 'Private messages', inline: true }
@@ -69,13 +76,20 @@ function buildPanel(guild, client) {
     .setPlaceholder('Select users to remove')
     .setMinValues(1)
     .setMaxValues(25);
+  const channelSelect = new ChannelSelectMenuBuilder()
+    .setCustomId(`${PANEL_PREFIX}set_channel`)
+    .setPlaceholder('Select a channel')
+    .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+    .setMinValues(1)
+    .setMaxValues(1);
   const controls = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`${PANEL_PREFIX}enable`).setLabel('Enable').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(`${PANEL_PREFIX}disable`).setLabel('Disable').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`${PANEL_PREFIX}clear`).setLabel('Clear').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`${PANEL_PREFIX}all_channels`).setLabel('All Channels').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`${PANEL_PREFIX}refresh`).setLabel('Refresh').setStyle(ButtonStyle.Primary)
   );
-  return { embeds: [embed], components: [new ActionRowBuilder().addComponents(addUsers), new ActionRowBuilder().addComponents(removeUsers), controls] };
+  return { embeds: [embed], components: [new ActionRowBuilder().addComponents(addUsers), new ActionRowBuilder().addComponents(removeUsers), new ActionRowBuilder().addComponents(channelSelect), controls] };
 }
 
 async function execute(message, _args, { client, BOT_OWNERS = [] } = {}) {
@@ -114,10 +128,17 @@ async function handleInteraction(interaction, { client, BOT_OWNERS = [] } = {}) 
     return true;
   }
 
+  if (interaction.isChannelSelectMenu() && id === 'set_channel') {
+    updateGuildSettings(interaction.guild.id, { channelId: interaction.values[0] || null });
+    await interaction.update(buildPanel(interaction.guild, client));
+    return true;
+  }
+
   if (!interaction.isButton()) return true;
   if (id === 'enable') updateGuildSettings(interaction.guild.id, { enabled: true });
   if (id === 'disable') updateGuildSettings(interaction.guild.id, { enabled: false });
   if (id === 'clear') updateGuildSettings(interaction.guild.id, { recipientIds: [] });
+  if (id === 'all_channels') updateGuildSettings(interaction.guild.id, { channelId: null });
   await interaction.update(buildPanel(interaction.guild, client));
   return true;
 }

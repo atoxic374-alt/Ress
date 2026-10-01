@@ -32,11 +32,17 @@ function normalizeId(value) {
   return /^\d{15,21}$/.test(id) ? id : null;
 }
 
+function normalizeChannelId(value) {
+  const id = String(value || '').replace(/[<#>]/g, '').trim();
+  return /^\d{15,21}$/.test(id) ? id : null;
+}
+
 function getGuildSettings(guildId) {
   const config = readConfig();
   const current = config.guilds[guildId] || {};
   return {
     enabled: current.enabled !== false,
+    channelId: normalizeChannelId(current.channelId),
     recipientIds: Array.isArray(current.recipientIds)
       ? [...new Set(current.recipientIds.map(normalizeId).filter(Boolean))]
       : []
@@ -49,6 +55,9 @@ function updateGuildSettings(guildId, patch) {
   const next = {
     ...current,
     ...patch,
+    channelId: patch.channelId === undefined
+      ? current.channelId
+      : normalizeChannelId(patch.channelId),
     recipientIds: [...new Set((patch.recipientIds ?? current.recipientIds).map(normalizeId).filter(Boolean))]
   };
   config.guilds[guildId] = next;
@@ -106,6 +115,9 @@ async function dispatchReactionLog({ reaction, user, action }) {
   if (!guild || !user || user.bot) return { sent: 0, skipped: true };
   const settings = getGuildSettings(guild.id);
   if (!settings.enabled || settings.recipientIds.length === 0) return { sent: 0, skipped: true };
+  if (settings.channelId && String(reaction.message.channelId) !== String(settings.channelId)) {
+    return { sent: 0, skipped: true };
+  }
 
   const embed = buildReactionLogEmbed({ reaction, user, action });
   let sent = 0;
@@ -126,5 +138,6 @@ module.exports = {
   getGuildSettings,
   updateGuildSettings,
   dispatchReactionLog,
-  normalizeId
+  normalizeId,
+  normalizeChannelId
 };
