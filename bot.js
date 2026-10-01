@@ -2357,18 +2357,61 @@ async function prepareReaction(reaction) {
   }
 }
 
-client.on('messageReactionAdd', async (reaction, user) => {
-  if (user?.bot || !(await prepareReaction(reaction))) return;
-  try {
+const reactionEventQueues = new Map();
+
+function snapshotReactionUser(user) {
+  return {
+    id: user?.id,
+    bot: Boolean(user?.bot),
+    tag: user?.tag || user?.username || user?.id,
+    username: user?.username || user?.tag || user?.id
+  };
+}
+
+function getReactionQueueKey(reaction) {
+  const message = reaction?.message;
+  const emoji = reaction?.emoji;
+  return [
+    message?.guild?.id || message?.guildId || 'unknown',
+    message?.channelId || message?.channel?.id || 'unknown',
+    message?.id || 'unknown',
+    emoji?.id || emoji?.name || 'unknown'
+  ].join(':');
+}
+
+function enqueueReactionLog(reaction, user, action) {
+  const actor = snapshotReactionUser(user);
+  const key = getReactionQueueKey(reaction);
+  const previous = reactionEventQueues.get(key) || Promise.resolve();
+  const task = previous.catch(() => {}).then(async () => {
+    if (!(await prepareReaction(reaction))) return;
+    const message = reaction.message;
+    const eventReaction = {
+      message,
+      emoji: reaction.emoji,
+      count: reaction.count
+    };
     const { dispatchReactionLog, shouldLogReaction } = require('./utils/reactionLogManager');
-    const channelId = reaction.message.channelId || reaction.message.channel?.id;
-    if (shouldLogReaction({ guildId: reaction.message.guild.id, channelId, action: 'add' }).allowed) {
-      await dispatchReactionLog({ reaction, user, action: 'add' });
-    }
+    const channelId = message.channelId || message.channel?.id;
+    if (!shouldLogReaction({ guildId: message.guild.id, channelId, action }).allowed) return;
+    await dispatchReactionLog({ reaction: eventReaction, user: actor, action });
+  });
+  const tracked = task.finally(() => {
+    if (reactionEventQueues.get(key) === tracked) reactionEventQueues.delete(key);
+  });
+  reactionEventQueues.set(key, tracked);
+  return tracked;
+}
+
+client.on('messageReactionAdd', async (reaction, user) => {
+  if (user?.bot) return;
+  try {
+    await enqueueReactionLog(reaction, user, 'add');
   } catch (error) {
     console.error('Reaction add log failed:', error?.message || error);
   }
   try {
+    if (!(await prepareReaction(reaction))) return;
     const { getDatabase } = require('./utils/database');
     const dbManager = getDatabase();
     if (!dbManager?.isInitialized) return;
@@ -2387,13 +2430,9 @@ client.on('messageReactionAdd', async (reaction, user) => {
 });
 
 client.on('messageReactionRemove', async (reaction, user) => {
-  if (user?.bot || !(await prepareReaction(reaction))) return;
+  if (user?.bot) return;
   try {
-    const { dispatchReactionLog, shouldLogReaction } = require('./utils/reactionLogManager');
-    const channelId = reaction.message.channelId || reaction.message.channel?.id;
-    if (shouldLogReaction({ guildId: reaction.message.guild.id, channelId, action: 'remove' }).allowed) {
-      await dispatchReactionLog({ reaction, user, action: 'remove' });
-    }
+    await enqueueReactionLog(reaction, user, 'remove');
   } catch (error) {
     console.error('Reaction remove log failed:', error?.message || error);
   }

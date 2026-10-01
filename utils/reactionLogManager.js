@@ -148,7 +148,20 @@ async function dispatchReactionLog({ reaction, user, action }) {
   for (const recipientId of settings.recipientIds) {
     try {
       const recipient = await guild.client.users.fetch(recipientId);
-      await recipient.send({ embeds: [embed], allowedMentions: { parse: [] } });
+      let delivered = false;
+      for (let attempt = 0; attempt < 3 && !delivered; attempt += 1) {
+        try {
+          await recipient.send({ embeds: [embed], allowedMentions: { parse: [] } });
+          delivered = true;
+        } catch (sendError) {
+          const retryAfter = Number(sendError?.rawError?.retry_after || sendError?.retry_after || 0);
+          if (attempt < 2 && (Number(sendError?.code) === 429 || retryAfter > 0)) {
+            await new Promise(resolve => setTimeout(resolve, Math.min(Math.max(retryAfter * 1000, 250), 5000)));
+            continue;
+          }
+          throw sendError;
+        }
+      }
       sent += 1;
     } catch (error) {
       console.warn(`⚠️ تعذر إرسال لوق الرياكشن بالخاص إلى ${recipientId}: ${error.code || error.message}`);
