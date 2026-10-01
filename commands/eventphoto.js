@@ -119,9 +119,13 @@ async function repost(message, initialCount = 0) {
       messageId: sent.id,
       channelId: message.channel.id,
       sourceMessageId: message.id,
+      sourceAuthorId: message.author.id,
       baseCount: count,
       count,
       voters: [],
+      manualAdditions: 0,
+      manualRemovals: 0,
+      managerAudit: [],
       createdAt: Date.now()
     };
     writeData(data);
@@ -194,7 +198,8 @@ function settingsPanel(guild) {
       { name: 'Channel', value: state.settings.channelId ? `<#${state.settings.channelId}>` : 'غير محدد', inline: true },
       { name: 'setEmoji', value: state.settings.emoji || '✅', inline: true },
       { name: 'Managers', value: state.settings.managerIds.length ? state.settings.managerIds.map(id => `<@${id}>`).join(', ').slice(0, 1024) : 'لا يوجد', inline: false },
-      { name: 'Auto behavior', value: 'ينقل أعلى عدد رياكشن للصورة ويحذف غير الصور', inline: false }
+      { name: 'Auto behavior', value: 'ينقل أعلى عدد رياكشن للصورة ويحذف غير الصور', inline: false },
+      { name: 'Rev', value: 'استخدم `eventphoto rev @user` لمراجعة صور شخص محدد', inline: false }
     );
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('eventphoto_setemoji').setLabel('setEmoji').setStyle(ButtonStyle.Primary),
@@ -204,8 +209,7 @@ function settingsPanel(guild) {
   );
   const managerRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('eventphoto_add_manager').setLabel('Add Manager').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('eventphoto_remove_manager').setLabel('Remove Manager').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('eventphoto_review').setLabel('Review Voters').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId('eventphoto_remove_manager').setLabel('Remove Manager').setStyle(ButtonStyle.Secondary)
   );
   return { embeds: [embed], components: [row, managerRow] };
 }
@@ -222,40 +226,94 @@ function userPicker(customId, placeholder) {
   )];
 }
 
-function reviewOptions(guild) {
-  return Object.values(guild.posts)
-    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
-    .slice(0, 25)
-    .map(post => ({
-      label: `Post ${post.messageId.slice(-8)} | ${post.count || 0} votes`.slice(0, 100),
-      description: `Channel: ${post.channelId} | Voters: ${(post.voters || []).length}`.slice(0, 100),
-      value: post.messageId
-    }));
+function extractUserId(input) {
+  return String(input || '').match(/\d{16,20}/)?.[0] || null;
 }
 
-function reviewEmbed(guild, post) {
+function recalculate(post) {
+  post.baseCount = Math.max(0, Number(post.baseCount) || 0);
+  post.manualAdditions = Math.max(0, Number(post.manualAdditions) || 0);
+  post.manualRemovals = Math.max(0, Number(post.manualRemovals) || 0);
+  post.count = Math.max(0, post.baseCount + (post.voters || []).length + post.manualAdditions - post.manualRemovals);
+}
+
+async function findPostsForUser(discordGuild, data, guild, userId) {
+  const matches = [];
+  let changed = false;
+  for (const post of Object.values(guild.posts)) {
+    if (post.sourceAuthorId === userId) {
+      matches.push(post);
+      continue;
+    }
+    if (post.sourceAuthorId) continue;
+    const channel = discordGuild.channels.cache.get(post.channelId) || await discordGuild.channels.fetch(post.channelId).catch(() => null);
+    const source = channel ? await channel.messages.fetch(post.sourceMessageId).catch(() => null) : null;
+    if (source?.author?.id) {
+      post.sourceAuthorId = source.author.id;
+      changed = true;
+      if (source.author.id === userId) matches.push(post);
+    }
+  }
+  if (changed) writeData(data);
+  return matches.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+}
+
+function reviewEmbed(post, page = 0) {
   const voters = Array.isArray(post.voters) ? post.voters : [];
-  const voterText = voters.length ? voters.map(id => `<@${id}> (\`${id}\`)`).join('\n').slice(0, 1024) : 'لا يوجد مصوتون حاليًا.';
+  const audit = Array.isArray(post.managerAudit) ? post.managerAudit.slice(-5) : [];
+  const pageSize = 8;
+  const pages = Math.max(1, Math.ceil(voters.length / pageSize));
+  const safePage = Math.min(Math.max(0, page), pages - 1);
+  const pageVoters = voters.slice(safePage * pageSize, (safePage + 1) * pageSize);
+  const voterText = pageVoters.length ? pageVoters.map((id, i) => `${safePage * pageSize + i + 1}. <@${id}> (\`${id}\`)`).join('\n') : 'لا يوجد مصوتون حاليًا.';
+  recalculate(post);
   return new EmbedBuilder()
-    .setTitle('Voter Review')
-    .setDescription(`**Post:** ${post.messageId}\n**Channel:** <#${post.channelId}>\n**Current count:** **${post.count || 0}**\n**Base count:** **${post.baseCount || 0}**`)
-    .addFields({ name: `Voters (${voters.length})`, value: voterText });
+    .setTitle('Rev • Voter Review')
+    .setDescription(`**Post:** ${post.messageId}\n**Channel:** <#${post.channelId}>\n**Page:** ${safePage + 1}/${pages}`)
+    .addFields(
+      { name: 'Current Count', value: `**${post.count}**`, inline: true },
+      { name: 'Real Voters', value: `**${voters.length}**`, inline: true },
+      { name: 'Manual + / -', value: `**+${post.manualAdditions || 0} / -${post.manualRemovals || 0}**`, inline: true },
+      { name: `Voters ${safePage * pageSize + 1}-${Math.min((safePage + 1) * pageSize, voters.length)}`, value: voterText, inline: false },
+      { name: 'Recent Manager Changes', value: audit.length ? audit.map(item => `${item.action === 'add' ? '+1' : '-1'} by <@${item.by}>`).join('\n') : 'لا توجد تعديلات يدوية.' , inline: false }
+    );
 }
 
-function reviewComponents(postId) {
-  return [new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`eventphoto_review_add:${postId}`).setLabel('Add Voter').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`eventphoto_review_remove:${postId}`).setLabel('Remove Voter').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId(`eventphoto_review_refresh:${postId}`).setLabel('Refresh').setStyle(ButtonStyle.Secondary)
-  )];
+function reviewComponents(postId, page, totalVoters) {
+  const pages = Math.max(1, Math.ceil((totalVoters || 0) / 8));
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`eventphoto_rev_add:${postId}:${page}`).setLabel('+1 Vote').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`eventphoto_rev_remove:${postId}:${page}`).setLabel('-1 Vote').setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId(`eventphoto_rev_refresh:${postId}:${page}`).setLabel('Refresh').setStyle(ButtonStyle.Secondary)
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`eventphoto_rev_page:${postId}:${Math.max(0, page - 1)}`).setLabel('Previous').setStyle(ButtonStyle.Secondary).setDisabled(page <= 0),
+      new ButtonBuilder().setCustomId(`eventphoto_rev_page:${postId}:${Math.min(pages - 1, page + 1)}`).setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(page >= pages - 1)
+    )
+  ];
 }
 
 async function execute(message, args, { client }) {
   if (!message.guild) return message.reply('❌ هذا الأمر يعمل داخل السيرفر فقط.');
   const panelData = readData();
   const panelGuild = getGuild(panelData, message.guild.id);
-  if (!isManager(message.member, panelGuild)) return message.reply('❌ هذا الأمر للأونرز أو مسؤولي Event Photos فقط.');
+  const wantsRev = (args[0] || '').toLowerCase() === 'rev';
+  if (wantsRev ? !isManager(message.member, panelGuild) : !isOwner(message.member)) return message.reply('❌ هذا الأمر متاح للأونر أو مسؤول Event Photos عند استخدام Rev.');
   initialize(client);
+  if (wantsRev) {
+    const targetId = extractUserId(args.slice(1).join(' '));
+    if (!targetId) return message.reply('❌ استخدم: `eventphoto rev @user` أو `eventphoto rev userID`');
+    const posts = await findPostsForUser(message.guild, panelData, panelGuild, targetId);
+    if (!posts.length) return message.reply('❌ لم يتم العثور على صورة محفوظة لهذا الشخص.');
+    if (posts.length === 1) {
+      const post = posts[0];
+      return message.reply({ embeds: [reviewEmbed(post, 0)], components: reviewComponents(post.messageId, 0, post.voters?.length || 0) });
+    }
+    const options = posts.slice(0, 25).map(post => ({ label: `Post ${post.messageId.slice(-8)} | ${post.count || 0} votes`.slice(0, 100), description: `Voters: ${(post.voters || []).length}`.slice(0, 100), value: post.messageId }));
+    const menu = new StringSelectMenuBuilder().setCustomId(`eventphoto_rev_select:${targetId}`).setPlaceholder('اختر صورة للمراجعة').addOptions(options);
+    return message.reply({ content: `تم العثور على ${posts.length} صور. اختر الصورة:`, components: [new ActionRowBuilder().addComponents(menu)] });
+  }
   if ((args[0] || '').toLowerCase() === 'off') {
     if (!isOwner(message.member)) return message.reply('❌ إيقاف النظام للأونر فقط.');
     const data = readData();
@@ -308,47 +366,49 @@ function initialize(client) {
         if (runtime.voteLocks.get(lockKey) === tracked) runtime.voteLocks.delete(lockKey);
         return;
       }
-      if (interaction.customId === 'eventphoto_review') {
-        if (!isManager(interaction.member, guild)) return interaction.reply({ content: '❌ لا تملك صلاحية مراجعة المصوتين.', flags: MessageFlags.Ephemeral });
-        const options = reviewOptions(guild);
-        if (!options.length) return interaction.reply({ content: '❌ لا توجد منشورات محفوظة للمراجعة.', flags: MessageFlags.Ephemeral });
-        const menu = new StringSelectMenuBuilder().setCustomId('eventphoto_review_select').setPlaceholder('اختر منشورًا لمراجعة المصوتين').addOptions(options);
-        return interaction.reply({ content: 'اختر المنشور:', components: [new ActionRowBuilder().addComponents(menu)], flags: MessageFlags.Ephemeral });
-      }
-      if (interaction.customId === 'eventphoto_review_select') {
+      if (interaction.customId.startsWith('eventphoto_rev_select:')) {
         if (!isManager(interaction.member, guild)) return interaction.reply({ content: '❌ لا تملك الصلاحية.', flags: MessageFlags.Ephemeral });
         const post = guild.posts[interaction.values[0]];
-        if (!post) return interaction.reply({ content: '❌ المنشور غير موجود.', flags: MessageFlags.Ephemeral });
-        return interaction.reply({ embeds: [reviewEmbed(guild, post)], components: reviewComponents(post.messageId), flags: MessageFlags.Ephemeral });
+        if (!post) return interaction.update({ content: '❌ المنشور غير موجود.', components: [] });
+        return interaction.update({ content: null, embeds: [reviewEmbed(post, 0)], components: reviewComponents(post.messageId, 0, post.voters?.length || 0) });
       }
-      if (interaction.customId.startsWith('eventphoto_review_add:') || interaction.customId.startsWith('eventphoto_review_remove:')) {
+      if (interaction.customId.startsWith('eventphoto_rev_page:') || interaction.customId.startsWith('eventphoto_rev_refresh:')) {
         if (!isManager(interaction.member, guild)) return interaction.reply({ content: '❌ لا تملك الصلاحية.', flags: MessageFlags.Ephemeral });
-        const [, postId] = interaction.customId.split(':');
-        const add = interaction.customId.startsWith('eventphoto_review_add:');
-        return interaction.reply({ content: add ? 'حدد المستخدمين لإضافتهم كمصوتين:' : 'حدد المستخدمين لإزالة تصويتهم:', components: userPicker(`${add ? 'eventphoto_review_add_select' : 'eventphoto_review_remove_select'}:${postId}`, 'حدد المستخدمين'), flags: MessageFlags.Ephemeral });
-      }
-      if (interaction.customId.startsWith('eventphoto_review_refresh:')) {
-        if (!isManager(interaction.member, guild)) return interaction.reply({ content: '❌ لا تملك الصلاحية.', flags: MessageFlags.Ephemeral });
-        const [, postId] = interaction.customId.split(':');
+        const [, postId, rawPage] = interaction.customId.split(':');
         const post = guild.posts[postId];
         if (!post) return interaction.update({ content: '❌ المنشور غير موجود.', embeds: [], components: [] });
-        return interaction.update({ embeds: [reviewEmbed(guild, post)], components: reviewComponents(post.messageId) });
+        const page = Number(rawPage) || 0;
+        return interaction.update({ embeds: [reviewEmbed(post, page)], components: reviewComponents(post.messageId, page, post.voters?.length || 0) });
       }
-      if (interaction.customId.startsWith('eventphoto_review_add_select:') || interaction.customId.startsWith('eventphoto_review_remove_select:')) {
+      if (interaction.customId.startsWith('eventphoto_rev_add:') || interaction.customId.startsWith('eventphoto_rev_remove:')) {
         if (!isManager(interaction.member, guild)) return interaction.reply({ content: '❌ لا تملك الصلاحية.', flags: MessageFlags.Ephemeral });
-        const [, postId] = interaction.customId.split(':');
-        const add = interaction.customId.startsWith('eventphoto_review_add_select:');
+        const [, postId, rawPage] = interaction.customId.split(':');
         const fresh = readData();
         const freshGuild = getGuild(fresh, interaction.guild.id);
         const post = freshGuild.posts[postId];
         if (!post) return interaction.update({ content: '❌ المنشور غير موجود.', embeds: [], components: [] });
-        const voters = new Set(Array.isArray(post.voters) ? post.voters : []);
-        for (const userId of interaction.values) add ? voters.add(userId) : voters.delete(userId);
-        post.voters = [...voters];
-        post.baseCount = Math.max(0, Number(post.baseCount) || 0);
-        post.count = post.baseCount + post.voters.length;
+        post.managerAudit = Array.isArray(post.managerAudit) ? post.managerAudit : [];
+        if (interaction.customId.startsWith('eventphoto_rev_add:')) post.manualAdditions = (Number(post.manualAdditions) || 0) + 1;
+        else post.manualRemovals = (Number(post.manualRemovals) || 0) + 1;
+        post.managerAudit.push({ action: interaction.customId.startsWith('eventphoto_rev_add:') ? 'add' : 'remove', by: interaction.user.id, at: Date.now() });
+        recalculate(post);
         writeData(fresh);
-        return interaction.update({ content: null, embeds: [reviewEmbed(freshGuild, post)], components: reviewComponents(post.messageId) });
+        const page = Number(rawPage) || 0;
+        return interaction.update({ embeds: [reviewEmbed(post, page)], components: reviewComponents(post.messageId, page, post.voters?.length || 0) });
+      }
+      if (interaction.customId === 'eventphoto_add_manager' || interaction.customId === 'eventphoto_remove_manager') {
+        if (!isOwner(interaction.member)) return interaction.reply({ content: '❌ إضافة وإزالة المسؤولين للأونر فقط.', flags: MessageFlags.Ephemeral });
+        const add = interaction.customId === 'eventphoto_add_manager';
+        return interaction.reply({ content: add ? 'حدد المسؤولين لإضافتهم:' : 'حدد المسؤولين لإزالتهم:', components: userPicker(add ? 'eventphoto_add_manager_select' : 'eventphoto_remove_manager_select', 'حدد المستخدمين'), flags: MessageFlags.Ephemeral });
+      }
+      if (interaction.customId === 'eventphoto_add_manager_select' || interaction.customId === 'eventphoto_remove_manager_select') {
+        if (!isOwner(interaction.member)) return interaction.reply({ content: '❌ للأونر فقط.', flags: MessageFlags.Ephemeral });
+        const add = interaction.customId === 'eventphoto_add_manager_select';
+        const ids = new Set(guild.settings.managerIds);
+        for (const id of interaction.values) add ? ids.add(id) : ids.delete(id);
+        guild.settings.managerIds = [...ids];
+        writeData(data);
+        return interaction.reply({ content: add ? `✅ تمت إضافة ${interaction.values.length} مسؤول.` : `✅ تمت إزالة ${interaction.values.length} مسؤول.`, flags: MessageFlags.Ephemeral });
       }
       if (interaction.customId === 'eventphoto_add_manager' || interaction.customId === 'eventphoto_remove_manager') {
         if (!isOwner(interaction.member)) return interaction.reply({ content: '❌ إضافة وإزالة المسؤولين للأونر فقط.', flags: MessageFlags.Ephemeral });
