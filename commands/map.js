@@ -134,7 +134,7 @@ async function syncOpenActiveUsers(config, guild) {
         return stored;
     }
 
-    // مزامنة خفيفة بدون جلب كل الأعضاء (أداء أعلى)
+    // مزامنة من الكاش والقائمة المحفوظة؛ لا نطلب أعضاء السيرفر كاملًا هنا.
     const roleId = config.open.roleId;
     if (!roleId || !/^\d{17,19}$/.test(roleId)) {
         config.open.activeUsers = [];
@@ -143,13 +143,18 @@ async function syncOpenActiveUsers(config, guild) {
 
     let role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
     if (role) {
-        if (guild.members.cache.size < guild.memberCount) {
-            await guild.members.fetch().catch(() => null);
-            role = guild.roles.cache.get(roleId) || role;
+        const activeUsers = new Set(stored);
+        for (const member of guild.members.cache.values()) {
+            if (member.roles.cache.has(roleId)) activeUsers.add(member.id);
+            else activeUsers.delete(member.id);
         }
-        const roleMembers = role.members.map(m => m.id);
-        config.open.activeUsers = roleMembers;
-        return roleMembers;
+        // إذا كان الكاش كاملًا، فهو المرجع الكامل؛ وإلا نحتفظ بالمخزّن للأعضاء غير المحمّلين.
+        if (guild.members.cache.size >= guild.memberCount) {
+            config.open.activeUsers = role.members.map(m => m.id);
+        } else {
+            config.open.activeUsers = [...activeUsers];
+        }
+        return config.open.activeUsers;
     }
 
     config.open.activeUsers = stored;

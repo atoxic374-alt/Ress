@@ -29,7 +29,8 @@ module.exports = {
     const guild = message.guild;
     if (!guild) return;
 
-    await guild.members.fetch().catch(() => null);
+    // لا نطلب قائمة الأعضاء كاملة من Discord عند عرض معلومات السيرفر؛ ذلك
+    // يسبب Gateway opcode 8 مكلفًا. الإجمالي من guild.memberCount، والتفاصيل تقريبية من الكاش.
     await guild.channels.fetch().catch(() => null);
 
     const owner = await guild.fetchOwner().catch(() => null);
@@ -61,9 +62,9 @@ module.exports = {
           name: 'الأعضاء',
           value:
             `**الإجمالي :** ${guild.memberCount}\n` +
-            `**بشر :** ${humans}\n` +
-            `**بوتات :** ${bots}\n` +
-            `**متصلين (تقريبي) :** ${online}`,
+            `**بشر (من الكاش) :** ${humans}\n` +
+            `**بوتات (من الكاش) :** ${bots}\n` +
+            `**متصلين (من الكاش/تقريبي) :** ${online}`,
           inline: true
         },
         {

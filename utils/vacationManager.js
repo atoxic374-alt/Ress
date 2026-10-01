@@ -80,13 +80,130 @@ function readJson(filePath, defaultData = {}) {
 }
 
 function saveVacations(data) {
+    const tempPath = `${vacationsPath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     try {
-        fs.writeFileSync(vacationsPath, JSON.stringify(data, null, 2));
+        fs.writeFileSync(tempPath, JSON.stringify(data, null, 2));
+        fs.renameSync(tempPath, vacationsPath);
         return true;
     } catch (error) {
+        try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch (_) {}
         console.error('Error writing vacations.json:', error);
         return false;
     }
+}
+
+function isUnknownMemberError(error) {
+    const code = Number(error?.code ?? error?.rawError?.code);
+    const status = Number(error?.status ?? error?.statusCode);
+    return code === 10007 || status === 404;
+}
+
+function getRetryDelayMs(error, fallbackMs = 120000) {
+    const retryAfter = Number(error?.retryAfter ?? error?.data?.retry_after ?? error?.rawError?.retry_after);
+    if (Number.isFinite(retryAfter) && retryAfter > 0) {
+        return Math.max(1000, retryAfter > 1000 ? retryAfter : retryAfter * 1000);
+    }
+    const match = String(error?.message || '').match(/retry after\s+([\d.]+)\s*(ms|seconds?|s)?/i);
+    if (match) {
+        const value = Number(match[1]);
+        return Math.max(1000, Math.ceil(value * (/^ms$/i.test(match[2] || '') ? 1 : 1000)));
+    }
+    return fallbackMs;
+}
+
+// Discord's unfiltered GuildMemberManager.fetch() requests the whole guild over
+// Gateway opcode 8. A single-member REST lookup avoids chunking/rate-limit spikes.
+async function fetchGuildMemberById(guild, userId) {
+    const cached = guild.members.cache.get(String(userId));
+    if (cached) return cached;
+    return guild.members.fetch({ user: String(userId), force: true });
+}
+
+let responsibilityMutationQueue = Promise.resolve();
+function withResponsibilityMutationLock(operation) {
+    const next = responsibilityMutationQueue.then(operation, operation);
+    responsibilityMutationQueue = next.catch(() => {});
+    return next;
+}
+
+async function getResponsibilitiesForVacation() {
+    const database = require('./database');
+    const manager = database.getDatabase();
+    const responsibilities = await manager.getResponsibilities();
+    if (responsibilities && Object.keys(responsibilities).length > 0) return responsibilities;
+    if (global.responsibilities && Object.keys(global.responsibilities).length > 0) return global.responsibilities;
+    return responsibilities || {};
+}
+
+function captureResponsibilityAssignments(responsibilities, userId) {
+    const assignments = [];
+    for (const [name, config] of Object.entries(responsibilities || {})) {
+        const responsibles = Array.isArray(config?.responsibles) ? config.responsibles.map(String) : [];
+        const index = responsibles.indexOf(String(userId));
+        if (index !== -1) {
+            const roles = Array.isArray(config.roles) ? config.roles : (config.roleId ? [config.roleId] : []);
+            assignments.push({ name, index, roleIds: [...new Set(roles.map(String).filter(Boolean))] });
+        }
+    }
+    return assignments;
+}
+
+async function removeUserFromResponsibilities(userId, assignments) {
+    return withResponsibilityMutationLock(async () => {
+        const database = require('./database');
+        const manager = database.getDatabase();
+        let responsibilities = await manager.getResponsibilities();
+        if ((!responsibilities || Object.keys(responsibilities).length === 0) && global.responsibilities && Object.keys(global.responsibilities).length > 0) {
+            responsibilities = global.responsibilities;
+        }
+        const targets = Array.isArray(assignments) ? assignments : captureResponsibilityAssignments(responsibilities, userId);
+        const failed = [];
+
+        for (const assignment of targets) {
+            const config = responsibilities[assignment.name];
+            if (!config || !Array.isArray(config.responsibles)) {
+                failed.push(assignment);
+                continue;
+            }
+            const current = config.responsibles.map(String);
+            if (!current.includes(String(userId))) continue;
+            const updated = { ...config, responsibles: current.filter(id => id !== String(userId)) };
+            if (!await manager.updateResponsibility(assignment.name, updated)) failed.push(assignment);
+            else responsibilities[assignment.name] = updated;
+        }
+
+        return { assignments: targets, failed };
+    });
+}
+
+async function restoreUserResponsibilities(userId, assignments = []) {
+    if (!Array.isArray(assignments) || assignments.length === 0) return { failed: [] };
+    return withResponsibilityMutationLock(async () => {
+        const database = require('./database');
+        const manager = database.getDatabase();
+        let responsibilities = await manager.getResponsibilities();
+        if ((!responsibilities || Object.keys(responsibilities).length === 0) && global.responsibilities && Object.keys(global.responsibilities).length > 0) {
+            responsibilities = global.responsibilities;
+        }
+        const failed = [];
+
+        for (const assignment of assignments) {
+            const config = responsibilities[assignment.name];
+            if (!config || !Array.isArray(config.responsibles)) {
+                failed.push(assignment);
+                continue;
+            }
+            const current = config.responsibles.map(String);
+            if (current.includes(String(userId))) continue;
+            const insertAt = Math.min(Math.max(Number(assignment.index) || 0, 0), current.length);
+            current.splice(insertAt, 0, String(userId));
+            const updated = { ...config, responsibles: current };
+            if (!await manager.updateResponsibility(assignment.name, updated)) failed.push(assignment);
+            else responsibilities[assignment.name] = updated;
+        }
+
+        return { failed };
+    });
 }
 
 // --- Public Functions ---
@@ -116,18 +233,48 @@ async function approveVacation(interaction, userId, approverId) {
 
     // وضع علامة المعالجة لمنع النقر المتكرر
     request.processed = true;
-    saveVacations(vacations);
+    if (!saveVacations(vacations)) {
+        request.processed = false;
+        return { success: false, message: 'تعذر حفظ قفل الطلب؛ لم يتم بدء الإجازة.' };
+    }
 
     const guild = interaction.guild;
-    if (!guild) return { success: false, message: 'Interaction did not originate from a guild.' };
+    if (!guild) {
+        request.processed = false;
+        saveVacations(vacations);
+        return { success: false, message: 'Interaction did not originate from a guild.' };
+    }
 
-    const member = await guild.members.fetch(userId).catch(() => null);
-    if (!member) return { success: false, message: 'User not found in the guild.' };
+    let member;
+    try {
+        member = await fetchGuildMemberById(guild, userId);
+    } catch (error) {
+        request.processed = false;
+        saveVacations(vacations);
+        return {
+            success: false,
+            message: isUnknownMemberError(error)
+                ? 'User not found in the guild.'
+                : `تعذر التحقق من العضو مؤقتًا: ${error.message}`
+        };
+    }
+
+    let responsibilityAssignments;
+    try {
+        const responsibilities = await getResponsibilitiesForVacation();
+        responsibilityAssignments = captureResponsibilityAssignments(responsibilities, userId);
+    } catch (error) {
+        console.error(`❌ تعذر حفظ مسؤوليات المستخدم ${userId} قبل الإجازة:`, error);
+        request.processed = false;
+        saveVacations(vacations);
+        return { success: false, message: 'تعذر تحميل المسؤوليات وحفظها قبل بدء الإجازة.' };
+    }
 
     const adminRoles = readJson(adminRolesPath, []);
     console.log(`📋 Admin Roles from file: ${JSON.stringify(adminRoles)}`);
 
-    const rolesToRemove = member.roles.cache.filter(role => adminRoles.includes(role.id));
+    const responsibilityRoleIds = [...new Set(responsibilityAssignments.flatMap(item => item.roleIds || []))];
+    const rolesToRemove = member.roles.cache.filter(role => adminRoles.includes(role.id) || responsibilityRoleIds.includes(role.id));
     let actuallyRemovedRoleIds = [];
 
     try {
@@ -139,14 +286,6 @@ async function approveVacation(interaction, userId, approverId) {
             actuallyRemovedRoleIds = rolesToRemove.map(role => role.id);
         } else {
             console.log(`⚠️ لا توجد أدوار إدارية لسحبها من المستخدم ${member.user.tag}`);
-            // Check if member has any roles that are in adminRoles but maybe cache is stale
-            const memberFetch = await guild.members.fetch(userId);
-            const rolesToRemoveFetch = memberFetch.roles.cache.filter(role => adminRoles.includes(role.id));
-            if (rolesToRemoveFetch.size > 0) {
-                console.log(`🔧 [Retry] محاولة سحب ${rolesToRemoveFetch.size} دور إداري`);
-                await memberFetch.roles.remove(rolesToRemoveFetch, 'سحب لرولات الإدارية بسبب الإجازة');
-                actuallyRemovedRoleIds = rolesToRemoveFetch.map(role => role.id);
-            }
         }
     } catch (error) {
         console.error(`Failed to remove roles from ${member.user.tag}:`, error);
@@ -160,7 +299,9 @@ async function approveVacation(interaction, userId, approverId) {
         approvedBy: approverId, 
         approvedAt: new Date().toISOString(), 
         removedRoles: actuallyRemovedRoleIds,  // معرفات الرولات المسحوبة
-        guildId: guild.id  // حفظ معرف السيرفر
+        guildId: guild.id,  // حفظ معرف السيرفر
+        responsibilityAssignments,
+        responsibilitiesRemoved: responsibilityAssignments.length === 0
     };
 
     // حفظ بيانات العضو
@@ -207,7 +348,38 @@ async function approveVacation(interaction, userId, approverId) {
     const saveResult = saveVacations(vacations);
     if (!saveResult) {
         console.error('❌ فشل في حفظ بيانات الإجازة!');
+        request.processed = false;
+        delete vacations.active[userId];
+        vacations.pending[userId] = request;
+        saveVacations(vacations);
+        if (actuallyRemovedRoleIds.length > 0) {
+            await member.roles.add(actuallyRemovedRoleIds, 'إلغاء اعتماد الإجازة بسبب فشل الحفظ').catch(rollbackError => {
+                console.error(`❌ فشل إعادة رولات المستخدم ${userId} بعد تعذر حفظ الإجازة:`, rollbackError.message);
+            });
+        }
         return { success: false, message: 'فشل في حفظ بيانات الإجازة' };
+    }
+
+    if (responsibilityAssignments.length > 0) {
+        try {
+            const removal = await removeUserFromResponsibilities(userId, responsibilityAssignments);
+            activeVacation.responsibilitiesRemoved = removal.failed.length === 0;
+            activeVacation.responsibilitiesRemovalFailures = removal.failed;
+            if (removal.failed.length === 0) {
+                activeVacation.responsibilitiesRemovedAt = new Date().toISOString();
+                console.log(`✅ تمت إزالة ${responsibilityAssignments.length} مسؤولية للمستخدم ${userId} خلال الإجازة`);
+            } else {
+                console.error(`⚠️ تعذرت إزالة ${removal.failed.length} مسؤولية للمستخدم ${userId}؛ ستتم إعادة المحاولة آليًا`);
+            }
+            if (!saveVacations(vacations)) {
+                console.error(`⚠️ لم يتم حفظ حالة إزالة المسؤوليات للمستخدم ${userId}; ستعاد المحاولة من النسخة المحفوظة`);
+            }
+        } catch (error) {
+            activeVacation.responsibilitiesRemoved = false;
+            activeVacation.responsibilitiesRemovalFailures = responsibilityAssignments;
+            saveVacations(vacations);
+            console.error(`❌ فشل إزالة مسؤوليات المستخدم ${userId}؛ ستعاد المحاولة:`, error.message);
+        }
     }
     
     console.log(`✅ تم حفظ بيانات الإجازة بنجاح`);
@@ -307,7 +479,21 @@ async function notifyAdminsVacationEnded(client, guild, vacation, userId, reason
     }
 }
 
+const activeVacationEndLocks = new Set();
 async function endVacation(guild, client, userId, reason = 'انتهت فترة الإجازة.') {
+    const lockKey = `${guild?.id || 'unknown'}:${userId}`;
+    if (activeVacationEndLocks.has(lockKey)) {
+        return { success: false, message: 'جارٍ إنهاء الإجازة لهذا المستخدم بالفعل.' };
+    }
+    activeVacationEndLocks.add(lockKey);
+    try {
+        return await performEndVacation(guild, client, userId, reason);
+    } finally {
+        activeVacationEndLocks.delete(lockKey);
+    }
+}
+
+async function performEndVacation(guild, client, userId, reason = 'انتهت فترة الإجازة.') {
     try {
         const vacations = readJson(vacationsPath);
         const vacation = vacations.active?.[userId];
@@ -333,83 +519,18 @@ async function endVacation(guild, client, userId, reason = 'انتهت فترة 
         console.log(`- العرض: ${savedMemberData?.displayName || 'غير محفوظ'}`);
         console.log(`📊 بيانات الرولات المحفوظة: ${savedRolesData.length} رول`);
 
-        // محاولة جلب العضو من السيرفر بـ 5 طرق موثوقة
         let member = null;
         let memberNotFound = false;
-
         try {
-            console.log(`🔍 بدء البحث الشامل عن العضو ${userId}...`);
-            
-            // الطريقة 1: فحص الكاش أولاً (الأسرع)
-            member = guild.members.cache.get(userId);
-            if (member) {
-                console.log(`✅ [طريقة 1 - كاش] تم العثور على ${member.user.tag}`);
-            } else {
-                console.log(`⏭️ [طريقة 1] العضو غير موجود في الكاش، جارٍ التجربة بطرق أخرى...`);
-                
-                // الطريقة 2: جلب مباشر بـ force
-                try {
-                    member = await guild.members.fetch({ user: userId, force: true });
-                    console.log(`✅ [طريقة 2 - جلب مباشر] تم جلب ${member.user.tag}`);
-                } catch (directError) {
-                    console.log(`⏭️ [طريقة 2] فشل: ${directError.message}`);
-                    
-                    // الطريقة 3: تحديث كاش السيرفر بالكامل ثم البحث
-                    try {
-                        console.log(`🔄 [طريقة 3] تحديث كاش السيرفر الكامل...`);
-                        await guild.members.fetch({ force: true, withPresences: false });
-                        console.log(`✓ تم تحديث ${guild.members.cache.size} عضو`);
-                        
-                        member = guild.members.cache.get(userId);
-                        if (member) {
-                            console.log(`✅ [طريقة 3 - كاش محدث] العثور على ${member.user.tag}`);
-                        } else {
-                            console.log(`⏭️ [طريقة 3] العضو غير موجود بعد التحديث`);
-                            
-                            // الطريقة 4: جلب جميع الأعضاء والبحث يدوياً
-                            try {
-                                console.log(`🔄 [طريقة 4] جلب جميع الأعضاء...`);
-                                const allMembers = await guild.members.fetch({ limit: 0 });
-                                console.log(`✓ تم جلب ${allMembers.size} عضو`);
-                                
-                                member = allMembers.get(userId) || allMembers.find(m => m.id === userId);
-                                if (member) {
-                                    console.log(`✅ [طريقة 4 - جلب شامل] العثور على ${member.user.tag}`);
-                                } else {
-                                    console.log(`⏭️ [طريقة 4] العضو غير موجود في القائمة الشاملة`);
-                                    
-                                    // الطريقة 5: محاولة أخيرة عبر API مباشرة
-                                    try {
-                                        console.log(`🔄 [طريقة 5] محاولة API مباشرة...`);
-                                        await new Promise(resolve => setTimeout(resolve, 1000)); // انتظار ثانية
-                                        member = await guild.members.fetch(userId).catch(() => null);
-                                        
-                                        if (member) {
-                                            console.log(`✅ [طريقة 5 - API] نجح الجلب: ${member.user.tag}`);
-                                        } else {
-                                            console.warn(`❌ [النتيجة النهائية] العضو ${userId} غير موجود في السيرفر بعد 5 محاولات`);
-                                            memberNotFound = true;
-                                        }
-                                    } catch (apiError) {
-                                        console.error(`❌ [طريقة 5] خطأ في API: ${apiError.message}`);
-                                        memberNotFound = true;
-                                    }
-                                }
-                            } catch (fetchAllError) {
-                                console.error(`❌ [طريقة 4] خطأ في جلب الكل: ${fetchAllError.message}`);
-                                memberNotFound = true;
-                            }
-                        }
-                    } catch (cacheError) {
-                        console.error(`❌ [طريقة 3] خطأ في تحديث الكاش: ${cacheError.message}`);
-                        memberNotFound = true;
-                    }
-                }
-            }
-            
+            member = await fetchGuildMemberById(guild, userId);
         } catch (error) {
-            console.error(`💥 خطأ عام في البحث عن العضو ${userId}:`, error);
-            memberNotFound = true;
+            if (isUnknownMemberError(error)) {
+                memberNotFound = true;
+                console.log(`⏳ العضو ${userId} غير موجود حاليًا في السيرفر؛ ستبقى الاستعادة معلقة حتى عودته.`);
+            } else {
+                console.error(`❌ تعذر جلب العضو ${userId} (لن نعدّه غائبًا بسبب خطأ مؤقت):`, error.message);
+                return { success: false, message: `تعذر التحقق من العضو مؤقتًا: ${error.message}` };
+            }
         }
 
         // لوج نهائي
@@ -436,11 +557,17 @@ async function endVacation(guild, client, userId, reason = 'انتهت فترة 
             console.warn(`⚠️ لا توجد بيانات رولات للاستعادة!`);
         }
 
+        const responsibilitiesToRestore = Array.isArray(vacation.responsibilityAssignments)
+            ? vacation.responsibilityAssignments
+            : [];
+        let rolesPendingRetry = [];
+        let responsibilityPendingRetry = [];
+
         console.log(`📋 معرفات الرولات للاستعادة: ${rolesToRestore.join(', ')}`);
 
-        if (rolesToRestore.length > 0) {
+        if (rolesToRestore.length > 0 || responsibilitiesToRestore.length > 0) {
             if (memberNotFound) {
-                console.warn(`⚠️ العضو غير موجود، حفظ للاستعادة المعلقة`);
+                console.warn(`⚠️ العضو غير موجود، حفظ الرولات والمسؤوليات للاستعادة المعلقة`);
 
                 if (!vacations.pendingRestorations) {
                     vacations.pendingRestorations = {};
@@ -449,90 +576,17 @@ async function endVacation(guild, client, userId, reason = 'انتهت فترة 
                 vacations.pendingRestorations[userId] = {
                     guildId: guild.id,
                     roleIds: rolesToRestore,
+                    responsibilityAssignments: responsibilitiesToRestore,
                     reason: reason,
                     vacationData: vacation,
-                    savedAt: new Date().toISOString()
+                    savedAt: new Date().toISOString(),
+                    lastAttempt: new Date().toISOString(),
+                    nextAttemptAt: Date.now() + 120000
                 };
 
-                console.log(`💾 تم حفظ ${rolesToRestore.length} رول للاستعادة المعلقة`);
+                console.log(`💾 تم حفظ ${rolesToRestore.length} رول و${responsibilitiesToRestore.length} مسؤولية للاستعادة المعلقة`);
 
-                // محاولة إضافية فورية بعد 10 ثوانٍ (بدلاً من الانتظار 5 دقائق)
-                setTimeout(async () => {
-                    try {
-                        console.log(`🔄 محاولة فورية لاستعادة الرولات للعضو ${userId} بعد 10 ثوانٍ...`);
-                        
-                        // محاولة جلب العضو مرة أخرى
-                        let retryMember = await guild.members.fetch({ user: userId, force: true }).catch(() => null);
-                        
-                        if (!retryMember) {
-                            await guild.members.fetch({ force: true });
-                            retryMember = guild.members.cache.get(userId);
-                        }
-
-                        if (retryMember) {
-                            console.log(`✅ تم العثور على العضو ${retryMember.user.tag} في المحاولة الفورية!`);
-                            
-                            // قراءة البيانات الحالية
-                            const currentVacations = readJson(vacationsPath);
-                            const pendingData = currentVacations.pendingRestorations?.[userId];
-
-                            if (pendingData && pendingData.guildId === guild.id) {
-                                const restoredRoles = [];
-                                const failedRoles = [];
-
-                                for (const roleId of pendingData.roleIds) {
-                                    try {
-                                        const role = await guild.roles.fetch(roleId).catch(() => null);
-
-                                        if (role && !retryMember.roles.cache.has(roleId)) {
-                                            roleProtection.addToAutoRestoreIgnore(retryMember.id, roleId);
-                                            roleProtection.trackBotRestoration(guild.id, retryMember.id, roleId);
-
-                                            await new Promise(resolve => setTimeout(resolve, 100));
-                                            await retryMember.roles.add(roleId, `استعادة فورية بعد انتهاء الإجازة`);
-                                            restoredRoles.push(roleId);
-                                            console.log(`✅ تمت استعادة الرول ${role.name} في المحاولة الفورية`);
-                                        } else if (role && retryMember.roles.cache.has(roleId)) {
-                                            restoredRoles.push(roleId);
-                                            console.log(`✓ العضو يمتلك الرول ${role.name} بالفعل`);
-                                        } else {
-                                            failedRoles.push(roleId);
-                                        }
-                                    } catch (error) {
-                                        console.error(`❌ خطأ في استعادة الرول ${roleId}:`, error.message);
-                                        failedRoles.push(roleId);
-                                    }
-                                }
-
-                                // تحديث البيانات
-                                if (failedRoles.length === 0) {
-                                    delete currentVacations.pendingRestorations[userId];
-                                    saveVacations(currentVacations);
-                                    console.log(`✅ تمت استعادة جميع الرولات في المحاولة الفورية`);
-
-                                    // إرسال إشعار
-                                    await notifyAdminsVacationEnded(
-                                        client, 
-                                        guild, 
-                                        pendingData.vacationData, 
-                                        userId, 
-                                        `${pendingData.reason} (استعادة فورية)`, 
-                                        restoredRoles
-                                    ).catch(e => console.error('❌ فشل الإشعار:', e.message));
-                                } else {
-                                    currentVacations.pendingRestorations[userId].roleIds = failedRoles;
-                                    currentVacations.pendingRestorations[userId].lastAttempt = new Date().toISOString();
-                                    saveVacations(currentVacations);
-                                    console.log(`⚠️ ${failedRoles.length} رول فشلت في المحاولة الفورية`);
-                                }
-                            }
-                        } else {
-                            console.log(`⏳ العضو ${userId} لا يزال غير موجود في المحاولة الفورية`);
-                        }
-                    } catch (retryError) {
-                        console.error(`❌ خطأ في المحاولة الفورية:`, retryError);
-                    }
-                }, 10000); // 10 ثوانٍ
+                // تتم إعادة المحاولة بهدوء عبر الفحص الدوري أو عند عودة العضو للسيرفر.
             } else if (member) {
                 console.log(`👤 العضو موجود، بدء استعادة ${rolesToRestore.length} رول...`);
 
@@ -547,9 +601,13 @@ async function endVacation(guild, client, userId, reason = 'انتهت فترة 
                             try {
                                 role = await guild.roles.fetch(roleId);
                             } catch (fetchError) {
-                                console.warn(`⚠️ الرول ${roleId} غير موجود`);
-                                deletedRoles.push(roleId);
-                                continue;
+                                const roleCode = Number(fetchError?.code ?? fetchError?.rawError?.code);
+                                if (roleCode === 10011 || Number(fetchError?.status) === 404) {
+                                    console.warn(`⚠️ الرول ${roleId} غير موجود؛ تمت إزالته من بيانات الاستعادة.`);
+                                    deletedRoles.push(roleId);
+                                    continue;
+                                }
+                                throw fetchError;
                             }
                         }
 
@@ -570,11 +628,12 @@ async function endVacation(guild, client, userId, reason = 'انتهت فترة 
                         }
                     } catch (roleError) {
                         console.error(`❌ خطأ في الرول ${roleId}:`, roleError.message);
-                        deletedRoles.push(roleId);
+                        if (!deletedRoles.includes(roleId)) rolesPendingRetry.push(roleId);
                     }
                 }
 
                 if (validRoles.length > 0) {
+                    rolesPendingRetry = [...validRoles];
                     console.log(`🔄 استعادة ${validRoles.length} رول...`);
                     try {
                         // انتظار قصير للتأكد من تسجيل الحماية
@@ -582,26 +641,43 @@ async function endVacation(guild, client, userId, reason = 'انتهت فترة 
                         
                         await member.roles.add(validRoles, 'إعادة لرولات بعد انتهاء الإجازة');
                         rolesRestored = [...validRoles];
-                        
-                        // التحقق من نجاح الاستعادة
-                        await new Promise(resolve => setTimeout(resolve, 1000));
-                        const verifyMember = await guild.members.fetch(userId);
-                        const actuallyRestored = validRoles.filter(id => verifyMember.roles.cache.has(id));
-                        
-                        console.log(`✅ تم استعادة ${actuallyRestored.length}/${validRoles.length} رول بنجاح`);
-                        rolesRestored = actuallyRestored;
+                        rolesPendingRetry = [];
+                        console.log(`✅ تمت إضافة ${rolesRestored.length}/${validRoles.length} رول بنجاح`);
                     } catch (addError) {
-                        console.error(`❌ فشل في إضافة الرولات:`, addError);
+                        console.error(`❌ فشل في إضافة الرولات:`, addError.message);
                     }
                 } else if (alreadyHasRoles.length > 0) {
                     rolesRestored = [...alreadyHasRoles];
                     console.log(`ℹ️ العضو يمتلك ${alreadyHasRoles.length} رول مسبقاً`);
                 }
 
+                rolesRestored = [...new Set([...rolesRestored, ...alreadyHasRoles])];
+                const responsibilityResult = await restoreUserResponsibilities(userId, responsibilitiesToRestore);
+                responsibilityPendingRetry = responsibilityResult.failed;
+                if (responsibilityPendingRetry.length > 0) {
+                    console.warn(`⚠️ تعذرت استعادة ${responsibilityPendingRetry.length} مسؤولية للمستخدم ${userId}; ستبقى معلقة للمحاولة مرة أخرى.`);
+                }
+
                 console.log(`📊 النتيجة النهائية: ${rolesRestored.length} مستعاد، ${deletedRoles.length} محذوف`);
             }
         } else {
-            console.warn(`⚠️ لا توجد رولات محفوظة للاستعادة!`);
+            console.log(`ℹ️ لا توجد رولات أو مسؤوليات محفوظة للاستعادة للمستخدم ${userId}.`);
+        }
+
+        if (!memberNotFound && (rolesPendingRetry.length > 0 || responsibilityPendingRetry.length > 0)) {
+            if (!vacations.pendingRestorations) vacations.pendingRestorations = {};
+            vacations.pendingRestorations[userId] = {
+                guildId: guild.id,
+                roleIds: rolesPendingRetry,
+                responsibilityAssignments: responsibilityPendingRetry,
+                reason,
+                vacationData: vacation,
+                savedAt: new Date().toISOString(),
+                lastAttempt: new Date().toISOString(),
+                nextAttemptAt: Date.now() + 120000
+            };
+        } else if (!memberNotFound && vacations.pendingRestorations?.[userId]) {
+            delete vacations.pendingRestorations[userId];
         }
 
         // إزالة من الإجازات النشطة والطلبات المعلقة للإنهاء
@@ -712,186 +788,241 @@ async function endVacation(guild, client, userId, reason = 'انتهت فترة 
     }
 }
 
+const pendingRestorationLocks = new Set();
+async function attemptPendingRestoration(guild, client, userId, pendingData, vacations) {
+    const lockKey = `${guild.id}:${userId}`;
+    if (pendingRestorationLocks.has(lockKey)) return { done: false, skipped: true };
+    pendingRestorationLocks.add(lockKey);
+    try {
+        return await performPendingRestoration(guild, client, userId, pendingData, vacations);
+    } finally {
+        pendingRestorationLocks.delete(lockKey);
+    }
+}
+
+async function performPendingRestoration(guild, client, userId, pendingData, vacations) {
+    const now = Date.now();
+    if (Number(pendingData.nextAttemptAt) > now) return { done: false, skipped: true };
+
+    let member;
+    try {
+        member = await fetchGuildMemberById(guild, userId);
+    } catch (error) {
+        pendingData.lastAttempt = new Date().toISOString();
+        pendingData.nextAttemptAt = now + getRetryDelayMs(error, 120000);
+        pendingData.lastError = error.message;
+        saveVacations(vacations);
+        if (isUnknownMemberError(error)) {
+            console.log(`⏳ العضو ${userId} غير موجود؛ تم تأجيل فحص الاستعادة حتى عودته.`);
+        } else {
+            console.warn(`⚠️ تعذر جلب العضو ${userId} مؤقتًا؛ إعادة المحاولة بعد ${Math.ceil((pendingData.nextAttemptAt - now) / 1000)} ثانية: ${error.message}`);
+        }
+        return { done: false, notFound: isUnknownMemberError(error), error };
+    }
+
+    const failedRoles = [];
+    const restoredRoles = [];
+    for (const roleId of Array.isArray(pendingData.roleIds) ? pendingData.roleIds : []) {
+        try {
+            if (member.roles.cache.has(roleId)) {
+                restoredRoles.push(roleId);
+                continue;
+            }
+            let role = guild.roles.cache.get(roleId);
+            if (!role) {
+                try {
+                    role = await guild.roles.fetch(roleId);
+                } catch (error) {
+                    const roleCode = Number(error?.code ?? error?.rawError?.code);
+                    if (roleCode === 10011 || Number(error?.status) === 404) {
+                        console.warn(`⚠️ الرول ${roleId} حُذف من السيرفر؛ تمت إزالة الرول من قائمة الاستعادة.`);
+                        continue;
+                    }
+                    throw error;
+                }
+            }
+            if (!role) continue;
+
+            roleProtection.addToAutoRestoreIgnore(member.id, roleId);
+            roleProtection.trackBotRestoration(guild.id, member.id, roleId);
+            await member.roles.add(roleId, `استعادة رول من إجازة معلقة`);
+            restoredRoles.push(roleId);
+        } catch (error) {
+            failedRoles.push(roleId);
+            console.error(`❌ فشل في استعادة الرول ${roleId} للعضو ${userId}:`, error.message);
+        }
+    }
+
+    const responsibilityAssignments = Array.isArray(pendingData.responsibilityAssignments)
+        ? pendingData.responsibilityAssignments
+        : [];
+    let failedResponsibilities = [];
+    try {
+        failedResponsibilities = (await restoreUserResponsibilities(userId, responsibilityAssignments)).failed;
+    } catch (error) {
+        failedResponsibilities = responsibilityAssignments;
+        console.error(`❌ فشل في استعادة مسؤوليات العضو ${userId}:`, error.message);
+    }
+
+    pendingData.roleIds = failedRoles;
+    pendingData.responsibilityAssignments = failedResponsibilities;
+    pendingData.lastAttempt = new Date().toISOString();
+    pendingData.lastError = failedRoles.length || failedResponsibilities.length ? 'بعض عناصر الاستعادة لم تنجح' : null;
+
+    if (failedRoles.length === 0 && failedResponsibilities.length === 0) {
+        delete vacations.pendingRestorations[userId];
+        if (!saveVacations(vacations)) {
+            console.error(`❌ تعذر حفظ اكتمال الاستعادة للعضو ${userId}؛ ستعاد المحاولة بأمان.`);
+            return { done: false, restoredRoles };
+        }
+        console.log(`✅ اكتملت استعادة الرولات والمسؤوليات للعضو ${userId}.`);
+        try {
+            await notifyAdminsVacationEnded(
+                client,
+                guild,
+                pendingData.vacationData,
+                userId,
+                `${pendingData.reason || 'انتهت الإجازة'} (تمت الاستعادة التلقائية)`,
+                restoredRoles
+            );
+        } catch (error) {
+            console.error('❌ فشل في إرسال إشعار اكتمال الاستعادة:', error.message);
+        }
+        return { done: true, restoredRoles };
+    }
+
+    pendingData.nextAttemptAt = Date.now() + 120000;
+    pendingData.failureReasons = [
+        ...failedRoles.map(roleId => ({ type: 'role', id: roleId })),
+        ...failedResponsibilities.map(item => ({ type: 'responsibility', name: item.name }))
+    ];
+    if (!saveVacations(vacations)) {
+        console.error(`❌ تعذر حفظ عناصر الاستعادة الفاشلة للعضو ${userId}.`);
+    }
+    console.warn(`⚠️ ما زال للعضو ${userId} ${failedRoles.length} رول و${failedResponsibilities.length} مسؤولية؛ ستتم إعادة المحاولة لاحقًا.`);
+    return { done: false, restoredRoles };
+}
+
+const activeVacationChecks = new Set();
 async function checkVacations(client) {
+    const checkKey = client?.user?.id || 'default';
+    if (activeVacationChecks.has(checkKey)) return;
+    activeVacationChecks.add(checkKey);
+
     try {
         const vacations = readJson(vacationsPath);
-
-        // التحقق من وجود بيانات الإجازات النشطة
-        if (!vacations.active || Object.keys(vacations.active).length === 0) {
-            return; // لا توجد إجازات نشطة للفحص
-        }
+        if (!vacations.active || typeof vacations.active !== 'object') vacations.active = {};
+        if (!vacations.pendingRestorations || typeof vacations.pendingRestorations !== 'object') vacations.pendingRestorations = {};
 
         const now = Date.now();
+        let vacationDataChanged = false;
+        const guildLookups = new Map();
+        const fetchGuildOnce = async (guildId) => {
+            if (!guildLookups.has(guildId)) {
+                const cachedGuild = client.guilds.cache.get(guildId);
+                guildLookups.set(guildId, cachedGuild || await client.guilds.fetch(guildId).catch(() => null));
+            }
+            return guildLookups.get(guildId);
+        };
+
+        // Retry responsibility removal if an approval was partially interrupted.
+        for (const [userId, vacation] of Object.entries(vacations.active)) {
+            const assignments = Array.isArray(vacation.responsibilityAssignments) ? vacation.responsibilityAssignments : [];
+            if (!assignments.length || vacation.responsibilitiesRemoved || Number(vacation.responsibilityRemovalRetryAt) > now) continue;
+            try {
+                const removal = await removeUserFromResponsibilities(userId, assignments);
+                vacation.responsibilitiesRemovalFailures = removal.failed;
+                vacation.responsibilitiesRemoved = removal.failed.length === 0;
+                vacation.responsibilityRemovalRetryAt = removal.failed.length ? now + 120000 : null;
+                if (vacation.responsibilitiesRemoved) vacation.responsibilitiesRemovedAt = new Date().toISOString();
+                vacationDataChanged = true;
+                if (removal.failed.length) {
+                    console.warn(`⚠️ تعذرت إزالة ${removal.failed.length} مسؤولية للمستخدم ${userId}; ستعاد المحاولة لاحقًا.`);
+                } else {
+                    console.log(`✅ اكتملت إزالة مسؤوليات المستخدم ${userId} للإجازة.`);
+                }
+            } catch (error) {
+                vacation.responsibilityRemovalRetryAt = now + getRetryDelayMs(error, 120000);
+                vacationDataChanged = true;
+                console.error(`❌ تعذر تحديث مسؤوليات الإجازة للمستخدم ${userId}:`, error.message);
+            }
+        }
+        if (vacationDataChanged && !saveVacations(vacations)) {
+            console.error('❌ تعذر حفظ حالة مسؤوليات الإجازات بعد إعادة المحاولة.');
+        }
+
         const expiredUsers = [];
-
-        // جمع المستخدمين الذين انتهت إجازاتهم
-        for (const userId in vacations.active) {
-            const vacation = vacations.active[userId];
-            if (!vacation.endDate) {
-                console.warn(`⚠️ إجازة المستخدم ${userId} لا تحتوي على تاريخ انتهاء`);
-                continue;
-            }
-
+        for (const [userId, vacation] of Object.entries(vacations.active)) {
+            if (!vacation.endDate) continue;
             const endDate = new Date(vacation.endDate).getTime();
-            if (isNaN(endDate)) {
-                console.warn(`⚠️ تاريخ انتهاء إجازة المستخدم ${userId} غير صالح: ${vacation.endDate}`);
+            if (Number.isFinite(endDate) && now >= endDate) expiredUsers.push(userId);
+        }
+
+        for (const userId of expiredUsers) {
+            const vacation = vacations.active[userId];
+            if (!vacation) continue;
+            if (Number(vacation.restorationRetryAt) > Date.now()) continue;
+            if (Number(vacation.guildRetryAt) > now) continue;
+            if (!vacation.guildId) {
+                console.error(`❌ لا يوجد معرف سيرفر في بيانات إجازة ${userId}`);
                 continue;
             }
 
-            if (now >= endDate) {
-                expiredUsers.push(userId);
-            }
-        }
-
-        // معالجة الإجازات المنتهية
-        if (expiredUsers.length > 0) {
-            console.log(`🕒 تم العثور على ${expiredUsers.length} إجازة منتهية`);
-
-            for (const userId of expiredUsers) {
-                try {
-                    console.log(`⏰ جاري إنهاء إجازة المستخدم ${userId}...`);
-                    
-                    // جلب السيرفر من بيانات الإجازة
-                    const vacation = vacations.active[userId];
-                    const guildId = vacation.guildId;
-                    
-                    if (!guildId) {
-                        console.error(`❌ لا يوجد معرف سيرفر في بيانات إجازة ${userId}`);
-                        continue;
-                    }
-                    
-                    const guild = await client.guilds.fetch(guildId).catch(() => null);
-                    if (!guild) {
-                        console.error(`❌ لا يمكن العثور على السيرفر ${guildId} للمستخدم ${userId}`);
-                        continue;
-                    }
-                    
-                    const result = await endVacation(guild, client, userId, 'Auto');
-
-                    if (result.success) {
-                        console.log(`✅ تم إنهاء إجازة المستخدم ${userId} تلقائياً بنجاح`);
-                        console.log(`📋 تم استعادة ${result.rolesRestored.length} دور للمستخدم`);
-                    } else {
-                        console.error(`❌ فشل في إنهاء إجازة المستخدم ${userId}: ${result.message}`);
-                    }
-                } catch (error) {
-                    console.error(`💥 خطأ في معالجة إنهاء إجازة المستخدم ${userId}:`, error);
-                }
-
-                // انتظار قصير بين العمليات لتجنب التحميل الزائد
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-
-            console.log('🔄 انتهت معالجة جميع الإجازات المنتهية');
-        }
-
-        // التحقق من الاستعادات المعلقة والمحاولة مرة أخرى للأعضاء الموجودين (دائماً)
-        if (vacations.pendingRestorations && Object.keys(vacations.pendingRestorations).length > 0) {
-            console.log(`🔍 فحص الاستعادات المعلقة (${Object.keys(vacations.pendingRestorations).length} عضو)`);
-
-            for (const userId in vacations.pendingRestorations) {
-                const pendingData = vacations.pendingRestorations[userId];
-
-                // جلب السيرفر من بيانات الاستعادة
-                const guildId = pendingData.guildId;
-                if (!guildId) {
-                    console.error(`❌ لا يوجد معرف سيرفر في بيانات الاستعادة المعلقة للمستخدم ${userId}`);
-                    continue;
-                }
-                
-                const guild = await client.guilds.fetch(guildId).catch(() => null);
+            try {
+                const guild = await fetchGuildOnce(vacation.guildId);
                 if (!guild) {
-                    console.error(`❌ لا يمكن العثور على السيرفر ${guildId} للمستخدم ${userId}`);
+                    vacation.guildRetryAt = now + 300000;
+                    saveVacations(vacations);
+                    console.warn(`⚠️ لا يمكن الوصول إلى سيرفر الإجازة للمستخدم ${userId}; ستعاد المحاولة بعد 5 دقائق.`);
                     continue;
                 }
-
-                try {
-                    // محاولة جلب العضو بطرق متعددة
-                    let member = guild.members.cache.get(userId);
-                    
-                    if (!member) {
-                        member = await guild.members.fetch({ user: userId, force: true }).catch(() => null);
-                    }
-                    
-                    if (!member) {
-                        await guild.members.fetch({ force: true });
-                        member = guild.members.cache.get(userId);
-                    }
-
-                    if (member) {
-                        console.log(`✅ العضو ${member.user.tag} موجود الآن - محاولة استعادة الرولات`);
-
-                        const rolesRestored = [];
-                        const rolesFailed = [];
-
-                        for (const roleId of pendingData.roleIds) {
-                            try {
-                                const role = await guild.roles.fetch(roleId).catch(() => null);
-
-                                if (role && !member.roles.cache.has(roleId)) {
-                                    try {
-                                        roleProtection.addToAutoRestoreIgnore(member.id, roleId);
-                                        roleProtection.trackBotRestoration(guild.id, member.id, roleId);
-
-                                        // انتظار قصير للتأكد من تسجيل الحماية
-                                        await new Promise(resolve => setTimeout(resolve, 100));
-
-                                        await member.roles.add(roleId, `استعادة رول من إجازة معلقة`);
-                                        rolesRestored.push(roleId);
-                                        console.log(`✅ تمت استعادة الرول ${role.name}`);
-                                    } catch (addError) {
-                                        rolesFailed.push(roleId);
-                                        console.error(`❌ فشل في استعادة الرول ${role.name}:`, addError.message);
-                                    }
-                                } else if (!role) {
-                                    rolesFailed.push(roleId);
-                                }
-                            } catch (error) {
-                                console.error(`❌ خطأ في معالجة الرول ${roleId}:`, error.message);
-                                rolesFailed.push(roleId);
-                            }
-                        }
-
-                        if (rolesFailed.length === 0) {
-                            // حذف الاستعادة المعلقة
-                            delete vacations.pendingRestorations[userId];
-                            saveVacations(vacations);
-                            console.log(`✅ تمت استعادة جميع الرولات للعضو ${member.user.tag}`);
-
-                            // إرسال إشعار
-                            try {
-                                await notifyAdminsVacationEnded(
-                                    client, 
-                                    guild, 
-                                    pendingData.vacationData, 
-                                    userId, 
-                                    `${pendingData.reason} (تمت الاستعادة التلقائية)`, 
-                                    rolesRestored
-                                );
-                            } catch (notifyError) {
-                                console.error('❌ فشل في إرسال إشعار:', notifyError.message);
-                            }
-                        } else {
-                            // تحديث بيانات الاستعادة المعلقة مع الفاشلين
-                            pendingData.roleIds = rolesFailed;
-                            pendingData.lastAttempt = new Date().toISOString();
-                            pendingData.failureReasons = rolesFailed.map(id => ({ roleId: id, reason: 'فشل الاستعادة' })); // Add failure reason
-                            saveVacations(vacations); // Save changes to pending restorations
-                            console.log(`⚠️ ${rolesFailed.length} رول فشلت استعادتها، سيتم إعادة المحاولة لاحقاً.`);
-                        }
-                    } else {
-                        console.log(`⏳ العضو ${userId} لا يزال غير موجود، سيتم التحقق لاحقاً.`);
-                    }
-                } catch (error) {
-                    console.error(`❌ خطأ في معالجة استعادة معلقة للعضو ${userId}:`, error.message);
+                const result = await endVacation(guild, client, userId, 'Auto');
+                if (result.success) {
+                    console.log(`✅ تم إنهاء إجازة المستخدم ${userId}; ${result.rolesRestored?.length || 0} رول أُعيد، وأي تعذر محفوظ للاستعادة.`);
+                } else {
+                    vacation.restorationRetryAt = Date.now() + 120000;
+                    vacation.restorationLastError = result.message;
+                    saveVacations(vacations);
+                    console.error(`❌ فشل في إنهاء إجازة المستخدم ${userId}: ${result.message}`);
                 }
-
-                await new Promise(resolve => setTimeout(resolve, 500));
+            } catch (error) {
+                console.error(`💥 خطأ في معالجة إنهاء إجازة المستخدم ${userId}:`, error.message);
             }
+            await new Promise(resolve => setTimeout(resolve, 500));
         }
 
+        const pendingIds = Object.keys(vacations.pendingRestorations);
+        if (pendingIds.length) console.log(`🔍 فحص ${pendingIds.length} استعادة معلقة.`);
+        for (const userId of pendingIds) {
+            const pendingData = vacations.pendingRestorations[userId];
+            if (!pendingData || Number(pendingData.nextAttemptAt) > Date.now()) continue;
+            if (!pendingData.guildId) {
+                console.error(`❌ لا يوجد معرف سيرفر في بيانات الاستعادة المعلقة للمستخدم ${userId}`);
+                continue;
+            }
+            try {
+                const guild = await fetchGuildOnce(pendingData.guildId);
+                if (!guild) {
+                    pendingData.nextAttemptAt = Date.now() + 600000;
+                    pendingData.lastAttempt = new Date().toISOString();
+                    saveVacations(vacations);
+                    console.warn(`⚠️ لا يمكن الوصول لسيرفر الاستعادة للمستخدم ${userId}; تأجيل الفحص 10 دقائق.`);
+                    continue;
+                }
+                await attemptPendingRestoration(guild, client, userId, pendingData, vacations);
+            } catch (error) {
+                pendingData.lastAttempt = new Date().toISOString();
+                pendingData.nextAttemptAt = Date.now() + getRetryDelayMs(error, 120000);
+                pendingData.lastError = error.message;
+                saveVacations(vacations);
+                console.error(`❌ خطأ في معالجة استعادة معلقة للعضو ${userId}; ستعاد المحاولة بعد التهدئة:`, error.message);
+            }
+            await new Promise(resolve => setTimeout(resolve, 250));
+        }
     } catch (error) {
         console.error('💥 خطأ عام في فحص الإجازات:', error);
+    } finally {
+        activeVacationChecks.delete(checkKey);
     }
 }
 
@@ -990,134 +1121,41 @@ if (botOwners && botOwners.includes(userId)) {
 async function handleMemberJoin(member) {
     try {
         const vacations = readJson(vacationsPath);
-
-        // التحقق من وجود استعادة معلقة لهذا العضو
-        if (!vacations.pendingRestorations || !vacations.pendingRestorations[member.id]) {
+        const pendingData = vacations.pendingRestorations?.[member.id];
+        if (!pendingData) {
             console.log(`📥 لا توجد استعادة معلقة للعضو ${member.user.tag}`);
             return;
         }
-
-        const pendingRestoration = vacations.pendingRestorations[member.id];
-
-        // التحقق من تطابق السيرفر
-        if (pendingRestoration.guildId !== member.guild.id) {
+        if (pendingData.guildId !== member.guild.id) {
             console.log(`⚠️ عدم تطابق السيرفر للاستعادة المعلقة للعضو ${member.user.tag}`);
             return;
         }
 
-        console.log(`🔄 بدء استعادة الرولات المعلقة للعضو ${member.user.tag}`);
-        console.log(`📋 عدد الرولات المراد استعادتها: ${pendingRestoration.roleIds.length}`);
+        // وصول العضو حدث موثوق؛ لا ننتظر مؤقت التهدئة المحفوظ من محاولة سابقة.
+        pendingData.nextAttemptAt = 0;
+        console.log(`🔄 استعادة الرولات والمسؤوليات المعلقة للعضو ${member.user.tag}`);
+        const result = await attemptPendingRestoration(member.guild, member.client, member.id, pendingData, vacations);
+        if (!result.done) return;
 
-        const rolesRestored = [];
-        const rolesFailed = [];
-
-        // معالجة كل رول
-        for (const roleId of pendingRestoration.roleIds) {
-            try {
-                // البحث عن الرول في السيرفر
-                let role = member.guild.roles.cache.get(roleId);
-
-                if (!role) {
-                    try {
-                        role = await member.guild.roles.fetch(roleId);
-                    } catch (fetchError) {
-                        console.warn(`⚠️ الرول ${roleId} غير موجود في السيرفر`);
-                        rolesFailed.push({ roleId, reason: 'الرول غير موجود' });
-                        continue;
-                    }
-                }
-
-                if (role) {
-                    // التحقق من عدم امتلاك العضو للرول
-                    if (!member.roles.cache.has(roleId)) {
-                        // استخدام نظام الحماية
-                        roleProtection.addToAutoRestoreIgnore(member.id, roleId);
-                        roleProtection.trackBotRestoration(member.guild.id, member.id, roleId);
-
-                        // إضافة الرول
-                        await member.roles.add(roleId, `استعادة رول بعد العودة من الإجازة: ${pendingRestoration.reason}`);
-                        rolesRestored.push(roleId);
-                        console.log(`✅ تمت استعادة الرول: ${role.name} (${roleId})`);
-                    } else {
-                        console.log(`🔄 العضو يمتلك الرول ${role.name} بالفعل`);
-                        rolesRestored.push(roleId);
-                    }
-                }
-            } catch (roleError) {
-                console.error(`❌ خطأ في استعادة الرول ${roleId}:`, roleError.message);
-                rolesFailed.push({ roleId, reason: roleError.message });
-            }
+        try {
+            const roleNames = (pendingData.vacationData?.rolesData || [])
+                .filter(role => result.restoredRoles.includes(role.id))
+                .map(role => `• ${role.name}`);
+            const responsibilityNames = (pendingData.vacationData?.responsibilityAssignments || [])
+                .map(item => `• ${item.name}`);
+            const details = [...roleNames, ...responsibilityNames];
+            const embed = new EmbedBuilder()
+                .setTitle('Welcome Back!')
+                .setColor(colorManager.getColor('ended') || '#FFA500')
+                .setDescription('انتهت إجازتك أثناء غيابك، وتمت استعادة الرولات والمسؤوليات المحفوظة.')
+                .addFields({ name: 'ما تمت استعادته', value: details.join('\n').slice(0, 1024) || 'لا توجد عناصر تحتاج إلى استعادة.' })
+                .setTimestamp();
+            await member.user.send({ embeds: [embed] }).catch(error => {
+                console.log(`تعذر إرسال رسالة استعادة للعضو ${member.id}: ${error.message}`);
+            });
+        } catch (dmError) {
+            console.error(`❌ خطأ في إرسال رسالة استعادة للعضو ${member.id}:`, dmError.message);
         }
-
-        console.log(`📊 النتيجة: ${rolesRestored.length} مستعاد، ${rolesFailed.length} فشل`);
-
-        // إذا كانت هناك رولات فشلت، احتفظ بها للمحاولة مرة أخرى
-        if (rolesFailed.length > 0) {
-            pendingRestoration.roleIds = rolesFailed.map(f => f.roleId);
-            pendingRestoration.lastAttempt = new Date().toISOString();
-            pendingRestoration.failureReasons = rolesFailed;
-            saveVacations(vacations);
-            console.log(`⚠️ تم الاحتفاظ بـ ${rolesFailed.length} رول فاشل للمحاولة مرة أخرى`);
-        } else {
-            // حذف الاستعادة المعلقة
-            delete vacations.pendingRestorations[member.id];
-            saveVacations(vacations);
-            console.log(`✅ تم حذف الاستعادة المعلقة بنجاح`);
-        }
-
-        // إرسال رسالة للمستخدم
-        if (rolesRestored.length > 0) {
-            try {
-                const vacation = pendingRestoration.vacationData;
-                const rolesData = vacation.rolesData || [];
-
-                let rolesText = '*لا توجد رولات*';
-                if (rolesData.length > 0) {
-                    const roleTexts = rolesData
-                        .filter(rd => rolesRestored.includes(rd.id))
-                        .map(rd => `✅ **${rd.name}**`);
-                    rolesText = roleTexts.length > 0 ? roleTexts.join('\n') : '*جميع الرولات محذوفة*';
-                }
-
-                const embed = new EmbedBuilder()
-                    .setTitle(' Welcome Back !')
-                    .setColor(colorManager.getColor('ended') || '#FFA500')
-                    .setDescription(`**انتهت إجازتك أثناء غيابك وتم استعادة رولاتك الآن**`)
-                        .setThumbnail('https://cdn.discordapp.com/attachments/1393840634149736508/1468175299601633364/info_1.png?ex=6983104c&is=6981becc&hm=e5ec42e46368e60486eb8d9ec9289affbba2d16971897b9c60322179fd2db47c&')
-                    .addFields(
-                        { name: 'Alert', value: pendingRestoration.reason },
-                        { name: 'Roles', value: rolesText },
-                        { name: 'Details', value: `**Restored : ${rolesRestored.length}${rolesFailed.length > 0 ? ` | Failed : ${rolesFailed.length}` : ''}**` }
-                    )
-                    .setTimestamp();
-
-                await member.user.send({ embeds: [embed] }).catch(e => 
-                    console.log(`فشل في إرسال رسالة للعضو: ${e.message}`)
-                );
-                console.log(`📧 تم إرسال رسالة استعادة للعضو ${member.user.tag}`);
-            } catch (dmError) {
-                console.error(`❌ خطأ في إرسال رسالة DM:`, dmError.message);
-            }
-        }
-
-        // إرسال إشعار للإدارة
-        if (rolesRestored.length > 0) {
-            try {
-                await notifyAdminsVacationEnded(
-                    member.client, 
-                    member.guild, 
-                    pendingRestoration.vacationData, 
-                    member.id, 
-                    `${pendingRestoration.reason} (تمت الاستعادة عند العودة)`, 
-                    rolesRestored
-                );
-            } catch (notifyError) {
-                console.error('❌ فشل في إرسال إشعار للإدارة:', notifyError.message);
-            }
-        }
-
-        console.log(`✅ تمت معالجة استعادة الإجازة للعضو ${member.user.tag}`);
-
     } catch (error) {
         console.error('❌ خطأ في handleMemberJoin للإجازات:', error);
     }

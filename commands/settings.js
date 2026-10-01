@@ -1,5 +1,5 @@
 const { getBotConfigPath } = require('../utils/storagePaths');
-const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, RoleSelectMenuBuilder } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, UserSelectMenuBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, RoleSelectMenuBuilder } = require('discord.js');
 const { logEvent } = require('../utils/logs_system.js');
 const colorManager = require('../utils/colorManager.js');
 const { isUserBlocked } = require('./block.js');
@@ -572,6 +572,7 @@ async function execute(message, args, { responsibilities, client, scheduleSave, 
     i.message?.id === sentMessage.id
     || i.customId?.startsWith('settings_responsibility_roles_open_modal_')
     || i.customId === 'settings_responsibility_roles_finish_create'
+    || i.customId === 'settings_select_members'
   );
   const collector = message.channel.createMessageComponentCollector({ filter, time: 600000 }); // 10 minutes
 
@@ -2145,27 +2146,12 @@ const deleteButton = new ButtonBuilder()
                     return;
                 }
 
-                // إنشاء Select Menu لاختيار الأعضاء
-                const members = await message.guild.members.fetch();
-                const memberOptions = members
-                    .filter(m => !m.user.bot)
-                    .map(m => ({
-                        label: m.displayName || m.user.username,
-                        value: m.id
-                    }))
-                    .slice(0, 25);
-
-                if (memberOptions.length === 0) {
-                    await interaction.reply({ content: '**لا يوجد أعضاء متاحين!**', ephemeral: true });
-                    return;
-                }
-
-                const selectMenu = new StringSelectMenuBuilder()
+                // UserSelectMenu يدع Discord يبحث في الأعضاء عند الاختيار بلا جلب القائمة كاملة.
+                const selectMenu = new UserSelectMenuBuilder()
                     .setCustomId('settings_select_members')
-                    .setPlaceholder('اختر الأعضاء')
-                    .addOptions(memberOptions)
+                    .setPlaceholder('ابحث عن الأعضاء واخترهم')
                     .setMinValues(1)
-                    .setMaxValues(Math.min(memberOptions.length, 25));
+                    .setMaxValues(25);
 
                 const row = new ActionRowBuilder().addComponents(selectMenu);
                 const embed = colorManager.createEmbed()
@@ -2212,7 +2198,11 @@ const deleteButton = new ButtonBuilder()
             }
         } else if (interaction.customId === 'settings_select_members') {
             try {
-                const selectedMembers = interaction.values;
+                const selectedMembers = interaction.values.filter(id => interaction.users?.get(id)?.bot !== true);
+                if (selectedMembers.length === 0) {
+                    await safeFollowUp(interaction, '**اختر عضوًا واحدًا على الأقل (لا يمكن تعيين بوت كمسؤول).**');
+                    return;
+                }
 
                 // البحث عن اسم المسؤولية من العنوان
                 let responsibilityName = null;
@@ -2633,9 +2623,9 @@ const deleteButton = new ButtonBuilder()
           return await safeReply(interaction, '**المسؤولية غير موجودة!**');
         }
 
-        // البحث عن الأعضاء
-        const allMembers = await message.guild.members.fetch();
-        const matchedMembers = allMembers.filter(member => 
+        // بحث محدود بالاسم باستخدام API البحث بدل طلب جميع أعضاء السيرفر.
+        const matches = await message.guild.members.search({ query: searchQuery, limit: 100 });
+        const matchedMembers = matches.filter(member =>
           !member.user.bot && (
             member.user.username.toLowerCase().includes(searchQuery) ||
             member.user.displayName?.toLowerCase().includes(searchQuery) ||

@@ -1094,9 +1094,13 @@ try {
 
   // استعادة الجدولات المحفوظة عند بدء البوت
   if (setroomCommand.restoreSchedules) {
-    setTimeout(() => {
-      setroomCommand.restoreSchedules(client);
-      console.log('✅ تم فحص واستعادة جدولات الغرف');
+    setTimeout(async () => {
+      try {
+        await setroomCommand.restoreSchedules(client);
+        console.log('✅ تم فحص واستعادة جدولات الغرف');
+      } catch (error) {
+        console.error('❌ فشل فحص واستعادة جدولات الغرف:', error);
+      }
     }, 3000); // انتظار 3 ثواني لضمان جاهزية البوت
   }
 
@@ -1603,7 +1607,6 @@ async function syncAllResponsibilityRoles(client) {
         const responsibilities = global.responsibilities || {};
         for (const guild of client.guilds.cache.values()) {
             console.log(`📡 جاري فحص سيرفر: ${guild.name}`);
-            const allMembers = await guild.members.fetch();
             
             // تجميع الرولات ومن يملكها
             const roleToResponsibles = new Map();
@@ -1616,18 +1619,49 @@ async function syncAllResponsibilityRoles(client) {
                 }
             }
 
+            const memberLookups = new Map();
+            const getMember = async (userId) => {
+                const cached = guild.members.cache.get(String(userId));
+                if (cached) return cached;
+                if (!memberLookups.has(String(userId))) {
+                    memberLookups.set(String(userId), (async () => {
+                        try {
+                            return await guild.members.fetch({ user: String(userId), force: true });
+                        } catch (error) {
+                            if (Number(error?.code ?? error?.rawError?.code) === 10007 || Number(error?.status) === 404) return null;
+                            throw error;
+                        } finally {
+                            // فاصل بين طلبات البحث الفردية عند التشغيل لتجنب دفعة REST كبيرة.
+                            await new Promise(resolve => setTimeout(resolve, 500));
+                        }
+                    })());
+                }
+                return memberLookups.get(String(userId));
+            };
+
             for (const [roleId, allowedUsers] of roleToResponsibles) {
                 const role = guild.roles.cache.get(roleId);
                 if (!role) continue;
-                for (const member of allMembers.values()) {
+                const candidateIds = new Set([...role.members.keys(), ...allowedUsers]);
+                for (const memberId of candidateIds) {
+                    // لا نبحث عن عضو غير مخزّن إلا إذا كان معينًا لهذه المسؤولية.
+                    if (!allowedUsers.has(memberId) && !guild.members.cache.has(memberId)) continue;
+                    let member;
+                    try {
+                        member = await getMember(memberId);
+                    } catch (error) {
+                        console.warn(`⚠️ تعذر جلب العضو ${memberId} لمزامنة المسؤوليات في ${guild.name}: ${error.message}`);
+                        continue;
+                    }
+                    if (!member) continue;
                     const hasRole = member.roles.cache.has(roleId);
                     const isResponsible = allowedUsers.has(member.id);
                     if (isResponsible && !hasRole) {
-                        await member.roles.add(roleId, 'مزامنة: مسؤول بدون رول').catch(() => {});
-                        await new Promise(resolve => setTimeout(resolve, 500)); // تأخير بسيط لتجنب الـ Rate Limit
+                        await member.roles.add(roleId, 'مزامنة: مسؤول بدون رول').catch(error => console.warn(`⚠️ لم تتم إضافة رول المسؤولية للعضو ${member.id}: ${error.message}`));
+                        await new Promise(resolve => setTimeout(resolve, 500));
                     } else if (!isResponsible && hasRole) {
-                        await member.roles.remove(roleId, 'مزامنة: رول بدون مسؤولية').catch(() => {});
-                        await new Promise(resolve => setTimeout(resolve, 500)); // تأخير بسيط لتجنب الـ Rate Limit
+                        await member.roles.remove(roleId, 'مزامنة: رول بدون مسؤولية').catch(error => console.warn(`⚠️ لم تتم إزالة رول المسؤولية من العضو ${member.id}: ${error.message}`));
+                        await new Promise(resolve => setTimeout(resolve, 500));
                     }
                 }
             }
@@ -4475,14 +4509,6 @@ async function handleMapOpenInteraction(interaction) {
     const currentActive = Array.isArray(config.open.activeUsers) ? config.open.activeUsers : [];
     if (hadRole) config.open.activeUsers = currentActive.filter(id => id !== member.id);
     else if (!currentActive.includes(member.id)) config.open.activeUsers = [...currentActive, member.id];
-
-    if (interaction.guild.members.cache.size < interaction.guild.memberCount) {
-        await interaction.guild.members.fetch().catch(() => null);
-    }
-    const refreshedRole = interaction.guild.roles.cache.get(role.id) || await interaction.guild.roles.fetch(role.id).catch(() => null);
-    if (refreshedRole) {
-        config.open.activeUsers = refreshedRole.members.map(m => m.id);
-    }
 
     allConfigs[configKey] = config;
     await writeMapConfigsQueued(allConfigs);
