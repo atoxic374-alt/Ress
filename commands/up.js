@@ -238,11 +238,16 @@ module.exports = {
                             const res = await promoteManager.createPromotion(
                                 message.guild, client, target.id, newRole.id,
                                 'نهائي', `Shortcut ${selectedAction.toUpperCase()} (${typeName})`,
-                                message.author.id, false, true, true
+                                message.author.id, false, true, true, null,
+                                selectedAction === 'down' ? 'demotion' : 'promotion'
                             );
 
                             if (!res.success) {
-                                memberOutcome.push(`❌ **${target.displayName} — ${typeName}**: فشل (${res.error}).`);
+                                const failureLabel = selectedAction === 'down' ? 'تعذر التنزيل' : 'تعذرت الترقية';
+                                const errorDetail = String(res.error || 'سبب غير محدد')
+                                    .replace(/^لا يمكن التنزيل\s*[:：]?\s*/i, '')
+                                    .replace(/^لا يمكن الترقية\s*[:：]?\s*/i, '');
+                                memberOutcome.push(`❌ **${target.displayName} — ${typeName}**\n${failureLabel}: ${errorDetail}`);
                                 continue;
                             }
 
@@ -365,7 +370,7 @@ module.exports = {
                 }
 
                 const finalResultEmbed = colorManager.createEmbed()
-                    .setTitle(statusTitle)
+                    .setTitle(selectedAction === 'down' ? `${statusTitle} — نتائج التنزيل` : `${statusTitle} — نتائج الترقية`)
                     .setDescription(
                         `${statusLine}\n` +
                         `**ملخص العمليات:** ✅ ${successCount} | ❌ ${failedCount} | ⚠️ ${skippedCount}\n` +
@@ -374,9 +379,9 @@ module.exports = {
                     .setFooter({ text: undoData.length ? 'يمكنك التراجع عن العمليات الناجحة خلال دقيقة واحدة.' : 'انتهت المعالجة.' });
 
                 const resultGroups = [
-                    ['الحرف', outcome.filter(line => line.includes('— حرف'))],
-                    ['الظاهرية', outcome.filter(line => line.includes('— ظاهرية'))],
-                    ['ملاحظات أخرى', outcome.filter(line => !line.includes('— حرف') && !line.includes('— ظاهرية'))]
+                    ['RANK | الحروف', outcome.filter(line => line.includes('— حرف'))],
+                    ['VISUAL | الظاهرية', outcome.filter(line => line.includes('— ظاهرية'))],
+                    ['NOTES | ملاحظات', outcome.filter(line => !line.includes('— حرف') && !line.includes('— ظاهرية'))]
                 ];
                 let remainingResultChars = 4700;
                 for (const [groupTitle, lines] of resultGroups) {
@@ -397,7 +402,7 @@ module.exports = {
                             part++;
                             if (fieldsForGroup.length >= 2 || remainingResultChars <= 0) break;
                         }
-                        current += `${current ? '\n' : ''}${safeLine}`;
+                        current += `${current ? '\n\n' : ''}${safeLine}`;
                         if (remainingLines <= 1) break;
                     }
                     if (current && fieldsForGroup.length < 2) {

@@ -4,6 +4,7 @@ const path = require('path');
 // EmbedBuilder now handled by colorManager
 const colorManager = require('./colorManager');
 const ms = require('ms');
+const { validateRoleDirection } = require('./roleDirectionValidator');
 
 // File paths
 const promoteSettingsPath = path.join(__dirname, '..', 'data', 'promoteSettings.json');
@@ -288,7 +289,7 @@ isBotPromotion(guildId, userId, roleId) {
     }
 
     // Role Hierarchy Validation for Promotions
-    async validateRoleHierarchy(guild, targetUserId, roleId, promoterUserId) {
+    async validateRoleHierarchy(guild, targetUserId, roleId, promoterUserId, action = 'promotion') {
         try {
             const targetMember = await guild.members.fetch(targetUserId).catch(() => null);
             const promoterMember = await guild.members.fetch(promoterUserId).catch(() => null);
@@ -301,6 +302,7 @@ isBotPromotion(guildId, userId, roleId) {
             // Get highest roles
             const promoterHighestRole = promoterMember.roles.highest;
             const adminRoles = this.getAdminRoles();
+            const isDemotion = action === 'demotion';
             const isTargetRoleRank = (role.name || '').length <= 3;
 
             // أعلى رول للعضو من نفس نوع العملية فقط (حرف/ظواهر)
@@ -329,19 +331,19 @@ isBotPromotion(guildId, userId, roleId) {
                 return { valid: true };
             }
 
-            // للأشخاص العاديين: الرول الجديد يجب أن يكون أعلى من أعلى رول للهدف من نفس النوع فقط
-            if (targetHighestSameTypeRole && role.position <= targetHighestSameTypeRole.position) {
-                return {
-                    valid: false,
-                    error: `لا يمكن الترقية: في نفس النوع (${isTargetRoleRank ? 'حرف' : 'ظواهر'}) العضو لديه رول أعلى/مساوٍ للرول المطلوب (الرول المطلوب: **${role.name}** | أعلى رول بنفس النوع: **${targetHighestSameTypeRole.name}**).`
-                };
-            }
+            const directionValidation = validateRoleDirection(
+                action,
+                targetHighestSameTypeRole,
+                role,
+                isTargetRoleRank ? 'حرف' : 'ظواهر'
+            );
+            if (!directionValidation.valid) return directionValidation;
 
-            // الرول الجديد يجب أن يكون أقل من أعلى رول للمُرقي (إلا إذا كان مالك)
+            // الرول الجديد يجب أن يكون أدنى من أعلى رول للمُرقي في الاتجاهين (إلا إذا كان مالك)
             if (role.position >= promoterHighestRole.position) {
                 return {
                     valid: false,
-                    error: `لا يمكنك ترقية شخص إلى رول (**${role.name}**) أعلى من أو مساوي لرولك الأعلى (**${promoterHighestRole.name}**)`
+                    error: `لا يمكنك ${isDemotion ? 'تنزيل' : 'ترقية'} شخص إلى رول (**${role.name}**) أعلى من أو مساوي لرولك الأعلى (**${promoterHighestRole.name}**)`
                 };
             }
 
@@ -475,7 +477,7 @@ isBotPromotion(guildId, userId, roleId) {
     }
 
     // Promotion Operations
-    async createPromotion(guild, client, targetUserId, roleId, duration, reason, byUserId, isBulkOperation = false, sendDM = true, isMultiPromotion = false, transactionId = null) {
+    async createPromotion(guild, client, targetUserId, roleId, duration, reason, byUserId, isBulkOperation = false, sendDM = true, isMultiPromotion = false, transactionId = null, action = 'promotion') {
         try {
             // Input validation
             if (!guild || !targetUserId || !roleId || !byUserId) {
@@ -503,7 +505,7 @@ isBotPromotion(guildId, userId, roleId) {
             }
 
             // فحص هرمية الرولات للترقية
-            const hierarchyValidation = await this.validateRoleHierarchy(guild, targetUserId, roleId, byUserId);
+            const hierarchyValidation = await this.validateRoleHierarchy(guild, targetUserId, roleId, byUserId, action);
             if (!hierarchyValidation.valid) {
                 return { success: false, error: hierarchyValidation.error };
             }
