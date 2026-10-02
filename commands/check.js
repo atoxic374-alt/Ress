@@ -37,6 +37,21 @@ async function mapWithConcurrency(items, limit, mapper) {
     return results;
 }
 
+async function fetchRoleMembers(guild, role) {
+    // role.members is cache-only. On large guilds it can contain only the
+    // members received so far, which makes check report an incorrect count.
+    try {
+        if (guild.memberCount > guild.members.cache.size) {
+            await guild.members.fetch();
+        }
+    } catch (error) {
+        console.error(`تعذر تحميل أعضاء السيرفر قبل فحص الرول ${role.id}:`, error);
+    }
+
+    return [...guild.members.cache.values()]
+        .filter(member => member.roles.cache.has(role.id) && !member.user.bot);
+}
+
 function getDatabaseManager() {
     const { getDatabase } = require('../utils/database.js');
     return getDatabase();
@@ -302,7 +317,8 @@ async function showRoleActivityStats(message, role, client) {
     const now = moment().tz('Asia/Riyadh');
     const monthStart = now.clone().startOf('month');
 
-    const members = role.members.filter(m => !m.user.bot).map(m => m.user.id);
+    const roleMembers = await fetchRoleMembers(message.guild, role);
+    const members = roleMembers.map(m => m.user.id);
 
     if (members.length === 0) {
         await message.channel.send('**لا يوجد أعضاء في هذا الرول**');
