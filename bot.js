@@ -651,9 +651,21 @@ function readJSONFile(filePath, defaultValue = {}) {
 // دالة لكتابة ملف JSON
 function writeJSONFile(filePath, data) {
     try {
-        fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+        const serialized = JSON.stringify(data, null, 2);
+        if (filePath === DATA_FILES.botConfig) {
+            const tempPath = `${filePath}.tmp`;
+            const backupPath = `${filePath}.bak`;
+            fs.writeFileSync(tempPath, serialized, 'utf8');
+            fs.renameSync(tempPath, filePath);
+            fs.copyFileSync(filePath, backupPath);
+        } else {
+            fs.writeFileSync(filePath, serialized);
+        }
         return true;
     } catch (error) {
+        if (filePath === DATA_FILES.botConfig) {
+            try { fs.unlinkSync(`${filePath}.tmp`); } catch (_) {}
+        }
         console.error(`خطأ في كتابة ${filePath}:`, error);
         return false;
     }
@@ -963,9 +975,12 @@ if (botConfig.owners && Array.isArray(botConfig.owners) && botConfig.owners.leng
     global.BOT_OWNERS = BOT_OWNERS;
 } else {
     // محاولة القراءة من متغيرات البيئة كـ fallback
-    const envOwner = process.env.BOT_OWNERS;
-    if (envOwner) {
-        BOT_OWNERS = [envOwner];
+    const envOwners = String(process.env.BOT_OWNERS || process.env.OWNER_ID || '')
+        .split(/[\s,;]+/)
+        .map(id => id.replace(/[<@!>]/g, '').trim())
+        .filter(id => /^\d{15,21}$/.test(id));
+    if (envOwners.length > 0) {
+        BOT_OWNERS = [...new Set(envOwners)];
         console.log('✅ تم تحميل المالك من متغيرات البيئة:', BOT_OWNERS);
         
         // استخدم مالك env للجلسة الحالية فقط. لا تكتب إعدادًا ناقصًا فوق
@@ -982,7 +997,7 @@ if (botConfig.owners && Array.isArray(botConfig.owners) && botConfig.owners.leng
         global.BOT_OWNERS = BOT_OWNERS;
     } else {
         console.log('⚠️ لم يتم العثور على مالكين محددين');
-        console.log('💡 نصيحة: أضف OWNER_ID في Secrets أو استخدم أمر owners بعد تعيين أول مالك');
+        console.log('💡 نصيحة: أضف OWNER_ID أو BOT_OWNERS في Secrets أو استخدم أمر owners بعد تعيين أول مالك');
         global.BOT_OWNERS = [];
     }
 }

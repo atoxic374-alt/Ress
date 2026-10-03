@@ -37,9 +37,16 @@ function loadBotConfig() {
 // دالة لحفظ إعدادات البوت
 function saveBotConfig(config) {
     try {
-        fs.writeFileSync(botConfigPath, JSON.stringify(config, null, 2));
+        const serialized = JSON.stringify(config, null, 2);
+        const tempPath = `${botConfigPath}.tmp`;
+        const backupPath = `${botConfigPath}.bak`;
+        fs.writeFileSync(tempPath, serialized, 'utf8');
+        fs.renameSync(tempPath, botConfigPath);
+        // تحديث نسخة الاسترجاع بعد نجاح الكتابة فقط.
+        fs.copyFileSync(botConfigPath, backupPath);
         return true;
     } catch (error) {
+        try { fs.unlinkSync(`${botConfigPath}.tmp`); } catch (_) {}
         console.error('خطأ في حفظ botConfig:', error);
         return false;
     }
