@@ -16,10 +16,13 @@ const SETROOM_GAP_MIN = 0.2;
 const SETROOM_GAP_MAX = 6;
 const DEFAULT_ROOM_DELETE_HOURS = 24;
 const DEFAULT_REJECT_COOLDOWN_MINUTES = 30;
+const DEFAULT_SETUP_CLEANUP_MINUTES = 3;
 const MIN_ROOM_DELETE_HOURS = 1;
 const MAX_ROOM_DELETE_HOURS = 168;
 const MIN_REJECT_COOLDOWN_MINUTES = 0;
 const MAX_REJECT_COOLDOWN_MINUTES = 10080;
+const MIN_SETUP_CLEANUP_MINUTES = 1;
+const MAX_SETUP_CLEANUP_MINUTES = 10080;
 const SETROOM_COLOR_CANVAS_WIDTH = 3200;
 const SETROOM_COLOR_CANVAS_HEIGHT = 1100;
 
@@ -36,6 +39,13 @@ function getRejectCooldownMs(guildConfig = {}) {
     const minutes = Number(guildConfig.rejectCooldownMinutes ?? DEFAULT_REJECT_COOLDOWN_MINUTES);
     if (!Number.isFinite(minutes)) return DEFAULT_REJECT_COOLDOWN_MINUTES * 60 * 1000;
     const normalized = Math.min(MAX_REJECT_COOLDOWN_MINUTES, Math.max(MIN_REJECT_COOLDOWN_MINUTES, minutes));
+    return normalized * 60 * 1000;
+}
+
+function getSetupCleanupMs(guildConfig = {}) {
+    const minutes = Number(guildConfig.setupCleanupMinutes ?? DEFAULT_SETUP_CLEANUP_MINUTES);
+    if (!Number.isFinite(minutes)) return DEFAULT_SETUP_CLEANUP_MINUTES * 60 * 1000;
+    const normalized = Math.min(MAX_SETUP_CLEANUP_MINUTES, Math.max(MIN_SETUP_CLEANUP_MINUTES, minutes));
     return normalized * 60 * 1000;
 }
 
@@ -125,6 +135,9 @@ const activeRoomsPath = path.join(__dirname, '..', 'data', 'activeRooms.json');
 const roomDeletionJobs = new Map();
 const roomDeletionRetryAttempts = new Map();
 const deletingRoomChannels = new Set();
+const setupCleanupLastRun = new Map();
+const setupCleanupInProgress = new Set();
+let setupCleanupTimer = null;
 let setupRefreshPromise = null;
 // تخزين آخر وقت تم فيه طباعة خطأ تحميل الصورة (لتقليل الرسائل المكررة)
 const lastImageErrorLog = new Map();
@@ -780,18 +793,52 @@ async function deleteAndSendEmbed(client) {
     }
 }
 
-// نظام حذف تلقائي للرسائل في قناة الإيمبد كل 3 دقائق
+async function runScheduledSetupCleanup(client) {
+    const config = loadRoomConfig();
+    const now = Date.now();
+
+    for (const [guildId, guildConfig] of Object.entries(config)) {
+        if (!guildConfig?.embedChannelId || setupCleanupInProgress.has(guildId)) continue;
+        const intervalMs = getSetupCleanupMs(guildConfig);
+        const lastRun = setupCleanupLastRun.get(guildId) || 0;
+        if (now - lastRun < intervalMs) continue;
+
+        setupCleanupInProgress.add(guildId);
+        try {
+            // هذا المسار ينظف كل رسائل القناة، ثم يرسل لوحة setroom من جديد.
+            const cleaned = await resendSetupEmbed(guildId, client);
+            if (cleaned) setupCleanupLastRun.set(guildId, Date.now());
+        } catch (error) {
+            console.error(`❌ فشل التنظيف الدوري لقناة setroom في ${guildId}:`, error?.stack || error);
+        } finally {
+            setupCleanupInProgress.delete(guildId);
+        }
+    }
+}
+
+// نظام حذف تلقائي فعلي لجميع الرسائل في قناة السيتب، افتراضيًا كل 3 دقائق.
 function startAutoMessageDeletion(client) {
-    // تحقق فوري عند بدء التشغيل ثم فحص خفيف؛ الحذف يحدث فقط إذا كانت لوحة setroom مفقودة.
+    if (setupCleanupTimer) return;
+
+    // إصلاح اللوحة المفقودة عند بدء التشغيل بدون حذف القناة إذا كانت موجودة.
     console.log('🔄 التحقق من لوحات setroom واستعادة المفقود فقط...');
     deleteAndSendEmbed(client);
-    
-    // ثم كل 3 دقائق
-    setInterval(() => {
-        deleteAndSendEmbed(client);
-    }, 3 * 60 * 1000); // كل 3 دقائق
 
-    console.log('✅ تم تشغيل فحص لوحة setroom (كل 3 دقائق، مع إعادة النشر الكامل عند فقدان اللوحة)');
+    // نبدأ حساب المدة من لحظة تشغيل البوت، ثم نتحقق كل دقيقة لدعم إعداد مختلف لكل سيرفر.
+    const config = loadRoomConfig();
+    const startedAt = Date.now();
+    for (const [guildId, guildConfig] of Object.entries(config)) {
+        if (guildConfig?.embedChannelId) setupCleanupLastRun.set(guildId, startedAt);
+    }
+
+    setupCleanupTimer = setInterval(() => {
+        runScheduledSetupCleanup(client).catch(error => {
+            console.error('❌ خطأ في دورة تنظيف قنوات setroom:', error?.stack || error);
+        });
+    }, 60_000);
+    setupCleanupTimer.unref?.();
+
+    console.log('✅ تم تشغيل التنظيف الدوري لقنوات setroom؛ الإعداد الافتراضي كل 3 دقائق ويمكن تغييره من setroom > كولداون');
 }
 
 // استعادة الإيموجي للرسائل الموجودة في الرومات النشطة
@@ -3119,6 +3166,7 @@ function ensureGuildRoomConfig(config, guildId) {
     if (!Array.isArray(config[guildId].reviewRejectRoleIds)) config[guildId].reviewRejectRoleIds = [];
     if (!Number.isFinite(Number(config[guildId].roomDeleteAfterHours))) config[guildId].roomDeleteAfterHours = DEFAULT_ROOM_DELETE_HOURS;
     if (!Number.isFinite(Number(config[guildId].rejectCooldownMinutes))) config[guildId].rejectCooldownMinutes = DEFAULT_REJECT_COOLDOWN_MINUTES;
+    if (!Number.isFinite(Number(config[guildId].setupCleanupMinutes))) config[guildId].setupCleanupMinutes = DEFAULT_SETUP_CLEANUP_MINUTES;
     config[guildId].texts = { ...getDefaultSetroomTexts(), ...(config[guildId].texts || {}) };
     return config[guildId];
 }
@@ -3130,6 +3178,7 @@ function getSetroomSummaryEmbed(guild, guildConfig = {}, actor = null) {
     const texts = getSetroomTexts(guildConfig);
     const deleteAfterHours = Number(guildConfig.roomDeleteAfterHours ?? DEFAULT_ROOM_DELETE_HOURS);
     const rejectCooldownMinutes = Number(guildConfig.rejectCooldownMinutes ?? DEFAULT_REJECT_COOLDOWN_MINUTES);
+    const setupCleanupMinutes = Number(guildConfig.setupCleanupMinutes ?? DEFAULT_SETUP_CLEANUP_MINUTES);
 
     const embed = colorManager.createEmbed()
         .setTitle(texts.panelTitle || '**SetRoom Control Panel**')
@@ -3145,6 +3194,7 @@ function getSetroomSummaryEmbed(guild, guildConfig = {}, actor = null) {
             { name: 'رولات الرفض', value: rejectRoles, inline: false },
             { name: 'حذف الروم', value: `${deleteAfterHours} ساعة`, inline: true },
             { name: 'كولداون بعد الرفض', value: `${rejectCooldownMinutes} دقيقة`, inline: true },
+            { name: 'تنظيف رسائل السيتب', value: `كل ${setupCleanupMinutes} دقيقة`, inline: true },
             { name: 'نص الألوان', value: guildConfig.colorsTitle === '' ? 'مخفي' : `${guildConfig.colorsTitle || 'Colors list :'}
 اللون: ${normalizeHexColor(guildConfig.textColor, '#ffffff')}`, inline: false },
             { name: 'افتار السيرفر', value: `الافتار: ${guildConfig.guildIconEnabled ? 'مفعّل' : 'مقفّل'}\nالإطار: ${layout.guildBorderEnabled === false ? 'مقفّل' : 'مفعّل'}`, inline: true },
@@ -3819,6 +3869,15 @@ function registerHandlers(client) {
                                 .setRequired(false)
                                 .setPlaceholder(`من ${MIN_REJECT_COOLDOWN_MINUTES} إلى ${MAX_REJECT_COOLDOWN_MINUTES}`)
                                 .setValue(String(guildConfig.rejectCooldownMinutes ?? DEFAULT_REJECT_COOLDOWN_MINUTES))
+                        ),
+                        new ActionRowBuilder().addComponents(
+                            new TextInputBuilder()
+                                .setCustomId('setup_cleanup_minutes')
+                                .setLabel('تنظيف رسائل السيتب كل كم دقيقة؟')
+                                .setStyle(TextInputStyle.Short)
+                                .setRequired(false)
+                                .setPlaceholder(`من ${MIN_SETUP_CLEANUP_MINUTES} إلى ${MAX_SETUP_CLEANUP_MINUTES}`)
+                                .setValue(String(guildConfig.setupCleanupMinutes ?? DEFAULT_SETUP_CLEANUP_MINUTES))
                         )
                     );
                     await interaction.showModal(modal);
@@ -4293,8 +4352,10 @@ function registerHandlers(client) {
                 if (interaction.customId === 'setroom_modal_safety') {
                     const deleteAfterHoursInput = interaction.fields.getTextInputValue('delete_after_hours').trim();
                     const rejectCooldownInput = interaction.fields.getTextInputValue('reject_cooldown_minutes').trim();
+                    const setupCleanupInput = interaction.fields.getTextInputValue('setup_cleanup_minutes').trim();
                     const deleteAfterHours = Number(deleteAfterHoursInput || guildConfig.roomDeleteAfterHours || DEFAULT_ROOM_DELETE_HOURS);
                     const rejectCooldownMinutes = Number(rejectCooldownInput || guildConfig.rejectCooldownMinutes || DEFAULT_REJECT_COOLDOWN_MINUTES);
+                    const setupCleanupMinutes = Number(setupCleanupInput || guildConfig.setupCleanupMinutes || DEFAULT_SETUP_CLEANUP_MINUTES);
 
                     if (!Number.isFinite(deleteAfterHours) || deleteAfterHours < MIN_ROOM_DELETE_HOURS || deleteAfterHours > MAX_ROOM_DELETE_HOURS) {
                         await interaction.reply({ content: `❌ مدة حذف الروم يجب أن تكون بين ${MIN_ROOM_DELETE_HOURS} و ${MAX_ROOM_DELETE_HOURS} ساعة.`, flags: 64 });
@@ -4304,12 +4365,17 @@ function registerHandlers(client) {
                         await interaction.reply({ content: `❌ كولداون الرفض يجب أن يكون بين ${MIN_REJECT_COOLDOWN_MINUTES} و ${MAX_REJECT_COOLDOWN_MINUTES} دقيقة.`, flags: 64 });
                         return;
                     }
+                    if (!Number.isFinite(setupCleanupMinutes) || setupCleanupMinutes < MIN_SETUP_CLEANUP_MINUTES || setupCleanupMinutes > MAX_SETUP_CLEANUP_MINUTES) {
+                        await interaction.reply({ content: `❌ تنظيف رسائل السيتب يجب أن يكون بين ${MIN_SETUP_CLEANUP_MINUTES} و ${MAX_SETUP_CLEANUP_MINUTES} دقيقة.`, flags: 64 });
+                        return;
+                    }
 
                     guildConfig.roomDeleteAfterHours = deleteAfterHours;
                     guildConfig.rejectCooldownMinutes = rejectCooldownMinutes;
+                    guildConfig.setupCleanupMinutes = setupCleanupMinutes;
                     if (!await saveRoomConfigOrRespond(interaction, config)) return;
                     await refreshSetroomPanelIfPossible(interaction, guildConfig);
-                    await interaction.reply({ content: `✅ تم حفظ الأمان: حذف الروم بعد ${deleteAfterHours} ساعة وكولداون رفض ${rejectCooldownMinutes} دقيقة.`, flags: 64 });
+                    await interaction.reply({ content: `✅ تم حفظ الأمان: حذف الروم بعد ${deleteAfterHours} ساعة، كولداون رفض ${rejectCooldownMinutes} دقيقة، وتنظيف رسائل السيتب كل ${setupCleanupMinutes} دقيقة.`, flags: 64 });
                     return;
                 }
             }
