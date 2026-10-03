@@ -2919,18 +2919,14 @@ function sanitizeName(input) {
 
 async function buildTicketControls(guildId, panelId, channelId, config, options = {}) {
   const includeClaimButton = options.includeClaimButton !== false && !options.disableClaimButton;
-  const includeReassignButton = options.hideReassignButton !== true;
   const row1Buttons = [];
   if (includeClaimButton) row1Buttons.push(new ButtonBuilder().setCustomId(`ticket_claim_${guildId}_${panelId}_${channelId}`).setLabel('Claim').setEmoji('<:emoji_3:1484364952780144710>').setStyle(ButtonStyle.Success));
   row1Buttons.push(
     new ButtonBuilder().setCustomId(`ticket_close_${guildId}_${panelId}_${channelId}`).setLabel('Close').setEmoji('<:emoji_7:1484365118576918638>').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`ticket_reassign_${guildId}_${panelId}_${channelId}`).setLabel('Change').setEmoji('<:emoji_2:1484364894491902034>').setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId(`ticket_reassign_${guildId}_${panelId}_${channelId}`).setLabel('Change').setEmoji('<:emoji_2:1484364894491902034>').setStyle(ButtonStyle.Secondary),
+    // Name مستقل عن إعادة التعيين ويظل ظاهرًا حتى بعد تغيير المسؤولية.
+    new ButtonBuilder().setCustomId(`ticket_rename_${guildId}_${panelId}_${channelId}`).setLabel('Name').setEmoji('<:emoji_5:1484364982094266428>').setStyle(ButtonStyle.Secondary)
   );
-  if (includeReassignButton) {
-    row1Buttons.push(
-      new ButtonBuilder().setCustomId(`ticket_rename_${guildId}_${panelId}_${channelId}`).setLabel(' Name').setEmoji('<:emoji_5:1484364982094266428>').setStyle(ButtonStyle.Secondary)
-    );
-  }
   const row1 = new ActionRowBuilder().addComponents(row1Buttons);
 
   const row2 = new ActionRowBuilder().addComponents(

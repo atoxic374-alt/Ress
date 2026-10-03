@@ -511,6 +511,36 @@ async function persistCompletedRoomMarker(request, channel) {
     });
 }
 
+// حذف جميع رسائل قناة لوحة setroom، بما فيها رسائل الأعضاء، قبل إعادة النشر.
+// الحذف الفردي مقصود حتى يشمل الرسائل الأقدم من 14 يومًا أيضًا.
+async function deleteAllChannelMessages(channel) {
+    let before;
+    let deletedCount = 0;
+    let previousOldestId = null;
+
+    while (true) {
+        const fetchOptions = { limit: 100 };
+        if (before) fetchOptions.before = before;
+        const batch = await channel.messages.fetch(fetchOptions);
+        if (!batch.size) break;
+
+        const messages = [...batch.values()];
+        for (let index = 0; index < messages.length; index += 5) {
+            const results = await Promise.allSettled(
+                messages.slice(index, index + 5).map(message => message.delete())
+            );
+            deletedCount += results.filter(result => result.status === 'fulfilled').length;
+        }
+
+        const oldestId = messages[messages.length - 1]?.id;
+        if (!oldestId || oldestId === previousOldestId || batch.size < 100) break;
+        previousOldestId = oldestId;
+        before = oldestId;
+    }
+
+    return deletedCount;
+}
+
 // إعادة إرسال setup embed - مبسط بدون كولداون
 async function resendSetupEmbed(guildId, client) {
     try {
@@ -538,7 +568,9 @@ async function resendSetupEmbed(guildId, client) {
             return false;
         }
 
-        const previousMessage = setupEmbedMessages.get(guildId);
+        // عند إعادة النشر يجب تنظيف القناة بالكامل، وليس رسالة البوت فقط.
+        const deletedCount = await deleteAllChannelMessages(embedChannel);
+        console.log(`🗑️ تم حذف ${deletedCount} رسالة من قناة setroom قبل إعادة النشر`);
         const newMessage = await sendSetupMessage(embedChannel, guild, guildConfig);
 
         // تحديث معلومات الرسالة
@@ -551,17 +583,7 @@ async function resendSetupEmbed(guildId, client) {
         const pointerSaved = saveSetupEmbedMessages(setupEmbedMessages);
         if (!pointerSaved) {
             console.error(`⚠️ أُرسلت لوحة setroom في ${guildId} لكن تعذر حفظ معرفها.`);
-        } else if (previousMessage?.messageId && previousMessage.channelId === embedChannel.id && previousMessage.messageId !== newMessage.id) {
-            try {
-                const oldMessage = await embedChannel.messages.fetch(previousMessage.messageId);
-                if (oldMessage.author?.id === client.user?.id) await oldMessage.delete();
-            } catch (error) {
-                if (getDiscordErrorCode(error) !== 10008 && Number(error?.status) !== 404 && !isUnknownChannelError(error)) {
-                    console.warn(`⚠️ تعذر حذف لوحة setroom السابقة ${previousMessage.messageId}:`, error?.message || error);
-                }
-            }
         }
-
         console.log(`✅ تم إعادة إرسال setup embed بنجاح في ${embedChannel.name}`);
         return true;
     } catch (error) {
@@ -712,7 +734,7 @@ function startContinuousSetupEmbedCheck(client) {
     console.log('ℹ️ نظام الفحص الدوري المستمر معطل - يعتمد على الحذف التلقائي كل 3 دقائق');
 }
 
-// التحقق من لوحة السيتب واستعادتها فقط عند فقدها؛ لا نحذف رسائل القناة ولا نعيد النشر الدوري بلا حاجة.
+// التحقق من لوحة السيتب واستعادتها فقط عند فقدها؛ عند الاستعادة تُحذف القناة بالكامل ثم تُرسل اللوحة من جديد.
 async function deleteAndSendEmbed(client) {
     if (setupRefreshPromise) return setupRefreshPromise;
     setupRefreshPromise = (async () => {
@@ -736,17 +758,13 @@ async function deleteAndSendEmbed(client) {
                             console.warn(`⚠️ لوحة setroom المتتبعة مفقودة في ${guildId}؛ ستتم استعادتها.`);
                         }
                     }
-                    const guild = client.guilds.cache.get(guildId) || await client.guilds.fetch(guildId);
-                    const newMessage = await sendSetupMessage(embedChannel, guild, guildConfig);
-                    setupEmbedMessages.set(guildId, {
-                        messageId: newMessage.id,
-                        channelId: embedChannel.id,
-                        imageUrl: guildConfig.imageUrl
-                    });
-                    if (!saveSetupEmbedMessages(setupEmbedMessages)) {
-                        console.error(`❌ أُرسلت لوحة setroom في ${guildId} لكن تعذر حفظ معرفها؛ ستبقى متتبعة في الذاكرة حتى إعادة التشغيل.`);
+                    // نفس مسار إعادة النشر: حذف كل الرسائل ثم إرسال لوحة setroom الجديدة.
+                    const restored = await resendSetupEmbed(guildId, client);
+                    if (restored) {
+                        console.log(`✅ تم حذف رسائل القناة وإرسال لوحة setroom الجديدة في ${guildId}`);
+                    } else {
+                        console.error(`❌ تعذر حذف رسائل القناة أو إرسال لوحة setroom الجديدة في ${guildId}`);
                     }
-                    console.log(`✅ تم استعادة لوحة setroom المفقودة للسيرفر ${guildId}`);
                 } catch (channelError) {
                     console.error(`خطأ في تحديث قناة السيتب في ${guildId}:`, channelError?.stack || channelError);
                 }
@@ -764,7 +782,7 @@ async function deleteAndSendEmbed(client) {
 
 // نظام حذف تلقائي للرسائل في قناة الإيمبد كل 3 دقائق
 function startAutoMessageDeletion(client) {
-    // تحقق فوري عند بدء التشغيل ثم فحص خفيف؛ لا يتم حذف أي رسائل في هذا المسار.
+    // تحقق فوري عند بدء التشغيل ثم فحص خفيف؛ الحذف يحدث فقط إذا كانت لوحة setroom مفقودة.
     console.log('🔄 التحقق من لوحات setroom واستعادة المفقود فقط...');
     deleteAndSendEmbed(client);
     
@@ -773,7 +791,7 @@ function startAutoMessageDeletion(client) {
         deleteAndSendEmbed(client);
     }, 3 * 60 * 1000); // كل 3 دقائق
 
-    console.log('✅ تم تشغيل فحص لوحة setroom (كل 3 دقائق، دون حذف رسائل القناة)');
+    console.log('✅ تم تشغيل فحص لوحة setroom (كل 3 دقائق، مع إعادة النشر الكامل عند فقدان اللوحة)');
 }
 
 // استعادة الإيموجي للرسائل الموجودة في الرومات النشطة
@@ -2460,7 +2478,7 @@ async function processCreateRoom(request, client, guildConfig) {
                 content: roomContent,
                 allowedMentions: {
                     parse: ['@here', '@everyone'].some(token => prefix.trim() === token) ? ['everyone'] : [],
-                    users: [request.userId, ...(targetUserId ? [targetUserId] : [])]
+                    users: [...new Set([request.userId, targetUserId].filter(Boolean).map(String))]
                 }
             });
         }
@@ -4548,7 +4566,9 @@ async function updateSetupEmbed(guildId, client) {
             return;
         }
 
-        // أرسل البديل أولاً؛ لا نحذف اللوحة الحالية قبل نجاح النشر والحفظ.
+        // إعادة النشر تنظف القناة بالكامل، بما فيها رسائل الأعضاء، حسب إعداد setroom.
+        const deletedCount = await deleteAllChannelMessages(embedChannel);
+        console.log(`🗑️ تم حذف ${deletedCount} رسالة من قناة setroom قبل تحديث اللوحة`);
         const newMessage = await sendSetupMessage(embedChannel, guild, guildConfig);
         
         // تحديث معلومات الرسالة
@@ -4561,14 +4581,6 @@ async function updateSetupEmbed(guildId, client) {
             console.error(`❌ أُرسلت لوحة setroom في ${guildId} لكن تعذر حفظ معرفها.`);
             return;
         }
-        try {
-            if (existingMessage.author?.id === client.user?.id) await existingMessage.delete();
-        } catch (error) {
-            if (getDiscordErrorCode(error) !== 10008 && !isUnknownChannelError(error)) {
-                console.warn(`⚠️ تعذر حذف لوحة setroom السابقة ${existingMessage.id}:`, error?.message || error);
-            }
-        }
-
         console.log(`✅ تم تحديث setup embed تلقائياً للسيرفر ${guildId} (${colorRoleIds.length} رول)`);
 
     } catch (error) {
