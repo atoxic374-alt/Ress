@@ -5,6 +5,9 @@ database/*.db-wal
 database/*.db-shm
 database/botConfig.json
 data/botConfig.json.bak
+data/allowConfig.json
+data/allowConfig.json.bak
+data/allowConfig.json.tmp
 data/eventPhotoSystem.json.bak
 data/eventPhotoSystem.json.tmp
 data/eventPhotoLines/

@@ -2,8 +2,7 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelect
 const colorManager = require('../utils/colorManager.js');
 const { isUserBlocked } = require('./block.js');
 const moment = require('moment-timezone');
-const path = require('path');
-const { getDataDir, getBotConfigPath } = require('../utils/storagePaths');
+const allowStore = require('../utils/allowStore');
 
 const name = 'check';
 
@@ -68,31 +67,11 @@ async function execute(message, args, { client, BOT_OWNERS, ADMIN_ROLES }) {
 
     const member = await message.guild.members.fetch(message.author.id);
     const hasAdministrator = member.permissions.has('Administrator');
-    const isOwner = BOT_OWNERS.includes(message.author.id);
-    
-    const fs = require('fs');
-    const botConfigPath = getBotConfigPath();
-    const botConfig = JSON.parse(fs.readFileSync(botConfigPath, 'utf8'));
-    const allowedRoles = botConfig.checkAllowedRoles || [];
-    const hasAllowedRole = member.roles.cache.some(role => allowedRoles.includes(role.id));
+    const allowConfig = allowStore.loadAllowConfig().check;
+    const hasAllowedRole = member.roles.cache.some(role => allowConfig.roles.includes(role.id));
+    const hasAllowedUser = allowConfig.users.includes(member.id);
 
-    if (args[0] && args[0].toLowerCase() === 'allow') {
-        if (!isOwner) return message.react('❌');
-        
-        let roleToAllow = message.mentions.roles.first() || message.guild.roles.cache.get(args[1]);
-        if (!roleToAllow) return message.reply('**الرجاء منشن رول أو كتابة ID الرول المسموح له**');
-        
-        if (!botConfig.checkAllowedRoles) botConfig.checkAllowedRoles = [];
-        if (!botConfig.checkAllowedRoles.includes(roleToAllow.id)) {
-            botConfig.checkAllowedRoles.push(roleToAllow.id);
-            fs.writeFileSync(botConfigPath, JSON.stringify(botConfig, null, 2));
-            return message.reply(`**✅ تم السماح للرول ${roleToAllow.name} باستخدام أمر check**`);
-        } else {
-            return message.reply(`**⚠️ الرول ${roleToAllow.name} مسموح له بالفعل**`);
-        }
-    }
-
-    if (!hasAdministrator && !hasAllowedRole) {
+    if (!hasAdministrator && !hasAllowedRole && !hasAllowedUser) {
         await message.react('❌');
         return;
     }
