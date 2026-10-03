@@ -696,7 +696,12 @@ async function handleInteraction(interaction) {
         }
 
         const db = getDatabase();
-        const stats = db && db.isInitialized ? await db.getMonthlyStats(interaction.user.id) : { messages: 0, voiceTime: 0 };
+        // يجب تمرير معرف السيرفر حتى تُقرأ إحصائيات guild_daily_activity
+        // التي يتم تحديثها عند تسجيل الرسائل ووقت الفويس. عدم تمريره كان
+        // يجعل الشروط تقرأ جدول daily_activity القديم، فتظهر القيم 0 دائماً.
+        const stats = db && db.isInitialized
+            ? await db.getMonthlyStats(interaction.user.id, interaction.guild.id)
+            : { messages: 0, voiceTime: 0 };
         const condition = appSystem.roleConditions?.[roleId] || null;
         const evaluation = buildConditionsDetails(condition, stats, member.user.createdAt);
 
