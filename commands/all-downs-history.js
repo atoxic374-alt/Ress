@@ -116,7 +116,7 @@ function buildEmbed(records, page, totalPages, filter, targetUserId = null) {
 
     return colorManager.createEmbed()
         .setTitle(`Down History • ${FILTERS[filter].label}`)
-        .setDescription(`${targetUserId ? `العضو: <@${targetUserId}>\n` : ''}**${records.length}** سجل مطابق\n\n${description}`)
+        .setDescription(`${targetUserId ? `**العضو :** <@${targetUserId}>\n` : ''}**عدد السجلات :** ${records.length}\n\n${description}`)
         .setFooter({ text: `الصفحة ${page + 1} من ${totalPages} • ${FILTERS[filter].description}` })
         .setTimestamp();
 }
