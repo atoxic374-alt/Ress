@@ -83,15 +83,19 @@ async function handleInteraction(interaction, context = {}) {
     const current = getSupervisors(interaction.guild.id, name);
     const userIds = adding ? [...new Set([...current.userIds, ...selected])] : current.userIds.filter(uid => !selected.includes(uid));
     setSupervisors(interaction.guild.id, name, { userIds });
+
+    // تأكيد التفاعل أولاً حتى لا تنتهي مهلة Discord أثناء تحديث رسالة Resp.
+    await interaction.update(managePanel(interaction.guild.id, name));
     try {
-      const respCommand = context.client?.commands?.get('resp');
-      if (respCommand?.updateEmbedMessage) {
-        await respCommand.updateEmbedMessage(context.client, interaction.guild.id);
+      const client = context.client || global.client;
+      const respCommand = client?.commands?.get('resp') || require('./resp.js');
+      if (client && respCommand?.updateEmbedMessage) {
+        await respCommand.updateEmbedMessage(client, interaction.guild.id);
       }
     } catch (refreshError) {
       console.error('تعذر تحديث Embed المسؤوليات بعد تعديل المشرفين:', refreshError);
     }
-    return interaction.update(managePanel(interaction.guild.id, name));
+    return;
   }
   return false;
 }
