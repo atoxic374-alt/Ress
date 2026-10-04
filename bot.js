@@ -33,6 +33,21 @@ const downManager = require('./utils/downManager');
 const warnManager = require('./utils/warnManager');
 const { checkCooldown, startCooldown } = require('./commands/cooldown.js');
 const colorManager = require('./utils/colorManager.js');
+
+// كولداون اختصارات المسؤوليات: الزران يشتركان في نفس الكولداون لكل مستخدم ومسؤولية.
+const SHORTCUT_CALL_COOLDOWN_MS = 10 * 60 * 1000;
+const shortcutCallCooldowns = new Map();
+function getShortcutCallCooldown(guildId, userId, responsibilityName) {
+    const key = `${guildId}:${userId}:${responsibilityName}`;
+    const lastUsed = shortcutCallCooldowns.get(key) || 0;
+    const timeLeft = lastUsed + SHORTCUT_CALL_COOLDOWN_MS - Date.now();
+    if (timeLeft > 0) return timeLeft;
+    shortcutCallCooldowns.delete(key);
+    return 0;
+}
+function startShortcutCallCooldown(guildId, userId, responsibilityName) {
+    shortcutCallCooldowns.set(`${guildId}:${userId}:${responsibilityName}`, Date.now());
+}
 const vacationManager = require('./utils/vacationManager');
 const promoteManager = require('./utils/promoteManager');
 const { getRoleEntry, addRoleEntry, getGuildRoles, findRoleByOwner, deleteRoleEntry } = require('./utils/customRolesSystem.js');
@@ -5607,6 +5622,15 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
         return;
       }
 
+      const supervisorCooldownLeft = getShortcutCallCooldown(callData.guildId, interaction.user.id, callData.responsibilityName);
+      if (supervisorCooldownLeft > 0) {
+        await interaction.reply({
+          content: `**عليك الانتظار ${Math.ceil(supervisorCooldownLeft / 60000)} دقائق قبل استدعاء مسؤولي أو مشرفي نفس المسؤولية مرة أخرى.**`,
+          flags: 64
+        }).catch(() => {});
+        return;
+      }
+
       const { getSupervisors } = require('./utils/responsibilitySupervisors.js');
       const supervisorData = getSupervisors(callData.guildId, callData.responsibilityName);
       const supervisorMentions = [
@@ -5652,6 +5676,7 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
         }
 
         await confirmation.deferUpdate();
+        startShortcutCallCooldown(callData.guildId, interaction.user.id, callData.responsibilityName);
         const recipientIds = new Set(supervisorData.userIds.map(String));
         for (const roleId of supervisorData.roleIds) {
           const role = await interaction.guild.roles.fetch(roleId).catch(() => null);
@@ -5709,8 +5734,17 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
       }
       
       // فحص الكولداون
-      const { checkCooldown } = require('./commands/cooldown.js');
-      const cooldownTime = checkCooldown(interaction.user.id, callData.responsibilityName);
+      const shortcutCooldownTime = getShortcutCallCooldown(callData.guildId, interaction.user.id, callData.responsibilityName);
+      const cooldownTime = checkCooldown(interaction, callData.responsibilityName);
+      if (shortcutCooldownTime > 0) {
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({
+            content: `**عليك الانتظار ${Math.ceil(shortcutCooldownTime / 60000)} دقائق قبل استدعاء مسؤولي أو مشرفي نفس المسؤولية مرة أخرى.**`,
+            flags: 64
+          }).catch(() => {});
+        }
+        return;
+      }
       if (cooldownTime > 0) {
         if (!interaction.replied && !interaction.deferred) {
           await interaction.reply({
@@ -5765,6 +5799,15 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
         await interaction.reply({ content: '**انتهت صلاحية هذا النموذج. يرجى استخدام الاختصار مرة أخرى.**', flags: 64 }).catch(() => {});
         return;
       }
+
+      const modalCooldownTime = getShortcutCallCooldown(callData.guildId, interaction.user.id, callData.responsibilityName);
+      if (modalCooldownTime > 0) {
+        await interaction.reply({
+          content: `**عليك الانتظار ${Math.ceil(modalCooldownTime / 60000)} دقائق قبل استدعاء مسؤولي أو مشرفي نفس المسؤولية مرة أخرى.**`,
+          flags: 64
+        }).catch(() => {});
+        return;
+      }
       
       const reason = interaction.fields.getTextInputValue('call_reason').trim() || 'غير محدد';
       const { responsibilityName, responsibles, channelId, messageId, guildId } = callData;
@@ -5775,6 +5818,7 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
       // بدء الكولداون
       const { startCooldown } = require('./commands/cooldown.js');
       startCooldown(interaction.user.id, responsibilityName);
+      startShortcutCallCooldown(guildId, interaction.user.id, responsibilityName);
       
       const messageLink = `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
       const currentTime = new Date().toLocaleString('ar-EG', { timeZone: 'Asia/Riyadh' });
