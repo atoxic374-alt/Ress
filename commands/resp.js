@@ -803,21 +803,11 @@ async function updateEmbedMessage(client, targetGuildId = null) {
                     }
                 }
 
-                if (message) {
-                    try {
-                        await message.edit(editOptions);
-                        embedData.message = message;
-                        console.log(`✅ تم تحديث رسالة المسؤوليات في السيرفر ${guildId} (${format})`);
-                    } catch (editError) {
-                        console.error(`❌ فشل تعديل الرسالة في السيرفر ${guildId}:`, editError);
-                        // إذا كانت الرسالة محذوفة، يفضل إرسال واحدة جديدة أو تنبيه المالك
-                    }
-                } else {
+                const recreateMessage = async () => {
                     const fallbackCandidates = [
                         config.guilds?.[guildId]?.embedChannel,
                         embedData.channelId
                     ].filter(Boolean);
-
                     let fallbackChannel = null;
                     for (const candidateId of fallbackCandidates) {
                         const candidate = await client.channels.fetch(candidateId).catch(() => null);
@@ -826,23 +816,40 @@ async function updateEmbedMessage(client, targetGuildId = null) {
                             break;
                         }
                     }
-
-                    if (fallbackChannel) {
-                        const sendOptions = { ...editOptions };
-                        if (sendOptions.content === null) delete sendOptions.content;
-
-                        const newMessage = await fallbackChannel.send(sendOptions);
-                        embedMessages.set(guildId, {
-                            messageId: newMessage.id,
-                            channelId: fallbackChannel.id,
-                            message: newMessage,
-                            format
-                        });
-                        updateStoredEmbedData(guildId);
-                        console.log(`✅ تم إنشاء رسالة مسؤوليات جديدة تلقائياً في السيرفر ${guildId}`);
-                    } else {
-                        console.log(`⚠️ لم يتم العثور على رسالة المسؤوليات أو القناة الاحتياطية في السيرفر ${guildId}`);
+                    if (!fallbackChannel) {
+                        console.log(`⚠️ لم يتم العثور على روم لإعادة رسالة المسؤوليات في السيرفر ${guildId}`);
+                        return false;
                     }
+                    const sendOptions = { ...editOptions };
+                    if (sendOptions.content === null) delete sendOptions.content;
+                    const newMessage = await fallbackChannel.send(sendOptions);
+                    embedMessages.set(guildId, {
+                        messageId: newMessage.id,
+                        channelId: fallbackChannel.id,
+                        message: newMessage,
+                        format
+                    });
+                    updateStoredEmbedData(guildId);
+                    console.log(`✅ تم إنشاء رسالة مسؤوليات جديدة تلقائياً في السيرفر ${guildId}`);
+                    return true;
+                };
+
+                if (message) {
+                    try {
+                        await message.edit(editOptions);
+                        embedData.message = message;
+                        console.log(`✅ تم تحديث رسالة المسؤوليات في السيرفر ${guildId} (${format})`);
+                    } catch (editError) {
+                        console.error(`❌ فشل تعديل الرسالة في السيرفر ${guildId}:`, editError);
+                        // الرسالة قد تكون حُذفت أو أصبح مرجعها قديمًا؛ أنشئ بديلًا فورًا.
+                        embedData.message = null;
+                        embedData.messageId = null;
+                        await recreateMessage().catch((recreateError) => {
+                            console.error(`❌ فشل إعادة إنشاء رسالة المسؤوليات في السيرفر ${guildId}:`, recreateError);
+                        });
+                    }
+                } else {
+                    await recreateMessage();
                 }
             } catch (error) {
                 console.error(`خطأ في تحديث رسالة المسؤوليات للسيرفر ${guildId}:`, error);

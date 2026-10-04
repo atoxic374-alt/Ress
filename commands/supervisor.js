@@ -82,6 +82,9 @@ async function handleInteraction(interaction, context = {}) {
     if (!selected.length) return interaction.reply({ content: '**اختر شخصاً واحداً على الأقل أولاً.**', flags: MessageFlags.Ephemeral });
     const current = getSupervisors(interaction.guild.id, name);
     const userIds = adding ? [...new Set([...current.userIds, ...selected])] : current.userIds.filter(uid => !selected.includes(uid));
+    const changedUserIds = adding
+      ? selected.filter(id => !current.userIds.includes(String(id)))
+      : selected.filter(id => current.userIds.includes(String(id)));
     setSupervisors(interaction.guild.id, name, { userIds });
 
     // تأكيد التفاعل أولاً حتى لا تنتهي مهلة Discord أثناء تحديث رسالة Resp.
@@ -91,6 +94,17 @@ async function handleInteraction(interaction, context = {}) {
       const respCommand = client?.commands?.get('resp') || require('./resp.js');
       if (client && respCommand?.updateEmbedMessage) {
         await respCommand.updateEmbedMessage(client, interaction.guild.id);
+      }
+
+      for (const userId of changedUserIds) {
+        const member = await interaction.guild.members.fetch(userId).catch(() => null);
+        if (member) {
+          await member.send({
+            content: adding
+              ? `**تم تعيينك مشرفًا على مسؤولية : ${name}** في سيرفر **${interaction.guild.name}**.`
+              : `**تمت إزالة إشرافك عن مسؤولية : ${name}** في سيرفر **${interaction.guild.name}**.`
+          }).catch(() => {});
+        }
       }
     } catch (refreshError) {
       console.error('تعذر تحديث Embed المسؤوليات بعد تعديل المشرفين:', refreshError);
