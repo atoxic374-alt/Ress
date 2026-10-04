@@ -4538,6 +4538,15 @@ client.on('interactionCreate', async (interaction) => {
     // تعريف customId في البداية
     const customId = interaction?.customId || '';
 
+    // Responsibility supervisor panel (settings button and مشرف command)
+    if (customId.startsWith('supervisor_')) {
+        const supervisorCommand = client.commands.get('مشرف') || client.commands.get('supervisor');
+        if (supervisorCommand?.handleInteraction) {
+            await supervisorCommand.handleInteraction(interaction, { client, BOT_OWNERS });
+        }
+        return;
+    }
+
     if (await interactionRouter.route(interaction, { client, BOT_OWNERS })) {
         return;
     }

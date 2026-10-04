@@ -475,8 +475,19 @@ async function createImageAttachment(url) {
 // متغير لتخزين رسائل الايمبد (دعم عدة سيرفرات)
 let embedMessages = new Map(); // guildId -> { messageId, channelId, message }
 
+
+function getSupervisorDisplay(guildId, respName) {
+    if (!guildId) return '';
+    const { getSupervisors } = require('../utils/responsibilitySupervisors.js');
+    const supervisors = getSupervisors(guildId, respName);
+    const users = supervisors.userIds.map(id => `<@${id}>`);
+    const roles = supervisors.roleIds.map(id => `<@&${id}>`);
+    const list = [...users, ...roles].join(' , ') || 'N/A';
+    return `- **المشرفين : ${list}**\n`;
+}
+
 // دالة لإنشاء الايمبد
-function createResponsibilitiesEmbed(responsibilities) {
+function createResponsibilitiesEmbed(responsibilities, guildId = null) {
     const embed = colorManager.createEmbed()
         .setTitle('Responsibilities');
     
@@ -506,7 +517,8 @@ function createResponsibilitiesEmbed(responsibilities) {
                     if (respData) {
                         description += `** المسؤوليه : ال${respName}**\n`;
                         
-                        if (respData.responsibles && respData.responsibles.length > 0) {
+                        description += getSupervisorDisplay(guildId, respName);
+            if (respData.responsibles && respData.responsibles.length > 0) {
                             const responsiblesList = respData.responsibles.map(id => `<@${id}>`).join(' , ');
                             description += `- **المسؤولين : ${responsiblesList}**\n\n`;
                         } else {
@@ -530,7 +542,8 @@ function createResponsibilitiesEmbed(responsibilities) {
                 const respData = currentResps[respName];
                 description += `**المسؤوليه : ال${respName}**\n`;
                 
-                if (respData.responsibles && respData.responsibles.length > 0) {
+                description += getSupervisorDisplay(guildId, respName);
+            if (respData.responsibles && respData.responsibles.length > 0) {
                     const responsiblesList = respData.responsibles.map(id => `<@${id}>`).join(' , ');
                     description += `- **المسؤولين : ${responsiblesList}**\n\n`;
                 } else {
@@ -544,6 +557,7 @@ function createResponsibilitiesEmbed(responsibilities) {
             const respData = currentResps[respName];
             description += `**المسؤوليه : ال${respName}**\n`;
             
+            description += getSupervisorDisplay(guildId, respName);
             if (respData.responsibles && respData.responsibles.length > 0) {
                 const responsiblesList = respData.responsibles.map(id => `<@${id}>`).join(' , ');
                 description += `- **المسؤولين : ${responsiblesList}**\n\n`;
@@ -558,7 +572,7 @@ function createResponsibilitiesEmbed(responsibilities) {
 }
 
 // دالة لإنشاء رسالة نصية للمسؤوليات
-function createResponsibilitiesText(responsibilities) {
+function createResponsibilitiesText(responsibilities, guildId = null) {
     const normalizedInput = normalizeResponsibilitiesMap(responsibilities);
     const currentResps = Object.keys(normalizedInput).length > 0 ? normalizedInput : getCurrentResponsibilities();
     const categories = readJSONFile(DATA_FILES.categories, {});
@@ -583,7 +597,8 @@ function createResponsibilitiesText(responsibilities) {
                     if (respData) {
                         text += `**المسؤوليه : ال${respName}**\n`;
                         
-                        if (respData.responsibles && respData.responsibles.length > 0) {
+                        text += getSupervisorDisplay(guildId, respName);
+            if (respData.responsibles && respData.responsibles.length > 0) {
                             const responsiblesList = respData.responsibles.map(id => `<@${id}>`).join(' , ');
                             text += `- **المسؤولين : ${responsiblesList}**\n\n`;
                         } else {
@@ -607,7 +622,8 @@ function createResponsibilitiesText(responsibilities) {
                 const respData = currentResps[respName];
                 text += `**المسؤوليه : ال${respName}**\n`;
                 
-                if (respData.responsibles && respData.responsibles.length > 0) {
+                text += getSupervisorDisplay(guildId, respName);
+            if (respData.responsibles && respData.responsibles.length > 0) {
                     const responsiblesList = respData.responsibles.map(id => `<@${id}>`).join(' , ');
                     text += `- **المسؤولين  : ${responsiblesList}**\n\n`;
                 } else {
@@ -621,6 +637,7 @@ function createResponsibilitiesText(responsibilities) {
             const respData = currentResps[respName];
             text += `**المسؤوليه : ال${respName}**\n`;
             
+            text += getSupervisorDisplay(guildId, respName);
             if (respData.responsibles && respData.responsibles.length > 0) {
                 const responsiblesList = respData.responsibles.map(id => `<@${id}>`).join('  ,  ');
                 text += `- **المسؤولين : ${responsiblesList}**\n\n`;
@@ -744,13 +761,13 @@ async function updateEmbedMessage(client, targetGuildId = null) {
                 let editOptions;
                 if (format === 'text') {
                     editOptions = {
-                        content: newText,
+                        content: createResponsibilitiesText(responsibilities, guildId),
                         embeds: [],
                         components: components,
                         files: imageFiles
                     };
                 } else {
-                    const embedForGuild = EmbedBuilder.from(newEmbed);
+                    const embedForGuild = createResponsibilitiesEmbed(responsibilities, guildId);
                     if (imageAttachment) {
                         embedForGuild.setImage(`attachment://${imageAttachment.name}`);
                     } else if (globalImageUrl) {
@@ -2725,7 +2742,7 @@ async function sendResponsibilitiesMessage(channel, client, format = 'embed') {
         
 if (format === 'text') {
 
-    const textContent = createResponsibilitiesText(responsibilities);
+    const textContent = createResponsibilitiesText(responsibilities, channel.guild.id);
 
     const parts = splitText(textContent);
 
@@ -2771,7 +2788,7 @@ if (format === 'text') {
 
 
             else {
-            const embed = createResponsibilitiesEmbed(responsibilities);
+            const embed = createResponsibilitiesEmbed(responsibilities, channel.guild.id);
             message = await channel.send({
                 embeds: [embed],
                 components: components

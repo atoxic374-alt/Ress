@@ -12,3 +12,6 @@ data/eventPhotoSystem.json.bak
 data/eventPhotoSystem.json.tmp
 data/eventPhotoLines/
 .env
+
+data/responsibilitySupervisors.json
+data/responsibilitySupervisors.json.tmp

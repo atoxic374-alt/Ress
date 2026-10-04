@@ -9,6 +9,7 @@ const {
 const { dbManager } = require('../utils/database.js');
 const colorManager = require('../utils/colorManager.js');
 const respCommand = require('./resp.js');
+const { getSupervisedResponsibilities } = require('../utils/responsibilitySupervisors.js');
 
 module.exports = {
     name: 'مسؤوليه',
@@ -23,8 +24,12 @@ module.exports = {
             
             const isOwner = allOwners.includes(message.author.id);
             const isRespManager = typeof respCommand.isRespManager === 'function' && respCommand.isRespManager(message);
+            const canManageAll = isOwner || isRespManager;
+            const knownResponsibilities = Object.keys(global.responsibilities || {}).length
+                ? global.responsibilities
+                : await dbManager.getResponsibilities();
             
-            if (!isOwner && !isRespManager) {
+            if (!canManageAll && getSupervisedResponsibilities(message.guild.id, message.member, knownResponsibilities).length === 0) {
                 return message.react('❌');
             }
 
@@ -75,7 +80,9 @@ module.exports = {
                         return i.update({ content: '⚠️ **لا توجد أي مسؤوليات معرفة في النظام حالياً.**', embeds: [], components: [] });
                     }
 
-                    const respNames = Object.keys(allResps);
+                    const respNames = canManageAll
+                        ? Object.keys(allResps)
+                        : getSupervisedResponsibilities(i.guild.id, message.member, allResps);
 
                     if (type === 'add') {
                         const availableResps = respNames.filter(name => !allResps[name].responsibles.includes(targetId));

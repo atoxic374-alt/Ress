@@ -568,7 +568,7 @@ async function execute(message, args, { responsibilities, client, scheduleSave, 
   // Collector with a 5-minute timeout
   // لا تلتقط هذه الجلسة أزرار لوحات settings أخرى أو لوحات أوامر مختلفة
   // حتى لا يرد معالج آخر برسالة صلاحيات غير صحيحة.
-  const filter = i => i.user.id === message.author.id && (
+  const filter = i => i.user.id === message.author.id && !String(i.customId || '').startsWith('supervisor_') && (
     i.message?.id === sentMessage.id
     || i.customId?.startsWith('settings_responsibility_roles_open_modal_')
     || i.customId === 'settings_responsibility_roles_finish_create'
@@ -651,6 +651,12 @@ async function execute(message, args, { responsibilities, client, scheduleSave, 
 .setEmoji('<:emoji_18:1448572201610776730>')
         .setStyle(ButtonStyle.Secondary);
 
+      const supervisorButton = new ButtonBuilder()
+        .setCustomId(`supervisor_manage_${Buffer.from(String(responsibilityName), 'utf8').toString('base64url')}`)
+        .setLabel('مشرف')
+        .setEmoji('<:emoji_2:1484364894491902034>')
+        .setStyle(ButtonStyle.Secondary);
+
 const deleteButton = new ButtonBuilder()
         .setCustomId(`delete_${responsibilityName}`)
         .setLabel('حذف')
@@ -666,7 +672,7 @@ const deleteButton = new ButtonBuilder()
         .setStyle(ButtonStyle.Secondary);
 
       const buttonsRow1 = new ActionRowBuilder().addComponents(editButton, renameButton, deleteButton, manageButton, roleButton);
-      const buttonsRowMent = new ActionRowBuilder().addComponents(mentButton);
+      const buttonsRowMent = new ActionRowBuilder().addComponents(mentButton, supervisorButton);
       
       // إنشاء select menu للترتيب (محدود بـ 25 عنصر)
       let positionOptions = orderedKeys.map((key, index) => ({
@@ -1523,6 +1529,12 @@ const deleteButton = new ButtonBuilder()
 .setEmoji('<:emoji_18:1448572201610776730>')
         .setStyle(ButtonStyle.Secondary);
 
+      const supervisorButton = new ButtonBuilder()
+        .setCustomId(`supervisor_manage_${Buffer.from(String(selected), 'utf8').toString('base64url')}`)
+        .setLabel('مشرف')
+        .setEmoji('<:emoji_2:1484364894491902034>')
+        .setStyle(ButtonStyle.Secondary);
+
 const deleteButton = new ButtonBuilder()
         .setCustomId(`delete_${selected}`)
         .setLabel('حذف')
@@ -1538,7 +1550,7 @@ const deleteButton = new ButtonBuilder()
             .setStyle(ButtonStyle.Secondary);
 
           const buttonsRow1 = new ActionRowBuilder().addComponents(editButton, renameButton, deleteButton, manageButton, roleButton);
-          const buttonsRowMent = new ActionRowBuilder().addComponents(mentButton);
+          const buttonsRowMent = new ActionRowBuilder().addComponents(mentButton, supervisorButton);
           
           // إنشاء select menu للترتيب (محدود بـ 25 عنصر)
           let positionOptions = orderedKeys.map((key, index) => ({
@@ -1697,6 +1709,12 @@ const deleteButton = new ButtonBuilder()
               .setEmoji('<:emoji_18:1448572201610776730>')
               .setStyle(ButtonStyle.Secondary);
 
+            const supervisorButton = new ButtonBuilder()
+              .setCustomId(`supervisor_manage_${Buffer.from(String(responsibilityName), 'utf8').toString('base64url')}`)
+              .setLabel('مشرف')
+              .setEmoji('<:emoji_2:1484364894491902034>')
+              .setStyle(ButtonStyle.Secondary);
+
             const backButton = new ButtonBuilder()
               .setCustomId('back_to_menu')
               .setLabel('main menu')
@@ -1716,7 +1734,7 @@ const deleteButton = new ButtonBuilder()
 
             const components = [
               new ActionRowBuilder().addComponents(editButton, renameButton, deleteButton, manageButton, roleButton),
-              new ActionRowBuilder().addComponents(mentButton),
+              new ActionRowBuilder().addComponents(mentButton, supervisorButton),
               new ActionRowBuilder().addComponents(backButton)
             ];
 
@@ -1865,7 +1883,14 @@ const deleteButton = new ButtonBuilder()
           return await safeReply(interaction, '**المسؤولية غير موجودة!**');
         }
 
-        if (action === 'delete') {
+        if (action === 'supervisor') {
+          const supervisorCommand = require('./supervisor.js');
+          await supervisorCommand.handleInteraction({
+            ...interaction,
+            customId: `supervisor_manage_${Buffer.from(String(responsibilityName), 'utf8').toString('base64url')}`
+          }, { BOT_OWNERS });
+          return;
+        } else if (action === 'delete') {
           try {
             const { dbManager } = require('../utils/database.js');
             const deletedResponsibility = { ...responsibilities[responsibilityName] };
