@@ -9,7 +9,7 @@ const fs = require('fs');
 
 const path = require('path');
 
-const { getSupervisedResponsibilities } = require('../utils/responsibilitySupervisors.js');
+const { getSupervisedResponsibilities, getSupervisors } = require('../utils/responsibilitySupervisors.js');
 
 const DATA_FILES = {
     categories: path.join(__dirname, '..', 'data', 'respCategories.json')
@@ -247,15 +247,42 @@ module.exports = {
 
             const row = new ActionRowBuilder().addComponents(selectMenu);
 
-            const sentMessage = await message.channel.send({ embeds: [respEmbed], components: [row] });
+            const supervisorsMenu = new StringSelectMenuBuilder()
+                .setCustomId('masooliyati_select_supervisors')
+                .setPlaceholder('Show responsibility supervisors')
+                .setMinValues(1)
+                .setMaxValues(Math.min(userResponsibilities.length, 25))
+                .addOptions(userResponsibilities.slice(0, 25).map(resp => ({
+                    label: resp.name.substring(0, 100),
+                    value: resp.name,
+                    description: 'عرض مشرفي هذه المسؤولية'
+                })));
+            const supervisorsRow = new ActionRowBuilder().addComponents(supervisorsMenu);
+
+            const sentMessage = await message.channel.send({ embeds: [respEmbed], components: [row, supervisorsRow] });
 
             const filter = (interaction) =>
-                interaction.customId === 'masooliyati_select_desc' &&
+                (interaction.customId === 'masooliyati_select_desc' || interaction.customId === 'masooliyati_select_supervisors') &&
                 interaction.user.id === message.author.id;
 
             const collector = sentMessage.createMessageComponentCollector({ filter, time: 600000 }); // 10 minutes
 
             collector.on('collect', async (interaction) => {
+                if (interaction.customId === 'masooliyati_select_supervisors') {
+                    const selectedSupervisors = interaction.values.map(respName => {
+                        const supervisors = getSupervisors(message.guild.id, respName);
+                        const mentions = [
+                            ...supervisors.userIds.map(id => `<@${id}>`),
+                            ...supervisors.roleIds.map(id => `<@&${id}>`)
+                        ];
+                        return `**المسؤولية : ${respName}**\n**المشرفين :** ${mentions.join(' , ') || 'لا يوجد مشرفين معينين'}`;
+                    }).join('\n\n');
+                    await interaction.reply({
+                        content: selectedSupervisors,
+                        ephemeral: true
+                    });
+                    return;
+                }
                 const selectedRespName = interaction.values[0];
                 const selectedResp = userResponsibilities.find(r => r.name === selectedRespName);
 
@@ -296,7 +323,10 @@ module.exports = {
                 const disabledRow = new ActionRowBuilder().addComponents(
                     StringSelectMenuBuilder.from(selectMenu).setDisabled(true)
                 );
-                sentMessage.edit({ components: [disabledRow] }).catch(() => {});
+                const disabledSupervisorsRow = new ActionRowBuilder().addComponents(
+                    StringSelectMenuBuilder.from(supervisorsMenu).setDisabled(true)
+                );
+                sentMessage.edit({ components: [disabledRow, disabledSupervisorsRow] }).catch(() => {});
             });
 
         }
