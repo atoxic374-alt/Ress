@@ -285,9 +285,10 @@ module.exports = {
                     }
 
                     try {
-                        const respCommand = i.client?.commands?.get('resp');
-                        if (respCommand?.updateEmbedMessage) {
-                            await respCommand.updateEmbedMessage(i.client);
+                        const client = i.client || global.client;
+                        const respCommand = client?.commands?.get('resp') || require('./resp.js');
+                        if (client && respCommand?.updateEmbedMessage) {
+                            await respCommand.updateEmbedMessage(client, i.guild.id);
                         }
                     } catch (updateError) {
                         console.error('Error updating resp setup embed:', updateError);
