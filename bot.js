@@ -6249,6 +6249,10 @@ async function showUserResponsibilities(message, targetUser, responsibilities, c
             responsibilitiesList += `**${index + 1}.** ${resp.name}\n**الصفة :** ${roles.join(' و ')}\n${resp.otherResponsiblesCount} مسؤولون غيرك\n\n`;
         });
 
+        const supervisorFieldValue = [...supervisedNames]
+            .map(respName => `مشرف : ${respName}`)
+            .join('\n') || 'لا يوجد';
+
         const respEmbed = colorManager.createEmbed()
             .setTitle('مسؤولياتك')
             .setDescription(`**مسؤولياتك هي:**\n\n${responsibilitiesList}`)
@@ -6256,7 +6260,8 @@ async function showUserResponsibilities(message, targetUser, responsibilities, c
             .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
             .addFields([
                 { name: 'Total Res', value: `${userResponsibilities.length}`, inline: true },
-                { name: 'User', value: `<@${targetUser.id}>`, inline: true }
+                { name: 'User', value: `<@${targetUser.id}>`, inline: true },
+                { name: 'Your supervisor', value: supervisorFieldValue.slice(0, 1024), inline: false }
             ])
             .setFooter({ text: 'By Ahmed.' })
             .setTimestamp();
