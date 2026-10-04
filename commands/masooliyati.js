@@ -9,6 +9,8 @@ const fs = require('fs');
 
 const path = require('path');
 
+const { getSupervisedResponsibilities } = require('../utils/responsibilitySupervisors.js');
+
 const DATA_FILES = {
     categories: path.join(__dirname, '..', 'data', 'respCategories.json')
 };
@@ -77,6 +79,7 @@ module.exports = {
 
         if (!targetUser) targetUser = message.author;
         let userId = targetUser.id;
+        const targetMember = await message.guild.members.fetch(userId).catch(() => null);
 
         // تحميل المسؤوليات الحديثة من الكائن العالمي أو SQLite
         let currentResponsibilities = global.responsibilities;
@@ -103,15 +106,20 @@ module.exports = {
             return null;
         }
 
-        // البحث عن مسؤوليات المستخدم المحدد
-
+        // البحث عن مسؤوليات المستخدم المحدد، بما في ذلك المسؤوليات التي يشرف عليها.
+        const supervisedNames = new Set(
+            getSupervisedResponsibilities(message.guild.id, targetMember || targetUser, currentResponsibilities)
+        );
         const userResponsibilities = [];
 
         for (const [respName, respData] of Object.entries(currentResponsibilities)) {
 
-            if (respData.responsibles && respData.responsibles.includes(userId)) {
+            const isResponsible = Array.isArray(respData.responsibles)
+                && respData.responsibles.map(String).includes(String(userId));
+            const isSupervisor = supervisedNames.has(respName);
+            if (isResponsible || isSupervisor) {
 
-                const otherResponsibles = respData.responsibles.filter(id => id !== userId);
+                const otherResponsibles = (respData.responsibles || []).filter(id => String(id) !== String(userId));
 
                 const category = findCategoryForResp(respName);
 
@@ -123,7 +131,9 @@ module.exports = {
 
                     otherResponsiblesCount: otherResponsibles.length,
 
-                    category: category
+                    category: category,
+                    isResponsible,
+                    isSupervisor
 
                 });
 
@@ -206,13 +216,17 @@ module.exports = {
             }
 
             const displayName = targetUser.displayName || targetUser.username;
+            const supervisorFieldValue = [...supervisedNames]
+                .map(respName => `مشرف : ${respName}`)
+                .join('\n') || 'لا يوجد';
             const respEmbed = colorManager.createEmbed()
                 .setTitle(`Res : ${displayName}`)
                 .setDescription(descriptionText)
                 .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
                 .addFields([
                     { name: 'All Res', value: `${userResponsibilities.length}`, inline: true },
-                    { name: 'Person', value: `<@${userId}>`, inline: true }
+                    { name: 'Person', value: `<@${userId}>`, inline: true },
+                    { name: 'Your supervisor', value: supervisorFieldValue.slice(0, 1024), inline: false }
                 ])
                 .setFooter({ text: 'By Ahmed.' })
                 .setTimestamp();
