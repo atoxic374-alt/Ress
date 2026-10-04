@@ -5,6 +5,7 @@ const {
 const colorManager = require('../utils/colorManager.js');
 const { getResponsibilitiesSnapshot } = require('../utils/responsibilitiesStore');
 const { getSupervisors, setSupervisors } = require('../utils/responsibilitySupervisors');
+const { dbManager } = require('../utils/database.js');
 
 const sessions = new Map();
 const encode = value => Buffer.from(String(value), 'utf8').toString('base64url');
@@ -85,6 +86,25 @@ async function handleInteraction(interaction, context = {}) {
     const changedUserIds = adding
       ? selected.filter(id => !current.userIds.includes(String(id)))
       : selected.filter(id => current.userIds.includes(String(id)));
+    let removedResponsibleIds = [];
+
+    // لا يمكن للشخص أن يكون مسؤولًا ومشرفًا على المسؤولية نفسها.
+    if (adding && changedUserIds.length) {
+      const responsibilities = await dbManager.getResponsibilities();
+      const responsibility = responsibilities?.[name];
+      if (responsibility && Array.isArray(responsibility.responsibles)) {
+        removedResponsibleIds = responsibility.responsibles
+          .map(String)
+          .filter(id => changedUserIds.map(String).includes(id));
+        if (removedResponsibleIds.length) {
+          responsibility.responsibles = responsibility.responsibles
+            .map(String)
+            .filter(id => !removedResponsibleIds.includes(id));
+          await dbManager.updateResponsibility(name, responsibility);
+          global.responsibilities = responsibilities;
+        }
+      }
+    }
     setSupervisors(interaction.guild.id, name, { userIds });
 
     // تأكيد التفاعل أولاً حتى لا تنتهي مهلة Discord أثناء تحديث رسالة Resp.
@@ -101,7 +121,7 @@ async function handleInteraction(interaction, context = {}) {
         if (member) {
           await member.send({
             content: adding
-              ? `**تم تعيينك مشرفًا على مسؤولية : ${name}** في سيرفر **${interaction.guild.name}**.`
+              ? `**تم تعيينك مشرفًا على مسؤولية : ${name}** في سيرفر **${interaction.guild.name}**.${removedResponsibleIds.includes(String(userId)) ? `\nتمت إزالتك تلقائيًا من صفة المسؤول عن نفس المسؤولية.` : ''}`
               : `**تمت إزالة إشرافك عن مسؤولية : ${name}** في سيرفر **${interaction.guild.name}**.`
           }).catch(() => {});
         }
