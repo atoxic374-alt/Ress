@@ -247,19 +247,28 @@ module.exports = {
 
             const row = new ActionRowBuilder().addComponents(selectMenu);
 
-            const supervisorsMenu = new StringSelectMenuBuilder()
-                .setCustomId('masooliyati_select_supervisors')
-                .setPlaceholder('Show responsibility supervisors')
-                .setMinValues(1)
-                .setMaxValues(Math.min(userResponsibilities.length, 25))
-                .addOptions(userResponsibilities.slice(0, 25).map(resp => ({
-                    label: resp.name.substring(0, 100),
-                    value: resp.name,
-                    description: 'عرض مشرفي هذه المسؤولية'
-                })));
-            const supervisorsRow = new ActionRowBuilder().addComponents(supervisorsMenu);
+            // منيو المشرفين تعرض المسؤوليات التي يملكها مستدعي الأمر فقط.
+            const ownedResponsibilities = userResponsibilities.filter(resp => resp.isResponsible);
+            const supervisorsMenu = ownedResponsibilities.length > 0
+                ? new StringSelectMenuBuilder()
+                    .setCustomId('masooliyati_select_supervisors')
+                    .setPlaceholder('Show responsibility supervisors')
+                    .setMinValues(1)
+                    .setMaxValues(Math.min(ownedResponsibilities.length, 25))
+                    .addOptions(ownedResponsibilities.slice(0, 25).map(resp => ({
+                        label: resp.name.substring(0, 100),
+                        value: resp.name,
+                        description: 'عرض مشرفي هذه المسؤولية'
+                    })))
+                : null;
+            const supervisorsRow = supervisorsMenu
+                ? new ActionRowBuilder().addComponents(supervisorsMenu)
+                : null;
 
-            const sentMessage = await message.channel.send({ embeds: [respEmbed], components: [row, supervisorsRow] });
+            const sentMessage = await message.channel.send({
+                embeds: [respEmbed],
+                components: supervisorsRow ? [row, supervisorsRow] : [row]
+            });
 
             const filter = (interaction) =>
                 (interaction.customId === 'masooliyati_select_desc' || interaction.customId === 'masooliyati_select_supervisors') &&
@@ -323,10 +332,13 @@ module.exports = {
                 const disabledRow = new ActionRowBuilder().addComponents(
                     StringSelectMenuBuilder.from(selectMenu).setDisabled(true)
                 );
-                const disabledSupervisorsRow = new ActionRowBuilder().addComponents(
-                    StringSelectMenuBuilder.from(supervisorsMenu).setDisabled(true)
-                );
-                sentMessage.edit({ components: [disabledRow, disabledSupervisorsRow] }).catch(() => {});
+                const disabledComponents = [disabledRow];
+                if (supervisorsMenu) {
+                    disabledComponents.push(new ActionRowBuilder().addComponents(
+                        StringSelectMenuBuilder.from(supervisorsMenu).setDisabled(true)
+                    ));
+                }
+                sentMessage.edit({ components: disabledComponents }).catch(() => {});
             });
 
         }
