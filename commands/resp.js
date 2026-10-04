@@ -1036,6 +1036,19 @@ async function handleResponsibilitySelect(interaction, client) {
             }
         }
         
+        // حقل المشرفين يظهر قبل المسؤولين في تفاصيل المسؤولية.
+        const { getSupervisors } = require('../utils/responsibilitySupervisors.js');
+        const supervisorData = getSupervisors(interaction.guild.id, selectedResp);
+        const supervisorMentions = [
+            ...supervisorData.userIds.map(id => `<@${id}>`),
+            ...supervisorData.roleIds.map(id => `<@&${id}>`)
+        ];
+        fields.push({
+            name: ' المشرفين',
+            value: supervisorMentions.length ? supervisorMentions.join(' , ') : 'لا يوجد مشرفين معينين',
+            inline: false
+        });
+
         // حقل المسؤولين - مع تحسين التعامل مع الأعداد الكبيرة
         if (respData.responsibles && respData.responsibles.length > 0) {
             // عرض أول 10 مسؤولين فقط إذا كان العدد كبير
