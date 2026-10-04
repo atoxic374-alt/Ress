@@ -2953,10 +2953,20 @@ client.on('messageCreate', async message => {
       const callButton = new ButtonBuilder()
         .setCustomId(callButtonId)
         .setLabel('Call')
-.setEmoji('<:emoji_11:1448570617950371861>')
+.setEmoji('<:emoji_11:1457490571458617861>')
         .setStyle(ButtonStyle.Secondary);
-      
-      const row = new ActionRowBuilder().addComponents(callButton);
+
+      let supervisorCallButtonId = `shortcut_supervisor_call_${matchedResponsibility}_${timestamp}_${message.author.id}`;
+      if (supervisorCallButtonId.length > 95) {
+        supervisorCallButtonId = `shortcut_supervisor_call_${timestamp}_${message.author.id}`;
+      }
+      const supervisorCallButton = new ButtonBuilder()
+        .setCustomId(supervisorCallButtonId)
+        .setLabel('Call Supervisors')
+        .setEmoji('<:emoji_11:1457490571458617861>')
+        .setStyle(ButtonStyle.Secondary);
+
+      const row = new ActionRowBuilder().addComponents(callButton, supervisorCallButton);
       
       // إنشاء رسالة نصية منظمة بدلاً من الإيمبد
       const textMessage = `- **مسؤولين ال${matchedResponsibility}**\n\n${numberedMentions}`;
@@ -2976,6 +2986,15 @@ client.on('messageCreate', async message => {
         messageId: sentMessage.id,
         guildId: message.guild.id,
         timestamp: timestamp
+      });
+      client.shortcutCallData.set(supervisorCallButtonId, {
+        responsibilityName: matchedResponsibility,
+        requesterId: message.author.id,
+        channelId: message.channel.id,
+        messageId: sentMessage.id,
+        guildId: message.guild.id,
+        timestamp: timestamp,
+        supervisorCall: true
       });
       
       return; // انتهاء المعالجة
@@ -5575,6 +5594,91 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
     }
 
     // معالج report تم نقله إلى ملف report.js كمعالج مستقل
+
+    // === معالج زر استدعاء مشرفي المسؤولية من اختصارات المنشن ===
+    if (interaction.isButton() && interaction.customId.startsWith('shortcut_supervisor_call_')) {
+      const callData = client.shortcutCallData?.get(interaction.customId);
+      if (!callData) {
+        await interaction.reply({ content: '**انتهت صلاحية هذا الزر. يرجى استخدام الاختصار مرة أخرى.**', flags: 64 }).catch(() => {});
+        return;
+      }
+      if (interaction.user.id !== callData.requesterId) {
+        await interaction.reply({ content: '**هذا الزر مخصص فقط للشخص الذي استخدم الاختصار.**', flags: 64 }).catch(() => {});
+        return;
+      }
+
+      const { getSupervisors } = require('./utils/responsibilitySupervisors.js');
+      const supervisorData = getSupervisors(callData.guildId, callData.responsibilityName);
+      const supervisorMentions = [
+        ...supervisorData.userIds.map(id => `<@${id}>`),
+        ...supervisorData.roleIds.map(id => `<@&${id}>`)
+      ];
+      if (supervisorMentions.length === 0) {
+        await interaction.reply({ content: `**لا يوجد مشرفين معينين لمسؤولية : ${callData.responsibilityName}**`, flags: 64 }).catch(() => {});
+        return;
+      }
+
+      const confirmationEmbed = colorManager.createEmbed()
+        .setTitle('Call Responsibility Supervisors')
+        .setDescription(`**هل أنت متأكد من طلب مشرفين المسؤولية : ${callData.responsibilityName} ؟**`)
+        .addFields({
+          name: 'Supervisors',
+          value: supervisorMentions.join(' , ').slice(0, 1024),
+          inline: false
+        })
+        .setThumbnail(interaction.guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL())
+        .setTimestamp();
+
+      const confirmationRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`shortcut_supervisor_confirm_${interaction.id}`).setLabel('Confirm').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`shortcut_supervisor_cancel_${interaction.id}`).setLabel('Cancel').setStyle(ButtonStyle.Danger)
+      );
+      const confirmationMessage = await interaction.reply({
+        embeds: [confirmationEmbed],
+        components: [confirmationRow],
+        flags: 64,
+        fetchReply: true
+      });
+
+      try {
+        const confirmation = await confirmationMessage.awaitMessageComponent({
+          filter: i => i.user.id === interaction.user.id
+            && [`shortcut_supervisor_confirm_${interaction.id}`, `shortcut_supervisor_cancel_${interaction.id}`].includes(i.customId),
+          time: 60000
+        });
+        if (confirmation.customId.endsWith('_cancel_' + interaction.id)) {
+          await confirmation.update({ content: '**تم إلغاء طلب استدعاء المشرفين.**', embeds: [], components: [] });
+          return;
+        }
+
+        await confirmation.deferUpdate();
+        const recipientIds = new Set(supervisorData.userIds.map(String));
+        for (const roleId of supervisorData.roleIds) {
+          const role = await interaction.guild.roles.fetch(roleId).catch(() => null);
+          role?.members?.forEach(member => recipientIds.add(String(member.id)));
+        }
+        const messageLink = `https://discord.com/channels/${callData.guildId}/${callData.channelId}/${callData.messageId}`;
+        const dmEmbed = colorManager.createEmbed()
+          .setTitle('Responsibility Supervisor Call')
+          .setDescription(`**تم استدعاؤك كمشرف على مسؤولية : ${callData.responsibilityName}**\n\n**المستدعي :** <@${interaction.user.id}>\n**الرابط :** [اذهب للرسالة](${messageLink})`)
+          .setThumbnail(interaction.guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL())
+          .setTimestamp();
+        let sentCount = 0;
+        for (const userId of recipientIds) {
+          const user = await client.users.fetch(userId).catch(() => null);
+          if (user && await user.send({ embeds: [dmEmbed] }).then(() => true).catch(() => false)) sentCount++;
+        }
+        await confirmation.editReply({
+          content: `**تم استدعاء مشرفي مسؤولية ${callData.responsibilityName} بنجاح.**\n**تم الإرسال إلى :** ${sentCount}`,
+          embeds: [],
+          components: []
+        });
+        client.shortcutCallData.delete(interaction.customId);
+      } catch (error) {
+        await interaction.editReply({ content: '**انتهت مهلة التأكيد ولم يتم استدعاء المشرفين.**', embeds: [], components: [] }).catch(() => {});
+      }
+      return;
+    }
 
     // === معالج زر الاستدعاء من اختصارات المنشن ===
     if (interaction.isButton() && interaction.customId.startsWith('shortcut_call_')) {
