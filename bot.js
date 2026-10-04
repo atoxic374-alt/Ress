@@ -6206,37 +6206,49 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
 
 // دالة لعرض مسؤوليات المستخدم
 async function showUserResponsibilities(message, targetUser, responsibilities, client) {
-    // البحث عن مسؤوليات المستخدم
+    // عرض المسؤوليات التي يتولاها المستخدم، وكذلك المسؤوليات التي يشرف عليها.
+    const { getSupervisedResponsibilities } = require('./utils/responsibilitySupervisors.js');
+    const targetMember = await message.guild.members.fetch(targetUser.id).catch(() => null);
+    const supervisedNames = new Set(
+        getSupervisedResponsibilities(message.guild.id, targetMember || targetUser, responsibilities)
+    );
     const userResponsibilities = [];
 
     for (const [respName, respData] of Object.entries(responsibilities)) {
-        if (respData.responsibles && respData.responsibles.includes(targetUser.id)) {
-            // حساب عدد المسؤولين الآخرين (غير المستخدم الحالي)
-            const otherResponsibles = respData.responsibles.filter(id => id !== targetUser.id);
+        const isResponsible = Array.isArray(respData.responsibles)
+            && respData.responsibles.map(String).includes(String(targetUser.id));
+        const isSupervisor = supervisedNames.has(respName);
+        if (isResponsible || isSupervisor) {
+            const otherResponsibles = (respData.responsibles || [])
+                .map(String)
+                .filter(id => id !== String(targetUser.id));
             userResponsibilities.push({
                 name: respName,
+                isResponsible,
+                isSupervisor,
                 otherResponsiblesCount: otherResponsibles.length
             });
         }
     }
 
-    // إنشاء الرد
     if (userResponsibilities.length === 0) {
         const noRespEmbed = colorManager.createEmbed()
-            .setDescription(`**${targetUser.username} ليس لديك أي مسؤوليات**`)
+            .setDescription(`**${targetUser.username} ليس لديه أي مسؤوليات أو إشراف حالياً**`)
             .setColor('#000000')
             .setThumbnail('https://cdn.discordapp.com/attachments/1373799493111386243/1400390144795738175/download__2_-removebg-preview.png?ex=688d1f34&is=688bcdb4&hm=40da8d91a92062c95eb9d48f307697ec0010860aca64dd3f8c3c045f3c2aa13a&');
 
         await message.channel.send({ embeds: [noRespEmbed] });
     } else {
-        // إنشاء قائمة المسؤوليات
         let responsibilitiesList = '';
         userResponsibilities.forEach((resp, index) => {
-            responsibilitiesList += `**${index + 1}.** ${resp.name}\n${resp.otherResponsiblesCount} مسؤولون غيرك\n\n`;
+            const roles = [];
+            if (resp.isResponsible) roles.push('مسؤول');
+            if (resp.isSupervisor) roles.push('مشرف');
+            responsibilitiesList += `**${index + 1}.** ${resp.name}\n**الصفة :** ${roles.join(' و ')}\n${resp.otherResponsiblesCount} مسؤولون غيرك\n\n`;
         });
 
         const respEmbed = colorManager.createEmbed()
-            .setTitle(`مسؤولياتك`)
+            .setTitle('مسؤولياتك')
             .setDescription(`**مسؤولياتك هي:**\n\n${responsibilitiesList}`)
             .setColor('#00ff00')
             .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
@@ -6250,7 +6262,6 @@ async function showUserResponsibilities(message, targetUser, responsibilities, c
         await message.channel.send({ embeds: [respEmbed] });
     }
 }
-
 // دالة لعرض إحصائيات المترقين مع التنقل
 // Handle single record deletion
 async function handleDeleteSingleRecord(interaction, roleId, recordIndex) {
