@@ -745,6 +745,18 @@ async function updateEmbedMessage(client, targetGuildId = null) {
         // فحص وجود صورة لنظام المسؤوليات في السيرفر
         const config = readJSONFile(DATA_FILES.respConfig, { guilds: {} });
 
+        // إعادة بناء مرجع الرسالة من الإعدادات حتى يعمل التحديث فوراً بعد إعادة التشغيل.
+        if (targetGuildId && !embedMessages.has(targetGuildId)) {
+            const stored = config.guilds?.[targetGuildId]?.embedData;
+            if (stored?.messageId && stored?.channelId) {
+                embedMessages.set(targetGuildId, {
+                    messageId: stored.messageId,
+                    channelId: stored.channelId,
+                    message: null,
+                    format: config.guilds?.[targetGuildId]?.messageFormat || 'embed'
+                });
+            }
+        }
         const entries = targetGuildId
             ? (embedMessages.has(targetGuildId) ? [[targetGuildId, embedMessages.get(targetGuildId)]] : [])
             : [...embedMessages.entries()];
@@ -2569,9 +2581,26 @@ module.exports = {
                     let totalRolesRemoved = 0;
                     let skippedMissingMembers = 0;
                     const { dbManager } = require('../utils/database.js');
+                    const { clearGuildSupervisors } = require('../utils/responsibilitySupervisors.js');
+                    const responsibilityNames = Object.keys(currentResps);
+                    const totalResponsibilities = responsibilityNames.length;
+                    let completedResponsibilities = 0;
+                    const progressBar = (done, total, size = 12) => {
+                        if (!total) return '░'.repeat(size);
+                        const filled = Math.round((done / total) * size);
+                        return '█'.repeat(filled) + '░'.repeat(Math.max(0, size - filled));
+                    };
+                    const updateClearProgress = async (label) => {
+                        await confirm.editReply({
+                            content: `**جاري تفريغ المسؤولين والمشرفين**\n**${label}**\n\`${progressBar(completedResponsibilities, totalResponsibilities)}\` ${completedResponsibilities}/${totalResponsibilities}`,
+                            components: []
+                        }).catch(() => {});
+                    };
 
-                    for (const respName in currentResps) {
+                    await updateClearProgress('بدء العملية...');
+                    for (const respName of responsibilityNames) {
                         const resp = currentResps[respName];
+                        await updateClearProgress(`جاري معالجة : ${respName}`);
                         const roleIds = Array.isArray(resp.roles) ? resp.roles.filter(Boolean) : (resp.roleId ? [resp.roleId] : []);
                         const members = [...new Set(resp.responsibles || resp.members || [])];
                         const fetchedMembers = members.length > 0
@@ -2596,8 +2625,12 @@ module.exports = {
                         resp.members = [];
                         resp.responsibles = [];
                         if (dbManager?.updateResponsibility) await dbManager.updateResponsibility(respName, resp);
+                        completedResponsibilities++;
                     }
 
+                    // حذف المشرفين المحفوظين لهذا السيرفر بعد تفريغ كل المسؤوليات.
+                    clearGuildSupervisors(guildId);
+                    await updateClearProgress('تم تفريغ جميع المسؤوليات والمشرفين.');
                     writeJSONFile(DATA_FILES.responsibilities, currentResps);
                     global.responsibilities = currentResps;
                     await updateEmbedMessage(message.client, guildId).catch(() => {});
@@ -2610,7 +2643,7 @@ module.exports = {
                         ? `\n**⚠️ لم يتم سحب رولات : ${skippedMissingMembers} (طالعين من السيرفر).**`
                         : '';
                     await interaction.editReply({
-                        content: `**✅ تم تفريغ المسؤولين (${totalRemoved}) وسحب الرولات (${totalRolesRemoved}).**${skippedLine}`,
+                        content: `**✅ تم تفريغ المسؤولين (${totalRemoved}) والمشرفين عن جميع المسؤوليات وسحب الرولات (${totalRolesRemoved}).**${skippedLine}`,
                         components: []
                     });
                 }
@@ -2707,7 +2740,7 @@ function loadEmbedData(client) {
 async function sendResponsibilitiesEmbed(channel, client) {
     try {
         const responsibilities = readJSONFile(DATA_FILES.responsibilities, {});
-        const embed = createResponsibilitiesEmbed(responsibilities);
+        const embed = createResponsibilitiesEmbed(responsibilities, channel.guild.id);
         const components = createSuggestionComponents();
         
         const message = await channel.send({

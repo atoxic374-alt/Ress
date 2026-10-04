@@ -1706,8 +1706,10 @@ client.once(Events.ClientReady, async () => {
     
     // تشغيل المزامنة فور الجاهزية
     await syncAllResponsibilityRoles(client);
+    // تحديث رسالة المسؤوليات فور جاهزية البوت، ثم إعادة المحاولة بعد دقيقتين.
+    await ensureRespMessageFreshness(client, 'startup');
 
-    // فحص وتحديث رسالة المسؤوليات بعد بدء التشغيل بدقيقتين (لتجنب الضغط المبكر)
+    // فحص وتحديث رسالة المسؤوليات بعد بدء التشغيل بدقيقتين (إعادة محاولة آمنة)
     setTimeout(async () => {
       await ensureRespMessageFreshness(client, 'startup+2m');
     }, 2 * 60 * 1000);

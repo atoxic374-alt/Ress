@@ -68,10 +68,20 @@ function getSupervisedResponsibilities(guildId, memberOrUser, responsibilities =
   return Object.keys(responsibilities).filter(name => isSupervisorForResponsibility(guildId, name, memberOrUser));
 }
 
+function clearGuildSupervisors(guildId) {
+  const store = readStore();
+  if (store.guilds && store.guilds[guildId]) {
+    delete store.guilds[guildId];
+    writeStore(store);
+  }
+  return true;
+}
+
 module.exports = {
   supervisorsPath,
   getSupervisors,
   setSupervisors,
+  clearGuildSupervisors,
   isSupervisorForResponsibility,
   getSupervisedResponsibilities
 };

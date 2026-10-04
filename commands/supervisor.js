@@ -83,6 +83,14 @@ async function handleInteraction(interaction, context = {}) {
     const current = getSupervisors(interaction.guild.id, name);
     const userIds = adding ? [...new Set([...current.userIds, ...selected])] : current.userIds.filter(uid => !selected.includes(uid));
     setSupervisors(interaction.guild.id, name, { userIds });
+    try {
+      const respCommand = context.client?.commands?.get('resp');
+      if (respCommand?.updateEmbedMessage) {
+        await respCommand.updateEmbedMessage(context.client, interaction.guild.id);
+      }
+    } catch (refreshError) {
+      console.error('تعذر تحديث Embed المسؤوليات بعد تعديل المشرفين:', refreshError);
+    }
     return interaction.update(managePanel(interaction.guild.id, name));
   }
   return false;
