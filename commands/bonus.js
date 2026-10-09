@@ -879,8 +879,8 @@ async function buildAdminTopPayload(guild) {
     content: `**All Points:** ${Number(summary?.points || 0).toLocaleString('en-US')}\n**Members Points:** ${Number(summary?.members || 0).toLocaleString('en-US')}`,
     files: [attachment], attachments: [],
     components: [new ActionRowBuilder().addComponents(
-      button('bonus:admin-top-add', '+', ButtonStyle.Success),
-      button('bonus:admin-top-remove', '-', ButtonStyle.Danger),
+      button('bonus:admin-top-add', '+', ButtonStyle.Success).setEmoji('<:emoji_11:1448570617950371861>'),
+      button('bonus:admin-top-remove', '-', ButtonStyle.Danger).setEmoji('<:emoji_11:1448570617950371861>'),
       button('bonus:admin-top-avatar', 'Change Avatar', ButtonStyle.Secondary)
     )]
   };
