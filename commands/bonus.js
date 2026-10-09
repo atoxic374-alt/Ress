@@ -8,6 +8,8 @@ const path = require('path');
 const { getDatabase, dbManager } = require('../utils/database');
 const { createBonusManager, BONUS_METRICS } = require('../utils/bonusManager');
 const { buildBonusTopImage, normalizeHex } = require('../utils/bonusTopRenderer');
+const { createAdminBonusManager } = require('../utils/adminBonusManager');
+const { buildBonusAdminTopImage } = require('../utils/bonusAdminTopRenderer');
 const colorManager = require('../utils/colorManager');
 const interactionRouter = require('../utils/interactionRouter');
 const name = 'bonus';
@@ -18,6 +20,7 @@ const pendingRuleChanges = new Map();
 const voiceSessions = new Map();
 const renderTimers = new Map();
 const lastRenderAt = new Map();
+const adminTopLastRenderAt = new Map();
 const activeBoardPanels = new Map();
 const roleAuditCache = new Map();
 const guildRoleAuditCache = new Map();
@@ -40,6 +43,7 @@ const BOARD_PERMISSION_BACKOFF_MS = 60 * 1000;
 const VOICE_SESSION_MAX_STALE_MS = 24 * 60 * 60 * 1000;
 let lastCacheCleanupAt = 0;
 let manager;
+let adminBonusManager;
 let boundClient = null;
 let voiceInterval = null;
 let boardRefreshInterval = null;
@@ -70,6 +74,15 @@ function getManager() {
   return manager;
 }
 
+function getAdminBonusManager() {
+  if (!adminBonusManager) {
+    const database = getDatabase();
+    if (!database.isInitialized || database.isDegraded) throw new Error('BONUS_DATABASE_NOT_PERSISTENT');
+    adminBonusManager = createAdminBonusManager(database);
+  }
+  return adminBonusManager;
+}
+
 async function ensureBonusDatabase() {
   if (dbManager.isDegraded && typeof dbManager.recoverPersistent === 'function') await dbManager.recoverPersistent();
   if (!dbManager.isInitialized) await dbManager.initialize();
@@ -97,8 +110,8 @@ function safeJsonParse(value, fallback = {}) {
 }
 function isModalOpeningAction(action, parts = []) {
   return action === 'color-manual' || action === 'rule' || action === 'audit-filter'
-    || action === 'group-search' || action === 'owner-avatar'
-    || (action === 'select' && parts[0] === 'owner-avatar')
+    || action === 'group-search' || action === 'owner-avatar' || action === 'admin-top-rule' || action === 'admin-top-color-manual'
+    || (action === 'select' && (parts[0] === 'owner-avatar' || parts[0] === 'admin-top-user'))
     || (action === 'group-action' && parts[0] === 'avatar');
 }
 
@@ -218,6 +231,19 @@ function getBotOwners(context = {}) {
   return owners.map(String);
 }
 
+function isAutomaticBonusEnabled(config) {
+  // الوضع الافتراضي مفعّل للحفاظ على السلوك السابق للسيرفرات الحالية.
+  return config?.automaticBonus !== false;
+}
+
+async function isGuildAutomaticBonusEnabled(guildId) {
+  try {
+    return isAutomaticBonusEnabled(await getManager().readConfig(String(guildId)));
+  } catch {
+    return false;
+  }
+}
+
 async function isManager(guild, member, userId, context = {}) {
   if (!guild || !member || !userId) return false;
   if (guild.ownerId === String(userId) || getBotOwners(context).includes(String(userId))) return true;
@@ -251,7 +277,7 @@ async function requireManager(interaction, context = {}) {
 }
 
 function isBonusPublicOrOwnerAction(action, parts = []) {
-  if (['close', 'public-close', 'public-refresh', 'top-page', 'private-top', 'private-top-page', 'my-group'].includes(action)) return true;
+  if (['close', 'public-close', 'public-refresh', 'admin-top-refresh', 'top-page', 'private-top', 'private-top-page', 'my-group'].includes(action)) return true;
   if (action === 'owner-avatar') return true;
   if (action === 'page' && parts[0] === 'owner-avatar') return true;
   if (action === 'select' && parts[0] === 'owner-avatar') return true;
@@ -268,6 +294,7 @@ function buildHomeEmbed(guild, config, groups, rules, complete) {
     `**Board Channel :** ${config.channelId ? `<#${config.channelId}>` : 'Not set'}`,
     `**Audit Channel :** ${config.auditChannelId ? `<#${config.auditChannelId}>` : 'Not set'}`,
     `**Board Color :** ${config.autoColor === false ? normalizeHex(config.color) : 'Auto server icon'}`,
+    `**Automatic Bonus :** ${isAutomaticBonusEnabled(config) ? 'Enabled' : 'Disabled (Manual points only)'}`,
     `**Global Double :** ${globalDouble ? (config.globalDoubleBonus.endsAt ? `Active until <t:${Math.floor(Number(config.globalDoubleBonus.endsAt) / 1000)}:R>` : 'Active until manual stop') : 'Inactive'}`,
     `**Active Groups :** ${groups.length}`,
     `**Message Rule :** ${rules.messages ? `${Number(rules.messages.threshold).toLocaleString()} messages = ${rules.messages.points} points` : 'Not set'}`,
@@ -281,7 +308,7 @@ function buildHomeEmbed(guild, config, groups, rules, complete) {
 }
 
 function button(customId, label, style = ButtonStyle.Secondary) {
-  return new ButtonBuilder().setCustomId(customId).setLabel(label).setStyle(ButtonStyle.Secondary);
+  return new ButtonBuilder().setCustomId(customId).setLabel(label).setStyle(style);
 }
 
 // Generic cancel/back actions return to the previous transient panel. Use an
@@ -353,9 +380,12 @@ function buildHomeRows() {
       button('bonus:manage-groups', 'Manage Groups'),
       button('bonus:reset', 'Reset'),
       button('bonus:double', 'Double Bonus'),
-      button('bonus:publish', 'Publish / Update', ButtonStyle.Secondary)
+      button('bonus:automatic', 'Automatic Bonus')
     ),
-    new ActionRowBuilder().addComponents(button('bonus:audit', 'Audit Log'))
+    new ActionRowBuilder().addComponents(
+      button('bonus:publish-admin', 'توب الإدارة', ButtonStyle.Primary),
+      button('bonus:audit', 'Audit Log')
+    ),
   ];
 }
 
@@ -613,6 +643,7 @@ async function resolveCurrentGroupForMember(guild, member) {
 
 async function refreshBoardNow(guild, force = false) {
   if (!guild || !boundClient) return;
+  await refreshAdminTopNow(guild, force).catch(error => console.error('[bonus] admin top refresh failed:', error));
   const blockedUntil = boardPermissionBackoff.get(String(guild.id)) || 0;
   if (!force && blockedUntil > Date.now()) return;
   const db = getManager();
@@ -751,6 +782,142 @@ async function buildBoardPayload(guild, prompt = '', requestedPage = 0) {
   });
   const attachment = await buildBonusTopImage({ guild, groups, config, updatedAt: Date.now() });
   return { content: [boardCounter(summary), prompt].filter(Boolean).join('\n'), files: [attachment], attachments: [], components: buildPublicRows() };
+}
+
+async function buildAdminTopHub(guild) {
+  const adminBonus = getAdminBonusManager();
+  const [config, rules] = await Promise.all([adminBonus.readConfig(guild.id), adminBonus.getRules(guild.id)]);
+  const automaticStatus = config.automaticBonus ? 'مفعّل' : 'متوقف';
+  const ruleText = [
+    rules.messages ? `الرسائل: كل ${Number(rules.messages.threshold).toLocaleString()} رسالة = ${rules.messages.points} نقطة` : 'الرسائل: غير مفعّلة',
+    rules.voice_ms ? `الصوت: كل ${(Number(rules.voice_ms.threshold) / 3600000).toLocaleString()} ساعة = ${rules.voice_ms.points} نقطة` : 'الصوت: غير مفعّل'
+  ];
+  const baseConfig = await getManager().readConfig(guild.id);
+  const channelId = config.channelId || baseConfig.channelId;
+  return {
+    embeds: [colorManager.createEmbed().setTitle('توب الإدارة • نقاط الأفراد')
+      .setDescription(`نظام نقاط مستقل للأعضاء. الإضافة اليدوية متاحة سواء كان التلقائي يعمل أو متوقفًا.\n\n**التلقائي:** ${automaticStatus}\n${ruleText.join('\n')}\n\n**روم الصورة:** ${channelId ? `<#${channelId}>` : 'غير محدد — يمكنك اختيار روم البورد الحالي أو تحديد روم مستقل.'}`)],
+    components: [
+      new ActionRowBuilder().addComponents(
+        button('bonus:admin-top-manual', 'إضافة نقاط يدويًا', ButtonStyle.Primary),
+        button('bonus:admin-top-auto', 'قواعد تلقائية (Rules)', ButtonStyle.Secondary)
+      ),
+      new ActionRowBuilder().addComponents(
+        button('bonus:admin-top-publish', 'إرسال/تحديث صورة التوب', ButtonStyle.Success),
+        button('bonus:admin-top-channel', 'اختيار روم الصورة')
+      ),
+      new ActionRowBuilder().addComponents(
+        button('bonus:admin-top-color-auto', 'لون تلقائي'),
+        button('bonus:admin-top-color-manual', 'لون يدوي'),
+        button('bonus:home', 'رجوع للإعدادات')
+      )
+    ]
+  };
+}
+function buildAdminManualPayload() {
+  return {
+    embeds: [colorManager.createEmbed().setTitle('نقاط توب الإدارة • يدوي')
+      .setDescription('اختر عضوًا من السيرفر ثم أضف أو أخصم من رصيده المستقل.')],
+    components: [
+      new ActionRowBuilder().addComponents(
+        button('bonus:admin-top-add', 'إضافة نقاط', ButtonStyle.Success),
+        button('bonus:admin-top-remove', 'خصم نقاط', ButtonStyle.Danger)
+      ),
+      new ActionRowBuilder().addComponents(button('bonus:publish-admin', 'رجوع لتوب الإدارة'), button('bonus:home', 'رجوع للإعدادات'))
+    ]
+  };
+}
+function buildAdminRulesPayload(config, rules) {
+  const lines = [
+    `**حالة التلقائي:** ${config.automaticBonus ? 'مفعّل' : 'متوقف'}`,
+    rules.messages ? `**قاعدة الرسائل:** ${Number(rules.messages.threshold).toLocaleString()} رسالة = ${Number(rules.messages.points).toLocaleString()} نقطة` : '**قاعدة الرسائل:** غير مفعّلة',
+    rules.voice_ms ? `**قاعدة الصوت:** ${(Number(rules.voice_ms.threshold) / 3600000).toLocaleString()} ساعة = ${Number(rules.voice_ms.points).toLocaleString()} نقطة` : '**قاعدة الصوت:** غير مفعّلة',
+    '\nهذه القواعد تخص نقاط الأفراد فقط، وإعداداتها مستقلة.'
+  ];
+  const rows = [new ActionRowBuilder().addComponents(
+    button('bonus:admin-top-auto-on', 'تفعيل التلقائي', config.automaticBonus ? ButtonStyle.Secondary : ButtonStyle.Success),
+    button('bonus:admin-top-auto-off', 'إيقاف التلقائي', config.automaticBonus ? ButtonStyle.Danger : ButtonStyle.Secondary)
+  ), new ActionRowBuilder().addComponents(
+    button('bonus:admin-top-rule:messages', 'قاعدة الرسائل'),
+    button('bonus:admin-top-rule:voice', 'قاعدة الصوت')
+  )];
+  const disabled = [];
+  if (rules.messages) disabled.push(button('bonus:admin-top-rule-off:messages', 'إيقاف الرسائل', ButtonStyle.Danger));
+  if (rules.voice_ms) disabled.push(button('bonus:admin-top-rule-off:voice', 'إيقاف الصوت', ButtonStyle.Danger));
+  if (disabled.length) rows.push(new ActionRowBuilder().addComponents(disabled));
+  rows.push(new ActionRowBuilder().addComponents(button('bonus:publish-admin', 'رجوع لتوب الإدارة'), button('bonus:home', 'رجوع للإعدادات')));
+  return { embeds: [colorManager.createEmbed().setTitle('نقاط توب الإدارة • تلقائي / Rules').setDescription(lines.join('\n'))], components: rows };
+}
+async function getAdminTopMembers(guild) {
+  const adminBonus = getAdminBonusManager();
+  const rows = await adminBonus.getLeaderboard(guild.id, 100, 0);
+  const members = [];
+  for (let offset = 0; offset < rows.length && members.length < 10; offset += 10) {
+    const batch = await Promise.all(rows.slice(offset, offset + 10).map(async row => {
+      const member = guild.members.cache.get(String(row.user_id))
+        || await guild.members.fetch(String(row.user_id)).catch(() => null);
+      if (!member || member.user?.bot) return null;
+      return {
+        user_id: String(row.user_id),
+        points: Number(row.points) || 0,
+        display_name: safeName(member.displayName || member.user?.globalName || member.user?.username || row.user_id, 80),
+        username: safeName(member.user?.username || row.user_id, 80),
+        avatar_url: member.displayAvatarURL({ extension: 'png', size: 128 })
+      };
+    }));
+    members.push(...batch.filter(Boolean));
+  }
+  return members.slice(0, 10);
+}
+async function buildAdminTopPayload(guild) {
+  const adminBonus = getAdminBonusManager();
+  const [config, summary, members] = await Promise.all([
+    adminBonus.readConfig(guild.id), adminBonus.getSummary(guild.id), getAdminTopMembers(guild)
+  ]);
+  const attachment = await buildBonusAdminTopImage({ guild, members, config, updatedAt: Date.now() });
+  return {
+    content: `**توب الإدارة • ترتيب عام للأعضاء**\nالأعضاء ذوو النقاط: ${Number(summary?.members || 0).toLocaleString('en-US')} • مجموع النقاط: ${Number(summary?.points || 0).toLocaleString('en-US')}`,
+    files: [attachment], attachments: [],
+    components: [new ActionRowBuilder().addComponents(button('bonus:admin-top-refresh', 'تحديث الصورة', ButtonStyle.Secondary))]
+  };
+}
+async function publishAdminTop(guild, actorId) {
+  const adminBonus = getAdminBonusManager();
+  const ownConfig = await adminBonus.readConfig(guild.id);
+  const normalConfig = await getManager().readConfig(guild.id);
+  const channelId = ownConfig.channelId || normalConfig.channelId;
+  if (!channelId) throw new Error('CHANNEL_REQUIRED');
+  const channel = await guild.channels.fetch(String(channelId)).catch(() => null);
+  if (!isGuildText(channel)) throw new Error('CHANNEL_NOT_FOUND');
+  const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+  const permissions = botMember ? channel.permissionsFor(botMember) : null;
+  if (!permissions || !permissions.has([
+    PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages,
+    PermissionsBitField.Flags.AttachFiles, PermissionsBitField.Flags.ReadMessageHistory
+  ])) throw new Error('MISSING_CHANNEL_PERMISSIONS');
+  const payload = await buildAdminTopPayload(guild);
+  let message = ownConfig.topMessageId && String(ownConfig.channelId || channel.id) === String(channel.id)
+    ? await channel.messages.fetch(String(ownConfig.topMessageId)).catch(() => null) : null;
+  if (message) await message.edit(payload);
+  else message = await channel.send(payload);
+  await adminBonus.saveConfig(guild.id, { channelId: channel.id, topMessageId: message.id }, actorId);
+  adminTopLastRenderAt.set(String(guild.id), Date.now());
+  return message;
+}
+async function refreshAdminTopNow(guild, force = false) {
+  if (!guild || !boundClient) return;
+  const adminBonus = getAdminBonusManager();
+  const config = await adminBonus.readConfig(guild.id);
+  if (!config.channelId || !config.topMessageId) return;
+  const now = Date.now();
+  const last = adminTopLastRenderAt.get(String(guild.id)) || 0;
+  if (now - last < (force ? 10000 : 60000)) return;
+  const channel = await guild.channels.fetch(String(config.channelId)).catch(() => null);
+  if (!isGuildText(channel)) return;
+  const message = await channel.messages.fetch(String(config.topMessageId)).catch(() => null);
+  if (!message) return;
+  await message.edit(await buildAdminTopPayload(guild));
+  adminTopLastRenderAt.set(String(guild.id), Date.now());
 }
 
 async function buildPrivateTopPayload(guild, requestedPage = 0) {
@@ -1258,6 +1425,38 @@ async function handleInteraction(interaction, context = {}) {
       await interaction.showModal(modal('bonus:modal:color', 'لون صورة التوب', [
         { id: 'hex', label: 'لون HEX مثل #D9A441', placeholder: '#D9A441', maxLength: 7 }
       ]));
+      return true;
+    }
+
+    if (action === 'automatic') {
+      const config = await db.readConfig(interaction.guild.id);
+      const enabled = isAutomaticBonusEnabled(config);
+      await showPrivatePanel(interaction, {
+        embeds: [colorManager.createEmbed()
+          .setTitle('Automatic Bonus')
+          .setDescription(enabled
+            ? 'الزيادة التلقائية مفعّلة. يتم احتساب الرسائل والصوت حسب القواعد، ويمكنك إيقافها للاعتماد على الإضافة اليدوية فقط.'
+            : 'الزيادة التلقائية متوقفة. لن تُحتسب الرسائل أو الصوت، وتبقى إضافة وخصم النقاط يدويًا متاحة للمسؤولين.')],
+        components: [new ActionRowBuilder().addComponents(
+          button('bonus:automatic-on', 'تفعيل الزيادة التلقائية', enabled ? ButtonStyle.Secondary : ButtonStyle.Success),
+          button('bonus:automatic-off', 'إلغاء الزيادة التلقائية', enabled ? ButtonStyle.Danger : ButtonStyle.Secondary)
+        ), new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع للإعدادات'))]
+      }, true);
+      return true;
+    }
+
+    if (action === 'automatic-on' || action === 'automatic-off') {
+      const enabled = action === 'automatic-on';
+      await db.saveConfig(interaction.guild.id, { automaticBonus: enabled }, interaction.user.id);
+      voiceTrackingCache.delete(String(interaction.guild.id));
+      if (boundClient) await restoreVoiceSessions(boundClient).catch(error => console.error('[bonus] voice restore after changing group automatic bonus failed:', error));
+      await showPrivatePanel(interaction, {
+        content: enabled
+          ? 'تم تفعيل الزيادة التلقائية. سيبدأ احتساب النشاط الجديد من الآن، مع بقاء الإضافة اليدوية متاحة.'
+          : 'تم إلغاء الزيادة التلقائية. تم إيقاف احتساب الرسائل والصوت، ويمكن الاعتماد على الإضافة اليدوية فقط.',
+        components: [new ActionRowBuilder().addComponents(button('bonus:automatic', 'إعداد الزيادة التلقائية'), button('bonus:home', 'رجوع للإعدادات'))]
+      }, true);
+      scheduleRefresh(interaction.guild, true);
       return true;
     }
 
@@ -1780,6 +1979,21 @@ async function handleInteraction(interaction, context = {}) {
     if (action === 'confirm') {
       const [confirmAction, rawGroupId, rawUserId, rawAmount] = parts;
       const groupId = Number(rawGroupId);
+      if (confirmAction === 'admin-remove') {
+        const userId = String(rawGroupId || '');
+        const amount = Number(rawUserId);
+        try {
+          const member = await interaction.guild.members.fetch(userId).catch(() => null);
+          if (!member || member.user?.bot || !Number.isSafeInteger(amount) || amount <= 0) throw new Error('INVALID_USER');
+          const result = await getAdminBonusManager().adjustPoints(interaction.guild.id, userId, -amount, interaction.user.id);
+          await showPrivatePanel(interaction, buildActionResult('Admin Top Points Updated', `تم خصم ${Math.abs(result.delta).toLocaleString()} نقطة من <@${userId}>. رصيده الجديد: ${result.after.toLocaleString()}.`), true);
+          scheduleRefresh(interaction.guild, true);
+        } catch (error) {
+          const text = error.message === 'INSUFFICIENT_USER_POINTS' ? 'رصيد العضو لم يعد كافيًا لهذا الخصم.' : 'تعذر خصم النقاط؛ تحقق من العضو والرصيد.';
+          await showPrivatePanel(interaction, buildActionResult('Points Update Failed', text), true);
+        }
+        return true;
+      }
       if (confirmAction === 'group-reset') {
         await settleVoiceBeforeReset(interaction.guild, groupId);
         const totals = await db.resetGroup(interaction.guild.id, groupId, interaction.user.id);
@@ -1841,6 +2055,146 @@ async function handleInteraction(interaction, context = {}) {
       return true;
     }
 
+    if (action === 'publish-admin') {
+      await showPrivatePanel(interaction, await buildAdminTopHub(interaction.guild), true);
+      return true;
+    }
+    if (action === 'admin-top-manual') {
+      await showPrivatePanel(interaction, buildAdminManualPayload(), true);
+      return true;
+    }
+    if (action === 'admin-top-auto') {
+      const adminBonus = getAdminBonusManager();
+      const [config, rules] = await Promise.all([adminBonus.readConfig(interaction.guild.id), adminBonus.getRules(interaction.guild.id)]);
+      await showPrivatePanel(interaction, buildAdminRulesPayload(config, rules), true);
+      return true;
+    }
+    if (action === 'admin-top-add' || action === 'admin-top-remove') {
+      const operation = action === 'admin-top-add' ? 'add' : 'remove';
+      const menu = new UserSelectMenuBuilder().setCustomId(`bonus:select:admin-top-user:${operation}`)
+        .setPlaceholder(operation === 'add' ? 'اختر عضوًا لإضافة النقاط له' : 'اختر عضوًا لخصم النقاط منه')
+        .setMinValues(1).setMaxValues(1);
+      await showPrivatePanel(interaction, {
+        content: operation === 'add' ? 'اختر أي عضو من السيرفر لإضافة نقاط إلى رصيده المستقل.' : 'اختر أي عضو من السيرفر لخصم نقاط من رصيده المستقل.',
+        components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(button('bonus:admin-top-manual', 'رجوع'))]
+      }, true);
+      return true;
+    }
+    if (action === 'select' && parts[0] === 'admin-top-user') {
+      const operation = parts[1] === 'remove' ? 'remove' : 'add';
+      const userId = String(interaction.values[0] || '');
+      const member = await interaction.guild.members.fetch(userId).catch(() => null);
+      if (!member || member.user?.bot) {
+        await showPrivatePanel(interaction, { content: 'اختر عضوًا حاليًا من السيرفر، وليس بوتًا.', components: [new ActionRowBuilder().addComponents(button('bonus:admin-top-manual', 'رجوع'))] }, true);
+        return true;
+      }
+      const balance = await getAdminBonusManager().getBalance(interaction.guild.id, userId);
+      await interaction.showModal(modal(`bonus:modal:admin-top-points:${operation}:${userId}`,
+        operation === 'add' ? 'إضافة نقاط توب الإدارة' : 'خصم نقاط توب الإدارة', [
+          { id: 'amount', label: operation === 'remove' ? `رصيد العضو: ${Number(balance?.points || 0)}` : 'عدد النقاط', placeholder: '100', maxLength: 8 }
+        ]));
+      return true;
+    }
+    if (action === 'admin-top-auto-on' || action === 'admin-top-auto-off') {
+      const adminBonus = getAdminBonusManager();
+      const enabled = action === 'admin-top-auto-on';
+      await adminBonus.saveConfig(interaction.guild.id, { automaticBonus: enabled }, interaction.user.id);
+      voiceTrackingCache.delete(String(interaction.guild.id));
+      if (boundClient) await restoreVoiceSessions(boundClient).catch(error => console.error('[bonus] admin voice restore failed:', error));
+      const [config, rules] = await Promise.all([adminBonus.readConfig(interaction.guild.id), adminBonus.getRules(interaction.guild.id)]);
+      await showPrivatePanel(interaction, { content: enabled
+        ? 'تم تفعيل الإضافة التلقائية لنقاط الأفراد حسب قواعد هذه اللوحة. الإضافة اليدوية ما زالت متاحة أيضًا.'
+        : 'تم إيقاف الإضافة التلقائية لنقاط الأفراد. النقاط اليدوية والرصيد الحالي محفوظان.',
+        embeds: buildAdminRulesPayload(config, rules).embeds,
+        components: buildAdminRulesPayload(config, rules).components }, true);
+      scheduleRefresh(interaction.guild, true);
+      return true;
+    }
+    if (action === 'admin-top-rule') {
+      const metricName = parts[0];
+      const metric = metricName === 'messages' ? BONUS_METRICS.messages : metricName === 'voice' ? BONUS_METRICS.voice : null;
+      if (!metric) return true;
+      const current = await getAdminBonusManager().getRules(interaction.guild.id);
+      const existing = current[metric];
+      await interaction.showModal(modal(`bonus:modal:admin-top-rule:${metricName}`,
+        metricName === 'messages' ? 'قاعدة رسائل الأفراد' : 'قاعدة صوت الأفراد', [
+          { id: 'threshold', label: metricName === 'messages' ? 'عدد الرسائل لكل خطوة' : 'عدد الساعات الصوتية لكل خطوة',
+            placeholder: metricName === 'messages' ? '300' : '1',
+            value: existing ? String(metricName === 'messages' ? existing.threshold : existing.threshold / 3600000) : undefined },
+          { id: 'points', label: 'النقاط عند اكتمال الخطوة', placeholder: '1', value: existing ? String(existing.points) : undefined }
+        ]));
+      return true;
+    }
+    if (action === 'admin-top-rule-off') {
+      const metric = parts[0] === 'messages' ? BONUS_METRICS.messages : parts[0] === 'voice' ? BONUS_METRICS.voice : null;
+      if (!metric) return true;
+      const result = await getAdminBonusManager().disableRule(interaction.guild.id, metric, interaction.user.id);
+      voiceTrackingCache.delete(String(interaction.guild.id));
+      if (boundClient) await restoreVoiceSessions(boundClient).catch(() => {});
+      const config = await getAdminBonusManager().readConfig(interaction.guild.id);
+      const rules = await getAdminBonusManager().getRules(interaction.guild.id);
+      await showPrivatePanel(interaction, { content: result.disabled
+        ? `تم إيقاف قاعدة ${metric === BONUS_METRICS.messages ? 'الرسائل' : 'الصوت'} للأفراد؛ بقي الرصيد المكتسب. التقدم الجزئي الذي تم مسحه: ${Number(result.clearedProgress).toLocaleString()}.`
+        : 'القاعدة متوقفة بالفعل.', embeds: buildAdminRulesPayload(config, rules).embeds,
+        components: buildAdminRulesPayload(config, rules).components }, true);
+      scheduleRefresh(interaction.guild, true);
+      return true;
+    }
+    if (action === 'admin-top-channel') {
+      const menu = new ChannelSelectMenuBuilder().setCustomId('bonus:admin-top-select-channel')
+        .setPlaceholder('اختر روم صورة توب الإدارة').setMinValues(1).setMaxValues(1)
+        .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement);
+      await showPrivatePanel(interaction, { content: 'اختر روم صورة توب الإدارة. إذا لم تحدد رومًا مستقلًا، يستخدم النظام روم البورد العادي.',
+        components: [new ActionRowBuilder().addComponents(menu), new ActionRowBuilder().addComponents(button('bonus:publish-admin', 'رجوع'))] }, true);
+      return true;
+    }
+    if (action === 'admin-top-select-channel') {
+      const channel = interaction.guild.channels.cache.get(String(interaction.values[0]));
+      if (!isGuildText(channel)) {
+        await showPrivatePanel(interaction, { content: 'الروم غير صالح، اختر رومًا نصيًا.', components: [new ActionRowBuilder().addComponents(button('bonus:publish-admin', 'رجوع'))] }, true);
+        return true;
+      }
+      await getAdminBonusManager().saveConfig(interaction.guild.id, { channelId: channel.id }, interaction.user.id);
+      await showPrivatePanel(interaction, { content: `تم تحديد روم توب الإدارة: <#${channel.id}>`, components: [new ActionRowBuilder().addComponents(button('bonus:publish-admin', 'رجوع لتوب الإدارة'))] }, true);
+      return true;
+    }
+    if (action === 'admin-top-color-auto') {
+      await getAdminBonusManager().saveConfig(interaction.guild.id, { colorAuto: true }, interaction.user.id);
+      await refreshAdminTopNow(interaction.guild, true).catch(() => {});
+      await showPrivatePanel(interaction, { content: 'سيُستخرج لون صورة توب الإدارة تلقائيًا من أيقونة السيرفر.', components: [new ActionRowBuilder().addComponents(button('bonus:publish-admin', 'رجوع لتوب الإدارة'))] }, true);
+      return true;
+    }
+    if (action === 'admin-top-color-manual') {
+      const config = await getAdminBonusManager().readConfig(interaction.guild.id);
+      await interaction.showModal(modal('bonus:modal:admin-top-color', 'لون صورة توب الإدارة', [
+        { id: 'hex', label: 'لون HEX مثل #D9A441', placeholder: '#D9A441', value: config.color || '#D9A441', maxLength: 7 }
+      ]));
+      return true;
+    }
+    if (action === 'admin-top-publish') {
+      try {
+        const message = await publishAdminTop(interaction.guild, interaction.user.id);
+        await showPrivatePanel(interaction, { content: `تم إرسال/تحديث صورة توب الإدارة في <#${message.channelId}>.`, components: [new ActionRowBuilder().addComponents(button('bonus:publish-admin', 'رجوع لتوب الإدارة'), button('bonus:home', 'الإعدادات'))] }, true);
+      } catch (error) {
+        const messages = { CHANNEL_REQUIRED: 'حدد رومًا من إعدادات توب الإدارة أو روم البورد العادي أولًا.',
+          CHANNEL_NOT_FOUND: 'روم توب الإدارة غير موجود أو لا يمكن الوصول إليه.',
+          MISSING_CHANNEL_PERMISSIONS: 'يحتاج البوت لصلاحية عرض الروم وإرسال الرسائل ورفع الملفات وقراءة سجل الرسائل.' };
+        await showPrivatePanel(interaction, { content: `تعذر نشر توب الإدارة: ${messages[error.message] || 'حدث خطأ أثناء تجهيز الصورة.'}`, components: [new ActionRowBuilder().addComponents(button('bonus:publish-admin', 'رجوع'))] }, true);
+      }
+      return true;
+    }
+    if (action === 'admin-top-refresh') {
+      const last = adminTopLastRenderAt.get(String(interaction.guild.id)) || 0;
+      if (Date.now() - last < 10000) {
+        await interaction.followUp({ content: 'تم تحديث الصورة مؤخرًا؛ انتظر قليلًا قبل طلب تحديث آخر.', ephemeral: true }).catch(() => {});
+        return true;
+      }
+      const payload = await buildAdminTopPayload(interaction.guild);
+      if (interaction.deferred || interaction.replied) await interaction.editReply(payload);
+      else await interaction.update(payload);
+      adminTopLastRenderAt.set(String(interaction.guild.id), Date.now());
+      return true;
+    }
     if (action === 'publish') {
       try {
         const published = await publishBoard(interaction.guild, interaction.user.id);
@@ -1860,6 +2214,61 @@ async function handleInteraction(interaction, context = {}) {
 
     if (action === 'modal') {
       const modalAction = parts[0];
+      if (modalAction === 'admin-top-points') {
+        const operation = parts[1] === 'remove' ? 'remove' : 'add';
+        const userId = String(parts[2] || '');
+        const member = await interaction.guild.members.fetch(userId).catch(() => null);
+        const amount = Number(collectModalValue(interaction, 'amount').replace(/[,،\s]/g, ''));
+        if (!member || member.user?.bot || !Number.isSafeInteger(amount) || amount < 1 || amount > 1000000) {
+          await showPrivatePanel(interaction, buildActionResult('Points Update Failed', 'اختر عضوًا حاليًا واكتب عددًا صحيحًا بين 1 و1,000,000.'), true);
+          return true;
+        }
+        if (operation === 'remove') {
+          const balance = await getAdminBonusManager().getBalance(interaction.guild.id, userId);
+          const current = Number(balance?.points) || 0;
+          if (amount > current) {
+            await showPrivatePanel(interaction, buildActionResult('Points Update Failed', `رصيد العضو ${current.toLocaleString()} فقط.`), true);
+            return true;
+          }
+          await showPrivatePanel(interaction, { content: `تأكيد خصم ${amount.toLocaleString()} نقطة من <@${userId}>؟ الرصيد بعد الخصم سيكون ${(current - amount).toLocaleString()}.`,
+            components: [new ActionRowBuilder().addComponents(button(`bonus:confirm:admin-remove:${userId}:${amount}`, 'تأكيد الخصم', ButtonStyle.Danger), closeButton('إلغاء'))] }, true);
+          return true;
+        }
+        const result = await getAdminBonusManager().adjustPoints(interaction.guild.id, userId, amount, interaction.user.id);
+        await showPrivatePanel(interaction, buildActionResult('Admin Top Points Updated', `تمت إضافة ${amount.toLocaleString()} نقطة إلى <@${userId}>. رصيده الجديد: ${result.after.toLocaleString()}.`), true);
+        scheduleRefresh(interaction.guild, true);
+        return true;
+      }
+      if (modalAction === 'admin-top-rule') {
+        const metricName = parts[1];
+        const metric = metricName === 'messages' ? BONUS_METRICS.messages : metricName === 'voice' ? BONUS_METRICS.voice : null;
+        const thresholdRaw = Number(collectModalValue(interaction, 'threshold').replace(/[,،\s]/g, ''));
+        const points = Number(collectModalValue(interaction, 'points').replace(/[,،\s]/g, ''));
+        const threshold = metricName === 'voice' ? Math.round(thresholdRaw * 3600000) : thresholdRaw;
+        if (!metric || !Number.isSafeInteger(threshold) || threshold <= 0 || !Number.isSafeInteger(points) || points <= 0 || points > 1000000) {
+          await showPrivatePanel(interaction, { content: 'القيم غير صحيحة. أدخل أعدادًا صحيحة أكبر من صفر، والساعات الصوتية كعدد ساعات.', components: [new ActionRowBuilder().addComponents(button('bonus:admin-top-auto', 'رجوع للقواعد'))] }, true);
+          return true;
+        }
+        const result = await getAdminBonusManager().setRule(interaction.guild.id, metric, threshold, points, interaction.user.id);
+        voiceTrackingCache.delete(String(interaction.guild.id));
+        if (metric === BONUS_METRICS.voice && result.newlyActivated && boundClient) await restoreVoiceSessions(boundClient).catch(() => {});
+        const [config, rules] = await Promise.all([getAdminBonusManager().readConfig(interaction.guild.id), getAdminBonusManager().getRules(interaction.guild.id)]);
+        await showPrivatePanel(interaction, { content: `تم حفظ قاعدة توب الإدارة: كل ${metricName === 'voice' ? `${thresholdRaw} ساعة صوت` : `${thresholdRaw} رسالة`} = ${points} نقطة.`,
+          embeds: buildAdminRulesPayload(config, rules).embeds, components: buildAdminRulesPayload(config, rules).components }, true);
+        scheduleRefresh(interaction.guild, true);
+        return true;
+      }
+      if (modalAction === 'admin-top-color') {
+        const color = collectModalValue(interaction, 'hex');
+        if (!/^#?[0-9a-f]{6}$/i.test(color)) {
+          await showPrivatePanel(interaction, { content: 'صيغة اللون غير صحيحة. استخدم مثل #D9A441.', components: [new ActionRowBuilder().addComponents(button('bonus:publish-admin', 'رجوع'))] }, true);
+          return true;
+        }
+        await getAdminBonusManager().saveConfig(interaction.guild.id, { colorAuto: false, color: normalizeHex(color) }, interaction.user.id);
+        await refreshAdminTopNow(interaction.guild, true).catch(() => {});
+        await showPrivatePanel(interaction, { content: `تم تحديث لون صورة توب الإدارة إلى ${normalizeHex(color)}.`, components: [new ActionRowBuilder().addComponents(button('bonus:publish-admin', 'رجوع لتوب الإدارة'))] }, true);
+        return true;
+      }
       if (modalAction === 'color') {
         const color = collectModalValue(interaction, 'hex');
         if (!/^#?[0-9a-f]{6}$/i.test(color)) {
@@ -2047,6 +2456,7 @@ function scheduleRefresh(guild, force = false) {
 
 async function recordActivity(guild, member, metric, amount, eventId, voiceSession = null, roleIdsOverride = null) {
   if (!guild || !member || member.user?.bot) return { ignored: true };
+  if (!await isGuildAutomaticBonusEnabled(guild.id)) return { ignored: true, automaticDisabled: true };
   let db;
   try { db = getDatabase(); } catch { return { ignored: true }; }
   if (!db?.isInitialized || db.isDegraded) return { ignored: true, degraded: true };
@@ -2072,10 +2482,32 @@ async function recordActivity(guild, member, metric, amount, eventId, voiceSessi
   }
 }
 
+async function recordAdminActivity(guild, member, metric, amount, eventId) {
+  if (!guild || !member || member.user?.bot) return { ignored: true };
+  let database;
+  try { database = getDatabase(); } catch { return { ignored: true }; }
+  if (!database?.isInitialized || database.isDegraded) return { ignored: true, degraded: true };
+  try {
+    const adminBonus = getAdminBonusManager();
+    const config = await adminBonus.readConfig(guild.id);
+    if (!config.automaticBonus) return { ignored: true, automaticDisabled: true };
+    const result = await adminBonus.addActivity({ guildId: guild.id, userId: member.id, metric, amount, eventId: `admin:${eventId}` });
+    if (result.awardedPoints > 0) scheduleRefresh(guild, false);
+    return result;
+  } catch (error) {
+    console.error('[bonus] admin activity recording failed:', error);
+    return { error: true };
+  }
+}
+
 async function recordMessage(message, prefix = null) {
   if (!message?.guild || message.author?.bot || message.system || (!String(message.content || '').trim() && !message.attachments?.size)) return;
   if (prefix && message.content?.startsWith(prefix)) return;
-  await recordActivity(message.guild, message.member, BONUS_METRICS.messages, 1, `message:${message.guild.id}:${message.id}`);
+  const eventId = `message:${message.guild.id}:${message.id}`;
+  await Promise.all([
+    recordActivity(message.guild, message.member, BONUS_METRICS.messages, 1, eventId),
+    recordAdminActivity(message.guild, message.member, BONUS_METRICS.messages, 1, eventId)
+  ]);
 }
 function voiceKey(guildId, userId) { return `${guildId}:${userId}`; }
 async function saveVoiceSession(session) {
@@ -2124,8 +2556,13 @@ async function isBonusVoiceTrackingEnabled(guildId) {
   try {
     const database = getDatabase();
     if (!database?.isInitialized || database.isDegraded) return false;
-    const [rules, groups] = await Promise.all([getManager().getRules(key), getManager().listGroups(key)]);
-    enabled = Boolean(rules?.[BONUS_METRICS.voice] && groups.length > 0);
+    const [config, rules, groups, adminConfig, adminRules] = await Promise.all([
+      getManager().readConfig(key), getManager().getRules(key), getManager().listGroups(key),
+      getAdminBonusManager().readConfig(key), getAdminBonusManager().getRules(key)
+    ]);
+    const groupVoice = isAutomaticBonusEnabled(config) && Boolean(rules?.[BONUS_METRICS.voice] && groups.length > 0);
+    const adminVoice = Boolean(adminConfig.automaticBonus && adminRules?.[BONUS_METRICS.voice]);
+    enabled = groupVoice || adminVoice;
   } catch (error) {
     console.error('[bonus] voice readiness check failed:', error);
   }
@@ -2159,12 +2596,14 @@ async function checkpointVoice(session, toTime = Date.now(), member = null, role
       return;
     }
     const eventId = `voice:${session.guildId}:${session.userId}:${start}:${end}`;
-    const result = await recordActivity(liveMember.guild, liveMember, BONUS_METRICS.voice, duration, eventId, {
-      channelId: session.channelId,
-      lastCheckpointAt: end
-    }, roleIdsOverride);
-    if (result.error || result.degraded) return;
+    const voiceSession = { channelId: session.channelId, lastCheckpointAt: end };
+    const [groupResult, adminResult] = await Promise.all([
+      recordActivity(liveMember.guild, liveMember, BONUS_METRICS.voice, duration, eventId, voiceSession, roleIdsOverride),
+      recordAdminActivity(liveMember.guild, liveMember, BONUS_METRICS.voice, duration, eventId)
+    ]);
+    if (groupResult.error || groupResult.degraded || adminResult.error || adminResult.degraded) return;
     session.lastTrackedAt = end;
+    await saveVoiceSession(session).catch(error => console.error('[bonus] voice checkpoint persistence failed:', error));
   })();
   session.pendingCheckpoint = pending;
   try { await pending; }
@@ -2215,9 +2654,14 @@ async function restoreVoiceSessions(client) {
     if (!await isBonusVoiceTrackingEnabled(guild.id)) continue;
     for (const state of guild.voiceStates.cache.values()) {
       if (!isEligibleVoiceState(state)) continue;
-      const roleHistory = await readRoleHistoryForMember(guild, state.member);
-      const targetGroup = await getManager().resolveTargetGroup(guild.id, state.member.id, getRoleIds(state.member), roleHistory);
-      if (targetGroup == null) continue;
+      const adminConfig = await getAdminBonusManager().readConfig(guild.id);
+      const adminRules = await getAdminBonusManager().getRules(guild.id);
+      const hasAdminVoiceRule = Boolean(adminConfig.automaticBonus && adminRules?.[BONUS_METRICS.voice]);
+      if (!hasAdminVoiceRule) {
+        const roleHistory = await readRoleHistoryForMember(guild, state.member);
+        const targetGroup = await getManager().resolveTargetGroup(guild.id, state.member.id, getRoleIds(state.member), roleHistory);
+        if (targetGroup == null) continue;
+      }
       const key = voiceKey(guild.id, state.member.id);
       activeKeys.add(key);
       if (!voiceSessions.has(key)) {
@@ -2234,7 +2678,13 @@ async function restoreVoiceSessions(client) {
   }
   for (const row of savedRows) {
     const key = voiceKey(row.guild_id, row.user_id);
-    if (!activeKeys.has(key)) await removeSavedVoiceSession(row.guild_id, row.user_id).catch(() => {});
+    if (!activeKeys.has(key)) {
+      voiceSessions.delete(key);
+      await removeSavedVoiceSession(row.guild_id, row.user_id).catch(() => {});
+    }
+  }
+  for (const [key, session] of Array.from(voiceSessions.entries())) {
+    if (client.guilds.cache.has(String(session.guildId)) && !activeKeys.has(key)) voiceSessions.delete(key);
   }
 }
 
@@ -2455,6 +2905,8 @@ function registerInteractionHandler(client) {
           lastEventPruneAt = now;
           getDatabase().run('DELETE FROM bonus_activity_events WHERE created_at < ?', [now - 7 * 24 * 60 * 60 * 1000])
             .catch(error => console.error('[bonus] event cleanup failed:', error));
+          getDatabase().run('DELETE FROM bonus_admin_activity_events WHERE created_at < ?', [now - 7 * 24 * 60 * 60 * 1000])
+            .catch(error => console.error('[bonus] admin event cleanup failed:', error));
         }
         if (now - lastVoiceCleanupAt >= 10 * 60 * 1000) {
           lastVoiceCleanupAt = now;
@@ -2466,4 +2918,10 @@ function registerInteractionHandler(client) {
   });
 }
 
-module.exports = { name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberJoin, handleMemberLeave, checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicSettingsRows, buildPublicRows, boardCounter, buildHomeEmbed, buildGroupSelect, buildOwnerAvatarResult, buildActionResult, closeButton, safeJsonParse, isModalOpeningAction, isEligibleVoiceState, resolveCurrentGroupForMember, validateAvatarUrl, structurePrivateResponse };
+module.exports = {
+  name, aliases, execute, registerInteractionHandler, recordMessage, handleMemberRoleUpdate, handleMemberJoin, handleMemberLeave,
+  checkpointMemberVoice, maybeRefreshBoard, scheduleRefresh, parseBonusCustomId, buildHomeRows, buildPublicSettingsRows, buildPublicRows,
+  boardCounter, buildHomeEmbed, buildGroupSelect, buildOwnerAvatarResult, buildActionResult, closeButton, safeJsonParse,
+  isModalOpeningAction, isEligibleVoiceState, resolveCurrentGroupForMember, validateAvatarUrl, isAutomaticBonusEnabled,
+  buildAdminTopHub, buildAdminManualPayload, buildAdminRulesPayload, buildAdminTopPayload, structurePrivateResponse
+};

@@ -545,6 +545,53 @@ class DatabaseManager {
                 group_id INTEGER,
                 created_at INTEGER NOT NULL
             )`,
+            `CREATE TABLE IF NOT EXISTS bonus_admin_config (
+                guild_id TEXT PRIMARY KEY,
+                config_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL
+            )`,
+            `CREATE TABLE IF NOT EXISTS bonus_admin_rules (
+                guild_id TEXT NOT NULL,
+                metric TEXT NOT NULL CHECK (metric IN ('messages', 'voice_ms')),
+                threshold INTEGER NOT NULL CHECK (threshold > 0),
+                points INTEGER NOT NULL CHECK (points > 0),
+                activated_at INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL,
+                updated_by TEXT NOT NULL,
+                PRIMARY KEY (guild_id, metric)
+            )`,
+            `CREATE TABLE IF NOT EXISTS bonus_admin_balances (
+                guild_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                points INTEGER NOT NULL DEFAULT 0 CHECK (points >= 0),
+                message_progress INTEGER NOT NULL DEFAULT 0 CHECK (message_progress >= 0),
+                voice_progress_ms INTEGER NOT NULL DEFAULT 0 CHECK (voice_progress_ms >= 0),
+                last_message_id TEXT,
+                last_message_at INTEGER,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_bonus_admin_balances_rank ON bonus_admin_balances(guild_id, points DESC, updated_at ASC)`,
+            `CREATE TABLE IF NOT EXISTS bonus_admin_activity_events (
+                event_id TEXT PRIMARY KEY,
+                guild_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                metric TEXT NOT NULL CHECK (metric IN ('messages', 'voice_ms')),
+                amount INTEGER NOT NULL CHECK (amount > 0),
+                awarded_points INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_bonus_admin_events_guild_time ON bonus_admin_activity_events(guild_id, created_at)`,
+            `CREATE TABLE IF NOT EXISTS bonus_admin_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                actor_id TEXT,
+                target_user_id TEXT,
+                action TEXT NOT NULL,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER NOT NULL
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_bonus_admin_audit_guild_time ON bonus_admin_audit_log(guild_id, created_at DESC)`,
             `CREATE TABLE IF NOT EXISTS bonus_voice_sessions (
                 guild_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
