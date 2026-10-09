@@ -148,6 +148,15 @@ function captureResponsibilityAssignments(responsibilities, userId) {
     return assignments;
 }
 
+function syncResponsibilitiesSnapshot(responsibilities) {
+    try {
+        fs.writeFileSync(responsibilitiesPath, JSON.stringify(responsibilities || {}, null, 2), 'utf8');
+        global.responsibilities = responsibilities;
+    } catch (error) {
+        console.error('❌ تعذر مزامنة ملف المسؤوليات مع قاعدة البيانات:', error.message);
+    }
+}
+
 async function removeUserFromResponsibilities(userId, assignments) {
     return withResponsibilityMutationLock(async () => {
         const database = require('./database');
@@ -171,6 +180,8 @@ async function removeUserFromResponsibilities(userId, assignments) {
             if (!await manager.updateResponsibility(assignment.name, updated)) failed.push(assignment);
             else responsibilities[assignment.name] = updated;
         }
+
+        syncResponsibilitiesSnapshot(responsibilities);
 
         return { assignments: targets, failed };
     });
@@ -201,6 +212,8 @@ async function restoreUserResponsibilities(userId, assignments = []) {
             if (!await manager.updateResponsibility(assignment.name, updated)) failed.push(assignment);
             else responsibilities[assignment.name] = updated;
         }
+
+        syncResponsibilitiesSnapshot(responsibilities);
 
         return { failed };
     });
@@ -590,10 +603,29 @@ async function performEndVacation(guild, client, userId, reason = 'انتهت ف
             } else if (member) {
                 console.log(`👤 العضو موجود، بدء استعادة ${rolesToRestore.length} رول...`);
 
+                // حدّث المسؤولية أولاً؛ حدث guildMemberUpdate الناتج عن إضافة
+                // الرول يقرأ هذه البيانات فوراً، وإلا سيعتبر الرول مضافاً يدوياً.
+                const responsibilityResult = await restoreUserResponsibilities(userId, responsibilitiesToRestore);
+                responsibilityPendingRetry = responsibilityResult.failed;
+                if (responsibilityPendingRetry.length > 0) {
+                    console.warn(`⚠️ تعذرت استعادة ${responsibilityPendingRetry.length} مسؤولية للمستخدم ${userId}; ستبقى معلقة للمحاولة مرة أخرى.`);
+                }
+                const failedResponsibilityNames = new Set(responsibilityPendingRetry.map(item => item.name));
+                const blockedRoleIds = new Set(
+                    responsibilitiesToRestore
+                        .filter(item => failedResponsibilityNames.has(item.name))
+                        .flatMap(item => item.roleIds || [])
+                        .map(String)
+                );
+
                 const validRoles = [];
                 const alreadyHasRoles = [];
 
                 for (const roleId of rolesToRestore) {
+                    if (blockedRoleIds.has(String(roleId))) {
+                        rolesPendingRetry.push(roleId);
+                        continue;
+                    }
                     try {
                         let role = guild.roles.cache.get(roleId);
 
@@ -633,7 +665,7 @@ async function performEndVacation(guild, client, userId, reason = 'انتهت ف
                 }
 
                 if (validRoles.length > 0) {
-                    rolesPendingRetry = [...validRoles];
+                    rolesPendingRetry = [...new Set([...rolesPendingRetry, ...validRoles])];
                     console.log(`🔄 استعادة ${validRoles.length} رول...`);
                     try {
                         // انتظار قصير للتأكد من تسجيل الحماية
@@ -641,7 +673,7 @@ async function performEndVacation(guild, client, userId, reason = 'انتهت ف
                         
                         await member.roles.add(validRoles, 'إعادة لرولات بعد انتهاء الإجازة');
                         rolesRestored = [...validRoles];
-                        rolesPendingRetry = [];
+                        rolesPendingRetry = rolesPendingRetry.filter(roleId => !validRoles.includes(roleId));
                         console.log(`✅ تمت إضافة ${rolesRestored.length}/${validRoles.length} رول بنجاح`);
                     } catch (addError) {
                         console.error(`❌ فشل في إضافة الرولات:`, addError.message);
@@ -652,11 +684,6 @@ async function performEndVacation(guild, client, userId, reason = 'انتهت ف
                 }
 
                 rolesRestored = [...new Set([...rolesRestored, ...alreadyHasRoles])];
-                const responsibilityResult = await restoreUserResponsibilities(userId, responsibilitiesToRestore);
-                responsibilityPendingRetry = responsibilityResult.failed;
-                if (responsibilityPendingRetry.length > 0) {
-                    console.warn(`⚠️ تعذرت استعادة ${responsibilityPendingRetry.length} مسؤولية للمستخدم ${userId}; ستبقى معلقة للمحاولة مرة أخرى.`);
-                }
 
                 console.log(`📊 النتيجة النهائية: ${rolesRestored.length} مستعاد، ${deletedRoles.length} محذوف`);
             }
@@ -822,7 +849,31 @@ async function performPendingRestoration(guild, client, userId, pendingData, vac
 
     const failedRoles = [];
     const restoredRoles = [];
+    const responsibilityAssignments = Array.isArray(pendingData.responsibilityAssignments)
+        ? pendingData.responsibilityAssignments
+        : [];
+    let failedResponsibilities = [];
+    try {
+        // يجب تحديث المسؤولية قبل إضافة الرول؛ حماية الرولات تعتمد على هذه
+        // البيانات أثناء حدث guildMemberUpdate الناتج عن الإضافة.
+        failedResponsibilities = (await restoreUserResponsibilities(userId, responsibilityAssignments)).failed;
+    } catch (error) {
+        failedResponsibilities = responsibilityAssignments;
+        console.error(`❌ فشل في استعادة مسؤوليات العضو ${userId}:`, error.message);
+    }
+    const failedResponsibilityNames = new Set(failedResponsibilities.map(item => item.name));
+    const blockedRoleIds = new Set(
+        responsibilityAssignments
+            .filter(item => failedResponsibilityNames.has(item.name))
+            .flatMap(item => item.roleIds || [])
+            .map(String)
+    );
+
     for (const roleId of Array.isArray(pendingData.roleIds) ? pendingData.roleIds : []) {
+        if (blockedRoleIds.has(String(roleId))) {
+            failedRoles.push(roleId);
+            continue;
+        }
         try {
             if (member.roles.cache.has(roleId)) {
                 restoredRoles.push(roleId);
@@ -851,17 +902,6 @@ async function performPendingRestoration(guild, client, userId, pendingData, vac
             failedRoles.push(roleId);
             console.error(`❌ فشل في استعادة الرول ${roleId} للعضو ${userId}:`, error.message);
         }
-    }
-
-    const responsibilityAssignments = Array.isArray(pendingData.responsibilityAssignments)
-        ? pendingData.responsibilityAssignments
-        : [];
-    let failedResponsibilities = [];
-    try {
-        failedResponsibilities = (await restoreUserResponsibilities(userId, responsibilityAssignments)).failed;
-    } catch (error) {
-        failedResponsibilities = responsibilityAssignments;
-        console.error(`❌ فشل في استعادة مسؤوليات العضو ${userId}:`, error.message);
     }
 
     pendingData.roleIds = failedRoles;
