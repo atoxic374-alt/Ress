@@ -1043,7 +1043,7 @@ class DatabaseManager {
             const source = guildId
                 ? `(SELECT date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ? AND user_id = ?
                    UNION ALL SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)`
-                : 'daily_activity';
+                : '(SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)';
             const params = guildId ? [guildId, userId, userId, cutoffDate] : [userId, cutoffDate];
 
             const result = await this.get(`
@@ -1069,7 +1069,7 @@ class DatabaseManager {
             const source = guildId
                 ? `(SELECT date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ? AND user_id = ?
                    UNION ALL SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)`
-                : 'daily_activity';
+                : '(SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)';
             const params = guildId ? [guildId, userId, userId, weekStartString] : [userId, weekStartString];
 
             const result = await this.get(`
@@ -1137,7 +1137,7 @@ class DatabaseManager {
             const source = guildId
                 ? `(SELECT date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ? AND user_id = ?
                    UNION ALL SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)`
-                : 'daily_activity';
+                : '(SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)';
             const params = guildId ? [guildId, userId, userId, weekStartString] : [userId, weekStartString];
             const activity = await this.get(`
                 SELECT SUM(voice_time) as weeklyTime,
@@ -1327,7 +1327,7 @@ class DatabaseManager {
             const source = guildId
                 ? `(SELECT date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ? AND user_id = ?
                    UNION ALL SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)`
-                : 'daily_activity';
+                : '(SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)';
             const params = guildId ? [guildId, userId, userId, today] : [userId, today];
 
             const dailyActivity = await this.get(`
@@ -1367,7 +1367,7 @@ class DatabaseManager {
             const activityTable = guildId
                 ? `(SELECT date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ? AND user_id = ?
                    UNION ALL SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)`
-                : 'daily_activity';
+                : '(SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)';
             const scopeClause = 'date >= ?';
             const scopeParams = guildId ? [guildId, userId, userId, monthStart] : [userId, monthStart];
 
