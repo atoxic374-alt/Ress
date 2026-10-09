@@ -48,7 +48,7 @@ function drawAvatar(ctx, image, x, y, radius, accent) {
   }
   ctx.restore();
 }
-async function buildBonusAdminTopImage({ guild, members = [], config = {}, updatedAt = Date.now() }) {
+async function buildBonusAdminTopImage({ guild, members = [], summary = {}, config = {}, updatedAt = Date.now() }) {
   const accent = config.colorAuto === false
     ? normalizeHex(config.color, DEFAULT_COLOR)
     : await findDominantColor(guild?.iconURL?.({ extension: 'png', size: 256 }));
@@ -64,20 +64,23 @@ async function buildBonusAdminTopImage({ guild, members = [], config = {}, updat
   roundedRect(ctx, 26, 24, WIDTH - 52, HEIGHT - 48, 32, 'rgba(18,22,31,0.94)', `${accent}99`);
   roundedRect(ctx, 54, 53, 8, 88, 4, accent);
 
+  const headerAvatarUrl = config.avatarUrl || guild?.iconURL?.({ extension: 'png', size: 128 });
+  const headerAvatar = headerAvatarUrl ? await loadImage(headerAvatarUrl).catch(() => null) : null;
+  if (headerAvatar) drawAvatar(ctx, headerAvatar, 1450, 88, 30, accent);
   ctx.textAlign = 'right';
   ctx.fillStyle = '#FFFFFF';
   ctx.font = 'bold 46px Cairo, sans-serif';
-  ctx.fillText('توب الإدارة', 1500, 82);
+  ctx.fillText('ALL POINTS', 1380, 82);
   ctx.fillStyle = '#AEB6C5';
   ctx.font = '23px Cairo, sans-serif';
-  ctx.fillText(`${safeText(guild?.name, 'السيرفر', 52)} • ترتيب نقاط الأعضاء`, 1500, 128);
+  ctx.fillText(`${safeText(guild?.name, 'السيرفر', 52)} • MEMBERS POINTS`, 1380, 128);
   ctx.textAlign = 'left';
   ctx.fillStyle = accent;
   ctx.font = 'bold 21px Cairo, sans-serif';
-  ctx.fillText('TOP MEMBERS', 78, 92);
+  ctx.fillText(`ALL POINTS: ${formatPoints(summary?.points)}`, 78, 92);
   ctx.fillStyle = '#858D9B';
   ctx.font = '16px Cairo, sans-serif';
-  ctx.fillText(`UPDATED ${new Date(Number(updatedAt) || Date.now()).toLocaleString('en-GB')}`, 78, 126);
+  ctx.fillText(`MEMBERS POINTS: ${formatPoints(summary?.members)} • UPDATED ${new Date(Number(updatedAt) || Date.now()).toLocaleString('en-GB')}`, 78, 126);
 
   const medalColors = ['#F1C75B', '#D4DCE7', '#CE9164'];
   const top = Array.from(members || []).slice(0, 10);

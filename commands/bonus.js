@@ -277,7 +277,7 @@ async function requireManager(interaction, context = {}) {
 }
 
 function isBonusPublicOrOwnerAction(action, parts = []) {
-  if (['close', 'public-close', 'public-refresh', 'admin-top-refresh', 'top-page', 'private-top', 'private-top-page', 'my-group'].includes(action)) return true;
+  if (['close', 'public-close', 'public-refresh', 'admin-top-refresh', 'admin-top-avatar', 'top-page', 'private-top', 'private-top-page', 'my-group'].includes(action)) return true;
   if (action === 'owner-avatar') return true;
   if (action === 'page' && parts[0] === 'owner-avatar') return true;
   if (action === 'select' && parts[0] === 'owner-avatar') return true;
@@ -874,11 +874,15 @@ async function buildAdminTopPayload(guild) {
   const [config, summary, members] = await Promise.all([
     adminBonus.readConfig(guild.id), adminBonus.getSummary(guild.id), getAdminTopMembers(guild)
   ]);
-  const attachment = await buildBonusAdminTopImage({ guild, members, config, updatedAt: Date.now() });
+  const attachment = await buildBonusAdminTopImage({ guild, members, summary, config, updatedAt: Date.now() });
   return {
-    content: `**توب الإدارة • ترتيب عام للأعضاء**\nالأعضاء ذوو النقاط: ${Number(summary?.members || 0).toLocaleString('en-US')} • مجموع النقاط: ${Number(summary?.points || 0).toLocaleString('en-US')}`,
+    content: `**All Points:** ${Number(summary?.points || 0).toLocaleString('en-US')}\n**Members Points:** ${Number(summary?.members || 0).toLocaleString('en-US')}`,
     files: [attachment], attachments: [],
-    components: [new ActionRowBuilder().addComponents(button('bonus:admin-top-refresh', 'تحديث الصورة', ButtonStyle.Secondary))]
+    components: [new ActionRowBuilder().addComponents(
+      button('bonus:admin-top-add', '+', ButtonStyle.Success),
+      button('bonus:admin-top-remove', '-', ButtonStyle.Danger),
+      button('bonus:admin-top-avatar', 'Change Avatar', ButtonStyle.Secondary)
+    )]
   };
 }
 async function publishAdminTop(guild, actorId) {
@@ -911,7 +915,7 @@ async function refreshAdminTopNow(guild, force = false) {
   if (!config.channelId || !config.topMessageId) return;
   const now = Date.now();
   const last = adminTopLastRenderAt.get(String(guild.id)) || 0;
-  if (now - last < (force ? 10000 : 60000)) return;
+  if (now - last < (force ? 10000 : 30000)) return;
   const channel = await guild.channels.fetch(String(config.channelId)).catch(() => null);
   if (!isGuildText(channel)) return;
   const message = await channel.messages.fetch(String(config.topMessageId)).catch(() => null);
@@ -2063,6 +2067,13 @@ async function handleInteraction(interaction, context = {}) {
       await showPrivatePanel(interaction, buildAdminManualPayload(), true);
       return true;
     }
+    if (action === 'admin-top-avatar') {
+      const config = await getAdminBonusManager().readConfig(interaction.guild.id);
+      await interaction.showModal(modal('bonus:modal:admin-top-avatar', 'Change Avatar', [
+        { id: 'url', label: 'Discord avatar URL', placeholder: 'https://cdn.discordapp.com/...', value: config.avatarUrl || '', maxLength: 500 }
+      ]));
+      return true;
+    }
     if (action === 'admin-top-auto') {
       const adminBonus = getAdminBonusManager();
       const [config, rules] = await Promise.all([adminBonus.readConfig(interaction.guild.id), adminBonus.getRules(interaction.guild.id)]);
@@ -2237,6 +2248,17 @@ async function handleInteraction(interaction, context = {}) {
         const result = await getAdminBonusManager().adjustPoints(interaction.guild.id, userId, amount, interaction.user.id);
         await showPrivatePanel(interaction, buildActionResult('Admin Top Points Updated', `تمت إضافة ${amount.toLocaleString()} نقطة إلى <@${userId}>. رصيده الجديد: ${result.after.toLocaleString()}.`), true);
         scheduleRefresh(interaction.guild, true);
+        return true;
+      }
+      if (modalAction === 'admin-top-avatar') {
+        const avatarCheck = await verifyAvatarUrl(collectModalValue(interaction, 'url'));
+        if (!avatarCheck.valid) {
+          await showPrivatePanel(interaction, { content: 'الرابط غير صالح. استخدم رابط صورة من Discord CDN بصيغة PNG أو JPG أو WEBP أو GIF.', components: [new ActionRowBuilder().addComponents(button('bonus:admin-top-avatar', 'Change Avatar'))] }, true);
+          return true;
+        }
+        await getAdminBonusManager().saveConfig(interaction.guild.id, { avatarUrl: avatarCheck.url }, interaction.user.id);
+        await refreshAdminTopNow(interaction.guild, true).catch(() => {});
+        await showPrivatePanel(interaction, { content: avatarCheck.url ? 'تم تغيير الافتار في الكانفاس.' : 'تمت إعادة الافتار الافتراضي.', components: [new ActionRowBuilder().addComponents(button('bonus:publish-admin', 'رجوع'))] }, true);
         return true;
       }
       if (modalAction === 'admin-top-rule') {
