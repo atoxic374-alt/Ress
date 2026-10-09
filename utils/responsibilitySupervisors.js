@@ -55,6 +55,27 @@ function setSupervisors(guildId, responsibilityName, updates = {}) {
   return { userIds, roleIds };
 }
 
+function removeUserFromAllSupervisors(guildId, userId) {
+  const store = readStore();
+  const data = store.guilds?.[guildId];
+  if (!data?.responsibilities || typeof data.responsibilities !== 'object') return [];
+  const targetId = String(userId);
+  const removedFrom = [];
+  for (const [name, entry] of Object.entries(data.responsibilities)) {
+    if (!entry || typeof entry !== 'object' || !Array.isArray(entry.userIds)) continue;
+    const nextUserIds = entry.userIds.map(String).filter(id => id !== targetId);
+    if (nextUserIds.length === entry.userIds.length) continue;
+    if (!nextUserIds.length && (!Array.isArray(entry.roleIds) || !entry.roleIds.length)) {
+      delete data.responsibilities[name];
+    } else {
+      entry.userIds = nextUserIds;
+    }
+    removedFrom.push(name);
+  }
+  if (removedFrom.length) writeStore(store);
+  return removedFrom;
+}
+
 function isSupervisorForResponsibility(guildId, responsibilityName, memberOrUser) {
   const id = String(memberOrUser?.id || memberOrUser?.user?.id || '');
   if (!id) return false;
@@ -81,6 +102,7 @@ module.exports = {
   supervisorsPath,
   getSupervisors,
   setSupervisors,
+  removeUserFromAllSupervisors,
   clearGuildSupervisors,
   isSupervisorForResponsibility,
   getSupervisedResponsibilities

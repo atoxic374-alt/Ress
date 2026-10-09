@@ -58,6 +58,8 @@ const { restoreTopSchedules, restorePanelCleanups, handlePanelMessageDelete } = 
 const { handleChannelDelete, handleRoleDelete } = require('./utils/protectionManager.js');
 const problemCommand = require('./commands/problem.js');
 const { getDataDir, getRailwayVolumeMountPath, getBotConfigPath } = require('./utils/storagePaths');
+const { isSupervisorForResponsibility, removeUserFromAllSupervisors } = require('./utils/responsibilitySupervisors');
+const { ownersPath, normalizeIds, loadOwners, saveOwners, isOwnerMember } = require('./utils/ownersStore');
 let interactiveRolesManager;
 
 // مسارات ملفات البيانات
@@ -71,6 +73,7 @@ const DATA_FILES = {
     responsibilities: path.join(dataDir, 'responsibilities.json'),
     logConfig: path.join(dataDir, 'logConfig.json'),
     adminRoles: path.join(dataDir, 'adminRoles.json'),
+    owners: ownersPath,
     botConfig: getBotConfigPath(),
     cooldowns: path.join(dataDir, 'cooldowns.json'),
     notifications: path.join(dataDir, 'notifications.json'),
@@ -755,6 +758,38 @@ async function removeInactiveResponsiblesForGuild(guild, now = Date.now()) {
     return changed;
 }
 
+async function removeMemberFromResponsibilityAssignmentsOnLeave(member) {
+    if (!member?.guild?.id || !member.id) return { responsibilities: [], supervisors: [] };
+    const guildId = member.guild.id;
+    const userId = String(member.id);
+    const responsibilities = readJSONFile(DATA_FILES.responsibilities, {});
+    const removedResponsibilities = [];
+    for (const [name, config] of Object.entries(responsibilities)) {
+        if (!Array.isArray(config?.responsibles)) continue;
+        const next = config.responsibles.map(String).filter(id => id !== userId);
+        if (next.length !== config.responsibles.length) {
+            config.responsibles = next;
+            removedResponsibilities.push(name);
+        }
+    }
+    const removedSupervisors = removeUserFromAllSupervisors(guildId, userId);
+    if (removedResponsibilities.length) {
+        writeJSONFile(DATA_FILES.responsibilities, responsibilities);
+        global.responsibilities = responsibilities;
+        if (dbManager.isInitialized) {
+            for (const name of removedResponsibilities) {
+                await dbManager.updateResponsibility(name, responsibilities[name]).catch(error =>
+                    console.error(`تعذر حفظ إزالة مسؤولية العضو ${userId} من قاعدة البيانات:`, error.message));
+            }
+        }
+    }
+    if (removedResponsibilities.length || removedSupervisors.length) {
+        await updateResponsibilitiesEmbedForGuild(guildId);
+        client.emit('responsibilityUpdate');
+    }
+    return { responsibilities: removedResponsibilities, supervisors: removedSupervisors };
+}
+
 // تحميل البيانات مباشرة من قاعدة البيانات والملفات
 const { dbManager } = require('./utils/database.js');
 let points = readJSONFile(DATA_FILES.points, {});
@@ -837,7 +872,6 @@ function loadAdminRoles() {
 }
 
 let botConfig = readJSONFile(DATA_FILES.botConfig, {
-    owners: [],
     prefix: null,
     settings: {},
     activeTasks: {},
@@ -980,54 +1014,45 @@ function saveVoiceSessionsToDisk() {
 
 loadVoiceSessionsFromDisk();
 
-// إعداد قائمة مالكي البوت من ملف botConfig مع fallback لـ env
+// إعداد قائمة مالكي البوت من owners.json مع ترحيل تلقائي للقائمة القديمة من botConfig/env
 let BOT_OWNERS = [];
-if (botConfig.owners && Array.isArray(botConfig.owners) && botConfig.owners.length > 0) {
-    BOT_OWNERS = [...botConfig.owners]; // استنساخ المصفوفة
-    console.log('✅ تم تحميل المالكين من ملف botConfig.json:', BOT_OWNERS);
-    
-    // تأكد من وجود الملاك في المتغير العالمي بشكل دائم
-    global.BOT_OWNERS = BOT_OWNERS;
+let BOT_OWNER_ROLES = [];
+const storedOwners = loadOwners();
+const legacyOwners = normalizeIds(botConfig.owners);
+const envOwners = normalizeIds(String(process.env.BOT_OWNERS || process.env.OWNER_ID || '')
+    .split(/[\s,;]+/).map(id => id.replace(/[<@!>]/g, '').trim()));
+if (!storedOwners.users.length && !storedOwners.roles.length && (legacyOwners.length || envOwners.length)) {
+    const migrated = saveOwners({ users: legacyOwners.length ? legacyOwners : envOwners, roles: [] });
+    BOT_OWNERS = [...migrated.users];
+    console.log('✅ تم ترحيل الأونرات إلى owners.json:', BOT_OWNERS);
 } else {
-    // محاولة القراءة من متغيرات البيئة كـ fallback
-    const envOwners = String(process.env.BOT_OWNERS || process.env.OWNER_ID || '')
-        .split(/[\s,;]+/)
-        .map(id => id.replace(/[<@!>]/g, '').trim())
-        .filter(id => /^\d{15,21}$/.test(id));
-    if (envOwners.length > 0) {
-        BOT_OWNERS = [...new Set(envOwners)];
-        console.log('✅ تم تحميل المالك من متغيرات البيئة:', BOT_OWNERS);
-        
-        // استخدم مالك env للجلسة الحالية فقط. لا تكتب إعدادًا ناقصًا فوق
-        // ملف botConfig إذا كان قد فُقد أو تعذر قراءته؛ مسار التخزين يعيد
-        // النسخة الاحتياطية تلقائيًا عند توفرها.
-        botConfig.owners = BOT_OWNERS;
-        if (fs.existsSync(DATA_FILES.botConfig)) {
-            writeJSONFile(DATA_FILES.botConfig, botConfig);
-            console.log('💾 تم حفظ المالك في botConfig.json');
-        } else {
-            console.warn('⚠️ botConfig غير موجود؛ تم استخدام مالك env مؤقتًا بدون إنشاء إعدادات ناقصة');
-        }
-        
-        global.BOT_OWNERS = BOT_OWNERS;
-    } else {
-        console.log('⚠️ لم يتم العثور على مالكين محددين');
-        console.log('💡 نصيحة: أضف OWNER_ID أو BOT_OWNERS في Secrets أو استخدم أمر owners بعد تعيين أول مالك');
-        global.BOT_OWNERS = [];
-    }
+    BOT_OWNERS = [...storedOwners.users];
+    BOT_OWNER_ROLES = [...storedOwners.roles];
+    console.log('✅ تم تحميل الأونرات من owners.json:', { users: BOT_OWNERS, roles: BOT_OWNER_ROLES });
+}
+if (Object.prototype.hasOwnProperty.call(botConfig, 'owners')) {
+    delete botConfig.owners;
+    writeJSONFile(DATA_FILES.botConfig, botConfig);
+}
+global.BOT_OWNERS = BOT_OWNERS;
+global.BOT_OWNER_ROLES = BOT_OWNER_ROLES;
+
+function isBotOwner(memberOrUser) {
+    const member = memberOrUser?.roles ? memberOrUser : null;
+    const userId = String(memberOrUser?.id || memberOrUser?.user?.id || '');
+    return BOT_OWNERS.includes(userId) || (member && BOT_OWNER_ROLES.some(roleId => member.roles.cache.has(roleId)));
 }
 
 // دالة لإعادة تحميل BOT_OWNERS من الملف
 function reloadBotOwners() {
     try {
-        const currentBotConfig = readJSONFile(DATA_FILES.botConfig, {});
-        if (currentBotConfig.owners && Array.isArray(currentBotConfig.owners)) {
-            BOT_OWNERS = [...currentBotConfig.owners];
-            global.BOT_OWNERS = BOT_OWNERS;
-            console.log('🔄 تم إعادة تحميل المالكين:', BOT_OWNERS);
-            return true;
-        }
-        return false;
+        const currentOwners = loadOwners();
+        BOT_OWNERS = [...currentOwners.users];
+        BOT_OWNER_ROLES = [...currentOwners.roles];
+        global.BOT_OWNERS = BOT_OWNERS;
+        global.BOT_OWNER_ROLES = BOT_OWNER_ROLES;
+        console.log('🔄 تم إعادة تحميل الأونرات:', { users: BOT_OWNERS, roles: BOT_OWNER_ROLES });
+        return true;
     } catch (error) {
         console.error('❌ خطأ في إعادة تحميل المالكين:', error);
         return false;
@@ -1052,10 +1077,8 @@ function updateBotOwners(newOwners) {
             BOT_OWNERS.push(...validOwners);
             global.BOT_OWNERS = BOT_OWNERS;
 
-            // تحديث الملف لضمان الحفظ الدائم
-            const currentConfig = readJSONFile(DATA_FILES.botConfig, {});
-            currentConfig.owners = BOT_OWNERS;
-            writeJSONFile(DATA_FILES.botConfig, currentConfig);
+            // تحديث owners.json مع الحفاظ على أدوار الأونر
+            saveOwners({ users: BOT_OWNERS, roles: BOT_OWNER_ROLES });
 
             console.log('✅ تم تحديث قائمة المالكين العالمية والدائمة بنجاح:', BOT_OWNERS);
             return true;
@@ -1072,6 +1095,14 @@ function updateBotOwners(newOwners) {
 // Make the functions available globally
 global.reloadBotOwners = reloadBotOwners;
 global.updateBotOwners = updateBotOwners;
+global.updateBotOwnerRoles = function updateBotOwnerRoles(newRoles) {
+    const validRoles = normalizeIds(newRoles);
+    BOT_OWNER_ROLES = validRoles;
+    global.BOT_OWNER_ROLES = BOT_OWNER_ROLES;
+    saveOwners({ users: BOT_OWNERS, roles: BOT_OWNER_ROLES });
+    return true;
+};
+global.isBotOwner = isBotOwner;
 
 client.commands = new Collection();
 client.pendingReports = new Map();
@@ -1600,7 +1631,7 @@ client.on(Events.InviteDelete, (invite) => {
                                     react: async () => {},
                                     permissionsFor: () => ({ has: () => true })
                                 };
-                                await mapCommand.execute(fakeMessage, [], { client, BOT_OWNERS: process.env.BOT_OWNERS ? process.env.BOT_OWNERS.split(',') : [] }).catch(() => {});
+                                await mapCommand.execute(fakeMessage, [], { client, BOT_OWNERS, BOT_OWNER_ROLES: process.env.BOT_OWNERS ? process.env.BOT_OWNERS.split(',') : [] }).catch(() => {});
                             }
                         }
                     }
@@ -1646,6 +1677,14 @@ async function syncAllResponsibilityRoles(client) {
                 for (const roleId of roles) {
                     if (!roleToResponsibles.has(roleId)) roleToResponsibles.set(roleId, new Set());
                     members.forEach(id => roleToResponsibles.get(roleId).add(id));
+                }
+            }
+            for (const [responsibilityName, config] of Object.entries(responsibilities)) {
+                const roles = Array.isArray(config.roles) ? config.roles : (config.roleId ? [config.roleId] : []);
+                const supervisorIds = require('./utils/responsibilitySupervisors').getSupervisors(guild.id, responsibilityName).userIds;
+                for (const roleId of roles) {
+                    if (!roleToResponsibles.has(roleId)) roleToResponsibles.set(roleId, new Set());
+                    supervisorIds.forEach(id => roleToResponsibles.get(roleId).add(id));
                 }
             }
 
@@ -2811,7 +2850,7 @@ client.on('messageCreate', async message => {
 
     if (wordCommand && typeof wordCommand.handleMessage === 'function') {
 
-      const consumed = await wordCommand.handleMessage(message, { client, BOT_OWNERS });
+      const consumed = await wordCommand.handleMessage(message, { client, BOT_OWNERS, BOT_OWNER_ROLES });
 
       if (consumed) return;
 
@@ -2833,7 +2872,7 @@ client.on('messageCreate', async message => {
       // تشغيل الأوامر بشكل غير متزامن لضمان عدم تأثر سرعة البوت الكلية
       setImmediate(async () => {
         try {
-          await command.execute(message, args, { client, BOT_OWNERS });
+          await command.execute(message, args, { client, BOT_OWNERS, BOT_OWNER_ROLES });
         } catch (error) {
           console.error(`Error executing command ${commandName}:`, error);
           message.reply('حدث خطأ أثناء تنفيذ هذا الأمر.').catch(() => {});
@@ -3114,18 +3153,18 @@ client.on('messageCreate', async message => {
     if (!command) return;
 
     // Check permissions - محسن مع الكاش
-    const isOwner = BOT_OWNERS.includes(message.author.id) || message.guild.ownerId === message.author.id;
+    const isOwner = isBotOwner(message.member || message.author) || message.guild.ownerId === message.author.id;
     const member = message.member || await message.guild.members.fetch(message.author.id);
     const hasAdministrator = member.permissions.has('Administrator');
 
     // صلاحيات نظام البونس تُفحص داخليًا من إعدادات كل سيرفر، لذلك لا يُربط
     // بصلاحيات المالك العام/الرولات الإدارية المشتركة للأوامر الأخرى.
     if (commandName === 'bonus' || commandName === 'بونس') {
-      await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, client, colorManager });
+      await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, client, colorManager });
       return;
     }
     if (commandName === 'settings' && ['bonus', 'بونس'].includes(String(args[0] || '').toLowerCase())) {
-      await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, client, colorManager });
+      await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, client, colorManager });
       return;
     }
 
@@ -3138,16 +3177,16 @@ client.on('messageCreate', async message => {
       if (commandName === 'مسؤولياتي') {
         await showUserResponsibilities(message, message.author, responsibilities, client);
       } else {
-        await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
+        await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
       }
     }
     // Commands for everyone (اجازتي)
     else if (commandName === 'اجازتي') {
-      await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
+      await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
     }
     // أمر مسؤوليه يفحص الأونر/مدير Resp/مشرف المسؤولية داخل الأمر نفسه.
     else if (commandName === 'مسؤوليه' || commandName === 'مسؤولية') {
-      await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
+      await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
     }
     // Commands for admins and owners (user, مسؤول, اجازه, check, rooms)
       else if (commandName === 'ترقيه' || commandName === 'list' || commandName === 'حذف' || commandName === 'settings' || commandName === 'problem' || commandName === 'مشكله' || commandName === 'word' || commandName === 'roled' || commandName === 'انشاء' || commandName === 'اجازه' || commandName === 'تصفيه' || commandName === 'مسؤولياتي' || commandName === 'اجازتي' || commandName === 'check' || commandName === 'rooms' || commandName === 'ticket' || commandName === 'تكت' || commandName === 'tclose' || commandName === 'اغلاق' || commandName === 'قفل' || commandName === 'اقفال' || commandName === 'myticket' || commandName === 'نقاطي' || commandName === 'tadd' || commandName === 'اضافه' || commandName === 'اضافة' || commandName === 'إضافة' || commandName === 'tremove' || commandName === 'ازاله' || commandName === 'ازالة' || commandName === 'إزالة' || commandName === 'tchange' || commandName === 'تغيير' || commandName === 'تحويل' || commandName === 'ttop' || commandName === 'نقاط' || commandName === 'tname' || commandName === 'اسم' || commandName === 'تسميه' || commandName === 'تسمية' || commandName === 'remind' || commandName === 'تنبيه' || commandName === 'استدعاء' || commandName === 'points' || commandName === 'tm' || commandName === 'treset' || commandName === 'tmreset' || commandName === 'tblock' || commandName === 'close' || commandName === 'open' || commandName === 'hide' || commandName === 'show' || commandName === 'store' || commandName === 'say' || commandName === 'reply' || commandName === 'قفل' || commandName === 'فتح' || commandName === 'اخفاء' || commandName === 'إخفاء' || commandName === 'اظهار' || commandName === 'إظهار' || commandName === 'ستور' || commandName === 'قول' || commandName === 'رد') {
@@ -3166,7 +3205,7 @@ client.on('messageCreate', async message => {
         if (commandName === 'مسؤول') {
           console.log(`✅ تم منح الصلاحية للمستخدم ${message.author.id}`);
         }
-        await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
+        await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
       } else {
         if (commandName === 'مسؤول') {
           console.log(`❌ المستخدم ${message.author.id} لا يملك الصلاحيات المطلوبة لأمر مسؤول`);
@@ -3178,7 +3217,7 @@ client.on('messageCreate', async message => {
     // Commands for owners only (call, stats, setup, report, set-vacation, top, test)
     else if (commandName === 'call' || commandName === 'stats' || commandName === 'setup' || commandName === 'report' || commandName === 'set-vacation' || commandName === 'top' || commandName === 'test') {
       if (isOwner) {
-        await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
+        await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
       } else {
         await message.react('❌');
         return;
@@ -3187,7 +3226,7 @@ client.on('messageCreate', async message => {
     // Commands for owners only (all other commands)
     else {
       if (isOwner) {
-        await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
+        await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
       } else {
         await message.react('❌');
         return;
@@ -3721,7 +3760,7 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
                             const executor = recentRoleUpdateEntry?.executor || null;
                             const executorMember = executor ? await newMember.guild.members.fetch(executor.id).catch(() => null) : null;
                             const isAllowedExecutor = Boolean(
-                                executorMember && (global.BOT_OWNERS || []).includes(executorMember.id)
+                                executorMember && isBotOwner(executorMember)
                                     || approverRoleIds.some((approverRoleId) => executorMember.roles.cache.has(approverRoleId))
                                 )
                             
@@ -3899,8 +3938,9 @@ if (executorMember && !isAllowedExecutor) {
             if (foundResp) {
                 // التحقق من أن المستخدم مسؤول في هذه المسؤولية
                 const isResponsible = foundResp.data.responsibles && foundResp.data.responsibles.includes(userId);
+                const isSupervisor = isSupervisorForResponsibility(newMember.guild.id, foundResp.name, newMember);
                 
-                if (!isResponsible) {
+                if (!isResponsible && !isSupervisor) {
                     // شخص غير مسؤول حصل على رول المسؤولية - يجب إزالته
                     console.log(`🚨 محاولة أخذ رول مسؤولية من غير مسؤول: ${role.name} للعضو ${newMember.displayName}`);
                     
@@ -3929,7 +3969,7 @@ if (executorMember && !isAllowedExecutor) {
                                 { name: '👤 العضو', value: `<@${userId}>`, inline: true },
                                 { name: '🏷️ الرول', value: `<@&${roleId}> (${role.name})`, inline: true },
                                 { name: '📂 المسؤولية', value: foundResp.name, inline: true },
-                                { name: '⚠️ السبب', value: 'العضو ليس مسؤولاً في هذه المسؤولية', inline: false }
+                                { name: '⚠️ السبب', value: 'العضو ليس مسؤولاً أو مشرفاً في هذه المسؤولية', inline: false }
                             ]
                         });
                     } catch (removeError) {
@@ -3953,8 +3993,9 @@ if (executorMember && !isAllowedExecutor) {
             if (foundResp) {
                 // التحقق من أن المستخدم مسؤول في هذه المسؤولية
                 const isResponsible = foundResp.data.responsibles && foundResp.data.responsibles.includes(userId);
+                const isSupervisor = isSupervisorForResponsibility(newMember.guild.id, foundResp.name, newMember);
                 
-                if (isResponsible) {
+                if (isResponsible || isSupervisor) {
                     // مسؤول تم إزالة رول المسؤولية منه - يجب إعادته
                     console.log(`🔄 إعادة رول مسؤولية تم إزالته: ${role.name} للمسؤول ${newMember.displayName}`);
                     
@@ -4011,12 +4052,15 @@ client.on('guildMemberRemove', async (member) => {
             console.error('❌ خطأ في حفظ رصيد البونس عند مغادرة العضو:', bonusLeaveError);
         }
 
+        const assignmentRemoval = await removeMemberFromResponsibilityAssignmentsOnLeave(member);
+        if (assignmentRemoval.responsibilities.length || assignmentRemoval.supervisors.length) {
+            console.log(`🧹 تمت إزالة العضو ${member.id} فورًا من المسؤوليات (${assignmentRemoval.responsibilities.join('، ') || 'لا يوجد'}) والإشراف (${assignmentRemoval.supervisors.join('، ') || 'لا يوجد'})`);
+        }
         const tracker = getResponsibilityLeaveTracker();
         if (!tracker.guilds[member.guild.id]) tracker.guilds[member.guild.id] = { leftAtByUser: {}, removedByUser: {} };
         tracker.guilds[member.guild.id].leftAtByUser = tracker.guilds[member.guild.id].leftAtByUser || {};
-        tracker.guilds[member.guild.id].leftAtByUser[member.id] = Date.now();
+        delete tracker.guilds[member.guild.id].leftAtByUser[member.id];
         saveResponsibilityLeaveTracker(tracker);
-        await removeInactiveResponsiblesForGuild(member.guild);
 
         // Handle down system member leave
         const downManager = require('./utils/downManager');
@@ -4142,7 +4186,7 @@ client.on('guildMemberAdd', async (member) => {
 });
 
 async function handleDownDMInteraction(interaction, context) {
-    const { client, BOT_OWNERS } = context;
+    const { client, BOT_OWNERS, BOT_OWNER_ROLES } = context;
     const downManager = require('./utils/downManager');
 
     // Check permissions
@@ -4582,12 +4626,12 @@ client.on('interactionCreate', async (interaction) => {
     if (customId.startsWith('supervisor_')) {
         const supervisorCommand = client.commands.get('مشرف') || client.commands.get('supervisor');
         if (supervisorCommand?.handleInteraction) {
-            await supervisorCommand.handleInteraction(interaction, { client, BOT_OWNERS });
+            await supervisorCommand.handleInteraction(interaction, { client, BOT_OWNERS, BOT_OWNER_ROLES });
         }
         return;
     }
 
-    if (await interactionRouter.route(interaction, { client, BOT_OWNERS })) {
+    if (await interactionRouter.route(interaction, { client, BOT_OWNERS, BOT_OWNER_ROLES })) {
         return;
     }
 if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRoleSelectMenu() || interaction.isStringSelectMenu()) && customId.startsWith('word_')) {
@@ -4596,7 +4640,7 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
 
         if (wordCommand && typeof wordCommand.handleInteraction === 'function') {
 
-            const consumed = await wordCommand.handleInteraction(interaction, { client, BOT_OWNERS });
+            const consumed = await wordCommand.handleInteraction(interaction, { client, BOT_OWNERS, BOT_OWNER_ROLES });
 
             if (consumed !== false) {
 
@@ -5160,7 +5204,7 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
         console.log(`معالجة تفاعل سجلات الترقيات: ${interaction.customId}`);
 
         try {
-            const promoteContext = { client, BOT_OWNERS };
+            const promoteContext = { client, BOT_OWNERS, BOT_OWNER_ROLES };
             const promoteCommand = client.commands.get('promote');
 
             if (promoteCommand && promoteCommand.handleInteraction) {
@@ -5190,7 +5234,7 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
         console.log(`معالجة تفاعل نظام الترقيات: ${interaction.customId}`);
 
         try {
-            const promoteContext = typeof context !== 'undefined' ? context : { client, BOT_OWNERS: typeof BOT_OWNERS !== 'undefined' ? BOT_OWNERS : [] };
+            const promoteContext = typeof context !== 'undefined' ? context : { client, BOT_OWNERS, BOT_OWNER_ROLES: typeof BOT_OWNERS !== 'undefined' ? BOT_OWNERS : [] };
             const promoteCommand = client.commands.get('promote');
 
             if (promoteCommand && typeof promoteCommand.handleInteraction === 'function') {
@@ -5217,7 +5261,7 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
 
     // --- Vacation System Interaction Router ---
     if (interaction.customId && interaction.customId.startsWith('vac_')) {
-        const vacationContext = typeof context !== 'undefined' ? context : { client, BOT_OWNERS: typeof BOT_OWNERS !== 'undefined' ? BOT_OWNERS : [] };
+        const vacationContext = typeof context !== 'undefined' ? context : { client, BOT_OWNERS, BOT_OWNER_ROLES: typeof BOT_OWNERS !== 'undefined' ? BOT_OWNERS : [] };
 
         // Handle Rejection buttons SPECIFICALLY before deferUpdate
         if (interaction.isButton() && (interaction.customId.startsWith('vac_reject_') || interaction.customId.startsWith('vac_reject_termination_'))) {
@@ -5534,7 +5578,7 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
         try {
             const reactionLogCommand = client.commands.get('reactionlog');
             if (reactionLogCommand && typeof reactionLogCommand.handleInteraction === 'function') {
-                await reactionLogCommand.handleInteraction(interaction, { client, BOT_OWNERS });
+                await reactionLogCommand.handleInteraction(interaction, { client, BOT_OWNERS, BOT_OWNER_ROLES });
             }
         } catch (error) {
             console.error('Reaction Log panel failed:', error);
@@ -5556,7 +5600,7 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
         try {
             const streakCommand = client.commands.get('streak');
             if (streakCommand && streakCommand.handleInteraction) {
-                await streakCommand.handleInteraction(interaction, { client, BOT_OWNERS });
+                await streakCommand.handleInteraction(interaction, { client, BOT_OWNERS, BOT_OWNER_ROLES });
             } else {
                 console.log('⚠️ لم يتم العثور على معالج Streak');
                 await interaction.reply({
@@ -6428,7 +6472,7 @@ async function handleDeleteSingleRecord(interaction, roleId, recordIndex) {
         const promoteLogsPath = path.join(__dirname, 'data', 'promoteLogs.json');
 
         // Check permissions
-        if (!BOT_OWNERS.includes(interaction.user.id)) {
+        if (!isBotOwner(interaction.member || interaction.user)) {
             await interaction.reply({
                 content: '❌ **ليس لديك صلاحية لحذف السجلات!**',
                 flags: MessageFlags.Ephemeral
@@ -6513,7 +6557,7 @@ async function handleDeleteAllRecords(interaction, roleId) {
         const promoteLogsPath = path.join(__dirname, 'data', 'promoteLogs.json');
 
         // Check permissions
-        if (!BOT_OWNERS.includes(interaction.user.id)) {
+        if (!isBotOwner(interaction.member || interaction.user)) {
             await interaction.reply({
                 content: '❌ **ليس لديك صلاحية لحذف السجلات!**',
                 flags: MessageFlags.Ephemeral
