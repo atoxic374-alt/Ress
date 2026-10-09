@@ -3007,7 +3007,7 @@ client.on('messageCreate', async message => {
       const callButton = new ButtonBuilder()
         .setCustomId(callButtonId)
         .setLabel('Call')
-.setEmoji('<:emoji_11:1457490571458617861>')
+.setEmoji('<:emoji_11:1448570617950371861>')
         .setStyle(ButtonStyle.Secondary);
 
       let supervisorCallButtonId = `shortcut_supervisor_call_${matchedResponsibility}_${timestamp}_${message.author.id}`;
@@ -3017,7 +3017,7 @@ client.on('messageCreate', async message => {
       const supervisorCallButton = new ButtonBuilder()
         .setCustomId(supervisorCallButtonId)
         .setLabel('Call Supervisors')
-        .setEmoji('<:emoji_11:1457490571458617861>')
+        .setEmoji('<:emoji_11:1448570617950371861>')
         .setStyle(ButtonStyle.Secondary);
 
       const row = new ActionRowBuilder().addComponents(callButton, supervisorCallButton);
