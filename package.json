@@ -5,7 +5,8 @@
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
-    "test:bonus": "node test-bonus-system.js"
+    "test:bonus": "node test-bonus-system.js",
+    "test:check": "node test-check-activity.js"
   },
   "dependencies": {
     "@discordjs/voice": "^0.18.0",

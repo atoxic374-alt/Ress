@@ -56,6 +56,37 @@ function getDatabaseManager() {
     return getDatabase();
 }
 
+function buildActivitySource(guildId) {
+    if (!guildId) return 'daily_activity';
+    // النشاط الجديد يُحفظ لكل سيرفر في guild_daily_activity؛ نضم إليه
+    // السجلات القديمة غير المعزولة حتى لا تختفي بيانات ما قبل هذا النظام.
+    return `(SELECT date, user_id, voice_time, messages FROM guild_daily_activity WHERE guild_id = ?
+            UNION ALL SELECT date, user_id, voice_time, messages FROM daily_activity)`;
+}
+
+function activityQueryParams(guildId, ...params) {
+    return guildId ? [String(guildId), ...params] : params;
+}
+
+async function getActivityTotals(dbManager, guildId, userId, fromDate) {
+    const source = buildActivitySource(guildId);
+    return dbManager.get(`
+        SELECT COALESCE(SUM(voice_time), 0) AS voiceTime,
+               COALESCE(SUM(messages), 0) AS messages
+        FROM ${source}
+        WHERE user_id = ? AND date >= ?
+    `, activityQueryParams(guildId, String(userId), fromDate));
+}
+
+function getLiveVoiceDuration(client, userId, guildId, fromTimestamp = 0, now = Date.now()) {
+    const session = client?.voiceSessions?.get(String(userId));
+    if (!session || session.isAFK) return 0;
+    if (guildId && session.guildId && String(session.guildId) !== String(guildId)) return 0;
+    const liveStart = Number(session.lastTrackedTime || session.startTime || session.sessionStartTime);
+    if (!Number.isFinite(liveStart) || liveStart <= 0) return 0;
+    return Math.max(0, now - Math.max(liveStart, Number(fromTimestamp) || 0));
+}
+
 async function execute(message, args, { client, BOT_OWNERS, ADMIN_ROLES }) {
     if (isUserBlocked(message.author.id)) {
         const blockedEmbed = colorManager.createEmbed()
@@ -116,162 +147,55 @@ async function execute(message, args, { client, BOT_OWNERS, ADMIN_ROLES }) {
     await message.channel.send('**لم يتم العثور على منشن أو آيدي أو اسم مطابق في الرسالة**');
 }
 
-async function getColorIndicator(userId, client, dbManager) {
+async function getColorIndicator(userId, client, dbManager, guildId = null) {
     try {
         const now = moment().tz('Asia/Riyadh');
-        const weekStart = now.clone().startOf('week');
-        const monthStart = now.clone().startOf('month');
-        const dayStart = now.clone().startOf('day');
-
-        const weeklyStats = await dbManager.all(`
-            SELECT SUM(voice_time) as voiceTime, SUM(messages) as messages
-            FROM daily_activity 
-            WHERE user_id = ? AND date >= ?
-        `, [userId, weekStart.format('YYYY-MM-DD')]);
-
-        const monthlyStats = await dbManager.all(`
-            SELECT SUM(voice_time) as voiceTime, SUM(messages) as messages
-            FROM daily_activity 
-            WHERE user_id = ? AND date >= ?
-        `, [userId, monthStart.format('YYYY-MM-DD')]);
-
-        const dailyStats = await dbManager.all(`
-            SELECT SUM(voice_time) as voiceTime, SUM(messages) as messages
-            FROM daily_activity 
-            WHERE user_id = ? AND date >= ?
-        `, [userId, dayStart.format('YYYY-MM-DD')]);
-
-        const activeSessions = client.voiceSessions || new Map();
-        let liveDuration = 0;
-        if (activeSessions.has(userId)) {
-            const session = activeSessions.get(userId);
-            if (session && !session.isAFK) {
-                const liveStart = session.lastTrackedTime || session.startTime || session.sessionStartTime;
-                liveDuration = Math.max(0, Date.now() - liveStart);
-            }
-        }
-
-        const weeklyVoiceTime = (weeklyStats[0]?.voiceTime || 0) + liveDuration;
-        const weeklyMessages = weeklyStats[0]?.messages || 0;
-        const monthlyVoiceTime = (monthlyStats[0]?.voiceTime || 0) + liveDuration;
-        const monthlyMessages = monthlyStats[0]?.messages || 0;
-        const dailyVoiceTime = (dailyStats[0]?.voiceTime || 0) + liveDuration;
-        const dailyMessages = dailyStats[0]?.messages || 0;
-
-        const weeklyXP = Math.floor(weeklyMessages / 10);
-        const monthlyXP = Math.floor(monthlyMessages / 10);
-        const dailyXP = Math.floor(dailyMessages / 10);
-
-        const weeklyTotal = weeklyVoiceTime + weeklyXP;
-        const monthlyTotal = monthlyVoiceTime + monthlyXP;
-        const dailyTotal = dailyVoiceTime + dailyXP;
-
-        const allWeeklyUsers = await dbManager.all(`
-            SELECT user_id, SUM(voice_time) + (SUM(messages) / 10) as total
-            FROM daily_activity 
+        const weekStart = now.clone().startOf('week').format('YYYY-MM-DD');
+        const monthStart = now.clone().startOf('month').format('YYYY-MM-DD');
+        const dayStart = now.clone().startOf('day').format('YYYY-MM-DD');
+        const source = buildActivitySource(guildId);
+        const params = (...values) => activityQueryParams(guildId, ...values);
+        const ranked = async (fromDate, score) => dbManager.all(`
+            SELECT user_id, ${score} AS score
+            FROM ${source}
             WHERE date >= ?
             GROUP BY user_id
-            ORDER BY total DESC
-        `, [weekStart.format('YYYY-MM-DD')]);
+            ORDER BY score DESC
+        `, params(fromDate));
+        const rankOf = rows => rows.findIndex(row => String(row.user_id) === String(userId)) + 1;
 
-        const allMonthlyUsers = await dbManager.all(`
-            SELECT user_id, SUM(voice_time) + (SUM(messages) / 10) as total
-            FROM daily_activity 
-            WHERE date >= ?
-            GROUP BY user_id
-            ORDER BY total DESC
-        `, [monthStart.format('YYYY-MM-DD')]);
+        const [weeklyTotal, monthlyTotal, dailyTotal, monthlyChat, weeklyChat, monthlyVoice, weeklyVoice] = await Promise.all([
+            ranked(weekStart, 'SUM(voice_time) + (SUM(messages) / 10)'),
+            ranked(monthStart, 'SUM(voice_time) + (SUM(messages) / 10)'),
+            ranked(dayStart, 'SUM(voice_time) + (SUM(messages) / 10)'),
+            ranked(monthStart, 'SUM(messages) / 10'),
+            ranked(weekStart, 'SUM(messages) / 10'),
+            ranked(monthStart, 'SUM(voice_time)'),
+            ranked(weekStart, 'SUM(voice_time)')
+        ]);
 
-        const allDailyUsers = await dbManager.all(`
-            SELECT user_id, SUM(voice_time) + (SUM(messages) / 10) as total
-            FROM daily_activity 
-            WHERE date >= ?
-            GROUP BY user_id
-            ORDER BY total DESC
-        `, [dayStart.format('YYYY-MM-DD')]);
-
-        const weeklyRank = allWeeklyUsers.findIndex(u => u.user_id === userId) + 1;
-        const monthlyRank = allMonthlyUsers.findIndex(u => u.user_id === userId) + 1;
-        const dailyRank = allDailyUsers.findIndex(u => u.user_id === userId) + 1;
-
-        // فحص الترتيب في الشات الشهري (XP فقط)
-        const allMonthlyChat = await dbManager.all(`
-            SELECT user_id, SUM(messages) / 10 as xp
-            FROM daily_activity 
-            WHERE date >= ?
-            GROUP BY user_id
-            ORDER BY xp DESC
-        `, [monthStart.format('YYYY-MM-DD')]);
-
-        const monthlyChatRank = allMonthlyChat.findIndex(u => u.user_id === userId) + 1;
-
-        // فحص الترتيب في الشات الأسبوعي (XP فقط)
-        const allWeeklyChat = await dbManager.all(`
-            SELECT user_id, SUM(messages) / 10 as xp
-            FROM daily_activity 
-            WHERE date >= ?
-            GROUP BY user_id
-            ORDER BY xp DESC
-        `, [weekStart.format('YYYY-MM-DD')]);
-
-        const weeklyChatRank = allWeeklyChat.findIndex(u => u.user_id === userId) + 1;
-
-        // فحص الترتيب في الفويس الشهري فقط
-        const allMonthlyVoice = await dbManager.all(`
-            SELECT user_id, SUM(voice_time) as voice_time
-            FROM daily_activity 
-            WHERE date >= ?
-            GROUP BY user_id
-            ORDER BY voice_time DESC
-        `, [monthStart.format('YYYY-MM-DD')]);
-
-        const monthlyVoiceRank = allMonthlyVoice.findIndex(u => u.user_id === userId) + 1;
-
-        // فحص الترتيب في الفويس الأسبوعي فقط
-        const allWeeklyVoice = await dbManager.all(`
-            SELECT user_id, SUM(voice_time) as voice_time
-            FROM daily_activity 
-            WHERE date >= ?
-            GROUP BY user_id
-            ORDER BY voice_time DESC
-        `, [weekStart.format('YYYY-MM-DD')]);
-
-        const weeklyVoiceRank = allWeeklyVoice.findIndex(u => u.user_id === userId) + 1;
-
-        // حساب عدد مرات الحصول على توب 1 يومي خلال الأسبوع
-        const dailyTop1Count = await dbManager.all(`
-            SELECT COUNT(*) as count
-            FROM (
-                SELECT date, user_id, 
-                       SUM(voice_time) + (SUM(messages) / 10) as total,
-                       RANK() OVER (PARTITION BY date ORDER BY SUM(voice_time) + (SUM(messages) / 10) DESC) as rank
-                FROM daily_activity
+        const [monthlyRank, monthlyChatRank, monthlyVoiceRank, weeklyRank, weeklyChatRank, weeklyVoiceRank] = [
+            rankOf(monthlyTotal), rankOf(monthlyChat), rankOf(monthlyVoice),
+            rankOf(weeklyTotal), rankOf(weeklyChat), rankOf(weeklyVoice)
+        ];
+        const dailyTop1Count = await dbManager.get(`
+            SELECT COUNT(*) AS count FROM (
+                SELECT date, user_id,
+                       RANK() OVER (PARTITION BY date ORDER BY SUM(voice_time) + (SUM(messages) / 10) DESC) AS rank
+                FROM ${source}
                 WHERE date >= ?
                 GROUP BY date, user_id
             )
             WHERE user_id = ? AND rank = 1
-        `, [weekStart.format('YYYY-MM-DD'), userId]);
+        `, params(weekStart, String(userId)));
+        const top1DailyCount = Number(dailyTop1Count?.count || 0);
 
-        const top1DailyCount = dailyTop1Count[0]?.count || 0;
-
-        // نظام شامل: أخضر إذا كان في توب 5 في أي من الفئات أو حصل على توب 1 يومي 3 مرات أسبوعياً
-        if (monthlyRank > 0 && monthlyRank <= 5) return '<:emoji_11:1429246636936138823>';
-        if (monthlyChatRank > 0 && monthlyChatRank <= 5) return '<:emoji_11:1429246636936138823>';
-        if (monthlyVoiceRank > 0 && monthlyVoiceRank <= 5) return '<:emoji_11:1429246636936138823>';
-        if (weeklyRank > 0 && weeklyRank <= 5) return '<:emoji_11:1429246636936138823>';
-        if (weeklyChatRank > 0 && weeklyChatRank <= 5) return '<:emoji_11:1429246636936138823>';
-        if (weeklyVoiceRank > 0 && weeklyVoiceRank <= 5) return '<:emoji_11:1429246636936138823>';
-        if (top1DailyCount >= 3) return '<:emoji_11:1429246636936138823>'; // 3 مرات توب 1 يومي = أخضر
-        
-        // أصفر إذا كان في 6-10 في أي من الفئات أو حصل على توب 1 يومي مرتين
-        if (monthlyRank > 5 && monthlyRank <= 10) return '<:emoji_10:1429246610784653412>';
-        if (monthlyChatRank > 5 && monthlyChatRank <= 10) return '<:emoji_10:1429246610784653412>';
-        if (monthlyVoiceRank > 5 && monthlyVoiceRank <= 10) return '<:emoji_10:1429246610784653412>';
-        if (weeklyRank > 5 && weeklyRank <= 10) return '<:emoji_10:1429246610784653412>';
-        if (weeklyChatRank > 5 && weeklyChatRank <= 10) return '<:emoji_10:1429246610784653412>';
-        if (weeklyVoiceRank > 5 && weeklyVoiceRank <= 10) return '<:emoji_10:1429246610784653412>';
-        if (top1DailyCount === 2) return '<:emoji_10:1429246610784653412>'; // مرتين توب 1 يومي = أصفر
-
+        if ([monthlyRank, monthlyChatRank, monthlyVoiceRank, weeklyRank, weeklyChatRank, weeklyVoiceRank].some(rank => rank > 0 && rank <= 5) || top1DailyCount >= 3) {
+            return '<:emoji_11:1429246636936138823>';
+        }
+        if ([monthlyRank, monthlyChatRank, monthlyVoiceRank, weeklyRank, weeklyChatRank, weeklyVoiceRank].some(rank => rank > 5 && rank <= 10) || top1DailyCount === 2) {
+            return '<:emoji_10:1429246610784653412>';
+        }
         return '<:emoji_9:1429246586289918063>';
     } catch (error) {
         console.error('خطأ في حساب مؤشر اللون:', error);
@@ -293,6 +217,7 @@ async function showRoleActivityStats(message, role, client) {
         return;
     }
 
+    const guildId = message.guild.id;
     const now = moment().tz('Asia/Riyadh');
     const monthStart = now.clone().startOf('month');
 
@@ -308,17 +233,13 @@ async function showRoleActivityStats(message, role, client) {
     try {
         const userStatsPromises = members.map(async (userId) => {
             try {
-                const monthlyStats = await dbManager.all(`
-                    SELECT SUM(voice_time) as voiceTime, SUM(messages) as messages
-                    FROM daily_activity 
-                    WHERE user_id = ? AND date >= ?
-                `, [userId, monthStart.format('YYYY-MM-DD')]);
-
-                const voiceTime = monthlyStats[0]?.voiceTime || 0;
-                const messages = monthlyStats[0]?.messages || 0;
+                const monthlyStats = await getActivityTotals(dbManager, guildId, userId, monthStart.format('YYYY-MM-DD'));
+                const voiceTime = (monthlyStats?.voiceTime || 0)
+                    + getLiveVoiceDuration(client, userId, guildId, monthStart.valueOf());
+                const messages = monthlyStats?.messages || 0;
                 const xp = Math.floor(messages / 10);
 
-                const color = await getColorIndicator(userId, client, dbManager);
+                const color = await getColorIndicator(userId, client, dbManager, guildId);
 
                 return {
                     userId,
@@ -706,18 +627,16 @@ async function showUserActivityStats(message, user, client) {
 
     const now = moment().tz('Asia/Riyadh');
     const monthStart = now.clone().startOf('month');
+    const guildId = message.guild?.id || null;
 
     try {
-        const monthlyStats = await dbManager.all(`
-            SELECT SUM(voice_time) as voiceTime, SUM(messages) as messages
-            FROM daily_activity 
-            WHERE user_id = ? AND date >= ?
-        `, [user.id, monthStart.format('YYYY-MM-DD')]);
+        const monthlyStats = await getActivityTotals(dbManager, guildId, user.id, monthStart.format('YYYY-MM-DD'));
 
-        const voiceTime = monthlyStats[0]?.voiceTime || 0;
-        const messages = monthlyStats[0]?.messages || 0;
+        const voiceTime = (monthlyStats?.voiceTime || 0)
+            + getLiveVoiceDuration(client, user.id, guildId, monthStart.valueOf());
+        const messages = monthlyStats?.messages || 0;
         const xp = Math.floor(messages / 10);
-        const colorEmoji = await getColorIndicator(user.id, client, dbManager);
+        const colorEmoji = await getColorIndicator(user.id, client, dbManager, guildId);
 
         const voiceTimeFormatted = formatDuration(voiceTime);
 
@@ -750,4 +669,4 @@ function formatDuration(milliseconds) {
     }
 }
 
-module.exports = { name, execute };
+module.exports = { name, execute, buildActivitySource, getActivityTotals, getLiveVoiceDuration, getColorIndicator };
