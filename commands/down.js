@@ -1454,13 +1454,19 @@ async function handleDownInteractions(interaction, context) {
                     results.push({ roleId, ...res });
                 }
 
+                if (results.some(result => result.success)) {
+                    setTimeout(() => downManager.verifyActiveDownRoleIntegrity().catch(error => {
+                        console.error('تعذر تطبيق حماية رتب المسؤوليات بعد الداون:', error);
+                    }), 0);
+                }
+
                 const allSuccess = results.every(r => r.success);
                 const successRoles = results.filter(r => r.success).map(r => `<@&${r.roleId}>`);
                 const failedRoles = results.filter(r => !r.success);
 
                 const resultEmbed = colorManager.createEmbed()
                     .setTitle(allSuccess ? '✅ تم تطبيق الداون بنجاح' : '⚠️ تم تطبيق الداون جزئياً')
-                    .setDescription(`تمت معالجة سحب الرولات للعضو <@${userId}>`)
+                    .setDescription(`تم تطبيق الداون على العضو <@${userId}>. ستُعلّق مسؤولياته ورولاتها المرتبطة حتى انتهاء آخر داون نشط.`)
                     .addFields([
                         { name: 'الرولات التي سُحبت', value: successRoles.length > 0 ? successRoles.join(' , ') : 'لا يوجد', inline: false },
                         { name: ' المدة', value: duration, inline: true },
@@ -1486,6 +1492,7 @@ async function handleDownInteractions(interaction, context) {
                         .setDescription(`تم اعطائك داون من قبل الإدارة.`)
                         .addFields([
                             { name: ' الرولات المسحوبة', value: successRoles.join(' , ') || 'لا يوجد', inline: false },
+                            { name: 'المسؤوليات', value: 'معلقة حتى انتهاء آخر داون نشط، ثم تُستعاد تلقائيًا.', inline: false },
                             { name: ' سحب الرول', value: `<@${interaction.user.id}>`, inline: true },
                             { name: ' المدة', value: duration || 'نهائي', inline: true },
                             { name: ' السبب', value: reason, inline: false }

@@ -4314,6 +4314,9 @@ async function handleDownDMInteraction(interaction, context) {
             );
 
             if (result.success) {
+                setTimeout(() => downManager.verifyActiveDownRoleIntegrity().catch(error => {
+                    console.error('تعذر تطبيق حماية رتب المسؤوليات بعد الداون:', error);
+                }), 0);
                 const member = await guild.members.fetch(userId);
                 const role = await guild.roles.fetch(roleId);
 

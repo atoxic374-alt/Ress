@@ -284,6 +284,179 @@ class DownManager {
         return adminRoles.includes(roleId);
     }
 
+    getRelatedActiveDowns(userId, guildId, activeDowns = this.getActiveDowns(), excludingId = null) {
+        return Object.entries(activeDowns || {})
+            .filter(([downId, down]) => downId !== excludingId &&
+                String(down?.userId) === String(userId) &&
+                String(down?.guildId) === String(guildId) &&
+                down?.status === 'active')
+            .map(([downId, down]) => ({ downId, ...down }));
+    }
+
+    async getDownResponsibilitySnapshot(member, userId, guildId, roleId, activeDowns = this.getActiveDowns()) {
+        const vacationManager = require('./vacationManager');
+        const relatedDowns = this.getRelatedActiveDowns(userId, guildId, activeDowns);
+        const capturedDowns = relatedDowns.filter(down => down.responsibilitySnapshotCaptured === true);
+        let responsibilityAssignments;
+
+        if (capturedDowns.length > 0) {
+            const assignmentsByName = new Map();
+            for (const down of capturedDowns) {
+                for (const assignment of down.responsibilityAssignments || []) {
+                    const existing = assignmentsByName.get(assignment.name);
+                    assignmentsByName.set(assignment.name, {
+                        ...assignment,
+                        index: existing ? Math.min(Number(existing.index) || 0, Number(assignment.index) || 0) : assignment.index,
+                        roleIds: [...new Set([...(existing?.roleIds || []), ...(assignment.roleIds || [])].map(String))]
+                    });
+                }
+            }
+            responsibilityAssignments = [...assignmentsByName.values()];
+        } else {
+            const responsibilities = await vacationManager.getResponsibilitiesForVacation();
+            responsibilityAssignments = vacationManager.captureResponsibilityAssignments(responsibilities, userId);
+        }
+
+        const adminRoleIds = new Set(this.getAdminRoles().map(String));
+        const responsibilityRoleIds = new Set(responsibilityAssignments.flatMap(item => item.roleIds || []).map(String));
+        const suspendedRoleIds = new Set(relatedDowns.map(down => String(down.roleId || '')).filter(Boolean));
+        for (const role of member.roles.cache.values()) {
+            if (adminRoleIds.has(String(role.id)) || responsibilityRoleIds.has(String(role.id))) {
+                suspendedRoleIds.add(String(role.id));
+            }
+        }
+        if (roleId) suspendedRoleIds.add(String(roleId));
+        for (const down of capturedDowns) {
+            for (const id of down.suspendedRoleIds || []) suspendedRoleIds.add(String(id));
+        }
+
+        return {
+            responsibilityAssignments,
+            suspendedRoleIds: [...suspendedRoleIds],
+            responsibilitySnapshotCaptured: true
+        };
+    }
+
+    persistDownResponsibilitySnapshot(activeDowns, snapshot, userId, guildId) {
+        for (const down of Object.values(activeDowns || {})) {
+            if (String(down?.userId) !== String(userId) || String(down?.guildId) !== String(guildId) || down?.status !== 'active') continue;
+            down.responsibilityAssignments = snapshot.responsibilityAssignments;
+            down.suspendedRoleIds = snapshot.suspendedRoleIds;
+            down.responsibilitySnapshotCaptured = true;
+        }
+        return writeJson(activeDownsPath, activeDowns);
+    }
+
+    async completeDownSuspension(downRecord, guild, member, reason = 'انتهاء مدة الداون') {
+        const downId = String(downRecord?.downId || downRecord?.id || '');
+        if (!downId) return { success: false, error: 'معرف الداون غير موجود' };
+        const activeDowns = this.getActiveDowns();
+        const currentRecord = activeDowns[downId] || downRecord;
+        const peers = this.getRelatedActiveDowns(currentRecord.userId, currentRecord.guildId, activeDowns, downId);
+        const assignmentMap = new Map();
+        const suspendedRoleSet = new Set();
+        for (const record of [currentRecord, ...peers]) {
+            for (const assignment of Array.isArray(record.responsibilityAssignments) ? record.responsibilityAssignments : []) {
+                const previous = assignmentMap.get(assignment.name);
+                assignmentMap.set(assignment.name, {
+                    ...assignment,
+                    index: previous ? Math.min(Number(previous.index) || 0, Number(assignment.index) || 0) : assignment.index,
+                    roleIds: [...new Set([...(previous?.roleIds || []), ...(assignment.roleIds || [])].map(String))]
+                });
+            }
+            for (const roleId of record.suspendedRoleIds || []) suspendedRoleSet.add(String(roleId));
+            if (record.roleId) suspendedRoleSet.add(String(record.roleId));
+        }
+        const assignments = [...assignmentMap.values()];
+        const suspendedRoleIds = [...suspendedRoleSet];
+
+        if (peers.length > 0) {
+            for (const peer of peers) {
+                const stored = activeDowns[peer.downId];
+                stored.responsibilityAssignments = assignments;
+                stored.suspendedRoleIds = suspendedRoleIds;
+                stored.responsibilitySnapshotCaptured = true;
+            }
+            delete activeDowns[downId];
+            if (!writeJson(activeDownsPath, activeDowns)) return { success: false, error: 'تعذر حفظ بيانات المسؤوليات للداون المتبقي' };
+            return { success: true, deferred: true };
+        }
+
+        const vacationManager = require('./vacationManager');
+        try {
+            const currentResponsibilities = await vacationManager.getResponsibilitiesForVacation();
+            const currentAssignments = vacationManager.captureResponsibilityAssignments(currentResponsibilities, currentRecord.userId);
+            const assignmentsToRemove = new Map();
+            for (const assignment of [...assignments, ...currentAssignments]) {
+                const previous = assignmentsToRemove.get(assignment.name);
+                assignmentsToRemove.set(assignment.name, {
+                    ...assignment,
+                    roleIds: [...new Set([...(previous?.roleIds || []), ...(assignment.roleIds || [])].map(String))]
+                });
+            }
+            const removal = await vacationManager.removeUserFromResponsibilities(currentRecord.userId, [...assignmentsToRemove.values()]);
+            if (removal.failed.length > 0) {
+                currentRecord.responsibilitiesRemoved = false;
+                currentRecord.responsibilityRemovalFailures = removal.failed;
+                currentRecord.responsibilityRestorePending = true;
+                currentRecord.pendingEndReason = reason;
+                writeJson(activeDownsPath, activeDowns);
+                return { success: false, error: 'تعذر تعليق بعض المسؤوليات قبل استعادتها؛ ستتم إعادة المحاولة تلقائيًا' };
+            }
+        } catch (error) {
+            currentRecord.responsibilityRestorePending = true;
+            currentRecord.pendingEndReason = reason;
+            writeJson(activeDownsPath, activeDowns);
+            console.error(`تعذر تنظيف المسؤوليات قبل إنهاء داون ${downId}:`, error);
+            return { success: false, error: 'تعذر التحقق من المسؤوليات؛ ستتم إعادة المحاولة تلقائيًا' };
+        }
+
+        let failedResponsibilities = [];
+        try {
+            failedResponsibilities = (await vacationManager.restoreUserResponsibilities(currentRecord.userId, assignments)).failed;
+        } catch (error) {
+            console.error(`تعذر استعادة مسؤوليات العضو ${currentRecord.userId} بعد الداون:`, error);
+            failedResponsibilities = assignments;
+        }
+        if (failedResponsibilities.length > 0) {
+            currentRecord.responsibilityAssignments = failedResponsibilities;
+            currentRecord.responsibilitySnapshotCaptured = true;
+            currentRecord.responsibilityRestorePending = true;
+            currentRecord.pendingEndReason = reason;
+            writeJson(activeDownsPath, activeDowns);
+            return { success: false, error: 'تعذر استعادة بعض المسؤوليات؛ ستتم إعادة المحاولة تلقائيًا' };
+        }
+
+        if (member) {
+            for (const restoreRoleId of suspendedRoleIds) {
+                if (member.roles.cache.has(restoreRoleId)) continue;
+                const role = guild.roles.cache.get(restoreRoleId) || await guild.roles.fetch(restoreRoleId).catch(() => null);
+                if (!role) continue;
+                const restorationKey = `${guild.id}_${member.id}_${restoreRoleId}`;
+                this.addToAutoRestoreIgnore(member.id, restoreRoleId);
+                this.botRestorationTracking.add(restorationKey);
+                try {
+                    await member.roles.add(role, `استعادة الرتب والمسؤوليات بعد انتهاء الداون: ${reason}`);
+                } catch (error) {
+                    currentRecord.responsibilityAssignments = assignments;
+                    currentRecord.suspendedRoleIds = suspendedRoleIds;
+                    currentRecord.responsibilitySnapshotCaptured = true;
+                    currentRecord.responsibilityRestorePending = true;
+                    currentRecord.pendingEndReason = reason;
+                    writeJson(activeDownsPath, activeDowns);
+                    console.error(`تعذر استعادة الرول ${restoreRoleId} بعد الداون:`, error);
+                    return { success: false, error: 'تعذر استعادة بعض الرتب؛ ستتم إعادة المحاولة تلقائيًا' };
+                } finally {
+                    setTimeout(() => this.botRestorationTracking.delete(restorationKey), 10000);
+                }
+            }
+        }
+
+        delete activeDowns[downId];
+        if (!writeJson(activeDownsPath, activeDowns)) return { success: false, error: 'تعذر حفظ إنهاء الداون بعد استعادة المسؤوليات' };
+        return { success: true, deferred: false };
+    }
+
     // Down Operations
     async createDown(guild, client, targetUserId, roleId, duration, reason, byUserId, botOwners = []) {
         try {
@@ -350,16 +523,6 @@ class DownManager {
                 }
             }
 
-            // Remove the role with error handling
-            if (duration !== 'شفوي' && duration !== 'verbal') {
-                try {
-                    await targetMember.roles.remove(roleId, `داون بواسطة ${await guild.members.fetch(byUserId).then(m => m.displayName).catch(() => 'غير معروف')}: ${reason}`);
-                } catch (roleError) {
-                    console.error('Error removing role:', roleError);
-                    return { success: false, error: 'فشل في سحب الرول - تحقق من صلاحيات البوت' };
-                }
-            }
-
             // Create down record
             const downId = isVerbal ? `${targetUserId}_verbal_${Date.now()}` : `${targetUserId}_${roleId}_${Date.now()}`;
             const downRecord = {
@@ -375,10 +538,40 @@ class DownManager {
                 status: isVerbal ? 'verbal' : 'active'
             };
 
-            // Verbal notices are history records, not active role downs.
             if (!isVerbal) {
-                const activeDowns = readJson(activeDownsPath, {});
+                const activeDowns = this.getActiveDowns();
+                const snapshot = await this.getDownResponsibilitySnapshot(targetMember, targetUserId, guild.id, roleId, activeDowns);
+                Object.assign(downRecord, snapshot, { responsibilitiesRemoved: snapshot.responsibilityAssignments.length === 0 });
                 activeDowns[downId] = downRecord;
+                if (!this.persistDownResponsibilitySnapshot(activeDowns, snapshot, targetUserId, guild.id)) {
+                    return { success: false, error: 'تعذر حفظ المسؤوليات قبل تطبيق الداون؛ لم يتم سحب الرتب' };
+                }
+
+                // اسحب الرول المختار الآن فقط؛ بقية adminRoles ورولات المسؤوليات
+                // يسحبها فحص التكامل بعد حفظ كل سجلات الداون المختارة.
+                const rolesToRemove = [String(roleId)];
+                try {
+                    const actorName = await guild.members.fetch(byUserId).then(m => m.displayName).catch(() => 'غير معروف');
+                    await targetMember.roles.remove(rolesToRemove, `داون بواسطة ${actorName}: ${reason}`);
+                } catch (roleError) {
+                    delete activeDowns[downId];
+                    writeJson(activeDownsPath, activeDowns);
+                    console.error('Error removing roles for down:', roleError);
+                    return { success: false, error: 'فشل في سحب الرولات - تحقق من صلاحيات البوت' };
+                }
+
+                try {
+                    const removal = await require('./vacationManager').removeUserFromResponsibilities(targetUserId, snapshot.responsibilityAssignments);
+                    downRecord.responsibilitiesRemoved = removal.failed.length === 0;
+                    downRecord.responsibilityRemovalFailures = removal.failed;
+                    if (removal.failed.length > 0) {
+                        console.warn(`تعذر إزالة ${removal.failed.length} مسؤولية أثناء تطبيق الداون؛ ستتم إعادة المحاولة.`);
+                    }
+                } catch (responsibilityError) {
+                    downRecord.responsibilitiesRemoved = false;
+                    downRecord.responsibilityRemovalFailures = snapshot.responsibilityAssignments;
+                    console.error('تعذر إزالة مسؤوليات العضو أثناء تطبيق الداون:', responsibilityError);
+                }
                 writeJson(activeDownsPath, activeDowns);
             }
 
@@ -429,37 +622,21 @@ class DownManager {
             // Get member and role; the record can outlive either resource.
             const member = await guild.members.fetch(downRecord.userId).catch(() => null);
             const role = await guild.roles.fetch(downRecord.roleId).catch(() => null);
+            const completion = await this.completeDownSuspension(
+                { ...downRecord, downId }, guild, member, reason
+            );
+            if (!completion.success) return completion;
 
-            if (member && role) {
-                // إضافة الرول لقائمة التجاهل قبل إرجاعه (للإنهاء اليدوي)
-                this.addToAutoRestoreIgnore(downRecord.userId, downRecord.roleId);
-
-                // تسجيل أن البوت سيقوم بإعادة الرول (لمنع تداخل نظام الحماية)
-                const restorationKey = `${guild.id}_${downRecord.userId}_${downRecord.roleId}`;
-                this.botRestorationTracking.add(restorationKey);
-
-                // إزالة المفتاح بعد 10 ثوانٍ
-                setTimeout(() => {
-                    this.botRestorationTracking.delete(restorationKey);
-                }, 10000);
-
-                // Add role back
-                await member.roles.add(downRecord.roleId);
-
-                // Send log message
+            if (member) {
                 await this.sendLogMessage(guild, client, 'DOWN_ENDED', {
                     targetUser: member.user,
-                    role: role,
-                    reason,
+                    role: role || 'الرول المحفوظ',
+                    reason: completion.deferred ? `${reason} (تأجلت الاستعادة لوجود داون آخر)` : reason,
                     originalReason: downRecord.reason,
                     duration: downRecord.duration || 'نهائي',
                     byUser: await client.users.fetch(downRecord.byUserId).catch(() => null)
                 });
             }
-
-            // Remove from active downs
-            delete activeDowns[downId];
-            writeJson(activeDownsPath, activeDowns);
 
             // Log the action
             this.logAction('DOWN_ENDED', {
@@ -807,9 +984,22 @@ class DownManager {
         const settings = this.getSettings();
         let fixedCount = 0;
 
-        for (const down of Object.values(activeDowns)) {
+        for (const [downId, down] of Object.entries(activeDowns)) {
             try {
                 if (!down || !down.roleId || down.status !== 'active') continue;
+
+                if (down.responsibilityRestorePending) {
+                    const pendingGuild = await this.client.guilds.fetch(down.guildId).catch(() => null);
+                    const pendingMember = pendingGuild
+                        ? await pendingGuild.members.fetch(down.userId).catch(() => null)
+                        : null;
+                    if (pendingGuild) {
+                        const retry = await this.completeDownSuspension(
+                            { ...down, downId }, pendingGuild, pendingMember, down.pendingEndReason || 'انتهاء الداون'
+                        );
+                        if (retry.success) continue;
+                    }
+                }
 
                 if (down.endTime && down.endTime <= Date.now()) {
                     continue;
@@ -821,8 +1011,39 @@ class DownManager {
                 const member = await guild.members.fetch(down.userId).catch(() => null);
                 if (!member) continue;
 
+                if (down.responsibilitySnapshotCaptured !== true) {
+                    const snapshot = await this.getDownResponsibilitySnapshot(member, down.userId, guild.id, down.roleId, activeDowns);
+                    this.persistDownResponsibilitySnapshot(activeDowns, snapshot, down.userId, guild.id);
+                }
+
+                const vacationManager = require('./vacationManager');
+                const currentResponsibilities = await vacationManager.getResponsibilitiesForVacation();
+                const currentAssignments = vacationManager.captureResponsibilityAssignments(currentResponsibilities, down.userId);
+                const assignmentsToRemove = new Map();
+                for (const assignment of [...(down.responsibilityAssignments || []), ...currentAssignments]) {
+                    const previous = assignmentsToRemove.get(assignment.name);
+                    assignmentsToRemove.set(assignment.name, {
+                        ...assignment,
+                        roleIds: [...new Set([...(previous?.roleIds || []), ...(assignment.roleIds || [])].map(String))]
+                    });
+                }
+                const assignmentsToSuspend = [...assignmentsToRemove.values()];
+                if (assignmentsToSuspend.length > 0) {
+                    const removal = await vacationManager.removeUserFromResponsibilities(down.userId, assignmentsToSuspend);
+                    down.responsibilitiesRemoved = removal.failed.length === 0;
+                    down.responsibilityRemovalFailures = removal.failed;
+                    writeJson(activeDownsPath, activeDowns);
+                } else {
+                    down.responsibilitiesRemoved = true;
+                }
+
                 const adminRoleIds = new Set(this.getAdminRoles().map(String));
-                const rolesToRemove = member.roles.cache.filter(role => adminRoleIds.has(String(role.id)));
+                const responsibilityRoleIds = new Set(
+                    assignmentsToSuspend.flatMap(item => item.roleIds || []).map(String)
+                );
+                const rolesToRemove = member.roles.cache.filter(role =>
+                    adminRoleIds.has(String(role.id)) || responsibilityRoleIds.has(String(role.id))
+                );
                 if (!rolesToRemove.size) continue;
 
                 for (const role of rolesToRemove.values()) {
@@ -875,42 +1096,29 @@ class DownManager {
             if (!guild) return;
 
             const member = await guild.members.fetch(expiredDown.userId).catch(() => null);
-            const role = await guild.roles.fetch(expiredDown.roleId).catch(() => null);
+            const role = expiredDown.roleId
+                ? await guild.roles.fetch(expiredDown.roleId).catch(() => null)
+                : null;
 
-            // التعامل مع العضو غير الموجود في السيرفر
-            if (!member) {
-                await this.handleExpiredDownForLeftMember(expiredDown, guild, role);
-                this.removeActiveDown(expiredDown.id || expiredDown.downId);
+            if (!member) await this.handleExpiredDownForLeftMember(expiredDown, guild, role);
+            const completion = await this.completeDownSuspension(
+                { ...expiredDown, downId: processingKey }, guild, member, 'انتهاء مدة الداون'
+            );
+            if (!completion.success) {
+                console.warn(`ستتم إعادة محاولة استعادة المسؤوليات/الرولات للداون ${processingKey}: ${completion.error}`);
                 return;
             }
-
-            if (!role) {
-                this.removeActiveDown(expiredDown.id || expiredDown.downId);
-                return;
-            }
-
-            // إضافة الرول لقائمة التجاهل قبل إرجاعه تلقائياً
-            this.addToAutoRestoreIgnore(member.id, role.id);
-
-            // تسجيل أن البوت سيقوم بإعادة الرول (لمنع تداخل نظام الحماية)
-            const restorationKey = `${member.guild.id}_${member.id}_${role.id}`;
-            this.botRestorationTracking.add(restorationKey);
-
-            // إزالة المفتاح بعد 10 ثوانٍ
-            setTimeout(() => {
-                this.botRestorationTracking.delete(restorationKey);
-            }, 10000);
-
-            // Restore the role
-            await member.roles.add(role, 'إعادة رول بعد انتهاء مدة الداون');
+            if (!member) return;
 
             // Notify the user via DM
             try {
                 const dmEmbed = colorManager.createEmbed()
                     .setTitle('تمت إعادة الرول')
-                    .setDescription(`تم إعادة الرول **${role.name}** إليك بعد انتهاء مدة الداون.`)
+                    .setDescription(completion.deferred
+                        ? 'انتهت مدة هذا الداون، لكن الرتب والمسؤوليات ستبقى معلقة حتى ينتهي آخر داون نشط.'
+                        : 'انتهت مدة الداون وتمت استعادة الرتب والمسؤوليات المحفوظة.')
                     .addFields([
-                        { name: 'الرول', value: `${role.name}`, inline: true },
+                        { name: 'الرول', value: role?.name || 'رول محفوظ', inline: true },
                         { name: 'وقت الإعادة', value: `<t:${this.formatTimestamp(Date.now()).unix}:f>`, inline: true }
                     ])
                     .setThumbnail(member.displayAvatarURL({ dynamic: true }));
@@ -927,14 +1135,16 @@ class DownManager {
                 if (logChannel) {
                     const logEmbed = colorManager.createEmbed()
                         .setTitle ('Down Ended')
-                        .setDescription(`تم إعادة الرول تلقائياً بعد انتهاء المدة المحددة`)
+                        .setDescription(completion.deferred
+                            ? 'انتهت مدة هذا الداون، وتبقى الرتب والمسؤوليات معلقة لوجود داون آخر.'
+                            : 'انتهت مدة الداون وتمت استعادة الرتب والمسؤوليات المحفوظة تلقائيًا.')
                         .addFields([
                             { name: 'العضو', value: `<@${member.id}>`, inline: true },
-                            { name: 'الرول المُعاد', value: `<@&${role.id}>`, inline: true },
-                            { name: 'وقت الإعادة', value: `<t:${this.formatTimestamp(Date.now()).unix}:f>`, inline: true },
+                            { name: 'الرول المُعاد', value: role ? `<@&${role.id}>` : 'تمت محاولة استعادة الرولات المحفوظة', inline: true },
+                            { name: completion.deferred ? 'وقت انتهاء هذا الداون' : 'وقت الإعادة', value: `<t:${this.formatTimestamp(Date.now()).unix}:f>`, inline: true },
                             { name: 'السبب الأصلي', value: expiredDown.reason || 'غير محدد', inline: false },
                             { name: ' كان الداون بواسطة', value: `<@${expiredDown.byUserId || expiredDown.moderatorId || 'غير معروف'}>`, inline: true },
-                            { name: 'Status', value: 'Restored', inline: true }
+                            { name: 'Status', value: completion.deferred ? 'Restoration deferred' : 'Restored', inline: true }
                         ])
                         .setFooter({ text: 'Down Log • Auto Restore' })
                         .setTimestamp();
@@ -945,10 +1155,9 @@ class DownManager {
                 }
             }
 
-            // Remove from active downs
-            this.removeActiveDown(expiredDown.id || expiredDown.downId);
-
-            console.log(`✅ تمت إعادة الرول ${role.name} إلى ${member.displayName} تلقائياً`);
+            console.log(completion.deferred
+                ? `⏳ انتهى الداون ${processingKey}; الاستعادة مؤجلة لوجود داون آخر.`
+                : `✅ انتهى الداون واستعيدت الرتب والمسؤوليات للعضو ${member.displayName}.`);
 
         } catch (error) {
             console.error('Error processing expired down:', error);

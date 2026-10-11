@@ -1225,5 +1225,9 @@ module.exports = {
     notifyAdminsVacationEnded,
     roleProtection,
     handleMemberJoin,
-    handleMemberLeave
+    handleMemberLeave,
+    getResponsibilitiesForVacation,
+    captureResponsibilityAssignments,
+    removeUserFromResponsibilities,
+    restoreUserResponsibilities
 };
