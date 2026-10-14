@@ -1,4 +1,4 @@
-const { getBotConfigPath } = require('../utils/storagePaths');
+const { getBotConfigPath, writeBotConfigFile } = require('../utils/storagePaths');
 const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ActivityType } = require('discord.js');
 const colorManager = require('../utils/colorManager');
 const { logEvent } = require('../utils/logs_system');
@@ -705,7 +705,7 @@ async function execute(message, args, { responsibilities, BOT_OWNERS, client, sa
                     }
 
                     // حفظ الكونفق المحدث
-                    fs.writeFileSync(botConfigFile, JSON.stringify(botConfig, null, 2));
+                    writeBotConfigFile(botConfigFile, botConfig);
 
                     // استخدام الدالة العامة أيضاً للتأكيد
                     if (global.updatePrefix) {

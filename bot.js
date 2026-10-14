@@ -57,7 +57,7 @@ const { handleAdminApplicationInteraction } = require('./commands/admin-apply.js
 const { restoreTopSchedules, restorePanelCleanups, handlePanelMessageDelete } = require('./commands/roles-settings.js');
 const { handleChannelDelete, handleRoleDelete } = require('./utils/protectionManager.js');
 const problemCommand = require('./commands/problem.js');
-const { getDataDir, getRailwayVolumeMountPath, getBotConfigPath } = require('./utils/storagePaths');
+const { getDataDir, getRailwayVolumeMountPath, getBotConfigPath, writeBotConfigFile } = require('./utils/storagePaths');
 const { isSupervisorForResponsibility, removeUserFromAllSupervisors } = require('./utils/responsibilitySupervisors');
 const { ownersPath, normalizeIds, loadOwners, saveOwners, isOwnerMember } = require('./utils/ownersStore');
 let interactiveRolesManager;
@@ -671,11 +671,7 @@ function writeJSONFile(filePath, data) {
     try {
         const serialized = JSON.stringify(data, null, 2);
         if (filePath === DATA_FILES.botConfig) {
-            const tempPath = `${filePath}.tmp`;
-            const backupPath = `${filePath}.bak`;
-            fs.writeFileSync(tempPath, serialized, 'utf8');
-            fs.renameSync(tempPath, filePath);
-            fs.copyFileSync(filePath, backupPath);
+            writeBotConfigFile(filePath, data);
         } else {
             fs.writeFileSync(filePath, serialized);
         }
@@ -1280,6 +1276,9 @@ async function saveData(force = false) {
             }
             botConfig.pendingReports = pendingReportsObj;
         }
+
+        // استبدال ذري يمنع أي أمر من قراءة ملف إعدادات فارغ أو مبتور.
+        writeBotConfigFile(DATA_FILES.botConfig, botConfig);
         
         // تنفيذ الحفظ بشكل متوازي وغير متزامن
         const dbPromises = [];
@@ -1292,8 +1291,7 @@ async function saveData(force = false) {
         await Promise.all([
             ...dbPromises,
             fs.promises.writeFile(DATA_FILES.points, JSON.stringify(points, null, 2)),
-            fs.promises.writeFile(DATA_FILES.logConfig, JSON.stringify(client.logConfig || logConfig, null, 2)),
-            fs.promises.writeFile(DATA_FILES.botConfig, JSON.stringify(botConfig, null, 2))
+            fs.promises.writeFile(DATA_FILES.logConfig, JSON.stringify(client.logConfig || logConfig, null, 2))
         ]);
 
         isDataDirty = false;

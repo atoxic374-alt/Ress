@@ -7,6 +7,7 @@ const dns = require('dns').promises;
 const net = require('net');
 const colorManager = require('../utils/colorManager.js');
 const { getResponsibilitiesSnapshot, normalizeResponsibilitiesMap } = require('../utils/responsibilitiesStore');
+const { isOwnerMember } = require('../utils/ownersStore');
 
 // نظام الكولداون
 const applyCooldowns = new Map();
@@ -279,9 +280,8 @@ function isRespManager(interactionLike) {
     const userId = interactionLike?.user?.id || interactionLike?.author?.id;
     if (!guild || !userId) return false;
 
-    const botConfig = readJSONFile(getBotConfigPath(), {});
-    const owners = Array.isArray(botConfig.owners) ? botConfig.owners.map(String) : [];
-    if (owners.includes(String(userId)) || guild.ownerId === String(userId)) return true;
+    if (isOwnerMember(interactionLike.member || interactionLike.user || interactionLike.author)
+        || guild.ownerId === String(userId)) return true;
 
     const managers = getRespManagers(guild.id);
     if (managers.userIds.includes(String(userId))) return true;
@@ -1675,9 +1675,8 @@ module.exports = {
     async execute(message, args, context) {
         const { client } = context;
 
-        const botConfig = readJSONFile(getBotConfigPath(), {});
-        const BOT_OWNERS = botConfig.owners || [];
-        const isOwner = BOT_OWNERS.includes(message.author.id) || message.guild.ownerId === message.author.id;
+        const isOwner = isOwnerMember(message.member || message.author)
+            || message.guild.ownerId === message.author.id;
 
         if (!isOwner) {
             await message.react('❌');

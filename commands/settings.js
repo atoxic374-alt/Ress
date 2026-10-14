@@ -1,4 +1,4 @@
-const { getBotConfigPath } = require('../utils/storagePaths');
+const { getBotConfigPath, writeBotConfigFile } = require('../utils/storagePaths');
 const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, UserSelectMenuBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, RoleSelectMenuBuilder } = require('discord.js');
 const { logEvent } = require('../utils/logs_system.js');
 const colorManager = require('../utils/colorManager.js');
@@ -1399,7 +1399,7 @@ const deleteButton = new ButtonBuilder()
       ? JSON.parse(fs.readFileSync(botConfigPath, 'utf8'))
       : {};
     currentConfig.owners = [...new Set(ownerIds.map(String))];
-    fs.writeFileSync(botConfigPath, JSON.stringify(currentConfig, null, 2));
+    writeBotConfigFile(botConfigPath, currentConfig);
     if (global.updateBotOwners) global.updateBotOwners(currentConfig.owners);
     else global.BOT_OWNERS = currentConfig.owners;
     return currentConfig.owners;

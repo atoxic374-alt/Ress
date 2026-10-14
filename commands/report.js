@@ -1,4 +1,4 @@
-const { getBotConfigPath } = require('../utils/storagePaths');
+const { getBotConfigPath, writeBotConfigFile } = require('../utils/storagePaths');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, ChannelType, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelSelectMenuBuilder, RoleSelectMenuBuilder } = require('discord.js');
 const colorManager = require('../utils/colorManager.js');
 const fs = require('fs');
@@ -1890,7 +1890,7 @@ function registerInteractionHandler(client) {
                         pendingReportsObj[key] = value;
                     }
                     botConfig.pendingReports = pendingReportsObj;
-                    fs.writeFileSync(botConfigPath, JSON.stringify(botConfig, null, 2));
+                    writeBotConfigFile(botConfigPath, botConfig);
                 } catch (error) {
                     console.error('❌ خطأ في حفظ البيانات:', error);
                 }

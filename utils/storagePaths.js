@@ -92,9 +92,43 @@ function getBotConfigPath() {
     if (!isMinimalEnvConfig(targetConfig)) {
       fs.copyFileSync(targetPath, recoveryPath);
     }
+  } else if (!targetConfig && fs.existsSync(targetPath)) {
+    // Keep the damaged file for manual recovery, but stop every command from
+    // repeatedly parsing the same truncated JSON when no valid .bak exists.
+    const damagedPath = `${targetPath}.corrupt-${Date.now()}`;
+    try {
+      fs.renameSync(targetPath, damagedPath);
+      writeBotConfigFile(targetPath, {
+        prefix: null,
+        settings: {},
+        activeTasks: {},
+        pendingReports: {}
+      });
+      console.error(`[storagePaths] Invalid botConfig archived at ${damagedPath}; initialized a valid config.`);
+    } catch (error) {
+      console.error(`[storagePaths] Could not recover invalid botConfig at ${targetPath}:`, error.message);
+    }
   }
 
   return targetPath;
+}
+
+function writeBotConfigFile(filePath, config) {
+  const temporaryPath = `${filePath}.tmp`;
+  const recoveryPath = `${filePath}.bak`;
+  try {
+    ensureParentDirSync(filePath);
+    const serialized = `${JSON.stringify(config, null, 2)}\n`;
+    fs.writeFileSync(temporaryPath, serialized, 'utf8');
+    fs.renameSync(temporaryPath, filePath);
+    fs.copyFileSync(filePath, recoveryPath);
+    return true;
+  } catch (error) {
+    try {
+      if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
+    } catch (_) {}
+    throw error;
+  }
 }
 
 function getDataDir() {
@@ -114,6 +148,7 @@ module.exports = {
   getDatabaseDir,
   getDatabasePath,
   getBotConfigPath,
+  writeBotConfigFile,
   getDataDir,
   getBackupsDir,
 };
