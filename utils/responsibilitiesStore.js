@@ -30,7 +30,11 @@ function safeReadResponsibilitiesFile() {
     const raw = fs.readFileSync(responsibilitiesPath, 'utf8');
     const parsed = JSON.parse(raw);
     return normalizeResponsibilitiesMap(parsed);
-  } catch {
+  } catch (error) {
+    console.error(
+      `[responsibilitiesStore] Failed to read valid JSON from ${responsibilitiesPath}:`,
+      error.message
+    );
     return {};
   }
 }
