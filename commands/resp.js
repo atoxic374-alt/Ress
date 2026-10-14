@@ -38,10 +38,16 @@ function readJSONFile(filePath, defaultValue = {}) {
 
 // دالة لكتابة ملف JSON
 function writeJSONFile(filePath, data) {
+    const temporaryPath = `${filePath}.tmp`;
     try {
-        fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+        const serialized = `${JSON.stringify(data, null, 2)}\n`;
+        fs.writeFileSync(temporaryPath, serialized, 'utf8');
+        fs.renameSync(temporaryPath, filePath);
         return true;
     } catch (error) {
+        try {
+            if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
+        } catch (_) {}
         console.error(`خطأ في كتابة ${filePath}:`, error);
         return false;
     }
