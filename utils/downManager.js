@@ -352,6 +352,26 @@ class DownManager {
         if (!downId) return { success: false, error: 'معرف الداون غير موجود' };
         const activeDowns = this.getActiveDowns();
         const currentRecord = activeDowns[downId] || downRecord;
+        activeDowns[downId] = currentRecord;
+        if (currentRecord.responsibilitySnapshotCaptured !== true && member) {
+            try {
+                const legacySnapshot = await this.getDownResponsibilitySnapshot(
+                    member, currentRecord.userId, currentRecord.guildId, currentRecord.roleId, activeDowns
+                );
+                Object.assign(currentRecord, legacySnapshot);
+                if (!this.persistDownResponsibilitySnapshot(activeDowns, legacySnapshot, currentRecord.userId, currentRecord.guildId)) {
+                    currentRecord.responsibilityRestorePending = true;
+                    currentRecord.pendingEndReason = reason;
+                    return { success: false, error: 'تعذر حفظ نسخة المسؤوليات؛ أُبقي الداون لإعادة المحاولة' };
+                }
+            } catch (error) {
+                currentRecord.responsibilityRestorePending = true;
+                currentRecord.pendingEndReason = reason;
+                writeJson(activeDownsPath, activeDowns);
+                console.error(`تعذر إنشاء snapshot للمسؤوليات أثناء إنهاء الداون ${downId}:`, error);
+                return { success: false, error: 'تعذر حفظ نسخة المسؤوليات؛ ستتم إعادة المحاولة تلقائيًا' };
+            }
+        }
         const peers = this.getRelatedActiveDowns(currentRecord.userId, currentRecord.guildId, activeDowns, downId);
         const assignmentMap = new Map();
         const suspendedRoleSet = new Set();
@@ -427,11 +447,48 @@ class DownManager {
             return { success: false, error: 'تعذر استعادة بعض المسؤوليات؛ ستتم إعادة المحاولة تلقائيًا' };
         }
 
+        if (!member && suspendedRoleIds.length > 0) {
+            currentRecord.responsibilityAssignments = assignments;
+            currentRecord.suspendedRoleIds = suspendedRoleIds;
+            currentRecord.responsibilitySnapshotCaptured = true;
+            currentRecord.responsibilityRestorePending = true;
+            currentRecord.pendingEndReason = reason;
+            currentRecord.roleRestorePending = true;
+            if (!writeJson(activeDownsPath, activeDowns)) {
+                return { success: false, error: 'العضو خارج السيرفر وتعذر حفظ استعادة الرولات للمحاولة لاحقًا' };
+            }
+            return { success: false, error: 'العضو خارج السيرفر؛ حُفظت الاستعادة وستتم عند عودته' };
+        }
+
         if (member) {
             for (const restoreRoleId of suspendedRoleIds) {
                 if (member.roles.cache.has(restoreRoleId)) continue;
-                const role = guild.roles.cache.get(restoreRoleId) || await guild.roles.fetch(restoreRoleId).catch(() => null);
-                if (!role) continue;
+                let role = guild.roles.cache.get(restoreRoleId) || null;
+                if (!role) {
+                    try {
+                        role = await guild.roles.fetch(restoreRoleId);
+                    } catch (error) {
+                        const errorCode = Number(error?.code ?? error?.rawError?.code);
+                        if (errorCode === 10011) {
+                            console.warn(`تم تخطي استعادة الرول ${restoreRoleId} لأنه حُذف من السيرفر.`);
+                            continue;
+                        }
+                        currentRecord.responsibilityAssignments = assignments;
+                        currentRecord.suspendedRoleIds = suspendedRoleIds;
+                        currentRecord.responsibilitySnapshotCaptured = true;
+                        currentRecord.responsibilityRestorePending = true;
+                        currentRecord.roleRestorePending = true;
+                        currentRecord.roleRestoreLastError = error.message;
+                        currentRecord.pendingEndReason = reason;
+                        writeJson(activeDownsPath, activeDowns);
+                        console.error(`تعذر جلب الرول ${restoreRoleId} لاستعادته؛ ستتم إعادة المحاولة:`, error);
+                        return { success: false, error: 'تعذر جلب بعض الرولات؛ حُفظت العملية لإعادة المحاولة' };
+                    }
+                }
+                if (!role) {
+                    console.warn(`تم تخطي استعادة الرول ${restoreRoleId} لأنه لم يعد موجودًا في السيرفر.`);
+                    continue;
+                }
                 const restorationKey = `${guild.id}_${member.id}_${restoreRoleId}`;
                 this.addToAutoRestoreIgnore(member.id, restoreRoleId);
                 this.botRestorationTracking.add(restorationKey);
@@ -1310,21 +1367,14 @@ class DownManager {
                 console.log(`🧹 تم حذف ${logs.length - filteredLogs.length} سجل قديم`);
             }
 
-            // تنظيف الداونات المنتهية الصلاحية من activeDowns
+            // لا تحذف الداونات المنتهية من activeDowns هنا: قد تكون الاستعادة
+            // بانتظار عضو عاد للسيرفر أو تعذر تنفيذها مؤقتًا. processExpiredDown
+            // يحذف السجل فقط بعد اكتمال استعادة المسؤوليات والرولات.
             const activeDowns = readJson(activeDownsPath, {});
-            let cleaned = false;
-
-            for (const [downId, down] of Object.entries(activeDowns)) {
-                if (down.endTime && down.endTime < Date.now()) {
-                    delete activeDowns[downId];
-                    cleaned = true;
-                }
-            }
-
-            if (cleaned) {
-                writeJson(activeDownsPath, activeDowns);
-                console.log('🧹 تم تنظيف الداونات المنتهية الصلاحية');
-            }
+            const expiredPending = Object.values(activeDowns).filter(down =>
+                down?.status === 'active' && down.endTime && Number(down.endTime) <= Date.now()
+            ).length;
+            if (expiredPending) console.log(`⏳ الإبقاء على ${expiredPending} داون منتهي حتى تكتمل استعادة الرولات والمسؤوليات.`);
 
         } catch (error) {
             console.error('خطأ في تنظيف البيانات:', error);
@@ -1685,19 +1735,44 @@ class DownManager {
             const memberData = leftMembersDowns[memberKey];
 
             if (memberData && memberData.downs && memberData.downs.length > 0) {
-                const activeDowns = readJson(activeDownsPath, {});
+                let activeDowns = readJson(activeDownsPath, {});
                 memberData.downs = this.mergeUniqueDowns(memberData.downs);
                 let restoredDowns = 0;
+                let expiredDownsProcessed = 0;
                 const failedDowns = [];
 
                 for (const downData of memberData.downs) {
                     try {
                         // فحص إذا كان الداون منتهي الصلاحية
                         if (downData.endTime && downData.endTime <= Date.now()) {
-                            failedDowns.push({
-                                reason: 'انتهت المدة أثناء الغياب',
-                                roleId: downData.roleId
-                            });
+                            const downId = String(downData.downId || downData.id || '');
+                            if (!downId) {
+                                failedDowns.push({ reason: 'معرف الداون غير موجود', roleId: downData.roleId });
+                                continue;
+                            }
+                            const expiredRecord = {
+                                ...downData,
+                                ...(activeDowns[downId] || {}),
+                                id: downData.id || downId,
+                                downId,
+                                status: 'active',
+                                responsibilityRestorePending: true,
+                                pendingEndReason: 'انتهاء الداون أثناء غياب العضو'
+                            };
+                            activeDowns[downId] = expiredRecord;
+                            if (!writeJson(activeDownsPath, activeDowns)) {
+                                failedDowns.push({ downId, reason: 'تعذر حفظ استعادة الداون المنتهي', roleId: downData.roleId });
+                                continue;
+                            }
+                            const completion = await this.completeDownSuspension(
+                                expiredRecord, member.guild, member, 'انتهاء الداون أثناء غياب العضو'
+                            );
+                            activeDowns = this.getActiveDowns();
+                            if (!completion.success) {
+                                failedDowns.push({ downId, reason: completion.error, roleId: downData.roleId });
+                            } else {
+                                expiredDownsProcessed++;
+                            }
                             continue;
                         }
 
@@ -1742,8 +1817,17 @@ class DownManager {
                     writeJson(activeDownsPath, activeDowns);
                 }
 
-                // حذف بيانات العضو المنسحب
-                delete leftMembersDowns[memberKey];
+                // أبقِ نسخة العضو المنسحب فقط إذا فشل حفظ سجل الاستعادة النشط.
+                const failedDownIds = new Set(failedDowns.map(item => String(item.downId || '')).filter(Boolean));
+                const unresolvedLeftDowns = memberData.downs.filter(down => {
+                    const downId = String(down.downId || down.id || '');
+                    return failedDownIds.has(downId) && !activeDowns[downId];
+                });
+                if (unresolvedLeftDowns.length > 0) {
+                    leftMembersDowns[memberKey] = { ...memberData, downs: unresolvedLeftDowns };
+                } else {
+                    delete leftMembersDowns[memberKey];
+                }
                 writeJson(leftMembersDownsPath, leftMembersDowns);
 
                 // تسجيل العودة
@@ -1758,7 +1842,8 @@ class DownManager {
                                 .addFields([
                                     { name: ' العضو', value: `<@${member.id}>`, inline: true },
                                     { name: ' وقت العودة', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
-                                    { name: ' تم استعادتها', value: restoredDowns.toString(), inline: true }
+                                    { name: ' تم إعادة تطبيقها', value: restoredDowns.toString(), inline: true },
+                                    { name: ' داونات منتهية تمت معالجتها', value: expiredDownsProcessed.toString(), inline: true }
                                 ])
                                 .setFooter({ text: 'Down Log • Member Rejoin' })
                                 .setTimestamp();
