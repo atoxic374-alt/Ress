@@ -2833,11 +2833,13 @@ client.on('messageCreate', async message => {
 
   // فحص البلوك قبل معالجة أي أمر
   const { isUserBlocked } = require('./commands/block.js');
-  if (isUserBlocked(message.author.id)) {
+  const canBypassMessageBlocks = isBotOwner(message.member || message.author)
+    || message.guild?.ownerId === message.author.id;
+  if (!canBypassMessageBlocks && isUserBlocked(message.author.id)) {
     return; // تجاهل المستخدمين المحظورين بصمت لتوفير الأداء
   }
   const { isChannelBlocked } = require('./commands/chatblock.js');
-  if (isChannelBlocked(message.channel.id)) {
+  if (!canBypassMessageBlocks && isChannelBlocked(message.channel.id)) {
     return; // تجاهل الأوامر في القنوات المحظورة بصمت
   }
   // نظام كلمات word

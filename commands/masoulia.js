@@ -10,6 +10,7 @@ const { dbManager } = require('../utils/database.js');
 const colorManager = require('../utils/colorManager.js');
 const respCommand = require('./resp.js');
 const { getSupervisedResponsibilities, getSupervisors, setSupervisors } = require('../utils/responsibilitySupervisors.js');
+const { isOwnerMember } = require('../utils/ownersStore.js');
 
 module.exports = {
     name: 'مسؤوليه',
@@ -17,12 +18,9 @@ module.exports = {
     aliases: ['مسؤولية'],
     async execute(message, args) {
         try {
-            // التحقق من الصلاحيات - الاونرز فقط
-            const botConfig = global.botConfig || { owners: [] };
-            const BOT_OWNERS_ENV = process.env.BOT_OWNERS ? process.env.BOT_OWNERS.split(',') : [];
-            const allOwners = [...new Set([...BOT_OWNERS_ENV, ...(botConfig.owners || []), ...(global.BOT_OWNERS || [])])];
-            
-            const isOwner = allOwners.includes(message.author.id);
+            // استخدم مصدر الأونرز الموحد نفسه الذي يعتمد عليه البوت.
+            const isOwner = isOwnerMember(message.member || message.author)
+                || message.guild?.ownerId === message.author.id;
             const isRespManager = typeof respCommand.isRespManager === 'function' && respCommand.isRespManager(message);
             const canManageAll = isOwner || isRespManager;
             const knownResponsibilities = Object.keys(global.responsibilities || {}).length
