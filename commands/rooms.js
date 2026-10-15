@@ -255,17 +255,39 @@ async function showUserActivity(message, user, client) {
 
 async function showAdminRolesActivity(message, client, ADMIN_ROLES) {
     try {
-        // جمع جميع الأعضاء من جميع رولات الأدمن
+        const adminRoleIds = [...new Set((Array.isArray(ADMIN_ROLES) ? ADMIN_ROLES : [])
+            .map(roleId => String(roleId).replace(/[<@&>]/g, '').trim())
+            .filter(roleId => /^\d{16,20}$/.test(roleId)))];
+
+        if (!adminRoleIds.length) {
+            await message.channel.send({ content: '**لا توجد رولات معرفة في adminRoles.json أو أن IDs الرولات غير صحيحة.**' });
+            return;
+        }
+
+        // Role.members يعرض الأعضاء الموجودين في الكاش فقط. اسحب أعضاء السيرفر
+        // أولاً كي تظهر كل عضوية الرولات، ثم استخدم الكاش كخيار احتياطي إن تعذر ذلك.
+        let fetchedMembers = null;
+        let memberFetchError = null;
+        try {
+            fetchedMembers = await message.guild.members.fetch();
+        } catch (error) {
+            memberFetchError = error;
+            console.warn('تعذر جلب كامل أعضاء السيرفر لعرض rooms admin؛ سيتم عرض الأعضاء الموجودين في الكاش فقط:', error.message);
+        }
+
+        // جمع جميع الأعضاء من جميع رولات الأدمن وإزالة التكرار بين الرولات
         const allAdminMembers = new Map();
 
-        for (const roleId of ADMIN_ROLES) {
+        for (const roleId of adminRoleIds) {
             try {
                 const role = await message.guild.roles.fetch(roleId);
-                if (role && role.members) {
-                    for (const [memberId, member] of role.members) {
-                        if (!member.user.bot) {
-                            allAdminMembers.set(memberId, member);
-                        }
+                if (!role) continue;
+                const roleMembers = fetchedMembers
+                    ? fetchedMembers.filter(member => member.roles.cache.has(role.id))
+                    : role.members;
+                for (const [memberId, member] of roleMembers) {
+                    if (!member.user?.bot) {
+                        allAdminMembers.set(memberId, member);
                     }
                 }
             } catch (error) {
@@ -275,7 +297,9 @@ async function showAdminRolesActivity(message, client, ADMIN_ROLES) {
 
         if (allAdminMembers.size === 0) {
             const embed = colorManager.createEmbed()
-                .setDescription('**No Admins يادلخ**')
+                .setDescription(memberFetchError
+                    ? '**تعذر تحميل أعضاء السيرفر. فعّل Server Members Intent من بوابة Discord ثم أعد تشغيل البوت.**'
+                    : '**لم يتم العثور على أعضاء في الرولات المسجلة في adminRoles.json. تحقق من IDs الرولات.**')
                 .setThumbnail(client.user.displayAvatarURL({ format: 'png', size: 128 }));
             await message.channel.send({ embeds: [embed] });
             return;
@@ -307,7 +331,7 @@ async function showAdminRolesActivity(message, client, ADMIN_ROLES) {
 
             const embed = colorManager.createEmbed()
                 .setTitle(`**Rooms : Admin Roles**`)
-                .setDescription(`** All members :** ${memberActivities.length}`)
+                .setDescription(`** All members :** ${memberActivities.length}${memberFetchError ? '\n\n⚠️ تعذر تحميل قائمة أعضاء السيرفر كاملة؛ يلزم تفعيل Server Members Intent حتى تظهر كل الرولات.' : ''}`)
                 .setFooter({ text: `By Ahmed. | صفحة ${page + 1} من ${totalPages}`, iconURL: message.guild.iconURL({ dynamic: true }) })
                 .setTimestamp();
 
@@ -454,11 +478,10 @@ async function showAdminRolesActivity(message, client, ADMIN_ROLES) {
                         .setFooter({ text: 'By Ahmed.' })
                         .setTimestamp();
 
-                    // إرسال أول رسالة كـ update
-                    await interaction.update({
+                    // إرسال المنشن بشكل منفصل حتى لا تختفي القائمة عند تحديث الأزرار.
+                    await interaction.reply({
                         content: mentionChunks[0] || 'لا يوجد أعضاء للمنشن (جميعهم في الرومات الصوتية)',
-                        embeds: [mentionEmbed],
-                        components: generateButtons(currentPage)
+                        embeds: [mentionEmbed]
                     });
                     
                     // إرسال باقي الرسائل كرسائل منفصلة
@@ -863,11 +886,10 @@ async function showRoleActivity(message, role, client) {
                         .setFooter({ text: 'By Ahmed.' })
                         .setTimestamp();
 
-                    // إرسال أول رسالة كـ update
-                    await interaction.update({
+                    // إرسال المنشن بشكل منفصل حتى لا تختفي القائمة عند تحديث الأزرار.
+                    await interaction.reply({
                         content: mentionChunks[0] || 'لا يوجد أعضاء للمنشن (جميعهم في الرومات الصوتية)',
-                        embeds: [mentionEmbed],
-                        components: generateButtons(currentPage)
+                        embeds: [mentionEmbed]
                     });
                     
                     // إرسال باقي الرسائل كرسائل منفصلة
