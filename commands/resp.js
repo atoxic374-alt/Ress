@@ -275,6 +275,16 @@ function setRespManagers(guildId, updates = {}) {
     return config.guilds[guildId].respManagers;
 }
 
+function getMemberRoleIds(member) {
+    const roles = member?.roles;
+    if (Array.isArray(roles)) return roles.map(String);
+    if (roles?.cache && typeof roles.cache.keys === 'function') {
+        return [...roles.cache.keys()].map(String);
+    }
+    if (roles && typeof roles.keys === 'function') return [...roles.keys()].map(String);
+    return [];
+}
+
 function isRespManager(interactionLike) {
     const guild = interactionLike?.guild;
     const userId = interactionLike?.user?.id || interactionLike?.author?.id;
@@ -285,9 +295,7 @@ function isRespManager(interactionLike) {
 
     const managers = getRespManagers(guild.id);
     if (managers.userIds.includes(String(userId))) return true;
-    const memberRoleIds = interactionLike.member?.roles?.cache
-        ? [...interactionLike.member.roles.cache.keys()].map(String)
-        : [];
+    const memberRoleIds = getMemberRoleIds(interactionLike.member);
     return managers.roleIds.some((roleId) => memberRoleIds.includes(roleId));
 }
 
@@ -1284,9 +1292,8 @@ async function handleApplyRespSelect(interaction, client) {
         const restrictions = getRespRoleRestrictions(interaction.guild.id);
         const requiredRoleIds = Array.isArray(restrictions[selectedResp]) ? restrictions[selectedResp] : [];
         if (requiredRoleIds.length > 0) {
-            const hasAccessRole = interaction.member?.roles?.cache
-                ? requiredRoleIds.some((roleId) => interaction.member.roles.cache.has(roleId))
-                : false;
+            const memberRoleIds = getMemberRoleIds(interaction.member);
+            const hasAccessRole = requiredRoleIds.some((roleId) => memberRoleIds.includes(String(roleId)));
             if (!hasAccessRole) {
                 return await interaction.reply({
                     content: `❌ **لا يمكنك التقديم على "${selectedResp}" إلا إذا كنت تحمل أحد الرولات المسموحة.**`,
@@ -1366,9 +1373,8 @@ async function handleApplyRespModal(interaction, client) {
         const restrictions = getRespRoleRestrictions(guildId);
         const requiredRoleIds = Array.isArray(restrictions[respName]) ? restrictions[respName] : [];
         if (requiredRoleIds.length > 0) {
-            const hasAccessRole = interaction.member?.roles?.cache
-                ? requiredRoleIds.some((roleId) => interaction.member.roles.cache.has(roleId))
-                : false;
+            const memberRoleIds = getMemberRoleIds(interaction.member);
+            const hasAccessRole = requiredRoleIds.some((roleId) => memberRoleIds.includes(String(roleId)));
             if (!hasAccessRole) {
                 return await interaction.editReply({
                     content: `❌ **هذه المسؤولية مخصصة لرولات إدارية محددة فقط.**`
@@ -1677,8 +1683,9 @@ module.exports = {
 
         const isOwner = isOwnerMember(message.member || message.author)
             || message.guild.ownerId === message.author.id;
+        const canManagePanel = isOwner || isRespManager(message);
 
-        if (!isOwner) {
+        if (!canManagePanel) {
             await message.react('❌');
             return;
         }

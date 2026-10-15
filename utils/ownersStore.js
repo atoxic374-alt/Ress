@@ -53,7 +53,15 @@ function isOwnerMember(member, owners = loadOwners()) {
     if (!member) return false;
     const userId = String(member.id || member.user?.id || '');
     if (owners.users.includes(userId)) return true;
-    return Boolean(member.roles?.cache && owners.roles.some(roleId => member.roles.cache.has(roleId)));
+    const roles = member.roles;
+    const roleIds = Array.isArray(roles)
+        ? roles.map(String)
+        : roles?.cache && typeof roles.cache.keys === 'function'
+            ? [...roles.cache.keys()].map(String)
+            : roles && typeof roles.keys === 'function'
+                ? [...roles.keys()].map(String)
+                : [];
+    return owners.roles.some(roleId => roleIds.includes(String(roleId)));
 }
 
 module.exports = { ownersPath, normalizeIds, loadOwners, saveOwners, isOwnerMember };

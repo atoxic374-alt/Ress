@@ -3182,8 +3182,8 @@ client.on('messageCreate', async message => {
     else if (commandName === 'اجازتي') {
       await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
     }
-    // أمر مسؤوليه يفحص الأونر/مدير Resp/مشرف المسؤولية داخل الأمر نفسه.
-    else if (commandName === 'مسؤوليه' || commandName === 'مسؤولية') {
+    // أوامر إدارة المسؤوليات تفحص الأونر/مدير Resp داخل الأمر نفسه.
+    else if (commandName === 'resp' || commandName === 'مسؤوليه' || commandName === 'مسؤولية') {
       await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
     }
     // Commands for admins and owners (user, مسؤول, اجازه, check, rooms)
