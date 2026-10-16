@@ -5,6 +5,7 @@ const { registerFont } = require('canvas');
 let cairoFontsRegistered = false;
 
 const FONTS_DIR = path.join(__dirname, '..', 'assets', 'fonts');
+const PERSISTENT_FONTS_DIR = path.join(__dirname, '..', 'data', 'fonts');
 
 // All Cairo weights shipped with the project
 const CAIRO_WEIGHTS = [
@@ -27,6 +28,7 @@ function getCairoFontStatus() {
   const ready = results.every(r => r.exists);
   return {
     fontsDir: FONTS_DIR,
+    persistentFontsDir: PERSISTENT_FONTS_DIR,
     weights: results,
     // legacy compat
     regularPath: path.join(FONTS_DIR, 'Cairo-Regular.ttf'),
@@ -38,9 +40,26 @@ function getCairoFontStatus() {
   };
 }
 
+function restorePersistedFonts() {
+  try {
+    if (!fs.existsSync(PERSISTENT_FONTS_DIR)) return;
+    fs.mkdirSync(FONTS_DIR, { recursive: true });
+    for (const { file } of CAIRO_WEIGHTS) {
+      const persistedPath = path.join(PERSISTENT_FONTS_DIR, file);
+      const targetPath = path.join(FONTS_DIR, file);
+      if (fs.existsSync(persistedPath)) {
+        fs.copyFileSync(persistedPath, targetPath);
+      }
+    }
+  } catch (error) {
+    console.error('❌ Failed to restore persisted Cairo fonts:', error.message);
+  }
+}
+
 function ensureCairoFontsRegistered(options = {}) {
   const force = Boolean(options.force);
   if (cairoFontsRegistered && !force) return;
+  restorePersistedFonts();
 
   let registered = 0;
   let warned = false;

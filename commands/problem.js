@@ -22,6 +22,7 @@ const net = require('net');
 
 const interactionRouter = require('../utils/interactionRouter.js');
 const colorManager = require('../utils/colorManager.js');
+const { problemLogPayload, problemLogFromEmbed } = require('../utils/problemLogContainer.js');
 
 // Default thumbnail URL for interactive embeds (problem creation flows).
 const LOG_THUMBNAIL_URL = 'https://cdn.discordapp.com/attachments/1294840822780526633/1465458307329167360/problem-solving.png?ex=69792de7&is=6977dc67&hm=876028d8022c57e8258ee956d753608a9d247e1e5f774a62f149f29f1200a673&';
@@ -918,7 +919,7 @@ async function createProblems(interaction, session, context) {
           logEmbed.setThumbnail(moderatorAvatar);
         }
         const files = getSeparatorAttachments();
-        logsChannel.send({ content: '@here', embeds: [logEmbed] }).catch(() => {});
+        logsChannel.send(problemLogPayload(problemLogFromEmbed(logEmbed))).catch(() => {});
         if (files && files.length > 0) {
           logsChannel.send({ files }).catch(() => {});
         }
@@ -972,7 +973,7 @@ ${secondPartiesText}
       logEmbed.setThumbnail(moderatorAvatar);
     }
     const files = getSeparatorAttachments();
-    logsChannel.send({ content: '@here', embeds: [logEmbed] }).catch(() => {});
+    logsChannel.send(problemLogPayload(problemLogFromEmbed(logEmbed))).catch(() => {});
     if (files && files.length > 0) {
       logsChannel.send({ files }).catch(() => {});
     }
@@ -1711,7 +1712,7 @@ async function handleMemberUpdate(oldMember, newMember, client) {
               }
               const files = getSeparatorAttachments();
               // Send the main log embed first without the separator image
-              logsChannel.send({ embeds: [logEmbed] }).catch(() => {});
+              logsChannel.send(problemLogPayload(problemLogFromEmbed(logEmbed))).catch(() => {});
               // Then send the separator image as a separate message if present
               if (files && files.length > 0) {
                 logsChannel.send({ files }).catch(() => {});
@@ -1842,7 +1843,7 @@ async function handleMemberUpdate(oldMember, newMember, client) {
                   }
                   const files = getSeparatorAttachments();
                   // Send the main log embed first without the separator image
-                  logsChannel.send({ embeds: [logEmbed] }).catch(() => {});
+                  logsChannel.send(problemLogPayload(problemLogFromEmbed(logEmbed))).catch(() => {});
                   // Then send the separator image as a separate message if present
                   if (files && files.length > 0) {
                     logsChannel.send({ files }).catch(() => {});
@@ -2107,7 +2108,7 @@ function getEffectiveRoleNameLength(name) {
         if (!msg.author || msg.author.id !== botId) continue;
         if (!isRecentLogMessage(msg)) continue;
         const embed = msg.embeds?.[0];
-        const desc = embed?.description || '';
+        const desc = embed?.description || JSON.stringify(msg.components || []);
         if (!desc) continue;
         const hasFirst = desc.includes(`<@${prob.firstId}>`);
         const hasSecond = desc.includes(`<@${prob.secondId}>`);
@@ -2127,7 +2128,7 @@ function getEffectiveRoleNameLength(name) {
       const botEmbedMessages = [];
       for (const msg of messages.values()) {
         if (!msg?.author || msg.author.id !== botId) continue;
-        if (!msg.embeds || msg.embeds.length === 0) continue;
+        if ((!msg.embeds || msg.embeds.length === 0) && (!msg.components || msg.components.length === 0)) continue;
         botEmbedMessages.push(msg);
       }
 
@@ -2137,6 +2138,7 @@ function getEffectiveRoleNameLength(name) {
 
     async function updateProblemLog(prob, logEmbed, files = []) {
       try {
+        const logPayload = problemLogPayload(problemLogFromEmbed(logEmbed));
         // Ensure we have a client reference and can look up the guild
         const guild = lastClient?.guilds?.cache?.get(prob.guildId);
         if (!guild) return;
@@ -2153,7 +2155,7 @@ function getEffectiveRoleNameLength(name) {
           if (existingMsg && isRecentLogMessage(existingMsg)) {
             const canEdit = await isMessageInLastTwoBotEmbeds(logsChannel, existingMsg.id, lastClient?.user?.id);
             if (canEdit) {
-              await existingMsg.edit({ embeds: [logEmbed] }).catch(() => {});
+              await existingMsg.edit(logPayload).catch(() => {});
               return;
             }
             prob.logMessageId = null;
@@ -2171,13 +2173,13 @@ function getEffectiveRoleNameLength(name) {
             if (canEdit) {
               prob.logMessageId = existingMsg.id;
               saveActiveProblemsToDisk();
-              await existingMsg.edit({ embeds: [logEmbed] }).catch(() => {});
+              await existingMsg.edit(logPayload).catch(() => {});
               return;
             }
           }
         }
         // Otherwise send a new embed message and store its ID
-        let sentMsg = await logsChannel.send({ embeds: [logEmbed] }).catch(() => null);
+        let sentMsg = await logsChannel.send(logPayload).catch(() => null);
         if (!sentMsg && lastClient?.user?.id) {
           const fallbackMsg = await findExistingLogMessage(logsChannel, prob, lastClient.user.id);
           if (fallbackMsg) {
@@ -2185,11 +2187,11 @@ function getEffectiveRoleNameLength(name) {
             if (canEdit) {
               prob.logMessageId = fallbackMsg.id;
               saveActiveProblemsToDisk();
-              await fallbackMsg.edit({ embeds: [logEmbed] }).catch(() => {});
+              await fallbackMsg.edit(logPayload).catch(() => {});
               return;
             }
           }
-          sentMsg = await logsChannel.send({ embeds: [logEmbed] }).catch(() => null);
+          sentMsg = await logsChannel.send(logPayload).catch(() => null);
         }
         if (sentMsg) {
           prob.logMessageId = sentMsg.id;
@@ -2483,7 +2485,7 @@ async function closeProblem(key, guild, context) {
       // Attach separator line if enabled
       const files = getSeparatorAttachments();
       // Send the main closure embed first without the separator image
-      logsChannel.send({ content: '@here', embeds: [logEmbed] }).catch(() => {});
+      logsChannel.send(problemLogPayload(problemLogFromEmbed(logEmbed))).catch(() => {});
       // Then, if a separator image exists, send it separately so it appears below
       if (files && files.length > 0) {
         logsChannel.send({ files }).catch(() => {});

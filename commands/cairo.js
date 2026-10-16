@@ -7,6 +7,7 @@ const { ensureCairoFontsRegistered, getCairoFontStatus } = require('../utils/cai
 const name = 'cairo';
 const aliases = ['خط', 'خط-كايرو'];
 const FONTS_DIR = path.join(__dirname, '..', 'assets', 'fonts');
+const PERSISTENT_FONTS_DIR = path.join(__dirname, '..', 'data', 'fonts');
 const REGULAR_FONT_PATH = path.join(FONTS_DIR, 'Cairo-Regular.ttf');
 const BOLD_FONT_PATH = path.join(FONTS_DIR, 'Cairo-Bold.ttf');
 const MAX_FONT_BYTES = 8 * 1024 * 1024;
@@ -67,6 +68,7 @@ function collectSources(message, args) {
 function formatStatus(status) {
   return [
     `**المجلد :** \`${status.fontsDir}\``,
+    `**الحفظ الدائم :** \`${status.persistentFontsDir}\``,
     `**Regular :** ${status.hasRegular ? '✅ موجود' : '❌ غير موجود'} \`${status.regularPath}\``,
     `**Bold :** ${status.hasBold ? '✅ موجود' : '❌ غير موجود'} \`${status.boldPath}\``,
     `**جاهز للأوامر :** ${status.ready ? '✅ نعم' : '❌ لا'}`
@@ -100,6 +102,7 @@ module.exports = {
     }
 
     await fs.promises.mkdir(FONTS_DIR, { recursive: true });
+    await fs.promises.mkdir(PERSISTENT_FONTS_DIR, { recursive: true });
 
     const saved = { regular: null, bold: null };
     const usedWeights = new Set();
@@ -118,6 +121,7 @@ module.exports = {
 
       const targetPath = weight === 'bold' ? BOLD_FONT_PATH : REGULAR_FONT_PATH;
       await fs.promises.writeFile(targetPath, buffer);
+      await fs.promises.writeFile(path.join(PERSISTENT_FONTS_DIR, path.basename(targetPath)), buffer);
       saved[weight] = path.basename(targetPath);
     }
 
