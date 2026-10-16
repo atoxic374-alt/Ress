@@ -357,8 +357,9 @@ async function validateSeparatorUrl(rawUrl) {
   return parsed;
 }
 
-async function downloadSeparatorImage(url) {
+async function downloadSeparatorImage(url, filePrefix = 'custom_separator') {
   const parsedUrl = await validateSeparatorUrl(url);
+  const safeFilePrefix = /^[a-z0-9_-]+$/i.test(filePrefix) ? filePrefix : 'custom_separator';
 
   return new Promise((resolve, reject) => {
     try {
@@ -369,7 +370,7 @@ async function downloadSeparatorImage(url) {
         fs.mkdirSync(assetsDir, { recursive: true });
       }
       // Save with a consistent name so that old custom images are overwritten
-      const dest = path.join(assetsDir, 'custom_separator' + ext.toLowerCase());
+      const dest = path.join(assetsDir, safeFilePrefix + ext.toLowerCase());
       const file = fs.createWriteStream(dest);
       const protocol = require('https');
       const request = protocol.get(parsedUrl.toString(), (response) => {
@@ -3034,6 +3035,7 @@ module.exports = {
   getProblemKey,
   getProblemHistory,
   closeProblem,
+  downloadSeparatorImage,
 
   saveActiveProblemsToDisk
 

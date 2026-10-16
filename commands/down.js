@@ -4,6 +4,7 @@ const path = require('path');
 const ms = require('ms');
 const colorManager = require('../utils/colorManager');
 const downManager = require('../utils/downManager');
+const { downloadSeparatorImage } = require('./problem');
 
 const name = 'down';
 
@@ -36,6 +37,8 @@ function normalizeDownSettings(settings = {}) {
         normalized.allowedUsers = { type: null, targets: [] };
     }
     if (!Array.isArray(normalized.allowedUsers.targets)) normalized.allowedUsers.targets = [];
+    if (typeof normalized.separatorEnabled !== 'boolean') normalized.separatorEnabled = true;
+    if (typeof normalized.separatorImage !== 'string') normalized.separatorImage = null;
     return normalized;
 }
 
@@ -95,6 +98,11 @@ function getPermissionTypeText(type) {
         case 'responsibility': return 'مسؤوليات محددة';
         default: return 'غير محدد';
     }
+}
+
+function getDownSeparatorStatus(settings = {}) {
+    if (settings.separatorEnabled === false) return 'غير مفعّل';
+    return settings.separatorImage ? 'مفعّل (صورة مخصصة)' : 'مفعّل (الخط الافتراضي)';
 }
 
 // Create permanent menu for the menu channel
@@ -289,7 +297,8 @@ async function execute(message, args, context) {
                     `${getPermissionTypeText(settings.allowedUsers.type)} (${settings.allowedUsers.targets?.length || 0})` :
                     'غير محدد',
                 inline: true
-            }
+            },
+            { name: 'الخط بعد السجلات', value: getDownSeparatorStatus(settings), inline: true }
         ])
         .setThumbnail(client?.user?.displayAvatarURL() || 'https://cdn.discordapp.com/attachments/1373799493111386243/1400677612304470086/images__5_-removebg-preview.png?ex=688d822e&is=688c30ae&hm=1ea7a63bb89b38bcd76c0f5668984d7fc919214096a3d3ee92f5d948497fcb51&')
         .setTimestamp();
@@ -352,6 +361,7 @@ async function handleInteraction(interaction, context) {
             'down_edit_select_responsibilities',
             'down_edit_log_channel_select',
             'down_edit_menu_channel_select',
+            'down_separator_modal',
             'down_confirm_reset',
             'down_cancel_reset'
         ]).has(customId);
@@ -477,6 +487,8 @@ async function handleSetupStep(interaction, context) {
     const settings = readJson(settingsPath, {
         menuChannel: null,
         logChannel: null,
+        separatorEnabled: true,
+        separatorImage: null,
         allowedUsers: { type: null, targets: [] }
     });
 
@@ -924,7 +936,8 @@ async function handleSettingsButton(interaction, context) {
         .addFields([
             { name: ' المعتمدين', value: `${getPermissionTypeText(settings.allowedUsers?.type)} (${settings.allowedUsers?.targets?.length || 0})`, inline: true },
             { name: ' روم السجلات', value: settings.logChannel ? `<#${settings.logChannel}>` : 'غير محدد', inline: true },
-            { name: ' روم المنيو', value: settings.menuChannel ? `<#${settings.menuChannel}>` : 'غير محدد', inline: true }
+            { name: ' روم المنيو', value: settings.menuChannel ? `<#${settings.menuChannel}>` : 'غير محدد', inline: true },
+            { name: 'الخط بعد السجلات', value: getDownSeparatorStatus(settings), inline: true }
         ]);
 
     const settingsSelect = new StringSelectMenuBuilder()
@@ -941,6 +954,11 @@ async function handleSettingsButton(interaction, context) {
                 label: 'تعديل الإعدادات',
                 value: 'edit_settings',
                 description: 'تعديل الصلاحيات والقنوات',
+            },
+            {
+                label: 'تعيين الخط بعد السجلات',
+                value: 'edit_separator',
+                description: 'تفعيل الخط الافتراضي أو تحديد صورة خط أو تعطيله',
             },
             {
                 label: 'إحصائيات مفصلة',
@@ -1159,6 +1177,46 @@ async function handleDownInteractions(interaction, context) {
             await interaction.deferReply({ ephemeral: true }).catch(() => {});
         }
     } catch (e) {}
+
+    if (interaction.isModalSubmit() && customId === 'down_separator_modal') {
+        const input = interaction.fields.getTextInputValue('separator_url').trim();
+        const normalizedInput = input.toLowerCase();
+        const settingsPath = path.join(__dirname, '..', 'data', 'downSettings.json');
+        const settings = normalizeDownSettings(readJson(settingsPath, {}));
+
+        if (normalizedInput === 'off') {
+            settings.separatorEnabled = false;
+            settings.separatorImage = null;
+        } else if (normalizedInput === 'default') {
+            settings.separatorEnabled = true;
+            settings.separatorImage = null;
+        } else {
+            try {
+                settings.separatorImage = await downloadSeparatorImage(input, 'down_separator');
+            } catch (error) {
+                console.error('تعذر حفظ صورة خط الداون:', error);
+                await interaction.reply({
+                    content: 'تعذر تعيين الصورة. استخدم رابط صورة HTTPS مباشرًا من Discord CDN، أو اكتب default للخط الافتراضي، أو off للتعطيل.',
+                    ephemeral: true
+                });
+                return;
+            }
+            settings.separatorEnabled = true;
+        }
+
+        if (!downManager.updateSettings(settings)) {
+            await interaction.reply({ content: 'تعذر حفظ إعداد الخط الفاصل. حاول مرة أخرى.', ephemeral: true });
+            return;
+        }
+        const status = getDownSeparatorStatus(settings);
+        await interaction.reply({
+            content: normalizedInput === 'off'
+                ? 'تم تعطيل الخط الفاصل وحفظ الإعداد.'
+                : `تم حفظ إعداد الخط الفاصل: ${status}. سيُرسل بعد كل سجل داون.`,
+            ephemeral: true
+        });
+        return;
+    }
 
     // Handle user selection for remove role
     if (interaction.isUserSelectMenu() && customId === 'down_selected_user') {
@@ -1859,6 +1917,9 @@ async function handleDownInteractions(interaction, context) {
             case 'detailed_stats':
                 await handleDetailedStats(interaction, context);
                 break;
+            case 'edit_separator':
+                await handleEditSeparator(interaction);
+                break;
             case 'reset_system':
                 await handleResetSystem(interaction, context);
                 break;
@@ -1878,6 +1939,9 @@ async function handleDownInteractions(interaction, context) {
                 break;
             case 'edit_menu_channel':
                 await handleEditMenuChannel(interaction, context);
+                break;
+            case 'edit_separator':
+                await handleEditSeparator(interaction);
                 break;
         }
         return;
@@ -2251,7 +2315,8 @@ async function handleEditSettings(interaction, context) {
         .addFields([
             { name: ' المعتمدين الحاليين', value: `${getPermissionTypeText(settings.allowedUsers?.type)} (${settings.allowedUsers?.targets?.length || 0})`, inline: true },
             { name: ' روم السجلات', value: settings.logChannel ? `<#${settings.logChannel}>` : 'غير محدد', inline: true },
-            { name: ' روم المنيو', value: settings.menuChannel ? `<#${settings.menuChannel}>` : 'غير محدد', inline: true }
+            { name: ' روم المنيو', value: settings.menuChannel ? `<#${settings.menuChannel}>` : 'غير محدد', inline: true },
+            { name: 'الخط بعد السجلات', value: getDownSeparatorStatus(settings), inline: true }
         ]);
 
     const editSelect = new StringSelectMenuBuilder()
@@ -2272,6 +2337,11 @@ async function handleEditSettings(interaction, context) {
                 label: 'تغيير قناة المنيو',
                 value: 'edit_menu_channel',
                 description: 'تحديد قناة جديدة للمنيو التفاعلي',
+            },
+            {
+                label: 'تعيين الخط بعد السجلات',
+                value: 'edit_separator',
+                description: 'تفعيل الخط الافتراضي أو اختيار صورة خط أو تعطيله'
             }
         ]);
 
@@ -2341,6 +2411,20 @@ async function handleEditMenuChannel(interaction, context) {
         content: ' **اختر روم المنيو الجديدة:**',
         components: [channelRow]
     });
+}
+
+async function handleEditSeparator(interaction) {
+    const modal = new ModalBuilder()
+        .setCustomId('down_separator_modal')
+        .setTitle('إعداد الخط بعد السجلات');
+    const input = new TextInputBuilder()
+        .setCustomId('separator_url')
+        .setLabel('رابط صورة Discord CDN أو default أو off')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setPlaceholder('default لتفعيل الخط، off للتعطيل');
+    modal.addComponents(new ActionRowBuilder().addComponents(input));
+    await interaction.showModal(modal);
 }
 
 async function handleDetailedStats(interaction, context) {

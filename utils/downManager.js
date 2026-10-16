@@ -69,6 +69,8 @@ function normalizeSettings(settings = {}) {
         normalized.allowedUsers = { type: null, targets: [] };
     }
     if (!Array.isArray(normalized.allowedUsers.targets)) normalized.allowedUsers.targets = [];
+    if (typeof normalized.separatorEnabled !== 'boolean') normalized.separatorEnabled = true;
+    if (typeof normalized.separatorImage !== 'string') normalized.separatorImage = null;
     return normalized;
 }
 
@@ -152,11 +154,9 @@ class DownManager {
         const section = new SectionBuilder()
             .addTextDisplayComponents(new TextDisplayBuilder().setContent(heading));
 
-        if (thumbnailURL) {
-            section.setThumbnailAccessory(new ThumbnailBuilder()
-                .setURL(thumbnailURL)
-                .setDescription(String(title || 'سجل الداون').slice(0, 200)));
-        }
+        section.setThumbnailAccessory(new ThumbnailBuilder()
+            .setURL(thumbnailURL || 'https://cdn.discordapp.com/embed/avatars/0.png')
+            .setDescription(String(title || 'سجل الداون').slice(0, 200)));
 
         const container = new ContainerBuilder()
             .setAccentColor(0x5865F2)
@@ -175,10 +175,49 @@ class DownManager {
 
     sendDownLog(channel, data) {
         if (!channel) return Promise.resolve(null);
-        return channel.send({
-            components: [this.createDownLogContainer(data)],
-            flags: MessageFlags.IsComponentsV2
-        });
+        return (async () => {
+            const message = await channel.send({
+                components: [this.createDownLogContainer(data)],
+                flags: MessageFlags.IsComponentsV2
+            });
+            const separatorFiles = this.getSeparatorAttachments();
+            if (separatorFiles.length > 0) {
+                try {
+                    await channel.send({ files: separatorFiles });
+                } catch (error) {
+                    console.error('تعذر إرسال الخط الفاصل بعد سجل الداون:', error);
+                }
+            }
+            return message;
+        })();
+    }
+
+    getSeparatorAttachments() {
+        const settings = this.getSettings();
+        if (!settings.separatorEnabled) return [];
+
+        if (settings.separatorImage) {
+            if (/^https?:\/\//i.test(settings.separatorImage)) {
+                let extension = '.png';
+                try { extension = path.extname(new URL(settings.separatorImage).pathname) || '.png'; } catch (_) {}
+                return [{ attachment: settings.separatorImage, name: `separator${extension}` }];
+            }
+            try {
+                if (fs.existsSync(settings.separatorImage)) {
+                    return [{ attachment: settings.separatorImage, name: path.basename(settings.separatorImage) }];
+                }
+            } catch (_) {}
+        }
+
+        const localSeparator = path.join(__dirname, '..', 'assets', 'separator.png');
+        if (fs.existsSync(localSeparator)) {
+            return [{ attachment: localSeparator, name: 'separator.png' }];
+        }
+
+        return [{
+            attachment: 'https://cdn.discordapp.com/attachments/1446184605056106690/1447086623954173972/colors-5.png',
+            name: 'separator.png'
+        }];
     }
 
     mergeUniqueDowns(downs = []) {
@@ -209,6 +248,8 @@ class DownManager {
             const defaultSettings = {
                 menuChannel: null,
                 logChannel: null,
+                separatorEnabled: true,
+                separatorImage: null,
                 allowedUsers: {
                     type: null, // 'owners', 'roles', 'responsibility'
                     targets: []
@@ -238,6 +279,8 @@ class DownManager {
         return normalizeSettings(readJson(downSettingsPath, {
             menuChannel: null,
             logChannel: null,
+            separatorEnabled: true,
+            separatorImage: null,
             allowedUsers: {
                 type: null,
                 targets: []
