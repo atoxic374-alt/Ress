@@ -6440,7 +6440,8 @@ async function showUserResponsibilities(message, targetUser, responsibilities, c
     const accentNumber = Number.parseInt(accentHex.replace('#', ''), 16);
     const summaryImage = buildResponsibilitiesSummaryImage({
         guildName: message.guild.name,
-        memberName: targetUser.username,
+        memberName: targetMember?.displayName || targetUser.globalName || targetUser.username,
+        memberTag: targetUser.tag || '',
         accentColor: accentHex,
         responsibilities: assignedResponsibilities,
         supervisors: [...supervisedNames].map(name => ({ name }))

@@ -4,6 +4,9 @@ const { ensureCairoFontsRegistered } = require('./cairoFont');
 
 ensureCairoFontsRegistered();
 
+const imageCache = new Map();
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
 function normalizeColor(color, fallback = '#5865F2') {
     const value = String(color || '').trim();
     if (/^#[0-9a-f]{6}$/i.test(value)) return value;
@@ -80,10 +83,17 @@ function drawSection(ctx, { title, rows, y, accent, width }) {
 function buildResponsibilitiesSummaryImage({
     guildName,
     memberName,
+    memberTag = '',
     accentColor,
     responsibilities = [],
     supervisors = []
 }) {
+    const cacheKey = JSON.stringify({ guildName, memberName, memberTag, accentColor, responsibilities, supervisors });
+    const cached = imageCache.get(cacheKey);
+    if (cached && Date.now() - cached.createdAt < CACHE_TTL_MS) {
+        return new AttachmentBuilder(Buffer.from(cached.buffer), { name: 'responsibilities-full.png' });
+    }
+
     const width = 1200;
     const accent = normalizeColor(accentColor);
     const headerHeight = 280;
@@ -99,25 +109,26 @@ function buildResponsibilitiesSummaryImage({
     ctx.fillStyle = background;
     ctx.fillRect(0, 0, width, height);
 
-    ctx.globalAlpha = 0.18;
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(0, headerHeight - 10);
-    ctx.quadraticCurveTo(width * 0.28, headerHeight - 125, width * 0.58, headerHeight - 35);
-    ctx.quadraticCurveTo(width * 0.8, headerHeight + 5, width, headerHeight - 75);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-
     ctx.fillStyle = accent;
-    roundedRect(ctx, 55, 52, 10, 170, 5);
+    roundedRect(ctx, 55, 52, 10, 204, 5);
     ctx.fill();
 
-    drawText(ctx, 'مسؤولياتي', width - 90, 94, { font: 'bold 48px Cairo' });
-    drawText(ctx, String(memberName || 'Member').slice(0, 42), width - 90, 145, {
-        font: '24px Cairo',
-        color: 'rgba(255,255,255,0.68)'
+    drawText(ctx, 'My Responsibilities', width / 2, 82, {
+        font: 'bold 48px Cairo',
+        align: 'center'
     });
+    drawText(ctx, String(memberName || 'Member').slice(0, 42), width / 2, 128, {
+        font: 'bold 27px Cairo',
+        color: 'rgba(255,255,255,0.68)'
+        , align: 'center'
+    });
+    if (memberTag && memberTag !== memberName) {
+        drawText(ctx, String(memberTag).slice(0, 52), width / 2, 158, {
+            font: '18px Cairo',
+            color: 'rgba(255,255,255,0.42)',
+            align: 'center'
+        });
+    }
 
     const cards = [
         { x: 95, title: 'المسؤوليات', count: responsibilities.length },
@@ -146,7 +157,13 @@ function buildResponsibilitiesSummaryImage({
         align: 'left'
     });
 
-    return new AttachmentBuilder(canvas.toBuffer('image/png'), { name: 'responsibilities-full.png' });
+    const buffer = canvas.toBuffer('image/png');
+    imageCache.set(cacheKey, { buffer, createdAt: Date.now() });
+    if (imageCache.size > 100) {
+        const oldestKey = imageCache.keys().next().value;
+        imageCache.delete(oldestKey);
+    }
+    return new AttachmentBuilder(Buffer.from(buffer), { name: 'responsibilities-full.png' });
 }
 
 module.exports = { buildResponsibilitiesSummaryImage, normalizeColor };
