@@ -6441,7 +6441,6 @@ async function showUserResponsibilities(message, targetUser, responsibilities, c
     const summaryImage = buildResponsibilitiesSummaryImage({
         guildName: message.guild.name,
         memberName: targetMember?.displayName || targetUser.globalName || targetUser.username,
-        memberTag: targetUser.tag || '',
         accentColor: accentHex,
         responsibilities: assignedResponsibilities,
         supervisors: [...supervisedNames].map(name => ({ name }))

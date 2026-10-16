@@ -65,7 +65,7 @@ function drawSection(ctx, { title, rows, y, accent, width }) {
             roundedRect(ctx, 78, rowY - 38, width - 156, 45, 12);
             ctx.fill();
         }
-        drawText(ctx, `${index + 1}. ${row.name}`, width - 110, rowY - 7, {
+        drawText(ctx, row.name, width - 110, rowY - 7, {
             font: 'bold 23px Cairo'
         });
         if (row.otherResponsiblesCount !== undefined) {
@@ -83,12 +83,11 @@ function drawSection(ctx, { title, rows, y, accent, width }) {
 function buildResponsibilitiesSummaryImage({
     guildName,
     memberName,
-    memberTag = '',
     accentColor,
     responsibilities = [],
     supervisors = []
 }) {
-    const cacheKey = JSON.stringify({ guildName, memberName, memberTag, accentColor, responsibilities, supervisors });
+    const cacheKey = JSON.stringify({ guildName, memberName, accentColor, responsibilities, supervisors });
     const cached = imageCache.get(cacheKey);
     if (cached && Date.now() - cached.createdAt < CACHE_TTL_MS) {
         return new AttachmentBuilder(Buffer.from(cached.buffer), { name: 'responsibilities-full.png' });
@@ -122,13 +121,6 @@ function buildResponsibilitiesSummaryImage({
         color: 'rgba(255,255,255,0.68)'
         , align: 'center'
     });
-    if (memberTag && memberTag !== memberName) {
-        drawText(ctx, String(memberTag).slice(0, 52), width / 2, 158, {
-            font: '18px Cairo',
-            color: 'rgba(255,255,255,0.42)',
-            align: 'center'
-        });
-    }
 
     const cards = [
         { x: 95, title: 'المسؤوليات', count: responsibilities.length },
