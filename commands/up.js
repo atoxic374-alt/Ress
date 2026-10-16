@@ -10,6 +10,7 @@ const colorManager = require('../utils/colorManager');
 const promoteManager = require('../utils/promoteManager');
 const { getAvailableQuickRoles, getQuickPromotionTypes, resolveQuickPromotion } = require('../utils/quickPromotionResolver');
 const { getRealUserStats } = require('../utils/userStatsCollector');
+const { quickPromotionLogPayload } = require('../utils/promoteLogContainer');
 const fs = require('fs');
 const path = require('path');
 
@@ -284,35 +285,14 @@ module.exports = {
                 if (settings.logChannel && hasPromotionDetails) {
                     const logChannel = await client.channels.fetch(settings.logChannel).catch(() => null);
                     if (logChannel) {
-                        const logEmbed = colorManager.createEmbed()
-                            .setTitle(selectedAction === 'up' ? 'Promotions | الترقيات' : 'Demotions | التنزيلات')
-                            .setDescription(`${message.author} • ${selectedLevels} مستوى`)
-                            .setThumbnail(message.guild.iconURL({ size: 256 }) || client.user.displayAvatarURL())
-                            .setTimestamp();
-
-                        const fields = [
-                            { name: 'ACTION | العملية', value: selectedAction === 'up' ? 'Promotion | ترقية' : 'Demotion | تنزيل', inline: true },
-                            { name: 'LEVELS | المستويات', value: `${selectedLevels}`, inline: true }
-                        ];
-
-                        for (const [type, title] of [['rank', 'RANK | الحروف'], ['visual', 'VISUAL | الظاهرية']]) {
-                            const entries = promotionDetails[type];
-                            if (!entries.length) continue;
-                            let part = 1;
-                            let current = '';
-                            for (const line of entries.slice(0, 12)) {
-                                if (current && current.length + line.length + 1 > 950) {
-                                    fields.push({ name: part === 1 ? title : `${title} (${part})`, value: current, inline: false });
-                                    current = '';
-                                    part++;
-                                }
-                                current += `${current ? '\n' : ''}${line}`;
-                            }
-                            if (entries.length > 12) current += `\n… و${entries.length - 12} عملية أخرى`;
-                            if (current) fields.push({ name: part === 1 ? title : `${title} (${part})`, value: current, inline: false });
-                        }
-                        logEmbed.addFields(fields);
-                        logEmbed.setFooter({ text: 'QUICK PROMOTION LOG • سجل الترقيات السريعة' });
+                        const logPayload = quickPromotionLogPayload({
+                            action: selectedAction,
+                            levels: selectedLevels,
+                            author: message.author,
+                            details: promotionDetails,
+                            guild: message.guild,
+                            client
+                        });
 
                         // حدّث آخر سجل للبوت بدل إرسال رسالة جديدة مع كل عملية.
                         let previousLog = settings.quickLogMessageId
@@ -321,18 +301,15 @@ module.exports = {
                         if (!previousLog) {
                             const recentMessages = await logChannel.messages.fetch({ limit: 50 }).catch(() => null);
                             previousLog = recentMessages?.find((candidate) =>
-                                candidate.author.id === client.user.id && candidate.embeds.some((existingEmbed) =>
-                                existingEmbed.footer?.text === 'QUICK PROMOTION LOG • سجل الترقيات السريعة' ||
-                                ['سجل الترقية السريعة', 'سجل التنزيل السريع', 'Promotion Summary | ملخص الترقيات', 'Demotion Summary | ملخص التنزيلات'].includes(existingEmbed.title)
-                                )
+                                candidate.author.id === client.user.id && candidate.components?.some((component) => component.type === 17)
                             ) || null;
                         }
 
                         let savedLog = null;
                         if (previousLog) {
-                            savedLog = await previousLog.edit({ embeds: [logEmbed], components: [] }).catch(() => null);
+                            savedLog = await previousLog.edit(logPayload).catch(() => null);
                         }
-                        if (!savedLog) savedLog = await logChannel.send({ embeds: [logEmbed] }).catch(() => null);
+                        if (!savedLog) savedLog = await logChannel.send(logPayload).catch(() => null);
                         if (savedLog) {
                             await promoteManager.updateSettings({
                                 ...settings,

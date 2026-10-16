@@ -143,4 +143,44 @@ function promoteLogPayload(type, data, guild, client) {
     };
 }
 
-module.exports = { createPromoteLogContainer, promoteLogPayload, formatRiyadhTime };
+function quickPromotionLogPayload({ action, levels, author, details, guild, client }) {
+    const isPromotion = action === 'up';
+    const title = isPromotion ? 'Quick Promotion Log' : 'Quick Demotion Log';
+    const actionText = isPromotion ? 'Promotion | ترقية' : 'Demotion | تنزيل';
+    const sections = [];
+
+    for (const [type, label] of [['rank', 'RANK | الحروف'], ['visual', 'VISUAL | الظاهرية']]) {
+        const entries = details?.[type] || [];
+        if (!entries.length) continue;
+        let text = entries.slice(0, 12).join('\n');
+        if (entries.length > 12) text += `\n… و${entries.length - 12} عملية أخرى`;
+        sections.push(`**${label} :**\n${text}`);
+    }
+
+    const body = [
+        `**Status :** Completed successfully`,
+        `**Action :** ${actionText}`,
+        `**Levels :** ${levels}`,
+        `**Performed by :** ${mentionUser(author)}`,
+        sections.join('\n\n'),
+        `**Time (Asia/Riyadh) :** ${formatRiyadhTime()}`
+    ].filter(Boolean).join('\n\n');
+
+    const section = new SectionBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${title}`))
+        .setThumbnailAccessory(new ThumbnailBuilder()
+            .setURL(guild?.iconURL?.({ extension: 'png', size: 128 }) || client?.user?.displayAvatarURL?.({ extension: 'png', size: 128 }) || 'https://cdn.discordapp.com/embed/avatars/0.png')
+            .setDescription('Quick promotion log'));
+
+    const container = new ContainerBuilder()
+        .setAccentColor(isPromotion ? 0x2596be : 0xed4245)
+        .addSectionComponents(section)
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(body.slice(0, 3900)))
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# ${guild?.name || 'Server'} • Quick Promote System`));
+
+    return { components: [container], flags: MessageFlags.IsComponentsV2 };
+}
+
+module.exports = { createPromoteLogContainer, promoteLogPayload, quickPromotionLogPayload, formatRiyadhTime };
