@@ -22,10 +22,74 @@ function roundedRect(ctx, x, y, width, height, radius) {
     ctx.closePath();
 }
 
-function buildResponsibilitiesSummaryImage({ guildName, accentColor, responsibilityCount, supervisorCount }) {
+function drawText(ctx, text, x, y, { font, color = '#ffffff', align = 'right' } = {}) {
+    ctx.font = font;
+    ctx.fillStyle = color;
+    ctx.textAlign = align;
+    ctx.fillText(String(text), x, y);
+}
+
+function drawSection(ctx, { title, rows, y, accent, width }) {
+    const rowHeight = 58;
+    const sectionHeight = 78 + Math.max(rows.length, 1) * rowHeight + 24;
+    ctx.fillStyle = 'rgba(255,255,255,0.045)';
+    roundedRect(ctx, 55, y, width - 110, sectionHeight, 22);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    drawText(ctx, title, width - 90, y + 52, {
+        font: 'bold 34px Cairo',
+        color: '#ffffff'
+    });
+    ctx.fillStyle = accent;
+    roundedRect(ctx, width - 355, y + 68, 265, 5, 3);
+    ctx.fill();
+
+    if (!rows.length) {
+        drawText(ctx, title === 'المسؤوليات' ? 'لا توجد مسؤوليات حالياً' : 'لا يوجد إشراف حالياً', width - 90, y + 120, {
+            font: '24px Cairo',
+            color: 'rgba(255,255,255,0.65)'
+        });
+        return y + sectionHeight;
+    }
+
+    rows.forEach((row, index) => {
+        const rowY = y + 116 + (index * rowHeight);
+        if (index % 2 === 0) {
+            ctx.fillStyle = 'rgba(255,255,255,0.035)';
+            roundedRect(ctx, 78, rowY - 38, width - 156, 45, 12);
+            ctx.fill();
+        }
+        drawText(ctx, `${index + 1}. ${row.name}`, width - 110, rowY - 7, {
+            font: 'bold 23px Cairo'
+        });
+        if (row.otherResponsiblesCount !== undefined) {
+            drawText(ctx, `مسؤولون آخرون : ${row.otherResponsiblesCount}`, 110, rowY - 7, {
+                font: '20px Cairo',
+                color: 'rgba(255,255,255,0.68)',
+                align: 'left'
+            });
+        }
+    });
+
+    return y + sectionHeight;
+}
+
+function buildResponsibilitiesSummaryImage({
+    guildName,
+    memberName,
+    accentColor,
+    responsibilities = [],
+    supervisors = []
+}) {
     const width = 1200;
-    const height = 320;
     const accent = normalizeColor(accentColor);
+    const headerHeight = 280;
+    const sectionRowHeight = 58;
+    const sectionHeight = rows => 78 + Math.max(rows.length, 1) * sectionRowHeight + 24;
+    const height = headerHeight + sectionHeight(responsibilities) + sectionHeight(supervisors) + 70;
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
 
@@ -37,57 +101,52 @@ function buildResponsibilitiesSummaryImage({ guildName, accentColor, responsibil
 
     ctx.globalAlpha = 0.18;
     ctx.strokeStyle = accent;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(0, height - 50);
-    ctx.quadraticCurveTo(width * 0.28, height - 150, width * 0.58, height - 70);
-    ctx.quadraticCurveTo(width * 0.8, height - 12, width, height - 92);
+    ctx.moveTo(0, headerHeight - 10);
+    ctx.quadraticCurveTo(width * 0.28, headerHeight - 125, width * 0.58, headerHeight - 35);
+    ctx.quadraticCurveTo(width * 0.8, headerHeight + 5, width, headerHeight - 75);
     ctx.stroke();
     ctx.globalAlpha = 1;
 
     ctx.fillStyle = accent;
-    roundedRect(ctx, 64, 62, 10, 196, 5);
+    roundedRect(ctx, 55, 52, 10, 170, 5);
     ctx.fill();
 
+    drawText(ctx, 'مسؤولياتي', width - 90, 94, { font: 'bold 48px Cairo' });
+    drawText(ctx, String(memberName || 'Member').slice(0, 42), width - 90, 145, {
+        font: '24px Cairo',
+        color: 'rgba(255,255,255,0.68)'
+    });
+
     const cards = [
-        { x: 115, title: 'المسؤوليات', count: responsibilityCount },
-        { x: 590, title: 'الإشراف', count: supervisorCount }
+        { x: 95, title: 'المسؤوليات', count: responsibilities.length },
+        { x: 625, title: 'الإشراف', count: supervisors.length }
     ];
-
     for (const card of cards) {
-        ctx.fillStyle = 'rgba(255,255,255,0.045)';
-        roundedRect(ctx, card.x, 52, 405, 215, 22);
+        ctx.fillStyle = 'rgba(255,255,255,0.055)';
+        roundedRect(ctx, card.x, 178, 480, 78, 18);
         ctx.fill();
-        ctx.strokeStyle = 'rgba(255,255,255,0.09)';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        ctx.fillStyle = '#ffffff';
-        ctx.textAlign = 'right';
-        ctx.font = 'bold 42px Cairo';
-        ctx.fillText(card.title, card.x + 350, 106);
-
-        ctx.fillStyle = accent;
-        roundedRect(ctx, card.x + 34, 84, 82, 6, 3);
-        ctx.fill();
-        roundedRect(ctx, card.x + 268, 84, 82, 6, 3);
-        ctx.fill();
-
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 86px Cairo';
-        ctx.fillText(String(card.count), card.x + 202, 190);
-        ctx.fillStyle = 'rgba(255,255,255,0.7)';
-        ctx.font = 'bold 20px Cairo';
-        ctx.fillText(card.title === 'المسؤوليات' ? 'عدد المسؤوليات' : 'عدد الإشراف', card.x + 202, 232);
+        drawText(ctx, card.title, card.x + 440, 228, { font: 'bold 26px Cairo' });
+        drawText(ctx, String(card.count), card.x + 54, 230, {
+            font: 'bold 38px Cairo',
+            color: accent,
+            align: 'left'
+        });
     }
 
-    ctx.textAlign = 'left';
-    ctx.fillStyle = 'rgba(255,255,255,0.52)';
-    ctx.font = '20px Cairo';
-    ctx.fillText(String(guildName || 'Server').slice(0, 48), 78, 295);
+    let y = headerHeight;
+    y = drawSection(ctx, { title: 'المسؤوليات', rows: responsibilities, y, accent, width });
+    y += 24;
+    y = drawSection(ctx, { title: 'الإشراف', rows: supervisors, y, accent, width });
 
-    return new AttachmentBuilder(canvas.toBuffer('image/png'), { name: 'responsibilities-summary.png' });
+    drawText(ctx, `${String(guildName || 'Server').slice(0, 54)} • Responsibilities Summary`, 70, height - 25, {
+        font: '20px Cairo',
+        color: 'rgba(255,255,255,0.52)',
+        align: 'left'
+    });
+
+    return new AttachmentBuilder(canvas.toBuffer('image/png'), { name: 'responsibilities-full.png' });
 }
 
 module.exports = { buildResponsibilitiesSummaryImage, normalizeColor };

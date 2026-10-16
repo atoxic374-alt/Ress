@@ -18,7 +18,7 @@ if (global.v8debug === undefined) {
 require('events').EventEmitter.defaultMaxListeners = Infinity;
 process.setMaxListeners(0);
 
-const { Client, GatewayIntentBits, Partials, Collection, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, EmbedBuilder, Events, MessageFlags, PermissionsBitField, ChannelType, AuditLogEvent, AttachmentBuilder, ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, SectionBuilder, ThumbnailBuilder, MediaGalleryBuilder, MediaGalleryItemBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, Collection, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, EmbedBuilder, Events, MessageFlags, PermissionsBitField, ChannelType, AuditLogEvent } = require('discord.js');
 const dotenv = require('dotenv');
 dotenv.config();
 const fs = require('fs');
@@ -6429,16 +6429,6 @@ async function showUserResponsibilities(message, targetUser, responsibilities, c
         }
     }
 
-    const assignedText = assignedResponsibilities.length
-        ? assignedResponsibilities.map((item, index) => [
-            `**${index + 1}. ${item.name}**`,
-            `> Other responsibles : ${item.otherResponsiblesCount}`
-        ].join('\n')).join('\n\n')
-        : 'No responsibilities assigned.';
-    const supervisedText = supervisedNames.size
-        ? [...supervisedNames].map((name, index) => `**${index + 1}. ${name}**`).join('\n')
-        : 'No supervised responsibilities.';
-
     const configuredServerColor = colorManager.getColor?.();
     const accentHex = configuredServerColor || (
         targetMember?.displayHexColor && targetMember.displayHexColor !== '#000000'
@@ -6450,40 +6440,16 @@ async function showUserResponsibilities(message, targetUser, responsibilities, c
     const accentNumber = Number.parseInt(accentHex.replace('#', ''), 16);
     const summaryImage = buildResponsibilitiesSummaryImage({
         guildName: message.guild.name,
+        memberName: targetUser.username,
         accentColor: accentHex,
-        responsibilityCount: assignedResponsibilities.length,
-        supervisorCount: supervisedNames.size
+        responsibilities: assignedResponsibilities,
+        supervisors: [...supervisedNames].map(name => ({ name }))
     });
-
-    const container = new ContainerBuilder()
-        .setAccentColor(Number.isFinite(accentNumber) ? accentNumber : 0x5865f2)
-        .addSectionComponents(new SectionBuilder()
-            .addTextDisplayComponents(new TextDisplayBuilder().setContent('## My Responsibilities'))
-            .setThumbnailAccessory(new ThumbnailBuilder()
-                .setURL(targetUser.displayAvatarURL({ extension: 'png', size: 128 }))
-                .setDescription(`صورة ${targetUser.username}`)))
-        .addSeparatorComponents(new SeparatorBuilder())
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-            `**Member :** <@${targetUser.id}>\n**Total Responsibilities :** ${assignedResponsibilities.length}\n**Total Supervision :** ${supervisedNames.size}`
-        ))
-        .addSeparatorComponents(new SeparatorBuilder())
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent('### Responsibilities'))
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(assignedText.slice(0, 3500)))
-        .addSeparatorComponents(new SeparatorBuilder())
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent('### Supervision'))
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(supervisedText.slice(0, 2500)))
-        .addSeparatorComponents(new SeparatorBuilder())
-        .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(
-            new MediaGalleryItemBuilder()
-                .setURL(`attachment://${summaryImage.name}`)
-                .setDescription('Responsibilities and supervision summary')
-        ))
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# ${message.guild.name} • Responsibilities Summary`));
-
     await message.channel.send({
-        components: [container],
         files: [summaryImage],
-        flags: MessageFlags.IsComponentsV2
+        embeds: [new EmbedBuilder()
+            .setColor(Number.isFinite(accentNumber) ? accentNumber : 0x5865f2)
+            .setImage(`attachment://${summaryImage.name}`)]
     });
 }
 // دالة لعرض إحصائيات المترقين مع التنقل
