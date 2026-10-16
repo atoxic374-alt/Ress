@@ -117,6 +117,7 @@ class DownManager {
         // قائمة تتبع الاستعادات التي يقوم بها البوت (لمنع التداخل مع نظام الحماية)
         this.botRestorationTracking = new Set();
         this.expiredDownProcessing = new Set();
+        this.leftMemberExpiryLogs = new Set();
         this.memberLifecycleLocks = new Map();
         this.recentLogDispatches = new Map();
     }
@@ -1886,64 +1887,69 @@ class DownManager {
 
     // معالجة انتهاء الداون لعضو خارج السيرفر
     async handleExpiredDownForLeftMember(expiredDown, guild, role) {
+        const downId = String(expiredDown?.downId || expiredDown?.id || '');
+        const logLockKey = downId || `${expiredDown?.guildId}_${expiredDown?.userId}_${expiredDown?.endTime}`;
+        if (this.leftMemberExpiryLogs.has(logLockKey)) return false;
+
+        const activeDowns = this.getActiveDowns();
+        const storedDown = activeDowns[downId] || expiredDown;
+        if (storedDown.leftMemberExpiryLogSentAt) {
+            this.leftMemberExpiryLogs.add(logLockKey);
+            return false;
+        }
+
+        this.leftMemberExpiryLogs.add(logLockKey);
+        let sent = false;
         try {
             const settings = this.getSettings();
-            if (!settings.logChannel) return;
+            if (!settings.logChannel) return false;
 
             const logChannel = await guild.channels.fetch(settings.logChannel).catch(() => null);
-            if (!logChannel) return;
+            if (!logChannel) return false;
 
-            // إنشاء embed للعضو الخارج
+            const leftUser = this.client.users.cache.get(expiredDown.userId)
+                || await this.client.users.fetch(expiredDown.userId).catch(() => null);
+            const byUserId = expiredDown.byUserId || expiredDown.moderatorId;
+            const endTime = Number(expiredDown.endTime) || Date.now();
+            const startTime = Number(expiredDown.startTime) || null;
             const embed = colorManager.createEmbed()
-                .setTitle('Down Ended - Member Left' )
-                .setDescription(`انتهت مدة الداون لعضو غير موجود في السيرفر`)
+                .setColor(colorManager.getColor() || '#5865F2')
+                .setAuthor({
+                    name: leftUser?.tag || 'العضو',
+                    ...(leftUser ? { iconURL: leftUser.displayAvatarURL({ dynamic: true, size: 128 }) } : {})
+                })
+                .setTitle('انتهاء الداون')
+                .setDescription('انتهت المدة أثناء وجود العضو خارج السيرفر. ستتم محاولة استعادة الرولات والمسؤوليات عند عودته.')
                 .addFields([
-                    { name: ' العضو', value: `<@${expiredDown.userId}>`, inline: true },
-                    { name: ' الحالة', value: 'خارج السيرفر', inline: true },
-                    { name: ' وقت الانتهاء', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
+                    { name: '👤 العضو', value: `<@${expiredDown.userId}>`, inline: true },
+                    { name: '🎭 الرول', value: role ? `<@&${role.id}>` : 'غير متاح', inline: true },
+                    { name: '🛠️ المنفذ', value: byUserId ? `<@${byUserId}>` : 'غير معروف', inline: true },
+                    { name: '📝 السبب', value: String(expiredDown.reason || 'غير محدد').slice(0, 900), inline: false },
+                    { name: '⏱️ انتهى', value: `<t:${Math.floor(endTime / 1000)}:R>`, inline: true },
+                    ...(startTime ? [{ name: '📅 بدأ', value: `<t:${Math.floor(startTime / 1000)}:R>`, inline: true }] : [])
                 ])
-                .setFooter({ text: 'Down Log • Expired Outside Server' })
-                .setTimestamp();
+                .setFooter({ text: 'سجل الداون • انتهاء خارج السيرفر' })
+                .setTimestamp(new Date(endTime));
 
-            const leftUser = await this.client.users.fetch(expiredDown.userId).catch(() => null);
-            if (leftUser) {
-                this.withEmbedIdentity(embed, leftUser, 'Member');
+            if (leftUser) embed.setThumbnail(leftUser.displayAvatarURL({ dynamic: true, size: 256 }));
+            const sentMessage = await logChannel.send({ embeds: [embed] });
+            sent = true;
+
+            storedDown.leftMemberExpiryLogSentAt = Date.now();
+            if (sentMessage?.id) storedDown.leftMemberExpiryLogMessageId = sentMessage.id;
+            if (downId) activeDowns[downId] = storedDown;
+            if (!writeJson(activeDownsPath, activeDowns)) {
+                console.error(`تعذر حفظ علامة سجل انتهاء الداون ${logLockKey}؛ سيمنع التكرار خلال التشغيل الحالي فقط.`);
             }
 
-            if (role) {
-                embed.addFields([
-                    { name: ' الرول المنتهي', value: `<@&${role.id}>`, inline: true },
-                    { name: ' السبب الأصلي', value: expiredDown.reason || 'غير محدد', inline: false }
-                ]);
-            } else {
-                embed.addFields([
-                    { name: 'الرول المنتهي', value: `Role ID: ${expiredDown.roleId}`, inline: true },
-                    { name: ' السبب الأصلي', value: expiredDown.reason || 'غير محدد', inline: false }
-                ]);
-            }
-
-            // إضافة معلومات إضافية
-            const byUser = await this.client.users.fetch(expiredDown.byUserId).catch(() => null);
-            if (byUser) {
-                embed.addFields([{ name: ' تم تطبيقه بواسطة', value: `<@${byUser.id}>`, inline: true }]);
-            }
-
-            const startTime = expiredDown.startTime || Date.now();
-            embed.addFields([{ name: 'تاريخ التطبيق', value: `<t:${Math.floor(startTime / 1000)}:F>`, inline: true }]);
-
-            // إضافة ملاحظة هامة
-            embed.addFields([{ 
-                name: 'ملاحظة هامة', 
-                value: 'إذا عاد هذا العضو للسيرفر، لن يعود الداون تلقائياً', 
-                inline: false 
-            }]);
-
-            await logChannel.send({ embeds: [embed] });
-
-            console.log(`⏰ انتهت مدة داون لعضو خارج السيرفر: ${expiredDown.userId}`);
+            console.log(`⏰ انتهت مدة داون لعضو خارج السيرفر: ${expiredDown.userId} (سجل واحد)`);
+            return true;
 
         } catch (error) {
             console.error('خطأ في معالجة انتهاء داون عضو خارج:', error);
+            return false;
+        } finally {
+            if (!sent) this.leftMemberExpiryLogs.delete(logLockKey);
         }
     }
 }
