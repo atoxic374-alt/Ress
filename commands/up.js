@@ -298,12 +298,6 @@ module.exports = {
                         let previousLog = settings.quickLogMessageId
                             ? await logChannel.messages.fetch(settings.quickLogMessageId).catch(() => null)
                             : null;
-                        if (!previousLog) {
-                            const recentMessages = await logChannel.messages.fetch({ limit: 50 }).catch(() => null);
-                            previousLog = recentMessages?.find((candidate) =>
-                                candidate.author.id === client.user.id && candidate.components?.some((component) => component.type === 17)
-                            ) || null;
-                        }
 
                         let savedLog = null;
                         if (previousLog) {
