@@ -1,11 +1,13 @@
 const { ButtonBuilder, ActionRowBuilder, ButtonStyle, StringSelectMenuBuilder, UserSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, RoleSelectMenuBuilder, ChannelSelectMenuBuilder, ChannelType, MessageFlags } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const ms = require('ms');
 const colorManager = require('../utils/colorManager');
 const downManager = require('../utils/downManager');
 
 const name = 'down';
+const pendingDownModals = new Map();
 
 // Helper function to read JSON files
 function readJson(filePath, defaultValue = {}) {
@@ -334,6 +336,7 @@ async function handleInteraction(interaction, context) {
         const { client } = context;
         const BOT_OWNERS = getBotOwners(context);
         const customId = interaction.customId;
+        const isModalSubmit = interaction.isModalSubmit();
 
         if (customId.startsWith('down_my_history_')) {
             const historyCommand = require('./my-down-history');
@@ -344,8 +347,14 @@ async function handleInteraction(interaction, context) {
             return allHistoryCommand.handleInteraction(interaction, context);
         }
 
+        // Modal processing may perform several Discord/database requests; acknowledge
+        // immediately so the 3-second interaction deadline cannot expire.
+        if (isModalSubmit && !interaction.replied && !interaction.deferred) {
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        }
+
         // Check interaction validity
-        if (interaction.replied || interaction.deferred) {
+        if ((interaction.replied || interaction.deferred) && !isModalSubmit) {
             console.log('Interaction already processed');
             return;
         }
@@ -368,12 +377,14 @@ async function handleInteraction(interaction, context) {
             ? BOT_OWNERS.includes(interaction.user?.id)
             : await downManager.hasPermission(interaction, BOT_OWNERS);
         if (!hasPermission) {
-            await interaction.reply({
+            const response = {
                 content: isSetupInteraction || isSettingsInteraction
                     ? ' **هذه الإعدادات متاحة للمالكين فقط.**'
                     : ' **ليس لديك صلاحية استخدام نظام الداون.**',
                 ephemeral: true
-            });
+            };
+            if (interaction.deferred || interaction.replied) await interaction.editReply(response);
+            else await interaction.reply(response);
             return;
         }
 
@@ -1194,7 +1205,7 @@ async function handleDownInteractions(interaction, context) {
                 settings.separatorImage = await downManager.downloadSeparatorImage(input);
             } catch (error) {
                 console.error('تعذر حفظ صورة خط الداون:', error);
-                await interaction.reply({
+                await interaction.editReply({
                     content: `تعذر تعيين الصورة (${String(error?.message || 'UNKNOWN_ERROR').slice(0, 80)}). استخدم رابط صورة HTTPS مباشرًا من Discord CDN، أو اكتب default للخط الافتراضي، أو off للتعطيل.`,
                     ephemeral: true
                 });
@@ -1204,11 +1215,11 @@ async function handleDownInteractions(interaction, context) {
         }
 
         if (!downManager.updateSettings(settings)) {
-            await interaction.reply({ content: 'تعذر حفظ إعداد الخط الفاصل. حاول مرة أخرى.', ephemeral: true });
+            await interaction.editReply({ content: 'تعذر حفظ إعداد الخط الفاصل. حاول مرة أخرى.', ephemeral: true });
             return;
         }
         const status = getDownSeparatorStatus(settings);
-        await interaction.reply({
+        await interaction.editReply({
             content: normalizedInput === 'off'
                 ? 'تم تعطيل الخط الفاصل وحفظ الإعداد.'
                 : `تم حفظ إعداد الخط الفاصل: ${status}. سيُرسل بعد كل سجل داون.`,
@@ -1278,10 +1289,14 @@ async function handleDownInteractions(interaction, context) {
         const selectedValues = interaction.values;
         const userId = selectedValues[0].split('_')[0];
         const roleIds = selectedValues.map(v => v.split('_')[1]);
+        const modalToken = crypto.randomBytes(8).toString('hex');
+        pendingDownModals.set(modalToken, { userId, roleIds, expiresAt: Date.now() + 15 * 60 * 1000 });
+        const expiryTimer = setTimeout(() => pendingDownModals.delete(modalToken), 15 * 60 * 1000);
+        expiryTimer.unref?.();
 
         // Create modal for duration and reason
         const modal = new ModalBuilder()
-            .setCustomId(`down_modal_${userId}_${roleIds.join(',')}`)
+            .setCustomId(`down_modal_${modalToken}`)
             .setTitle('تفاصيل الداون');
 
         const durationInput = new TextInputBuilder()
@@ -1449,10 +1464,16 @@ async function handleDownInteractions(interaction, context) {
 
     // Handle modal submission for down
     if (interaction.isModalSubmit() && customId.startsWith('down_modal_')) {
-        const parts = customId.split('_');
-        const userId = parts[2];
-        const roleIdsString = parts[3];
-        const roleIds = roleIdsString.split(',');
+        const modalToken = customId.slice('down_modal_'.length);
+        const pending = pendingDownModals.get(modalToken);
+        pendingDownModals.delete(modalToken);
+        const legacyParts = modalToken.includes('_') ? modalToken.split('_') : null;
+        const userId = pending?.userId || legacyParts?.[0];
+        const roleIds = pending?.roleIds || legacyParts?.[1]?.split(',') || [];
+        if (!userId || !roleIds.length) {
+            await interaction.editReply({ content: 'انتهت صلاحية نموذج الداون أو لم تعد اختياراته متاحة. افتح النموذج من جديد.', ephemeral: true });
+            return;
+        }
         const duration = interaction.fields.getTextInputValue('down_duration');
         const reason = interaction.fields.getTextInputValue('down_reason');
 
@@ -1473,7 +1494,7 @@ async function handleDownInteractions(interaction, context) {
                             { name: ' بواسطة', value: `<@${interaction.user.id}>`, inline: true }
                         ])
                         .setTimestamp();
-                    await interaction.reply({ embeds: [successEmbed], ephemeral: true });
+                    await interaction.editReply({ embeds: [successEmbed], ephemeral: true });
 
                     // Send DM notification for verbal down
                     try {
@@ -1539,7 +1560,7 @@ async function handleDownInteractions(interaction, context) {
                     });
                 }
 
-                await interaction.reply({ embeds: [resultEmbed], ephemeral: true });
+                await interaction.editReply({ embeds: [resultEmbed], ephemeral: true });
 
                 // Send DM notification for normal down
                 try {
@@ -1563,7 +1584,7 @@ async function handleDownInteractions(interaction, context) {
             }
         } catch (error) {
             console.error('Error processing down modal:', error);
-            await interaction.reply({ content: '❌ حدث خطأ غير متوقع أثناء معالجة الداون.', ephemeral: true });
+            await interaction.editReply({ content: '❌ حدث خطأ غير متوقع أثناء معالجة الداون.', ephemeral: true });
         }
         return;
     }
@@ -1579,7 +1600,7 @@ async function handleDownInteractions(interaction, context) {
         const downData = activeDowns[downId];
 
         if (!downData) {
-            await interaction.reply({
+            await interaction.editReply({
                 content: ' **الداون غير موجود أو تم حذفه!**',
                 ephemeral: true
             });
@@ -1596,7 +1617,7 @@ async function handleDownInteractions(interaction, context) {
             const downData = activeDowns[downId];
 
             if (!downData) {
-                await interaction.reply({ content: ' **الداون غير موجود!**', ephemeral: true });
+                await interaction.editReply({ content: ' **الداون غير موجود!**', ephemeral: true });
                 return;
             }
 
@@ -1634,7 +1655,7 @@ async function handleDownInteractions(interaction, context) {
                     ])
                     .setTimestamp();
 
-                await interaction.reply({ embeds: [successEmbed], ephemeral: true });
+                await interaction.editReply({ embeds: [successEmbed], ephemeral: true });
 
                 // Notify the user
                 try {
@@ -1652,11 +1673,11 @@ async function handleDownInteractions(interaction, context) {
                     console.log(`لا يمكن إرسال رسالة للمستخدم ${userId}`);
                 }
             } else {
-                await interaction.reply({ content: ` **فشل في تعديل المدة:** ${result.error}`, ephemeral: true });
+                await interaction.editReply({ content: ` **فشل في تعديل المدة:** ${result.error}`, ephemeral: true });
             }
         } catch (error) {
             console.error('خطأ في تعديل مدة الداون:', error);
-            await interaction.reply({
+            await interaction.editReply({
                 content: ' **حدث خطأ أثناء تعديل المدة!**',
                 ephemeral: true
             });
@@ -1694,7 +1715,7 @@ async function handleDownInteractions(interaction, context) {
         const downData = activeDowns[downId];
 
         if (!downData) {
-            await interaction.reply({
+            await interaction.editReply({
                 content: ` **الداون غير موجود أو تم حذفه!**`,
                 ephemeral: true
             });
@@ -1709,7 +1730,7 @@ async function handleDownInteractions(interaction, context) {
             const role = await interaction.guild.roles.fetch(roleId);
 
             if (!member || !role) {
-                await interaction.reply({
+                await interaction.editReply({
                     content: ' **العضو أو الرول غير موجود!**',
                     ephemeral: true
                 });
@@ -1717,7 +1738,7 @@ async function handleDownInteractions(interaction, context) {
             }
 
             // End the down using downManager
-            const result = await downManager.endDown(interaction.guild, context.client, downId, endReason);
+            const result = await downManager.endDown(interaction.guild, context.client, downId, endReason, interaction.user);
 
             if (result.success) {
                 const successEmbed = colorManager.createEmbed()
@@ -1730,7 +1751,7 @@ async function handleDownInteractions(interaction, context) {
                     ])
                     .setTimestamp();
 
-                await interaction.reply({ embeds: [successEmbed], ephemeral: true });
+                await interaction.editReply({ embeds: [successEmbed], ephemeral: true });
 
                 // Notify the user
                 try {
@@ -1750,7 +1771,7 @@ async function handleDownInteractions(interaction, context) {
                 }
 
             } else {
-                await interaction.reply({
+                await interaction.editReply({
                     content: ` **فشل في إنهاء الداون:** ${result.error}`,
                     ephemeral: true
                 });
@@ -1758,7 +1779,7 @@ async function handleDownInteractions(interaction, context) {
 
         } catch (error) {
             console.error('خطأ في إنهاء الداون:', error);
-            await interaction.reply({
+            await interaction.editReply({
                 content: ' **حدث خطأ أثناء إنهاء الداون!**',
                 ephemeral: true
             });

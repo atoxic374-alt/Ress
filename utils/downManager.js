@@ -753,9 +753,13 @@ class DownManager {
                     return { success: false, error: 'تعذر حفظ المسؤوليات قبل تطبيق الداون؛ لم يتم سحب الرتب' };
                 }
 
-                // اسحب الرول المختار الآن فقط؛ بقية adminRoles ورولات المسؤوليات
-                // يسحبها فحص التكامل بعد حفظ كل سجلات الداون المختارة.
-                const rolesToRemove = [String(roleId)];
+                // سحب رول الداون ورولات المسؤوليات ضمن تطبيق الداون نفسه؛
+                // فحص الحماية الدوري يبقى مخصصًا لرولات الإدارة فقط.
+                const responsibilityRoleIds = snapshot.responsibilityAssignments
+                    .flatMap(assignment => assignment.roleIds || [])
+                    .map(String)
+                    .filter(id => targetMember.roles.cache.has(id));
+                const rolesToRemove = [...new Set([String(roleId), ...responsibilityRoleIds])];
                 try {
                     const actorName = await guild.members.fetch(byUserId).then(m => m.displayName).catch(() => 'غير معروف');
                     await targetMember.roles.remove(rolesToRemove, `داون بواسطة ${actorName}: ${reason}`);
@@ -816,7 +820,7 @@ class DownManager {
         }
     }
 
-    async endDown(guild, client, downId, reason = 'انتهاء المدة المحددة') {
+    async endDown(guild, client, downId, reason = 'انتهاء المدة المحددة', endedBy = null) {
         try {
             const activeDowns = readJson(activeDownsPath, {});
             const downRecord = activeDowns[downId];
@@ -828,6 +832,7 @@ class DownManager {
             // Get member and role; the record can outlive either resource.
             const member = await guild.members.fetch(downRecord.userId).catch(() => null);
             const role = await guild.roles.fetch(downRecord.roleId).catch(() => null);
+            const endedById = String(endedBy?.id || endedBy?.user?.id || endedBy || '');
             const completion = await this.completeDownSuspension(
                 { ...downRecord, downId }, guild, member, reason
             );
@@ -840,7 +845,10 @@ class DownManager {
                     reason: completion.deferred ? `${reason} (تأجلت الاستعادة لوجود داون آخر)` : reason,
                     originalReason: downRecord.reason,
                     duration: downRecord.duration || 'نهائي',
-                    byUser: await client.users.fetch(downRecord.byUserId).catch(() => null)
+                    byUser: endedById
+                        ? await client.users.fetch(endedById).catch(() => ({ id: endedById }))
+                        : null,
+                    byUserId: endedById || null
                 });
             }
 
@@ -852,7 +860,8 @@ class DownManager {
                 reason,
                 originalReason: downRecord.reason,
                 duration: downRecord.duration,
-                byUserId: downRecord.byUserId,
+                byUserId: endedById || null,
+                originalByUserId: downRecord.byUserId,
                 timestamp: Date.now()
             });
 
@@ -919,7 +928,8 @@ class DownManager {
                     role,
                     oldDuration,
                     newDuration: newDuration || 'نهائي',
-                    modifiedBy: await client.users.fetch(modifiedById).catch(() => null)
+                    modifiedBy: await client.users.fetch(modifiedById).catch(() => null),
+                    modifiedById
                 });
             }
 
@@ -1090,7 +1100,7 @@ class DownManager {
             case 'DOWN_ENDED':
                 return {
                     title: 'Down Ended',
-                    details: `**Member:** ${targetMention}\n**Role:** ${shortText(roleText, 100)}\n**Original Duration:** ${shortText(data.duration, 100)}\n**Moderator:** ${actorMention}\n\n**Original Reason**\n${shortText(data.originalReason)}\n\n**End Reason**\n${shortText(data.reason)}`,
+                    details: `**Member:** ${targetMention}\n**Role:** ${shortText(roleText, 100)}\n**Original Duration:** ${shortText(data.duration, 100)}\n**Ended By:** ${actorMention}\n\n**Original Reason**\n${shortText(data.originalReason)}\n\n**End Reason**\n${shortText(data.reason)}`,
                     thumbnailURL,
                     footer: 'Down Log • Ended'
                 };
@@ -1106,7 +1116,7 @@ class DownManager {
             case 'DOWN_MODIFIED':
                 return {
                     title: 'Down Duration Updated',
-                    details: `**Member:** ${targetMention}\n**Role:** ${shortText(roleText, 100)}\n**Previous Duration:** ${shortText(data.oldDuration, 100)}\n**New Duration:** ${shortText(data.newDuration, 100)}\n**Moderator:** ${actorMention}`,
+                    details: `**Member:** ${targetMention}\n**Role:** ${shortText(roleText, 100)}\n**Previous Duration:** ${shortText(data.oldDuration, 100)}\n**New Duration:** ${shortText(data.newDuration, 100)}\n**Modified By:** ${actorMention}`,
                     thumbnailURL,
                     footer: 'Down Log • Duration Updated'
                 };
@@ -1224,11 +1234,8 @@ class DownManager {
                 }
 
                 const adminRoleIds = new Set(this.getAdminRoles().map(String));
-                const responsibilityRoleIds = new Set(
-                    assignmentsToSuspend.flatMap(item => item.roleIds || []).map(String)
-                );
                 const rolesToRemove = member.roles.cache.filter(role =>
-                    adminRoleIds.has(String(role.id)) || responsibilityRoleIds.has(String(role.id))
+                    adminRoleIds.has(String(role.id))
                 );
                 if (!rolesToRemove.size) continue;
 
@@ -1243,10 +1250,10 @@ class DownManager {
                     const logChannel = await guild.channels.fetch(settings.logChannel).catch(() => null);
                     if (logChannel) {
                         await this.sendDownLog(logChannel, {
-                            title: 'Down Role Protection',
-                            details: `**Member:** <@${member.id}>\n**Roles:** ${rolesToRemove.map(role => `<@&${role.id}>`).join(', ').slice(0, 900)}\n**Down Ends:** ${down.endTime ? `<t:${Math.floor(down.endTime / 1000)}:R>` : 'Permanent'}`,
+                            title: 'Admin Role Protection',
+                            details: `**Member:** <@${member.id}>\n**Admin Roles:** ${rolesToRemove.map(role => `<@&${role.id}>`).join(', ').slice(0, 900)}\n**Down Ends:** ${down.endTime ? `<t:${Math.floor(down.endTime / 1000)}:R>` : 'Permanent'}`,
                             thumbnailURL: member.displayAvatarURL({ dynamic: true, size: 256 }),
-                            footer: 'Down Log • Role Protection'
+                            footer: 'Down Log • Admin Role Protection'
                         }).catch(() => null);
                     }
                 }
