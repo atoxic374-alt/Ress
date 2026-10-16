@@ -146,17 +146,14 @@ class DownManager {
         return true;
     }
 
-    createDownLogContainer({ title, description = '', details = '', thumbnailURL = null, footer = 'سجل الداون' }) {
-        const heading = [
-            `## ${String(title || 'سجل الداون').slice(0, 200)}`,
-            String(description || '').slice(0, 1200)
-        ].filter(Boolean).join('\n\n');
+    createDownLogContainer({ title, details = '', thumbnailURL = null, footer = 'Down Log' }) {
+        const heading = `## ${String(title || 'Down Log').slice(0, 200)}`;
         const section = new SectionBuilder()
             .addTextDisplayComponents(new TextDisplayBuilder().setContent(heading));
 
         section.setThumbnailAccessory(new ThumbnailBuilder()
             .setURL(thumbnailURL || 'https://cdn.discordapp.com/embed/avatars/0.png')
-            .setDescription(String(title || 'سجل الداون').slice(0, 200)));
+            .setDescription(String(title || 'Down Log').slice(0, 200)));
 
         const container = new ContainerBuilder()
             .setAccentColor(0x5865F2)
@@ -998,12 +995,12 @@ class DownManager {
     createLogData(type, data) {
         const targetUser = data.targetUser && typeof data.targetUser === 'object' ? data.targetUser : null;
         const targetId = targetUser?.id || data.targetUserId || null;
-        const targetMention = targetId ? `<@${targetId}>` : 'غير معروف';
-        const roleText = data.role?.id ? `<@&${data.role.id}>` : String(data.role || 'غير محدد');
+        const targetMention = targetId ? `<@${targetId}>` : 'Unknown';
+        const roleText = data.role?.id ? `<@&${data.role.id}>` : String(data.role || 'Unspecified');
         const actor = data.byUser || data.modifiedBy || null;
         const actorId = actor?.id || data.byUserId || data.modifiedById || null;
-        const actorMention = actorId ? `<@${actorId}>` : 'غير معروف';
-        const shortText = (value, max = 900) => String(value || 'غير محدد').slice(0, max);
+        const actorMention = actorId ? `<@${actorId}>` : 'Unknown';
+        const shortText = (value, max = 900) => String(value || 'Unspecified').slice(0, max);
         const thumbnailURL = targetUser && typeof targetUser.displayAvatarURL === 'function'
             ? targetUser.displayAvatarURL({ dynamic: true, size: 256 })
             : null;
@@ -1011,47 +1008,42 @@ class DownManager {
         switch (type) {
             case 'DOWN_APPLIED':
                 return {
-                    title: 'تم تطبيق الداون',
-                    description: `تم سحب الرول من ${targetMention}.`,
-                    details: `**العضو:** ${targetMention}\n**الرول:** ${shortText(roleText, 100)}\n**المدة:** ${shortText(data.duration, 100)}\n**المنفذ:** ${actorMention}\n\n**السبب**\n${shortText(data.reason)}`,
+                    title: 'Down Applied',
+                    details: `**Member:** ${targetMention}\n**Role:** ${shortText(roleText, 100)}\n**Duration:** ${shortText(data.duration, 100)}\n**Moderator:** ${actorMention}\n\n**Reason**\n${shortText(data.reason)}`,
                     thumbnailURL,
-                    footer: 'سجل الداون • تطبيق'
+                    footer: 'Down Log • Applied'
                 };
 
             case 'DOWN_ENDED':
                 return {
-                    title: 'تم إنهاء الداون',
-                    description: `انتهى الداون عن ${targetMention}.`,
-                    details: `**العضو:** ${targetMention}\n**الرول:** ${shortText(roleText, 100)}\n**المدة الأصلية:** ${shortText(data.duration, 100)}\n**المنفذ:** ${actorMention}\n\n**السبب الأصلي**\n${shortText(data.originalReason)}\n\n**سبب الإنهاء**\n${shortText(data.reason)}`,
+                    title: 'Down Ended',
+                    details: `**Member:** ${targetMention}\n**Role:** ${shortText(roleText, 100)}\n**Original Duration:** ${shortText(data.duration, 100)}\n**Moderator:** ${actorMention}\n\n**Original Reason**\n${shortText(data.originalReason)}\n\n**End Reason**\n${shortText(data.reason)}`,
                     thumbnailURL,
-                    footer: 'سجل الداون • إنهاء'
+                    footer: 'Down Log • Ended'
                 };
 
             case 'DOWN_VERBAL':
                 return {
-                    title: 'تنبيه شفوي',
-                    description: `تم تسجيل تنبيه شفوي على ${targetMention}.`,
-                    details: `**العضو:** ${targetMention}\n**المنفذ:** ${actorMention}\n\n**السبب**\n${shortText(data.reason)}`,
+                    title: 'Verbal Warning',
+                    details: `**Member:** ${targetMention}\n**Moderator:** ${actorMention}\n\n**Reason**\n${shortText(data.reason)}`,
                     thumbnailURL,
-                    footer: 'سجل الداون • شفوي'
+                    footer: 'Down Log • Verbal Warning'
                 };
 
             case 'DOWN_MODIFIED':
                 return {
-                    title: 'تم تعديل مدة الداون',
-                    description: `تم تحديث مدة الداون للعضو ${targetMention}.`,
-                    details: `**العضو:** ${targetMention}\n**الرول:** ${shortText(roleText, 100)}\n**المدة السابقة:** ${shortText(data.oldDuration, 100)}\n**المدة الجديدة:** ${shortText(data.newDuration, 100)}\n**المنفذ:** ${actorMention}`,
+                    title: 'Down Duration Updated',
+                    details: `**Member:** ${targetMention}\n**Role:** ${shortText(roleText, 100)}\n**Previous Duration:** ${shortText(data.oldDuration, 100)}\n**New Duration:** ${shortText(data.newDuration, 100)}\n**Moderator:** ${actorMention}`,
                     thumbnailURL,
-                    footer: 'سجل الداون • تعديل المدة'
+                    footer: 'Down Log • Duration Updated'
                 };
 
             default:
                 return {
-                    title: 'سجل الداون',
-                    description: 'حدث إجراء في نظام الداون.',
-                    details: `**العضو:** ${targetMention}`,
+                    title: 'Down Log',
+                    details: `**Member:** ${targetMention}`,
                     thumbnailURL,
-                    footer: 'سجل الداون'
+                    footer: 'Down Log'
                 };
         }
     }
@@ -1178,11 +1170,10 @@ class DownManager {
                     const logChannel = await guild.channels.fetch(settings.logChannel).catch(() => null);
                     if (logChannel) {
                         await this.sendDownLog(logChannel, {
-                            title: 'حماية الداون',
-                            description: 'أُعيدت رولات محمية أثناء الداون، فسحبها النظام تلقائيًا.',
-                            details: `**العضو:** <@${member.id}>\n**الرولات:** ${rolesToRemove.map(role => `<@&${role.id}>`).join('، ').slice(0, 900)}\n**ينتهي الداون:** ${down.endTime ? `<t:${Math.floor(down.endTime / 1000)}:R>` : 'نهائي'}`,
+                            title: 'Down Role Protection',
+                            details: `**Member:** <@${member.id}>\n**Roles:** ${rolesToRemove.map(role => `<@&${role.id}>`).join(', ').slice(0, 900)}\n**Down Ends:** ${down.endTime ? `<t:${Math.floor(down.endTime / 1000)}:R>` : 'Permanent'}`,
                             thumbnailURL: member.displayAvatarURL({ dynamic: true, size: 256 }),
-                            footer: 'سجل الداون • حماية الرولات'
+                            footer: 'Down Log • Role Protection'
                         }).catch(() => null);
                     }
                 }
@@ -1250,13 +1241,10 @@ class DownManager {
                 if (logChannel) {
                     const moderatorId = expiredDown.byUserId || expiredDown.moderatorId;
                     await this.sendDownLog(logChannel, {
-                        title: 'انتهاء الداون',
-                        description: completion.deferred
-                            ? 'انتهت المدة؛ بقيت الرولات والمسؤوليات معلقة لوجود داون آخر.'
-                            : 'انتهت المدة واستُعيدت الرولات والمسؤوليات المحفوظة.',
-                        details: `**العضو:** <@${member.id}>\n**الرول:** ${role ? `<@&${role.id}>` : 'الرولات المحفوظة'}\n**المنفذ:** ${moderatorId ? `<@${moderatorId}>` : 'غير معروف'}\n**السبب:** ${String(expiredDown.reason || 'غير محدد').slice(0, 900)}\n**الوقت:** <t:${this.formatTimestamp(Date.now()).unix}:R>`,
+                        title: 'Down Expired',
+                        details: `**Member:** <@${member.id}>\n**Role:** ${role ? `<@&${role.id}>` : 'Saved Roles'}\n**Moderator:** ${moderatorId ? `<@${moderatorId}>` : 'Unknown'}\n**Reason:** ${String(expiredDown.reason || 'Unspecified').slice(0, 900)}\n**Time:** <t:${this.formatTimestamp(Date.now()).unix}:R>\n**Restoration:** ${completion.deferred ? 'Pending until other downs end' : 'Roles and responsibilities restored'}`,
                         thumbnailURL: member.displayAvatarURL({ dynamic: true, size: 256 }),
-                        footer: 'سجل الداون • استعادة تلقائية'
+                        footer: 'Down Log • Automatic Restoration'
                     });
                 }
             }
@@ -1646,17 +1634,16 @@ class DownManager {
 
             logEvent(this.client || require('../bot').client, guild, {
                 type: 'DOWN_SYSTEM',
-                title: data.type === 'ROLE_REMOVED' ? 'تم سحب رول' : 'تم تطبيق إجراء',
-                description: `تم تطبيق داون على العضو ${data.user.username}`,
-                details: `الرول: ${data.role.name} | المدة: ${data.duration} | السبب: ${data.reason}`,
+                title: data.type === 'ROLE_REMOVED' ? 'Down Role Removed' : 'Down Action',
+                details: `Role: ${data.role.name} | Duration: ${data.duration} | Reason: ${data.reason}`,
                 user: data.moderator,
                 fields: [
-                    { name: 'لعضو المتأثر', value: `<@${data.user.id}>`, inline: true },
-                    { name: 'الرول المسحوب', value: `<@&${data.role.id}>`, inline: true },
-                    { name: ' المدة', value: data.duration, inline: true },
-                    { name: ' السبب', value: data.reason, inline: false },
-                    { name: ' بواسطة', value: `<@${data.moderator.id}>`, inline: true },
-                    { name: ' ينتهي في', value: data.endTime || 'نهائي', inline: true }
+                    { name: 'Member', value: `<@${data.user.id}>`, inline: true },
+                    { name: 'Removed Role', value: `<@&${data.role.id}>`, inline: true },
+                    { name: 'Duration', value: data.duration, inline: true },
+                    { name: 'Reason', value: data.reason, inline: false },
+                    { name: 'Moderator', value: `<@${data.moderator.id}>`, inline: true },
+                    { name: 'Ends At', value: data.endTime || 'Permanent', inline: true }
                 ]
             });
 
@@ -1734,20 +1721,19 @@ class DownManager {
                                 const downData = mergedDowns[i];
                                 const role = await member.guild.roles.fetch(downData.roleId).catch(() => null);
                                 const roleName = role ? role.name : `Role ID: ${downData.roleId}`;
-                                const endTime = downData.endTime ? `<t:${Math.floor(downData.endTime / 1000)}:R>` : 'نهائي';
-                                downsList += `- **${roleName}** — ينتهي ${endTime}\n`;
+                                const endTime = downData.endTime ? `<t:${Math.floor(downData.endTime / 1000)}:R>` : 'Permanent';
+                                downsList += `- **${roleName}** — Ends ${endTime}\n`;
                             }
 
                             if (mergedDowns.length > 5) {
-                                downsList += `- ${mergedDowns.length - 5} داون إضافي\n`;
+                                downsList += `- ${mergedDowns.length - 5} additional down(s)\n`;
                             }
 
                             await this.sendDownLog(logChannel, {
-                                title: 'مغادرة عضو عليه داون',
-                                description: 'حُفظت بيانات الداون لاستكمال الحماية والاستعادة عند عودة العضو.',
-                                details: `**العضو:** <@${member.id}>\n**عدد الداونات:** ${mergedDowns.length}\n**الوقت:** <t:${Math.floor(Date.now() / 1000)}:R>\n\n**ملخص الرولات**\n${(downsList || 'لا توجد').slice(0, 2200)}`,
+                                title: 'Member Left During Down',
+                                details: `**Member:** <@${member.id}>\n**Active Downs:** ${mergedDowns.length}\n**Time:** <t:${Math.floor(Date.now() / 1000)}:R>\n\n**Role Summary**\n${(downsList || 'None').slice(0, 2200)}`,
                                 thumbnailURL: member.displayAvatarURL({ dynamic: true, size: 256 }),
-                                footer: 'سجل الداون • مغادرة'
+                                footer: 'Down Log • Member Left'
                             });
                         }
                     } catch (error) {
@@ -1877,16 +1863,15 @@ class DownManager {
                         const logChannel = await member.guild.channels.fetch(settings.logChannel);
                         if (logChannel) {
                             const timeSinceLeft = Date.now() - memberData.leftAt;
-                            const timeLeftText = timeSinceLeft > 3600000 ? 
-                                `${Math.floor(timeSinceLeft / 3600000)} ساعة` : 
-                                `${Math.floor(timeSinceLeft / 60000)} دقيقة`;
+                            const timeAwayText = timeSinceLeft > 3600000 ?
+                                `${Math.floor(timeSinceLeft / 3600000)} hour(s)` :
+                                `${Math.floor(timeSinceLeft / 60000)} minute(s)`;
 
                             await this.sendDownLog(logChannel, {
-                                title: 'عودة عضو عليه داون',
-                                description: 'تم تحديث حالة الداون واستكمال الحماية والاستعادة حسب الداونات المتبقية.',
-                                details: `**العضو:** <@${member.id}>\n**داونات أُعيد تطبيقها:** ${restoredDowns}\n**داونات منتهية عولجت:** ${expiredDownsProcessed}\n**تعذرت استعادتها:** ${failedDowns.length}\n**مدة الغياب:** ${timeLeftText}`,
+                                title: 'Member Returned During Down',
+                                details: `**Member:** <@${member.id}>\n**Downs Reapplied:** ${restoredDowns}\n**Expired Downs Processed:** ${expiredDownsProcessed}\n**Restoration Failures:** ${failedDowns.length}\n**Time Away:** ${timeAwayText}`,
                                 thumbnailURL: member.displayAvatarURL({ dynamic: true, size: 256 }),
-                                footer: 'سجل الداون • عودة'
+                                footer: 'Down Log • Member Returned'
                             });
                         }
                     } catch (error) {
@@ -1930,21 +1915,20 @@ class DownManager {
             const endTime = Number(expiredDown.endTime) || Date.now();
             const startTime = Number(expiredDown.startTime) || null;
             const details = [
-                `**العضو:** <@${expiredDown.userId}>`,
-                `**الرول:** ${role ? `<@&${role.id}>` : 'غير متاح'}`,
-                `**المنفذ:** ${byUserId ? `<@${byUserId}>` : 'غير معروف'}`,
-                `**انتهى:** <t:${Math.floor(endTime / 1000)}:R>`,
-                ...(startTime ? [`**بدأ:** <t:${Math.floor(startTime / 1000)}:R>`] : []),
+                `**Member:** <@${expiredDown.userId}>`,
+                `**Role:** ${role ? `<@&${role.id}>` : 'Unavailable'}`,
+                `**Moderator:** ${byUserId ? `<@${byUserId}>` : 'Unknown'}`,
+                `**Ended:** <t:${Math.floor(endTime / 1000)}:R>`,
+                ...(startTime ? [`**Started:** <t:${Math.floor(startTime / 1000)}:R>`] : []),
                 '',
-                '**السبب**',
-                String(expiredDown.reason || 'غير محدد').slice(0, 900)
+                '**Reason**',
+                String(expiredDown.reason || 'Unspecified').slice(0, 900)
             ].join('\n');
             const sentMessage = await this.sendDownLog(logChannel, {
-                title: 'انتهاء الداون',
-                description: 'انتهت المدة أثناء وجود العضو خارج السيرفر. ستتم محاولة استعادة الرولات والمسؤوليات عند عودته.',
+                title: 'Down Expired While Member Away',
                 details,
                 thumbnailURL: leftUser?.displayAvatarURL({ dynamic: true, size: 256 }) || null,
-                footer: 'سجل الداون • انتهاء خارج السيرفر'
+                footer: 'Down Log • Member Away'
             });
             sent = true;
 
