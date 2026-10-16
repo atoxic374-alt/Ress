@@ -4,7 +4,6 @@ const path = require('path');
 const ms = require('ms');
 const colorManager = require('../utils/colorManager');
 const downManager = require('../utils/downManager');
-const { downloadSeparatorImage } = require('./problem');
 
 const name = 'down';
 
@@ -1192,11 +1191,11 @@ async function handleDownInteractions(interaction, context) {
             settings.separatorImage = null;
         } else {
             try {
-                settings.separatorImage = await downloadSeparatorImage(input, 'down_separator');
+                settings.separatorImage = await downManager.downloadSeparatorImage(input);
             } catch (error) {
                 console.error('تعذر حفظ صورة خط الداون:', error);
                 await interaction.reply({
-                    content: 'تعذر تعيين الصورة. استخدم رابط صورة HTTPS مباشرًا من Discord CDN، أو اكتب default للخط الافتراضي، أو off للتعطيل.',
+                    content: `تعذر تعيين الصورة (${String(error?.message || 'UNKNOWN_ERROR').slice(0, 80)}). استخدم رابط صورة HTTPS مباشرًا من Discord CDN، أو اكتب default للخط الافتراضي، أو off للتعطيل.`,
                     ephemeral: true
                 });
                 return;

@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 const {
     ContainerBuilder,
     SectionBuilder,
@@ -155,8 +156,10 @@ class DownManager {
             .setURL(thumbnailURL || 'https://cdn.discordapp.com/embed/avatars/0.png')
             .setDescription(String(title || 'Down Log').slice(0, 200)));
 
+        const colorValue = String(colorManager.getColor?.() || '#0099ff').replace(/^#/, '').replace(/^0x/i, '');
+        const accentColor = Number.parseInt(colorValue, 16);
         const container = new ContainerBuilder()
-            .setAccentColor(0x5865F2)
+            .setAccentColor(Number.isFinite(accentColor) ? accentColor : 0x0099ff)
             .addSectionComponents(section);
 
         if (details) {
@@ -215,6 +218,76 @@ class DownManager {
             attachment: 'https://cdn.discordapp.com/attachments/1446184605056106690/1447086623954173972/colors-5.png',
             name: 'separator.png'
         }];
+    }
+
+    async downloadSeparatorImage(rawUrl) {
+        let parsedUrl;
+        try { parsedUrl = new URL(String(rawUrl)); } catch (_) { throw new Error('INVALID_URL'); }
+
+        const allowedHosts = new Set([
+            'cdn.discordapp.com',
+            'media.discordapp.net',
+            'images-ext-1.discordapp.net',
+            'images-ext-2.discordapp.net'
+        ]);
+        if (parsedUrl.protocol !== 'https:' || (parsedUrl.port && parsedUrl.port !== '443') || !allowedHosts.has(parsedUrl.hostname.toLowerCase())) {
+            throw new Error('DISCORD_CDN_HTTPS_REQUIRED');
+        }
+
+        const assetsDir = path.join(__dirname, '..', 'assets');
+        fs.mkdirSync(assetsDir, { recursive: true });
+        const maxBytes = 5 * 1024 * 1024;
+
+        return new Promise((resolve, reject) => {
+            const request = https.get(parsedUrl, response => {
+                if (response.statusCode !== 200) {
+                    response.resume();
+                    reject(new Error(`HTTP_${response.statusCode || 'ERROR'}`));
+                    return;
+                }
+
+                const contentType = String(response.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+                const extensionByType = {
+                    'image/png': '.png',
+                    'image/jpeg': '.jpg',
+                    'image/gif': '.gif',
+                    'image/webp': '.webp'
+                };
+                const extension = extensionByType[contentType];
+                if (!extension) {
+                    response.resume();
+                    reject(new Error('INVALID_IMAGE_TYPE'));
+                    return;
+                }
+
+                const outputPath = path.join(assetsDir, `down_separator${extension}`);
+                const chunks = [];
+                let totalBytes = 0;
+                response.on('data', chunk => {
+                    totalBytes += chunk.length;
+                    if (totalBytes > maxBytes) {
+                        request.destroy(new Error('IMAGE_TOO_LARGE'));
+                        return;
+                    }
+                    chunks.push(chunk);
+                });
+                response.on('end', () => {
+                    if (totalBytes === 0) {
+                        reject(new Error('EMPTY_IMAGE'));
+                        return;
+                    }
+                    try {
+                        fs.writeFileSync(outputPath, Buffer.concat(chunks));
+                        resolve(outputPath);
+                    } catch (error) {
+                        reject(error);
+                    }
+                });
+                response.on('error', reject);
+            });
+            request.setTimeout(10000, () => request.destroy(new Error('REQUEST_TIMEOUT')));
+            request.on('error', reject);
+        });
     }
 
     mergeUniqueDowns(downs = []) {
