@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const colorManager = require('../utils/colorManager.js');
 const vacationManager = require('../utils/vacationManager.js');
+const { createDecisionContainer, decisionPayload } = require('../utils/decisionContainer.js');
 
 // مسارات الملفات
 const dataDir = path.join(__dirname, '..', 'data');
@@ -594,17 +595,33 @@ async function updateOriginalMessage(guild, userId, type, status, data = {}) {
         });
 
         if (targetMsg) {
-            const embed = EmbedBuilder.from(targetMsg.embeds[0]);
-            if (status === 'approved') {
-                embed.setTitle(type === 'vacation' ? '✅ تم قبول طلب الإجازة' : '✅ تم قبول إنهاء الإجازة')
-                     .setColor(colorManager.getColor('approved') || '#2ECC71')
-                     .addFields({ name: "المسؤول (عبر لوحة التحكم)", value: `<@${data.adminId}>`, inline: true });
-            } else {
-                embed.setTitle(type === 'vacation' ? '❌ تم رفض طلب الإجازة' : '❌ تم رفض إنهاء الإجازة')
-                     .setColor(colorManager.getColor('rejected') || '#E74C3C')
-                     .addFields({ name: "المسؤول (عبر لوحة التحكم)", value: `<@${data.adminId}>`, inline: true });
-            }
-            await targetMsg.edit({ embeds: [embed], components: [] }).catch(() => null);
+            const targetMember = await guild.members.fetch(userId).catch(() => null);
+            const fields = targetMsg.embeds[0]?.fields || [];
+            const fieldValue = (name) => fields.find(field => field.name === name)?.value;
+            const details = [
+                '',
+                '### Decision Details',
+                `**Action :** ${type === 'vacation'
+                    ? (status === 'approved' ? 'تم قبول طلب الإجازة' : 'تم رفض طلب الإجازة')
+                    : (status === 'approved' ? 'تم قبول إنهاء الإجازة' : 'تم رفض إنهاء الإجازة')}`,
+                fieldValue('السبب') ? `**Reason :** ${fieldValue('السبب')}` : null,
+                fieldValue('سبب الرفض') ? `**Rejection Reason :** ${fieldValue('سبب الرفض')}` : null,
+                fieldValue('تاريخ البدء') ? `**Start Date :** ${fieldValue('تاريخ البدء')}` : null,
+                fieldValue('تاريخ الانتهاء') ? `**End Date :** ${fieldValue('تاريخ الانتهاء')}` : null
+            ];
+            const container = createDecisionContainer({
+                approved: status === 'approved',
+                title: type === 'vacation'
+                    ? (status === 'approved' ? '✅ Vacation Accepted' : '❌ Vacation Rejected')
+                    : (status === 'approved' ? '✅ Vacation Ended' : '❌ Termination Rejected'),
+                targetMember,
+                targetUserId: userId,
+                actorId: data.adminId,
+                guild,
+                details,
+                footer: `Vacation System • ${status === 'approved' ? 'Approved' : 'Rejected'}`
+            });
+            await targetMsg.edit(decisionPayload(container)).catch(() => null);
         }
     } catch (error) {
         console.error('[Vacations] Error updating original message:', error);

@@ -18,7 +18,7 @@ if (global.v8debug === undefined) {
 require('events').EventEmitter.defaultMaxListeners = Infinity;
 process.setMaxListeners(0);
 
-const { Client, GatewayIntentBits, Partials, Collection, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, EmbedBuilder, Events, MessageFlags, PermissionsBitField, ChannelType, AuditLogEvent } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, Collection, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, EmbedBuilder, Events, MessageFlags, PermissionsBitField, ChannelType, AuditLogEvent, AttachmentBuilder, ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, SectionBuilder, ThumbnailBuilder, MediaGalleryBuilder, MediaGalleryItemBuilder } = require('discord.js');
 const dotenv = require('dotenv');
 dotenv.config();
 const fs = require('fs');
@@ -33,6 +33,7 @@ const downManager = require('./utils/downManager');
 const warnManager = require('./utils/warnManager');
 const { checkCooldown, startCooldown } = require('./commands/cooldown.js');
 const colorManager = require('./utils/colorManager.js');
+const { buildResponsibilitiesSummaryImage } = require('./utils/responsibilitiesSummaryRenderer.js');
 
 // كولداون اختصارات المسؤوليات: الزران يشتركان في نفس الكولداون لكل مستخدم ومسؤولية.
 const SHORTCUT_CALL_COOLDOWN_MS = 10 * 60 * 1000;
@@ -6407,66 +6408,83 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
 
 // دالة لعرض مسؤوليات المستخدم
 async function showUserResponsibilities(message, targetUser, responsibilities, client) {
-    // عرض المسؤوليات التي يتولاها المستخدم، وكذلك المسؤوليات التي يشرف عليها.
     const { getSupervisedResponsibilities } = require('./utils/responsibilitySupervisors.js');
     const targetMember = await message.guild.members.fetch(targetUser.id).catch(() => null);
     const supervisedNames = new Set(
         getSupervisedResponsibilities(message.guild.id, targetMember || targetUser, responsibilities)
     );
-    const userResponsibilities = [];
+    const assignedResponsibilities = [];
 
     for (const [respName, respData] of Object.entries(responsibilities)) {
         const isResponsible = Array.isArray(respData.responsibles)
             && respData.responsibles.map(String).includes(String(targetUser.id));
-        const isSupervisor = supervisedNames.has(respName);
-        if (isResponsible || isSupervisor) {
+        if (isResponsible) {
             const otherResponsibles = (respData.responsibles || [])
                 .map(String)
                 .filter(id => id !== String(targetUser.id));
-            userResponsibilities.push({
+            assignedResponsibilities.push({
                 name: respName,
-                isResponsible,
-                isSupervisor,
                 otherResponsiblesCount: otherResponsibles.length
             });
         }
     }
 
-    if (userResponsibilities.length === 0) {
-        const noRespEmbed = colorManager.createEmbed()
-            .setDescription(`**${targetUser.username} ليس لديه أي مسؤوليات أو إشراف حالياً**`)
-            .setColor('#000000')
-            .setThumbnail('https://cdn.discordapp.com/attachments/1373799493111386243/1400390144795738175/download__2_-removebg-preview.png?ex=688d1f34&is=688bcdb4&hm=40da8d91a92062c95eb9d48f307697ec0010860aca64dd3f8c3c045f3c2aa13a&');
+    const assignedText = assignedResponsibilities.length
+        ? assignedResponsibilities.map((item, index) => [
+            `**${index + 1}. ${item.name}**`,
+            `> Other responsibles : ${item.otherResponsiblesCount}`
+        ].join('\n')).join('\n\n')
+        : 'No responsibilities assigned.';
+    const supervisedText = supervisedNames.size
+        ? [...supervisedNames].map((name, index) => `**${index + 1}. ${name}**`).join('\n')
+        : 'No supervised responsibilities.';
 
-        await message.channel.send({ embeds: [noRespEmbed] });
-    } else {
-        let responsibilitiesList = '';
-        userResponsibilities.forEach((resp, index) => {
-            const roles = [];
-            if (resp.isResponsible) roles.push('مسؤول');
-            if (resp.isSupervisor) roles.push('مشرف');
-            responsibilitiesList += `**${index + 1}.** ${resp.name}\n**الصفة :** ${roles.join(' و ')}\n${resp.otherResponsiblesCount} مسؤولون غيرك\n\n`;
-        });
+    const configuredServerColor = colorManager.getColor?.();
+    const accentHex = configuredServerColor || (
+        targetMember?.displayHexColor && targetMember.displayHexColor !== '#000000'
+            ? targetMember.displayHexColor
+            : (message.guild.members.me?.displayHexColor && message.guild.members.me.displayHexColor !== '#000000'
+                ? message.guild.members.me.displayHexColor
+                : '#5865F2')
+    );
+    const accentNumber = Number.parseInt(accentHex.replace('#', ''), 16);
+    const summaryImage = buildResponsibilitiesSummaryImage({
+        guildName: message.guild.name,
+        accentColor: accentHex,
+        responsibilityCount: assignedResponsibilities.length,
+        supervisorCount: supervisedNames.size
+    });
 
-        const supervisorFieldValue = [...supervisedNames]
-            .map(respName => `مشرف : ${respName}`)
-            .join('\n') || 'لا يوجد';
+    const container = new ContainerBuilder()
+        .setAccentColor(Number.isFinite(accentNumber) ? accentNumber : 0x5865f2)
+        .addSectionComponents(new SectionBuilder()
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent('## My Responsibilities'))
+            .setThumbnailAccessory(new ThumbnailBuilder()
+                .setURL(targetUser.displayAvatarURL({ extension: 'png', size: 128 }))
+                .setDescription(`صورة ${targetUser.username}`)))
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(
+            `**Member :** <@${targetUser.id}>\n**Total Responsibilities :** ${assignedResponsibilities.length}\n**Total Supervision :** ${supervisedNames.size}`
+        ))
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent('### Responsibilities'))
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(assignedText.slice(0, 3500)))
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent('### Supervision'))
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(supervisedText.slice(0, 2500)))
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(
+            new MediaGalleryItemBuilder()
+                .setURL(`attachment://${summaryImage.name}`)
+                .setDescription('Responsibilities and supervision summary')
+        ))
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# ${message.guild.name} • Responsibilities Summary`));
 
-        const respEmbed = colorManager.createEmbed()
-            .setTitle('مسؤولياتك')
-            .setDescription(`**مسؤولياتك هي:**\n\n${responsibilitiesList}`)
-            .setColor('#00ff00')
-            .setThumbnail(targetUser.displayAvatarURL({ dynamic: true }))
-            .addFields([
-                { name: 'Total Res', value: `${userResponsibilities.length}`, inline: true },
-                { name: 'User', value: `<@${targetUser.id}>`, inline: true },
-                { name: 'Your supervisor', value: supervisorFieldValue.slice(0, 1024), inline: false }
-            ])
-            .setFooter({ text: 'By Ahmed.' })
-            .setTimestamp();
-
-        await message.channel.send({ embeds: [respEmbed] });
-    }
+    await message.channel.send({
+        components: [container],
+        files: [summaryImage],
+        flags: MessageFlags.IsComponentsV2
+    });
 }
 // دالة لعرض إحصائيات المترقين مع التنقل
 // Handle single record deletion

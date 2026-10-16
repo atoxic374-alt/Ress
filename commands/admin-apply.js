@@ -4,6 +4,7 @@ const path = require('path');
 const moment = require('moment-timezone');
 const { collectUserStats, createUserStatsEmbed } = require('../utils/userStatsCollector');
 const colorManager = require('../utils/colorManager');
+const { createDecisionContainer, decisionPayload } = require('../utils/decisionContainer');
 
 const adminApplicationsPath = path.join(__dirname, '..', 'data', 'adminApplications.json');
 
@@ -576,19 +577,25 @@ async function handleAdminApplicationInteraction(interaction) {
 
             // تحديث الرسالة
             const cooldownEnd = new Date(Date.now() + (settings.settings.rejectCooldownHours * 60 * 60 * 1000));
-            const embed = EmbedBuilder.from(interaction.message.embeds[0])
-                .setColor('#ff0000')
-                .setTitle('❌ Rejected')
-                .setFields([]) // مسح الحقول القديمة
-                .addFields([
-                    { name: '**المسؤول**', value: `<@${interaction.user.id}>`, inline: true },
-                    { name: '**المرفوض**', value: `<@${candidateId}>`, inline: true },
-                    { name: '**سبب الرفض**', value: reason, inline: false },
-                    { name: '**الكولداون**', value: `${settings.settings.rejectCooldownHours} ساعة`, inline: true },
-                    { name: '**ينتهي في**', value: `<t:${Math.floor(cooldownEnd.getTime() / 1000)}:R>`, inline: true }
-                ]);
+            const rejectContainer = createDecisionContainer({
+                approved: false,
+                title: '❌ Admin Application Rejected',
+                targetUserId: candidateId,
+                actorId: interaction.user.id,
+                guild: interaction.guild,
+                details: [
+                    '',
+                    '### Application Details',
+                    `**Application ID :** \`${applicationId}\``,
+                    `**Requested by :** <@${application.requesterId}>`,
+                    `**Rejection Reason :** ${reason}`,
+                    `**Cooldown :** ${settings.settings.rejectCooldownHours} hours`,
+                    `**Cooldown Ends :** ${moment(cooldownEnd).tz('Asia/Riyadh').format('dddd, MMMM D, YYYY h:mm A')}`
+                ],
+                footer: 'Admin Application • Rejected'
+            });
 
-            await interaction.update({ embeds: [embed], components: [] });
+            await interaction.update(decisionPayload(rejectContainer));
 
             // إرسال رسالة خاصة للمرشح
             try {
@@ -906,33 +913,25 @@ async function handleAdminApplicationInteraction(interaction) {
             }
 
             // تحديث الرسالة الأصلية
-            const approvedEmbed = colorManager.createEmbed()
-                .setTitle('✅ Accepted')
-                .setDescription(`**By : <@${interaction.user.id}>\nNew Admin : <@${application.candidateId}> **`)
-                .addFields([
-                    { 
-                        name: '**Added role**', 
-                        value: addedRoles.length > 0 ? addedRoles.map(r => r.name).slice(0, 5).join(', ') : 'لا يوجد', 
-                        inline: false 
-                    },
-                    { 
-                        name: '**Date**', 
-                        value: moment().tz('Asia/Riyadh').format('YYYY-MM-DD HH:mm'), 
-                        inline: true 
-                    }
-                ])
-                .setTimestamp();
-
-            if (failedRoles.length > 0) {
-                approvedEmbed.addFields([
-                    { name: 'ملاحظات', value: `فشل في إضافة : ${failedRoles.join(', ')}`, inline: false }
-                ]);
-            }
-
-            await interaction.message.edit({
-                embeds: [approvedEmbed],
-                components: []
+            const approvedContainer = createDecisionContainer({
+                approved: true,
+                title: '✅ Admin Application Accepted',
+                targetMember: candidate,
+                targetUserId: application.candidateId,
+                actorId: interaction.user.id,
+                guild: interaction.guild,
+                details: [
+                    '',
+                    '### Application Details',
+                    `**Application ID :** \`${applicationId}\``,
+                    `**Requested by :** <@${application.requesterId}>`,
+                    `**Added Roles :** ${addedRoles.length > 0 ? addedRoles.map(r => r.name).slice(0, 10).join(' • ') : 'None'}`,
+                    failedRoles.length > 0 ? `**Failed Roles :** ${failedRoles.join(' • ')}` : null
+                ],
+                footer: 'Admin Application • Accepted'
             });
+
+            await interaction.message.edit(decisionPayload(approvedContainer));
 
             // إرسال إشعار للمرشح
             if (addedRoles.length > 0) {

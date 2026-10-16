@@ -4,6 +4,7 @@ const path = require('path');
 const ms = require('ms');
 const colorManager = require('../utils/colorManager.js');
 const vacationManager = require('../utils/vacationManager.js');
+const { createDecisionContainer, decisionPayload } = require('../utils/decisionContainer.js');
 
 const adminRolesPath = path.join(__dirname, '..', 'data', 'adminRoles.json');
 const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json'); // Added path for responsibilities.json
@@ -338,22 +339,24 @@ async function handleInteraction(interaction, context) {
                 });
             }
 
-            const successEmbed = new EmbedBuilder()
-                .setColor(colorManager.getColor('approved') || '#2ECC71')
-                .setTitle('✅ Accepted ')
-                .setAuthor({ name: member.user.tag, iconURL: member.user.displayAvatarURL({ size: 128 }) })
-                .setThumbnail(member.user.displayAvatarURL({ size: 128 }))
-                .addFields(
-                    { name: " الإداري", value: `${member}`, inline: true },
-                    { name: " المسؤول", value: `${approverMember}`, inline: true },
-                    { name: " تاريخ البدء", value: `<t:${Math.floor(new Date(pendingRequest.startDate).getTime() / 1000)}:f>`, inline: true },
-                    { name: " تاريخ الانتهاء", value: `<t:${Math.floor(new Date(pendingRequest.endDate).getTime() / 1000)}:f>`, inline: true },
-                    { name: " السبب", value: pendingRequest.reason || 'غير محدد', inline: false }
-                )
-                .setFooter({ text: '🟢' })
-                .setTimestamp();
+            const successContainer = createDecisionContainer({
+                approved: true,
+                title: '✅ Vacation Accepted',
+                targetMember: member,
+                targetUserId: userId,
+                actorId: interaction.user.id,
+                guild: interaction.guild,
+                details: [
+                    '',
+                    '### Vacation Details',
+                    `**Start Date :** ${new Date(pendingRequest.startDate).toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })}`,
+                    `**End Date :** ${new Date(pendingRequest.endDate).toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })}`,
+                    `**Reason :** ${pendingRequest.reason || 'Not specified'}`
+                ],
+                footer: 'Vacation System • Approved'
+            });
 
-            await interaction.editReply({ embeds: [successEmbed], components: [] });
+            await interaction.editReply(decisionPayload(successContainer));
 
             // DM user
             try {
@@ -432,22 +435,24 @@ async function handleInteraction(interaction, context) {
         delete vacationsData.pending[userId];
         vacationManager.saveVacations(vacationsData);
 
-        const rejectEmbed = new EmbedBuilder()
-            .setColor(colorManager.getColor('rejected') || '#E74C3C')
-            .setTitle('❌ Vacation Rejected')
-            .setAuthor({ name: member?.user.tag || 'User', iconURL: member?.user.displayAvatarURL({ size: 128 }) })
-            .setThumbnail(member?.user.displayAvatarURL({ size: 128 }) || null)
-            .addFields(
-                { name: " الإداري", value: `<@${userId}>`, inline: true },
-                { name: " المسؤول", value: `${approverMember}`, inline: true },
-                { name: " سبب الرفض", value: rejectReason, inline: false },
-                { name: " السبب الأصلي", value: pendingRequest.reason, inline: false },
-                { name: " الكولداون", value: `${rejectCooldownHours} ساعة`, inline: true }
-            )
-            .setFooter({ text: '🔴' })
-            .setTimestamp();
+        const rejectContainer = createDecisionContainer({
+            approved: false,
+            title: '❌ Vacation Rejected',
+            targetMember: member,
+            targetUserId: userId,
+            actorId: interaction.user.id,
+            guild: interaction.guild,
+            details: [
+                '',
+                '### Rejection Details',
+                `**Rejection Reason :** ${rejectReason}`,
+                `**Original Reason :** ${pendingRequest.reason || 'Not specified'}`,
+                `**Cooldown :** ${rejectCooldownHours} hours`
+            ],
+            footer: 'Vacation System • Rejected'
+        });
 
-        await interaction.editReply({ embeds: [rejectEmbed], components: [] });
+        await interaction.editReply(decisionPayload(rejectContainer));
 
         // DM user
         if (member) {

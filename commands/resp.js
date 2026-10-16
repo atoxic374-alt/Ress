@@ -1,5 +1,5 @@
 const { getBotConfigPath } = require('../utils/storagePaths');
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ComponentType, StringSelectMenuBuilder, ChannelSelectMenuBuilder, RoleSelectMenuBuilder, UserSelectMenuBuilder, AttachmentBuilder, ChannelType, ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, MediaGalleryBuilder, MediaGalleryItemBuilder, MessageFlags } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ComponentType, StringSelectMenuBuilder, ChannelSelectMenuBuilder, RoleSelectMenuBuilder, UserSelectMenuBuilder, AttachmentBuilder, ChannelType, ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, SectionBuilder, ThumbnailBuilder, MediaGalleryBuilder, MediaGalleryItemBuilder, MessageFlags } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
@@ -1588,6 +1588,65 @@ async function handleApplyRespModal(interaction, client) {
     }
 }
 
+function getApplicationFieldValue(message, fieldName) {
+    const field = message?.embeds?.[0]?.fields?.find(item => item.name === fieldName);
+    return field?.value || null;
+}
+
+function createResponsibilityDecisionContainer({ approved, targetMember, userId, respName, actorId, guild, reason = null, applicationReason = null }) {
+    const title = approved ? '✅ Accepted' : '❌ Rejected';
+    const accentColor = approved ? 0x57f287 : 0xed4245;
+    const targetAvatar = targetMember?.user?.displayAvatarURL({ extension: 'png', size: 128 })
+        || guild.iconURL({ extension: 'png', size: 128 })
+        || 'https://cdn.discordapp.com/embed/avatars/0.png';
+    const now = new Date();
+    const riyadhTime = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Riyadh',
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+    }).format(now);
+    const currentResponsibilityCount = Object.values(getCurrentResponsibilities()).filter(item =>
+        Array.isArray(item?.responsibles) && item.responsibles.includes(userId)
+    ).length;
+    const details = [
+        `**Status :** ${approved ? 'Accepted successfully' : 'Rejected'}`,
+        `**New Responsible :** <@${userId}>`,
+        `**Responsibility :** ${respName.startsWith('ال') ? respName : `ال${respName}`}`,
+        `**${approved ? 'Approved by' : 'Rejected by'} :** <@${actorId}>`,
+        `**Current Responsibilities :** ${currentResponsibilityCount}`,
+        applicationReason ? `**Application Reason / Experience :** ${String(applicationReason).slice(0, 700)}` : null,
+        !approved && reason ? `**Rejection Reason :** ${String(reason).slice(0, 700)}` : null,
+        `**Time (Asia/Riyadh) :** ${riyadhTime}`
+    ].filter(Boolean).join('\n');
+
+    const section = new SectionBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${title}`))
+        .setThumbnailAccessory(new ThumbnailBuilder()
+            .setURL(targetAvatar)
+            .setDescription(`صورة ${targetMember?.displayName || 'المتقدم'}`));
+
+    return new ContainerBuilder()
+        .setAccentColor(accentColor)
+        .addSectionComponents(section)
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(details))
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# R Sys • ${guild.name} • ${approved ? 'Responsibility Accepted' : 'Responsibility Rejected'}`));
+}
+
+function responsibilityDecisionPayload(container) {
+    return {
+        components: [container],
+        flags: MessageFlags.IsComponentsV2
+    };
+}
+
 // دالة للتعامل مع أزرار القبول والرفض
 async function handleApplyAction(interaction, client) {
     try {
@@ -1652,18 +1711,17 @@ async function handleApplyAction(interaction, client) {
                     global.client.emit('responsibilityUpdate');
                 }
                 
-                const approvalEmbed = colorManager.createEmbed()
-                    .setTitle('✅ Accepted')
-                           .setDescription(`**المسؤول الجديد : <@${userId}>\nعلى مسؤولية : ال${respName}\n من مسؤول المسؤوليات : <@${interaction.user.id}>**`)
-                    .setThumbnail(targetMember?.user.displayAvatarURL({ size: 128 }) || null)
-                    .setTimestamp();
-
-                await interaction.editReply({ 
-                    content: '**R Sys;**',
-                    embeds: [approvalEmbed],
-                    files: [],
-                    components: [] 
+                const approvalContainer = createResponsibilityDecisionContainer({
+                    approved: true,
+                    targetMember,
+                    userId,
+                    respName,
+                    actorId: interaction.user.id,
+                    guild: interaction.guild,
+                    applicationReason: getApplicationFieldValue(interaction.message, 'السبب/الخبرة')
                 });
+
+                await interaction.editReply(responsibilityDecisionPayload(approvalContainer));
 
                 // تحديث رسالة المسؤوليات (resp setup) بجميع الأحوال
                 try {
@@ -1738,31 +1796,32 @@ async function handleRejectReasonModal(interaction, client) {
             setRejectedApplyCooldown(interaction.guild.id, userId, respName, rejectCooldownMs);
         }
         
-        const rejectResponseEmbed = colorManager.createEmbed()
-            .setTitle('❌ Rejected')
-            .setDescription(`**الإداري المقدم : <@${userId}>\n المسؤوليه :  ال${respName}\n من مسؤول المسؤوليات : <@${interaction.user.id}>\nالسبب : ${reason}**`)
-            .setThumbnail(targetMember?.user.displayAvatarURL({ size: 128 }) || null)
-            .setTimestamp();
-
-        await interaction.editReply({ 
-            content: '**R Sys;**',
-            embeds: [rejectResponseEmbed],
-            files: []
+        const rejectContainer = createResponsibilityDecisionContainer({
+            approved: false,
+            targetMember,
+            userId,
+            respName,
+            actorId: interaction.user.id,
+            guild: interaction.guild,
+            reason,
+            applicationReason: getApplicationFieldValue(interaction.message, 'السبب/الخبرة')
         });
+
+        await interaction.editReply(responsibilityDecisionPayload(rejectContainer));
         // محاولة تعديل الرسالة الأصلية في قناة الطلبات
         if (interaction.message) {
-            const rejectPublicEmbed = colorManager.createEmbed()
-                .setTitle('❌ Rejected')
-                .setDescription(`**الإداري المقدم : <@${userId}>\n المسؤوليه :  ال${respName}\n من مسؤول المسؤوليات : <@${interaction.user.id}>\nالسبب : ${reason}**`)
-                .setThumbnail(targetMember?.user.displayAvatarURL({ size: 128 }) || null)
-                .setTimestamp();
+            const rejectPublicContainer = createResponsibilityDecisionContainer({
+                approved: false,
+                targetMember,
+                userId,
+                respName,
+                actorId: interaction.user.id,
+                guild: interaction.guild,
+                reason,
+                applicationReason: getApplicationFieldValue(interaction.message, 'السبب/الخبرة')
+            });
 
-            await interaction.message.edit({ 
-                content: '',
-                embeds: [rejectPublicEmbed],
-                files: [],
-                components: [] 
-            }).catch(() => {});
+            await interaction.message.edit(responsibilityDecisionPayload(rejectPublicContainer)).catch(() => {});
         }
     } catch (error) {
         console.error('Error in handleRejectReasonModal:', error);

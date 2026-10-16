@@ -12,6 +12,7 @@ const path = require('path');
 const ms = require('ms');
 const colorManager = require('../utils/colorManager.js');
 const vacationManager = require('../utils/vacationManager.js');
+const { createDecisionContainer, decisionPayload } = require('../utils/decisionContainer.js');
 
 const adminRolesPath = path.join(__dirname, '..', 'data', 'adminRoles.json');
 
@@ -526,20 +527,23 @@ async function handleInteraction(interaction, context) {
                     }
                     vacationManager.saveVacations(currentVacations);
 
-                    const successEmbed = new EmbedBuilder()
-                        .setTitle('✅Accepted')
-                        .setColor(colorManager.getColor('approved') || '#2ECC71')
-                        .setDescription(`**تمت الموافقة على طلب إنهاء إجازة <@${userId}> مبكراً بنجاح.**`)
-                        .setThumbnail(requestedUser?.displayAvatarURL({ size: 128 }) || null)
-                        .addFields([
-                            { name: 'الإداري', value: `<@${userId}>`, inline: true },
-                            { name: 'المسؤول', value: `<@${interaction.user.id}>`, inline: true },
-                            { name: 'تاريخ الإنهاء', value: `<t:${Math.floor(Date.now() / 1000)}:f>`, inline: true }
-                        ])
-                        .setFooter({ text: 'Space' })
-                        .setTimestamp();
+                    const successContainer = createDecisionContainer({
+                        approved: true,
+                        title: '✅ Vacation Ended',
+                        targetUserId: userId,
+                        actorId: interaction.user.id,
+                        guild: interaction.guild,
+                        details: [
+                            '',
+                            '### Termination Details',
+                            '**Action :** Early vacation termination approved',
+                            `**End Date :** ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })}`,
+                            `**Reason :** ${terminationRequest.reason || 'Not specified'}`
+                        ],
+                        footer: 'Vacation System • Early Termination Approved'
+                    });
 
-                    await interaction.editReply({ embeds: [successEmbed] });
+                    await interaction.editReply(decisionPayload(successContainer));
                   
         
                     if (interaction.message) {
@@ -582,22 +586,24 @@ async function handleInteraction(interaction, context) {
         
         vacationManager.saveVacations(vacations);
 
-        const rejectEmbed = new EmbedBuilder()
-            .setColor(colorManager.getColor('rejected') || '#E74C3C')
-            .setTitle('❌ Request Rejected (Early Termination)')
-            .setDescription(`**تم رفض طلب إنهاء إجازه مبكراً.**`)
-            .setThumbnail(interaction.user.displayAvatarURL({ size: 128 }))
-            .addFields([
-                { name: 'الإداري', value: `<@${userId}>`, inline: true },
-                { name: 'المسؤول', value: `<@${interaction.user.id}>`, inline: true },
-                { name: 'سبب الرفض', value: reason, inline: false },
-                { name: 'الكولداون', value: `${rejectCooldownHours}h`, inline: true }
-            ])
-            .setFooter({ text: 'Space' })
-            .setTimestamp();
+        const rejectContainer = createDecisionContainer({
+            approved: false,
+            title: '❌ Early Termination Rejected',
+            targetUserId: userId,
+            actorId: interaction.user.id,
+            guild: interaction.guild,
+            details: [
+                '',
+                '### Termination Details',
+                '**Action :** Early vacation termination rejected',
+                `**Rejection Reason :** ${reason}`,
+                `**Cooldown :** ${rejectCooldownHours} hours`
+            ],
+            footer: 'Vacation System • Early Termination Rejected'
+        });
 
         // رد مخفي للمعتمد
-        await interaction.reply({ embeds: [rejectEmbed], ephemeral: true });
+        await interaction.reply({ ...decisionPayload(rejectContainer), flags: decisionPayload(rejectContainer).flags | 64 });
 
         // تنبيه المستخدم في الخاص
         const user = await client.users.fetch(userId).catch(() => null);
