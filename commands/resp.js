@@ -1,5 +1,5 @@
 const { getBotConfigPath } = require('../utils/storagePaths');
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ComponentType, StringSelectMenuBuilder, ChannelSelectMenuBuilder, RoleSelectMenuBuilder, UserSelectMenuBuilder, AttachmentBuilder, ChannelType } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ComponentType, StringSelectMenuBuilder, ChannelSelectMenuBuilder, RoleSelectMenuBuilder, UserSelectMenuBuilder, AttachmentBuilder, ChannelType, ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, MediaGalleryBuilder, MediaGalleryItemBuilder, MessageFlags } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
@@ -689,6 +689,62 @@ function splitText(text, maxLength = 2000) {
 
 }
 
+function splitComponentText(text, maxLength = 3500) {
+    const chunks = [];
+    let current = '';
+    for (const line of String(text || '').split('\n')) {
+        let remaining = line;
+        while (remaining.length > maxLength) {
+            const available = maxLength - current.length - (current ? 1 : 0);
+            if (available > 0) {
+                current += `${current ? '\n' : ''}${remaining.slice(0, available)}`;
+                remaining = remaining.slice(available);
+            }
+            chunks.push(current);
+            current = '';
+        }
+        const candidate = `${current}${current ? '\n' : ''}${remaining}`;
+        if (candidate.length > maxLength && current) {
+            chunks.push(current);
+            current = remaining;
+        } else {
+            current = candidate;
+        }
+    }
+    if (current.trim()) chunks.push(current);
+    return chunks.length ? chunks : ['لا توجد مسؤوليات محددة حالياً'];
+}
+
+function createResponsibilitiesContainerComponents(responsibilities, guildId = null, imageAttachment = null) {
+    const text = createResponsibilitiesText(responsibilities, guildId)
+        .replace(/^\*\*Responsibilities\*\*\s*/, '')
+        .trim();
+    const chunks = splitComponentText(text);
+    const colorText = String(colorManager.getColor?.() || '#0099ff').replace(/^#/, '').replace(/^0x/i, '');
+    const accentColor = Number.parseInt(colorText, 16);
+    const containers = chunks.slice(0, 38).map((chunk, index) => {
+        const container = new ContainerBuilder()
+            .setAccentColor(Number.isFinite(accentColor) ? accentColor : 0x0099ff)
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent(index === 0 ? '## Responsibilities' : '## Responsibilities — Continued'))
+            .addSeparatorComponents(new SeparatorBuilder())
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent(chunk));
+        if (index === 0 && imageAttachment) {
+            container.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(
+                new MediaGalleryItemBuilder()
+                    .setURL(`attachment://${imageAttachment.name}`)
+                    .setDescription('Responsibilities')
+            ));
+        }
+        return container;
+    });
+    if (chunks.length > 38) {
+        containers[containers.length - 1]
+            .addSeparatorComponents(new SeparatorBuilder())
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent('-# The responsibility list is too long to display in full.'));
+    }
+    return containers;
+}
+
 // دالة لإنشاء الأزرار والمنيو
 function createSuggestionComponents() {
     const currentResps = getCurrentResponsibilities();
@@ -791,6 +847,15 @@ async function updateEmbedMessage(client, targetGuildId = null) {
                         embeds: [],
                         components: components,
                         files: imageFiles
+                    };
+                } else if (format === 'container') {
+                    const containers = createResponsibilitiesContainerComponents(responsibilities, guildId, imageAttachment);
+                    editOptions = {
+                        content: null,
+                        embeds: [],
+                        components: [...containers, ...components],
+                        files: imageFiles,
+                        flags: MessageFlags.IsComponentsV2
                     };
                 } else {
                     const embedForGuild = createResponsibilitiesEmbed(responsibilities, guildId);
@@ -2038,7 +2103,8 @@ module.exports = {
                         components: [
                             new ActionRowBuilder().addComponents(
                                 new ButtonBuilder().setCustomId(`resp_setup_fmt_embed_${message.id}`).setLabel('Embed').setStyle(ButtonStyle.Secondary),
-                                new ButtonBuilder().setCustomId(`resp_setup_fmt_text_${message.id}`).setLabel('Text').setStyle(ButtonStyle.Secondary)
+                                new ButtonBuilder().setCustomId(`resp_setup_fmt_text_${message.id}`).setLabel('Text').setStyle(ButtonStyle.Secondary),
+                                new ButtonBuilder().setCustomId(`resp_setup_fmt_container_${message.id}`).setLabel('Container V2').setStyle(ButtonStyle.Primary)
                             )
                         ]
                     });
@@ -2046,13 +2112,15 @@ module.exports = {
                     const fmtPick = await roomMsg.awaitMessageComponent({
                         filter: (i) => i.user.id === message.author.id && [
                             `resp_setup_fmt_embed_${message.id}`,
-                            `resp_setup_fmt_text_${message.id}`
+                            `resp_setup_fmt_text_${message.id}`,
+                            `resp_setup_fmt_container_${message.id}`
                         ].includes(i.customId),
                         time: 120000
                     }).catch(() => null);
                     if (!fmtPick) return;
 
-                    const format = fmtPick.customId.includes('_embed_') ? 'embed' : 'text';
+                    const format = fmtPick.customId.includes('_container_') ? 'container'
+                        : fmtPick.customId.includes('_embed_') ? 'embed' : 'text';
                     setGuildConfig(guildId, { messageFormat: format });
                     await sendResponsibilitiesMessage(embedChannel, client, format);
                     appendRespAuditLog(guildId, message.author.id, 'resp.setup', {
@@ -2701,7 +2769,9 @@ module.exports = {
     handleSuggestionButton,
     handleSuggestionModal,
     handleResponsibilitySelect,
-    isRespManager
+    isRespManager,
+    createResponsibilitiesContainerComponents,
+    splitComponentText
 };
 
 // دوال إدارة الإعدادات لكل سيرفر
@@ -2713,7 +2783,7 @@ function getGuildConfig(guildId) {
             suggestionsChannel: null,
             embedChannel: null,
             embedData: null,
-            messageFormat: 'embed' // 'embed' or 'text'
+            messageFormat: 'embed' // 'embed', 'text', or 'container'
         };
     }
     return config;
@@ -2798,83 +2868,52 @@ async function sendResponsibilitiesEmbed(channel, client) {
     }
 }
 
-// دالة لإرسال رسالة المسؤوليات (إيمبد أو نص)
+// دالة لإرسال رسالة المسؤوليات (Embed أو Text أو Container V2)
 async function sendResponsibilitiesMessage(channel, client, format = 'embed') {
     try {
         const responsibilities = readJSONFile(DATA_FILES.responsibilities, {});
+        const guildId = channel.guild.id;
         const components = createSuggestionComponents();
         let message;
-        
-if (format === 'text') {
 
-    const textContent = createResponsibilitiesText(responsibilities, channel.guild.id);
-
-    const parts = splitText(textContent);
-
-    for (let i = 0; i < parts.length; i++) {
-
-        const sentMessage = await channel.send({
-
-            content: parts[i],
-
-            components: i === parts.length - 1 ? components : []
-
-        });
-
-        // حفظ آخر رسالة فقط (عشان التحديث لاحقًا)
-
-        if (i === parts.length - 1) {
-
-            const guildId = channel.guild.id;
-
-            embedMessages.set(guildId, {
-
-                messageId: sentMessage.id,
-
-                channelId: channel.id,
-
-                message: sentMessage,
-
-                format: 'text'
-
-            });
-
-            updateStoredEmbedData();
-
-        }
-
-    }
-
-    console.log('تم إرسال رسالة المسؤوليات بنجاح (text - multi messages)');
-
-    return;
-
-}
-
-
-            else {
-            const embed = createResponsibilitiesEmbed(responsibilities, channel.guild.id);
+        if (format === 'text') {
+            const parts = splitText(createResponsibilitiesText(responsibilities, guildId));
+            for (let i = 0; i < parts.length; i++) {
+                const sentMessage = await channel.send({
+                    content: parts[i],
+                    components: i === parts.length - 1 ? components : []
+                });
+                if (i === parts.length - 1) {
+                    message = sentMessage;
+                }
+            }
+        } else if (format === 'container') {
+            const config = readJSONFile(DATA_FILES.respConfig, { guilds: {} });
+            const imageUrl = config.guilds?.[guildId]?.globalImageUrl;
+            const imageAttachment = imageUrl ? await createImageAttachment(imageUrl) : null;
+            const containers = createResponsibilitiesContainerComponents(responsibilities, guildId, imageAttachment);
             message = await channel.send({
-                embeds: [embed],
-                components: components
+                components: [...containers, ...components],
+                files: imageAttachment ? [imageAttachment] : [],
+                flags: MessageFlags.IsComponentsV2
             });
+        } else {
+            const embed = createResponsibilitiesEmbed(responsibilities, guildId);
+            message = await channel.send({ embeds: [embed], components });
+            format = 'embed';
         }
-        
-        // حفظ مرجع للرسالة
-        const guildId = channel.guild.id;
+
         embedMessages.set(guildId, {
             messageId: message.id,
             channelId: channel.id,
-            message: message,
-            format: format
+            message,
+            format
         });
-        
-        // حفظ البيانات في الكونفيغ
-        updateStoredEmbedData();
-        
+        updateStoredEmbedData(guildId);
         console.log(`تم إرسال رسالة المسؤوليات بنجاح (${format})`);
-        
+        return message;
     } catch (error) {
         console.error('خطأ في إرسال رسالة المسؤوليات:', error);
+        return null;
     }
 }
