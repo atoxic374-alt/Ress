@@ -920,73 +920,78 @@ class DownManager {
 
     createLogEmbed(type, data) {
         const embed = colorManager.createEmbed()
-            .setTimestamp();
+            .setColor(colorManager.getColor() || '#5865F2')
+            .setTimestamp(new Date(Number(data.timestamp) || Date.now()));
+        const targetUser = data.targetUser && typeof data.targetUser === 'object' ? data.targetUser : null;
+        const targetId = targetUser?.id || data.targetUserId || null;
+        const targetMention = targetId ? `<@${targetId}>` : 'غير معروف';
+        const roleText = data.role?.id ? `<@&${data.role.id}>` : String(data.role || 'غير محدد');
+        const actor = data.byUser || data.modifiedBy || null;
+        const actorId = actor?.id || data.byUserId || data.modifiedById || null;
+        const actorMention = actorId ? `<@${actorId}>` : 'غير معروف';
+        const shortText = (value, max = 900) => String(value || 'غير محدد').slice(0, max);
 
-        // إضافة أفتار البوت إذا كان متاحاً
-        if (this.client && this.client.user) {
-            embed.setThumbnail(this.client.user.displayAvatarURL({ dynamic: true, size: 256 }));
+        if (targetUser && typeof targetUser.displayAvatarURL === 'function') {
+            embed.setThumbnail(targetUser.displayAvatarURL({ dynamic: true, size: 256 }));
         }
 
         switch (type) {
             case 'DOWN_APPLIED':
-                embed.setTitle('Down Applied')
-                    .setDescription(`تم سحب رول من <@${data.targetUser.id}>`)
+                embed.setTitle('تم تطبيق الداون')
+                    .setDescription(`تم سحب الرول من ${targetMention}.`)
                     .addFields([
-                        { name: 'العضو', value: `<@${data.targetUser.id}>`, inline: true },
-                        { name: 'الرول', value: `${data.role}`, inline: true },
-                        { name: 'المدة', value: data.duration, inline: true },
-                        { name: 'السبب', value: data.reason, inline: false },
-                        { name: 'بواسطة', value: `<@${data.byUser.id}>`, inline: true },
-                        { name: 'التاريخ', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
+                        { name: '👤 العضو', value: targetMention, inline: true },
+                        { name: '🎭 الرول', value: shortText(roleText, 100), inline: true },
+                        { name: '⏱️ المدة', value: shortText(data.duration, 100), inline: true },
+                        { name: '📝 السبب', value: shortText(data.reason), inline: false },
+                        { name: '🛠️ المنفذ', value: actorMention, inline: true }
                     ])
-                    .setFooter({ text: 'Down Log • Action Applied' });
+                    .setFooter({ text: 'سجل الداون • تطبيق' });
 
-                this.withEmbedIdentity(embed, data.byUser, 'Moderator');
+                this.withEmbedIdentity(embed, actor, 'تطبيق الداون');
                 break;
 
             case 'DOWN_ENDED':
-                embed.setTitle('Down Ended')
+                embed.setTitle('تم إنهاء الداون')
+                    .setDescription(`انتهى الداون عن ${targetMention}.`)
                     .addFields([
-                        { name: 'العضو', value: `${data.targetUser}`, inline: true },
-                        { name: 'الرول', value: `${data.role}`, inline: true },
-                        { name: 'المدة الأصلية', value: data.duration, inline: true },
-                        { name: 'السبب الأصلي', value: data.originalReason, inline: false },
-                        { name: 'سبب الإنهاء', value: data.reason, inline: false },
-                        { name: 'الداون كان بواسطة', value: `${data.byUser}`, inline: true },
-                        { name: 'تاريخ الإنهاء', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
+                        { name: '👤 العضو', value: targetMention, inline: true },
+                        { name: '🎭 الرول', value: shortText(roleText, 100), inline: true },
+                        { name: '⏱️ المدة الأصلية', value: shortText(data.duration, 100), inline: true },
+                        { name: '📝 السبب الأصلي', value: shortText(data.originalReason), inline: false },
+                        { name: '✅ سبب الإنهاء', value: shortText(data.reason), inline: false },
+                        { name: '🛠️ المنفذ', value: actorMention, inline: true }
                     ])
-                    .setFooter({ text: 'Down Log • Action Ended' });
+                    .setFooter({ text: 'سجل الداون • إنهاء' });
 
-                this.withEmbedIdentity(embed, data.targetUser, 'Member');
+                this.withEmbedIdentity(embed, targetUser, 'إنهاء الداون');
                 break;
             case 'DOWN_VERBAL':
-                embed.setTitle('Verbal Down')
-                    .setDescription(`**تنبيه شفوي للعضو :** <@${data.targetUserId}>`)
+                embed.setTitle('تنبيه شفوي')
+                    .setDescription(`تم تسجيل تنبيه شفوي على ${targetMention}.`)
                     .addFields([
-                        { name: 'النوع', value: 'شفوي', inline: true },
-                        { name: 'السبب', value: data.reason, inline: false },
-                        { name: 'بواسطة', value: `<@${data.byUserId}>`, inline: true },
-                        { name: 'التاريخ', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
+                        { name: '👤 العضو', value: targetMention, inline: true },
+                        { name: '📝 السبب', value: shortText(data.reason), inline: false },
+                        { name: '🛠️ المنفذ', value: actorMention, inline: true }
                     ])
-                    .setFooter({ text: 'Down Log • Verbal Notice' });
+                    .setFooter({ text: 'سجل الداون • شفوي' });
 
-                this.withEmbedIdentity(embed, data.byUser, 'Moderator');
+                this.withEmbedIdentity(embed, actor, 'تنبيه شفوي');
                 break;
 
 
             case 'DOWN_MODIFIED':
-                embed.setTitle('Down Duration Updated')
+                embed.setTitle('تم تعديل مدة الداون')
                     .addFields([
-                        { name: 'العضو', value: `${data.targetUser}`, inline: true },
-                        { name: 'الرول', value: `${data.role}`, inline: true },
-                        { name: 'المدة القديمة', value: data.oldDuration, inline: true },
-                        { name: 'المدة الجديدة', value: data.newDuration, inline: true },
-                        { name: 'تم التعديل بواسطة', value: `${data.modifiedBy}`, inline: true },
-                        { name: 'وقت التعديل', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
+                        { name: '👤 العضو', value: targetMention, inline: true },
+                        { name: '🎭 الرول', value: shortText(roleText, 100), inline: true },
+                        { name: 'قبل', value: shortText(data.oldDuration, 100), inline: true },
+                        { name: 'بعد', value: shortText(data.newDuration, 100), inline: true },
+                        { name: '🛠️ المنفذ', value: actorMention, inline: true }
                     ])
-                    .setFooter({ text: 'Down Log • Duration Changed' });
+                    .setFooter({ text: 'سجل الداون • تعديل مدة' });
 
-                this.withEmbedIdentity(embed, data.modifiedBy, 'Moderator');
+                this.withEmbedIdentity(embed, actor, 'تعديل الداون');
                 break;
         }
 
@@ -1115,17 +1120,17 @@ class DownManager {
                     const logChannel = await guild.channels.fetch(settings.logChannel).catch(() => null);
                     if (logChannel) {
                         const embed = colorManager.createEmbed()
-                            .setTitle('Down Integrity Check Triggered')
-                            .setDescription('تم اكتشاف أن العضو استرجع رولاً وهو ما زال تحت داون نشط، وتمت إزالته تلقائياً بواسطة فحص التكامل الدوري.')
+                            .setTitle('حماية الداون')
+                            .setDescription('أُعيد أحد الرولات أثناء الداون، فسحبه النظام تلقائيًا.')
                             .addFields([
-                                { name: ' العضو', value: `<@${member.id}>`, inline: true },
-                                { name: ' الرولات المحمية', value: rolesToRemove.map(role => `<@&${role.id}>`).join(' , ').slice(0, 1024), inline: true },
-                                { name: ' نوع الفحص', value: 'دوري كل دقيقتين', inline: true },
-                                { name: ' سبب الداون', value: down.reason || 'غير محدد', inline: false },
-                                { name: ' ينتهي الداون', value: down.endTime ? `<t:${Math.floor(down.endTime / 1000)}:R>` : 'نهائي', inline: true }
+                                { name: '👤 العضو', value: `<@${member.id}>`, inline: true },
+                                { name: '🎭 الرولات', value: rolesToRemove.map(role => `<@&${role.id}>`).join('، ').slice(0, 900), inline: true },
+                                { name: '⏱️ ينتهي', value: down.endTime ? `<t:${Math.floor(down.endTime / 1000)}:R>` : 'نهائي', inline: true }
                             ])
+                            .setFooter({ text: 'سجل الداون • حماية الرولات' })
                             .setTimestamp();
 
+                        embed.setThumbnail(member.displayAvatarURL({ dynamic: true, size: 256 }));
                         await logChannel.send({ embeds: [embed] }).catch(() => null);
                     }
                 }
@@ -1191,23 +1196,25 @@ class DownManager {
             if (settings.logChannel && this.client) {
                 const logChannel = await this.client.channels.fetch(settings.logChannel).catch(() => null);
                 if (logChannel) {
+                    const moderatorId = expiredDown.byUserId || expiredDown.moderatorId;
                     const logEmbed = colorManager.createEmbed()
-                        .setTitle ('Down Ended')
+                        .setColor(colorManager.getColor() || '#5865F2')
+                        .setTitle('انتهاء الداون')
                         .setDescription(completion.deferred
-                            ? 'انتهت مدة هذا الداون، وتبقى الرتب والمسؤوليات معلقة لوجود داون آخر.'
-                            : 'انتهت مدة الداون وتمت استعادة الرتب والمسؤوليات المحفوظة تلقائيًا.')
+                            ? 'انتهت المدة؛ بقيت الرولات والمسؤوليات معلقة لوجود داون آخر.'
+                            : 'انتهت المدة واستُعيدت الرولات والمسؤوليات المحفوظة.')
                         .addFields([
-                            { name: 'العضو', value: `<@${member.id}>`, inline: true },
-                            { name: 'الرول المُعاد', value: role ? `<@&${role.id}>` : 'تمت محاولة استعادة الرولات المحفوظة', inline: true },
-                            { name: completion.deferred ? 'وقت انتهاء هذا الداون' : 'وقت الإعادة', value: `<t:${this.formatTimestamp(Date.now()).unix}:f>`, inline: true },
-                            { name: 'السبب الأصلي', value: expiredDown.reason || 'غير محدد', inline: false },
-                            { name: ' كان الداون بواسطة', value: `<@${expiredDown.byUserId || expiredDown.moderatorId || 'غير معروف'}>`, inline: true },
-                            { name: 'Status', value: completion.deferred ? 'Restoration deferred' : 'Restored', inline: true }
+                            { name: '👤 العضو', value: `<@${member.id}>`, inline: true },
+                            { name: '🎭 الرول', value: role ? `<@&${role.id}>` : 'الرولات المحفوظة', inline: true },
+                            { name: '🛠️ بواسطة', value: moderatorId ? `<@${moderatorId}>` : 'غير معروف', inline: true },
+                            { name: '📝 السبب', value: String(expiredDown.reason || 'غير محدد').slice(0, 900), inline: false },
+                            { name: '⏱️ الوقت', value: `<t:${this.formatTimestamp(Date.now()).unix}:R>`, inline: true }
                         ])
-                        .setFooter({ text: 'Down Log • Auto Restore' })
+                        .setFooter({ text: 'سجل الداون • استعادة تلقائية' })
                         .setTimestamp();
 
-                    this.withEmbedIdentity(logEmbed, member.user, 'Member');
+                    this.withEmbedIdentity(logEmbed, member.user, 'انتهاء الداون');
+                    logEmbed.setThumbnail(member.displayAvatarURL({ dynamic: true, size: 256 }));
 
                     await logChannel.send({ embeds: [logEmbed] });
                 }
@@ -1681,17 +1688,18 @@ class DownManager {
                         const logChannel = await member.guild.channels.fetch(settings.logChannel);
                         if (logChannel) {
                             const embed = colorManager.createEmbed()
-                                .setTitle('Member Left with Active Downs')
-                                .setDescription('خرج عضو عليه داون من السيرفر، وتم حفظ بيانات الداون تلقائياً لضمان استمرار الحماية عند العودة.')
+                                .setTitle('مغادرة عضو عليه داون')
+                                .setDescription('حُفظت بيانات الداون لاستكمال الحماية والاستعادة عند عودة العضو.')
                                 .addFields([
-                                    { name: ' العضو', value: `<@${member.id}>`, inline: true },
-                                    { name: ' وقت الانسحاب', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
-                                    { name: ' عدد الداونات', value: mergedDowns.length.toString(), inline: true }
+                                    { name: '👤 العضو', value: `<@${member.id}>`, inline: true },
+                                    { name: '📌 عدد الداونات', value: mergedDowns.length.toString(), inline: true },
+                                    { name: '🕒 الوقت', value: `<t:${Math.floor(Date.now() / 1000)}:R>`, inline: true }
                                 ])
-                                .setFooter({ text: 'Down Log • Member Leave' })
+                                .setFooter({ text: 'سجل الداون • مغادرة' })
                                 .setTimestamp();
 
-                            this.withEmbedIdentity(embed, member.user, 'Member');
+                            this.withEmbedIdentity(embed, member.user, 'مغادرة عضو');
+                            embed.setThumbnail(member.displayAvatarURL({ dynamic: true, size: 256 }));
 
                             // إضافة تفاصيل الداونات
                             let downsList = '';
@@ -1707,7 +1715,7 @@ class DownManager {
                                 downsList += `• **+${mergedDowns.length - 5} داون إضافي**\n`;
                             }
 
-                            embed.addFields([{ name: '📋 الداونات المحفوظة', value: downsList || 'لا توجد', inline: false }]);
+                            embed.addFields([{ name: '📋 ملخص الرولات', value: (downsList || 'لا توجد').slice(0, 900), inline: false }]);
 
                             await logChannel.send({ embeds: [embed] });
                         }
@@ -1838,18 +1846,18 @@ class DownManager {
                         const logChannel = await member.guild.channels.fetch(settings.logChannel);
                         if (logChannel) {
                             const embed = colorManager.createEmbed()
-                                .setTitle('Member Rejoined - Down Reapplied')
-                                .setDescription('عاد العضو إلى السيرفر وتمت إعادة تطبيق الداونات النشطة عليه تلقائياً مع استمرار نظام الحماية.')
+                                .setTitle('عودة عضو عليه داون')
+                                .setDescription('تم تحديث حالة الداون واستكمال الحماية والاستعادة حسب الداونات المتبقية.')
                                 .addFields([
-                                    { name: ' العضو', value: `<@${member.id}>`, inline: true },
-                                    { name: ' وقت العودة', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
-                                    { name: ' تم إعادة تطبيقها', value: restoredDowns.toString(), inline: true },
-                                    { name: ' داونات منتهية تمت معالجتها', value: expiredDownsProcessed.toString(), inline: true }
+                                    { name: '👤 العضو', value: `<@${member.id}>`, inline: true },
+                                    { name: '⏱️ أُعيد تطبيقها', value: restoredDowns.toString(), inline: true },
+                                    { name: '✅ منتهية عولجت', value: expiredDownsProcessed.toString(), inline: true }
                                 ])
-                                .setFooter({ text: 'Down Log • Member Rejoin' })
+                                .setFooter({ text: 'سجل الداون • عودة' })
                                 .setTimestamp();
 
-                            this.withEmbedIdentity(embed, member.user, 'Member');
+                            this.withEmbedIdentity(embed, member.user, 'عودة عضو');
+                            embed.setThumbnail(member.displayAvatarURL({ dynamic: true, size: 256 }));
 
                             if (failedDowns.length > 0) {
                                 embed.addFields([{ 
