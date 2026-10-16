@@ -719,27 +719,67 @@ function createResponsibilitiesContainerComponents(responsibilities, guildId = n
     const text = createResponsibilitiesText(responsibilities, guildId)
         .replace(/^\*\*Responsibilities\*\*\s*/, '')
         .trim();
-    const chunks = splitComponentText(text);
+    const categoryHeadings = [...text.matchAll(/\*\*# ([\s\S]*?)\*\*/g)];
+    const sections = categoryHeadings.length
+        ? categoryHeadings.map((heading, index) => {
+            const bodyStart = heading.index + heading[0].length;
+            const bodyEnd = categoryHeadings[index + 1]?.index ?? text.length;
+            const title = heading[1].replace(/\s+Category$/, '').trim();
+            return {
+                title: title === 'No categories' ? 'Uncategorized' : title,
+                body: text.slice(bodyStart, bodyEnd).trim() || 'No responsibilities in this category.'
+            };
+        })
+        : [{ title: 'Responsibilities', body: text || 'لا توجد مسؤوليات محددة حالياً' }];
     const colorText = String(colorManager.getColor?.() || '#0099ff').replace(/^#/, '').replace(/^0x/i, '');
     const accentColor = Number.parseInt(colorText, 16);
-    const containers = chunks.slice(0, 38).map((chunk, index) => {
-        const container = new ContainerBuilder()
-            .setAccentColor(Number.isFinite(accentColor) ? accentColor : 0x0099ff)
-            .addTextDisplayComponents(new TextDisplayBuilder().setContent(index === 0 ? '## Responsibilities' : '## Responsibilities — Continued'))
-            .addSeparatorComponents(new SeparatorBuilder())
-            .addTextDisplayComponents(new TextDisplayBuilder().setContent(chunk));
-        if (index === 0 && imageAttachment) {
-            container.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(
-                new MediaGalleryItemBuilder()
-                    .setURL(`attachment://${imageAttachment.name}`)
-                    .setDescription('Responsibilities')
-            ));
+    const containers = [];
+    let truncated = false;
+    for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex++) {
+        const section = sections[sectionIndex];
+        const chunks = splitComponentText(section.body);
+        const maxChunksPerContainer = containers.length === 0 ? (imageAttachment ? 3 : 4) : 6;
+        for (let offset = 0; offset < chunks.length; offset += maxChunksPerContainer) {
+            if (containers.length >= 38) {
+                truncated = true;
+                break;
+            }
+            const firstContainer = containers.length === 0;
+            const container = new ContainerBuilder()
+                .setAccentColor(Number.isFinite(accentColor) ? accentColor : 0x0099ff);
+            if (firstContainer) {
+                container.addTextDisplayComponents(new TextDisplayBuilder().setContent('## Responsibilities'))
+                    .addSeparatorComponents(new SeparatorBuilder());
+            }
+            const isContinued = offset > 0;
+            container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+                `### ${section.title}${isContinued ? ' — Continued' : ''}`
+            )).addSeparatorComponents(new SeparatorBuilder());
+            const contentChunks = chunks.slice(offset, offset + maxChunksPerContainer);
+            container.addTextDisplayComponents(...contentChunks.map(chunk => new TextDisplayBuilder().setContent(chunk)));
+            if (offset + maxChunksPerContainer < chunks.length || section !== sections[sections.length - 1]) {
+                container.addSeparatorComponents(new SeparatorBuilder());
+            }
+            if (firstContainer && imageAttachment) {
+                container.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(
+                    new MediaGalleryItemBuilder()
+                        .setURL(`attachment://${imageAttachment.name}`)
+                        .setDescription('Responsibilities')
+                ));
+            }
+            containers.push(container);
         }
-        return container;
-    });
-    if (chunks.length > 38) {
-        containers[containers.length - 1]
+        if (truncated) break;
+    }
+    if (containers.length === 0) {
+        containers.push(new ContainerBuilder()
+            .setAccentColor(Number.isFinite(accentColor) ? accentColor : 0x0099ff)
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent('## Responsibilities'))
             .addSeparatorComponents(new SeparatorBuilder())
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent('لا توجد مسؤوليات محددة حالياً')));
+    }
+    if (truncated) {
+        containers[containers.length - 1]
             .addTextDisplayComponents(new TextDisplayBuilder().setContent('-# The responsibility list is too long to display in full.'));
     }
     return containers;
