@@ -515,32 +515,16 @@ async function handleInteraction(interaction, context) {
             return;
         }
 
-        const settings = promoteManager.getSettings();
-        if (interaction.message.id === settings.menuMessageId) {
-            if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(() => {});
-            await updatePermanentMenu(client, interaction.message);
-        } else {
-            // For other messages (like the one from /promote command)
-            try {
-                const currentEmbed = interaction.message.embeds[0];
-                if (currentEmbed) {
-                    const updatedEmbed = colorManager.createEmbed()
-                        .setTitle(currentEmbed.title)
-                        .setDescription(currentEmbed.description)
-                        .setThumbnail(currentEmbed.thumbnail?.url)
-                        .setFooter({ text: 'تم التحديث بعد التفاعل | By Ahmed' })
-                        .setTimestamp();
-
-                    if (currentEmbed.fields && currentEmbed.fields.length > 0) {
-                        updatedEmbed.addFields(currentEmbed.fields);
-                    }
-                    await interaction.editReply({ embeds: [updatedEmbed] }).catch(() => {});
-                }
-            } catch (e) {}
-        }
-
-        // Handle other promote interactions
+        // كل معالج فرعي مسؤول عن acknowledgement الخاص به (reply/update/showModal).
+        // لا تعمل deferUpdate هنا، لأن ذلك كان يسبق interaction.update/reply
+        // ويؤدي إلى InteractionAlreadyReplied ثم يظهر للمستخدم Interaction Failed.
         await handlePromoteInteractions(interaction, context);
+        if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({
+                content: '⚠️ هذا الخيار لم يعد متاحاً. أعد فتح منيو Promote من جديد.',
+                flags: MessageFlags.Ephemeral
+            }).catch(() => {});
+        }
 
     } catch (error) {
         console.error('خطأ في معالجة تفاعل promote:', error);

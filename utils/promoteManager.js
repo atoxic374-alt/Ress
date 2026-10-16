@@ -4,6 +4,7 @@ const path = require('path');
 // EmbedBuilder now handled by colorManager
 const colorManager = require('./colorManager');
 const ms = require('ms');
+const { promoteLogPayload } = require('./promoteLogContainer');
 
 // File paths
 const promoteSettingsPath = path.join(__dirname, '..', 'data', 'promoteSettings.json');
@@ -1211,10 +1212,9 @@ isBotPromotion(guildId, userId, roleId) {
         if (!settings.logChannel) return;
 
         try {
-            const channel = await guild.channels.fetch(settings.logChannel);
+            const channel = await client.channels.fetch(settings.logChannel).catch(() => null);
             if (!channel) return;
-
-            const embed = this.createLogEmbed(type, data);
+            const logPayload = promoteLogPayload(type, data, guild, client);
 
             // إضافة زر رؤية الأعضاء المترقين للترقيات الجماعية
             if (type === 'BULK_PROMOTION' && data.successfulMembers && data.successfulMembers.length > 0) {
@@ -1258,12 +1258,13 @@ isBotPromotion(guildId, userId, roleId) {
                 const buttonKey = `bulk_promotion_members_${Date.now()}_${data.moderatorId}`;
                 client.bulkPromotionMembers.set(buttonKey, membersData);
 
-                await channel.send({ embeds: [embed], components: [buttonRow] });
+                // Components V2 لا يقبل embeds/content مع الحاوية؛ نرسل السجل كـ Container.
+                await channel.send({ ...logPayload, components: [...logPayload.components, buttonRow] });
             } else {
-                await channel.send({ embeds: [embed] });
+                await channel.send(logPayload);
             }
         } catch (error) {
-            console.error('Error sending log message:', error);
+            console.error(`Error sending promote log (${type}):`, error);
         }
     }
 
