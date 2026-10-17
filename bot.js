@@ -3175,7 +3175,7 @@ client.on('messageCreate', async message => {
     const hasAdminRole = CURRENT_ADMIN_ROLES.length > 0 && member.roles.cache.some(role => CURRENT_ADMIN_ROLES.includes(role.id));
 
     // Commands for everyone (help, tops, تفاعلي, ستريكي, profile, myprofile, داوني)
-    if (commandName === 'رولي' || commandName === 'tops' || commandName === 'توب' || commandName === 'تفاعلي' || commandName === 'تواجدي' || commandName === 'انهاء' || commandName === 'user' || commandName === 'ستريكي' || commandName === 'profile' || commandName === 'id' || commandName === 'مشاكلي' || commandName === 'myprofile' || commandName === 'داوني' || commandName === 'داوناتي' || commandName === 'داونات') {
+    if (commandName === 'رولي' || commandName === 'tops' || commandName === 'توب' || commandName === 'تفاعلي' || commandName === 'تواجدي' || commandName === 'انهاء' || commandName === 'user' || commandName === 'ستريكي' || commandName === 'profile' || commandName === 'id' || commandName === 'مشاكلي' || commandName === 'myprofile' || commandName === 'داوني' || commandName === 'داوناتي' || commandName === 'داونات' || commandName === 'مسؤولياتي') {
       if (commandName === 'مسؤولياتي') {
         await showUserResponsibilities(message, message.author, responsibilities, client);
       } else {
@@ -6434,7 +6434,6 @@ async function showUserResponsibilities(message, targetUser, responsibilities, c
         message.guild,
         colorManager.getColor?.() || '#5865F2'
     );
-    const accentNumber = Number.parseInt(accentHex.replace('#', ''), 16);
     const summaryImage = buildResponsibilitiesSummaryImage({
         guildName: message.guild.name,
         memberName: targetMember?.displayName || targetUser.globalName || targetUser.username,
@@ -6442,12 +6441,7 @@ async function showUserResponsibilities(message, targetUser, responsibilities, c
         responsibilities: assignedResponsibilities,
         supervisors: [...supervisedNames].map(name => ({ name }))
     });
-    await message.channel.send({
-        files: [summaryImage],
-        embeds: [new EmbedBuilder()
-            .setColor(Number.isFinite(accentNumber) ? accentNumber : 0x5865f2)
-            .setImage(`attachment://${summaryImage.name}`)]
-    });
+    await message.channel.send({ files: [summaryImage] });
 }
 // دالة لعرض إحصائيات المترقين مع التنقل
 // Handle single record deletion
