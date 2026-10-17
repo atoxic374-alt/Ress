@@ -409,16 +409,43 @@ async function execute(message, args, { client }) {
     let currentPeriod = 'monthly';
     let currentPage = 0;
     const pageSize = 10;
+    const topNameCache = new Map();
+    let allMembersFetchPromise = null;
     async function getTopDisplayName(userId) {
         const normalizedId = String(userId);
+        if (topNameCache.has(normalizedId)) return topNameCache.get(normalizedId);
         const cachedMember = message.guild.members.cache.get(normalizedId);
-        if (cachedMember?.displayName) return cachedMember.displayName;
+        if (cachedMember?.displayName) {
+            topNameCache.set(normalizedId, cachedMember.displayName);
+            return cachedMember.displayName;
+        }
+        const fetchedMember = await message.guild.members.fetch({ user: normalizedId, force: true }).catch(() => null);
+        if (fetchedMember?.displayName) {
+            topNameCache.set(normalizedId, fetchedMember.displayName);
+            return fetchedMember.displayName;
+        }
         const cachedUser = client.users.cache.get(normalizedId);
-        if (cachedUser?.globalName || cachedUser?.username) return cachedUser.globalName || cachedUser.username;
-        const fetchedMember = await message.guild.members.fetch(normalizedId).catch(() => null);
-        if (fetchedMember?.displayName) return fetchedMember.displayName;
-        const fetchedUser = await client.users.fetch(normalizedId).catch(() => null);
-        return fetchedUser?.globalName || fetchedUser?.username || `User ${normalizedId}`;
+        if (cachedUser?.globalName || cachedUser?.username) {
+            const name = cachedUser.globalName || cachedUser.username;
+            topNameCache.set(normalizedId, name);
+            return name;
+        }
+        const fetchedUser = await client.users.fetch(normalizedId, { force: true }).catch(() => null);
+        if (fetchedUser?.globalName || fetchedUser?.username) {
+            const name = fetchedUser.globalName || fetchedUser.username;
+            topNameCache.set(normalizedId, name);
+            return name;
+        }
+        // محاولة أخيرة من قائمة أعضاء السيرفر لمعالجة حالات الكاش أو مشاكل الـ gateway.
+        if (!allMembersFetchPromise) allMembersFetchPromise = message.guild.members.fetch().catch(() => null);
+        const allMembers = await allMembersFetchPromise;
+        const recoveredMember = allMembers?.get(normalizedId);
+        const recoveredName = recoveredMember?.displayName || recoveredMember?.user?.globalName || recoveredMember?.user?.username;
+        if (recoveredName) {
+            topNameCache.set(normalizedId, recoveredName);
+            return recoveredName;
+        }
+        return 'Unknown Member';
     }
 
     function formatRankValue(category, value) {
@@ -492,8 +519,8 @@ async function execute(message, args, { client }) {
     }
 
     async function buildCategoryImage() {
-        const categoryPageSize = currentCategory === 'voice' ? 5 : 10;
-        const topUsers = await getTopUsers(db, currentCategory, currentPeriod, currentCategory === 'voice' ? 5 : 100, message.guild.id);
+        const categoryPageSize = 10;
+        const topUsers = await getTopUsers(db, currentCategory, currentPeriod, 100, message.guild.id);
         const categoryNames = { voice: 'Top Voice', chat: 'Top Chat', reactions: 'Reactions', joins: 'Joins' };
         const periodNames = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', total: 'All' };
         if (!topUsers.length) {
@@ -573,7 +600,7 @@ async function execute(message, args, { client }) {
             const allStreaks = await getStreakUsers(message.guild.id);
             totalPages = Math.ceil(allStreaks.length / pageSize);
         } else {
-            const categoryPageSize = currentCategory === 'voice' ? 5 : 10;
+            const categoryPageSize = 10;
             const topUsers = await getTopUsers(db, currentCategory, currentPeriod, 100, message.guild.id);
             totalPages = Math.ceil(topUsers.length / categoryPageSize);
         }
@@ -630,7 +657,7 @@ async function execute(message, args, { client }) {
                     const allStreaks = await getStreakUsers(message.guild.id);
                     totalPages = Math.ceil(allStreaks.length / pageSize);
                 } else {
-                    const categoryPageSize = currentCategory === 'voice' ? 5 : 10;
+                    const categoryPageSize = 10;
                     const topUsers = await getTopUsers(db, currentCategory, currentPeriod, 100, message.guild.id);
                     totalPages = Math.ceil(topUsers.length / categoryPageSize);
                 }
