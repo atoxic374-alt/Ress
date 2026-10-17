@@ -70,7 +70,7 @@ async function buildActivityImage({ message, member, period, periodLabel, stats,
     pruneActivityCache(now);
     const cached = activityCache.get(cacheKey);
     if (cached && now - cached.createdAt < ACTIVITY_CACHE_TTL_MS) return cached.image;
-    const [ranks, topVoiceChannel, topMessageChannel] = await Promise.all([
+    const [ranks, topVoiceChannel = {}, topMessageChannel = {}] = await Promise.all([
         getActivityRanks(db, period, member.id, guildId),
         db.getMostActiveVoiceChannel(member.id, period, guildId),
         db.getMostActiveMessageChannel(member.id, guildId)
