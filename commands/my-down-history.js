@@ -2,7 +2,7 @@ const { ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } = requ
 const colorManager = require('../utils/colorManager');
 const downManager = require('../utils/downManager');
 const { buildTopSummaryImage } = require('../utils/topSummaryRenderer');
-const { getGuildBannerHex } = require('../utils/guildBannerColor');
+const { getGuildBannerHexFast } = require('../utils/guildBannerColor');
 
 const name = 'داوناتي';
 const PAGE_SIZE = 1;
@@ -118,9 +118,11 @@ async function sendHistory(message, context, targetId, viewerId, page = 0, inter
         return interaction ? interaction.update(payload) : message.reply(payload);
     }
     const [user, records, accentColor] = await Promise.all([
-        context.client.users.fetch(targetId, { force: true }).catch(() => null),
+        targetId === viewerId
+            ? Promise.resolve(message?.author || interaction?.user || context.client.users.cache.get(targetId))
+            : (context.client.users.cache.get(targetId) || context.client.users.fetch(targetId).catch(() => null)),
         collectHistory(targetId, guild),
-        getGuildBannerHex(guild, colorManager.getColor?.() || '#5865F2')
+        getGuildBannerHexFast(guild, colorManager.getColor?.() || '#5865F2')
     ]);
     if (!records.length) {
         const payload = { content: targetId === viewerId ? '❌ **ليس لديك أي سجل داون.**' : `❌ **<@${targetId}> ليس لديه أي سجل داون.**`, components: [] };

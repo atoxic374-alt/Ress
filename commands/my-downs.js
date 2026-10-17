@@ -2,7 +2,7 @@ const { AttachmentBuilder } = require('discord.js');
 const colorManager = require('../utils/colorManager');
 const downManager = require('../utils/downManager');
 const { buildTopSummaryImage } = require('../utils/topSummaryRenderer');
-const { getGuildBannerHex } = require('../utils/guildBannerColor');
+const { getGuildBannerHexFast } = require('../utils/guildBannerColor');
 
 const imageCache = new Map();
 const CACHE_TTL_MS = 15 * 1000;
@@ -106,7 +106,7 @@ module.exports = {
             const isTargetingOther = targetId !== message.author.id;
             const activeDowns = downManager.getUserDowns(targetId, message.guild?.id);
             if (!activeDowns.length && isTargetingOther && !canViewOthers) return message.react('❌').catch(() => null);
-            const accentColor = await getGuildBannerHex(message.guild, colorManager.getColor?.() || '#5865F2');
+            const accentColor = getGuildBannerHexFast(message.guild, colorManager.getColor?.() || '#5865F2');
             const image = await buildDownImage(message, client, targetId, targetUser, targetMember, activeDowns, accentColor);
             return message.reply({ files: [image] });
         } catch (error) {

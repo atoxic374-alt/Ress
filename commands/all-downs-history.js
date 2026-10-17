@@ -27,46 +27,52 @@ function startOfToday() {
 }
 
 async function buildRecords(guild, targetUserId = null) {
-    const logs = downManager.getGuildDownHistory(guild.id);
-    const activeDowns = Object.values(downManager.getActiveDowns());
-    const records = [];
-
-    for (const log of logs) {
-        if (!['DOWN_APPLIED', 'DOWN_VERBAL'].includes(log.type)) continue;
+    const logs = downManager.getGuildDownHistory(guild.id)
+        .filter(log => ['DOWN_APPLIED', 'DOWN_VERBAL'].includes(log.type))
+        .filter(log => !targetUserId || String(log.data?.targetUserId) === String(targetUserId));
+    const activeDowns = Object.values(downManager.getActiveDowns())
+        .filter(down => down?.guildId === guild.id && down.status === 'active');
+    const records = logs.map(log => {
         const data = log.data || {};
-        const targetId = String(data.targetUserId || '');
-        if (!targetId || (targetUserId && targetId !== String(targetUserId))) continue;
-
-        const member = await guild.members.fetch(targetId).catch(() => null);
+        const targetId = String(data.targetUserId);
         const verbal = log.type === 'DOWN_VERBAL' || data.roleId === null || data.duration === 'شفوي' || data.duration === 'verbal';
-        const active = !verbal && activeDowns.some(down =>
-            down?.guildId === guild.id && String(down.userId) === targetId &&
-            String(down.roleId) === String(data.roleId) && down.status === 'active' &&
+        const activeDown = !verbal && activeDowns.find(down =>
+            String(down.userId) === targetId && String(down.roleId) === String(data.roleId) &&
             (!down.endTime || down.endTime > Date.now())
         );
-        const role = !verbal && data.roleId ? await guild.roles.fetch(data.roleId).catch(() => null) : null;
         const timestamp = log.timestamp || data.timestamp || Date.now();
-        const activeRecord = active;
-        const activeDown = activeDowns.find(down =>
-            activeRecord && down?.guildId === guild.id && String(down.userId) === targetId &&
-            String(down.roleId) === String(data.roleId) && down.status === 'active'
-        );
-
-        records.push({
+        return {
             targetId,
-            targetName: member?.displayName || 'عضو غير موجود',
-            roleName: verbal ? 'تنبيه شفوي' : (role?.name || `رول محذوف (${data.roleId || 'غير معروف'})`),
+            targetName: guild.members.cache.get(targetId)?.displayName || 'عضو غير موجود',
+            roleName: verbal ? 'تنبيه شفوي' : (guild.roles.cache.get(String(data.roleId))?.name || `رول محذوف (${data.roleId || 'غير معروف'})`),
             roleId: data.roleId || null,
-            active: activeRecord,
-            status: verbal ? 'شفوي' : (activeRecord ? 'نشط' : 'منتهي'),
+            active: Boolean(activeDown),
+            status: verbal ? 'شفوي' : (activeDown ? 'نشط' : 'منتهي'),
             duration: verbal ? 'شفوي' : (data.duration || 'نهائي'),
             endTime: activeDown?.endTime || null,
             reason: data.reason || data.originalReason || 'غير محدد',
             moderatorId: data.byUserId || data.modifiedBy,
             timestamp
-        });
-    }
+        };
+    });
     return records.sort((a, b) => b.timestamp - a.timestamp);
+}
+
+async function hydratePageRecords(guild, records) {
+    const targetIds = [...new Set(records.map(record => record.targetId))];
+    const roleIds = [...new Set(records.map(record => record.roleId).filter(Boolean).map(String))];
+    const [members, roles] = await Promise.all([
+        Promise.all(targetIds.map(async id => [id, guild.members.cache.get(id) || await guild.members.fetch(id).catch(() => null)])),
+        Promise.all(roleIds.map(async id => [id, guild.roles.cache.get(id) || await guild.roles.fetch(id).catch(() => null)]))
+    ]);
+    const memberMap = new Map(members);
+    const roleMap = new Map(roles);
+    for (const record of records) {
+        record.targetName = memberMap.get(record.targetId)?.displayName || record.targetName;
+        record.roleName = record.roleId
+            ? (roleMap.get(String(record.roleId))?.name || record.roleName)
+            : record.roleName;
+    }
 }
 
 function filterRecords(records, filter) {
@@ -160,6 +166,8 @@ async function render(message, context, viewerId, page = 0, interaction = null, 
 
     const totalPages = Math.ceil(records.length / PAGE_SIZE);
     const safePage = Math.max(0, Math.min(Number(page) || 0, totalPages - 1));
+    const pageRecords = records.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
+    await hydratePageRecords(guild, pageRecords);
     const payload = {
         embeds: [buildEmbed(records, safePage, totalPages, selectedFilter, targetUserId)],
         components: components(viewerId, safePage, totalPages, selectedFilter, targetUserId || 'all'),

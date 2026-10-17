@@ -11,14 +11,8 @@ const colorManager = require('./colorManager.js');
 function formatRiyadhTime(date = new Date()) {
     return new Intl.DateTimeFormat('en-US', {
         timeZone: 'Asia/Riyadh',
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: true
+        dateStyle: 'medium',
+        timeStyle: 'short'
     }).format(date);
 }
 
@@ -41,12 +35,15 @@ function createDecisionContainer({
     const heading = title || (approved ? '✅ Accepted' : '❌ Rejected');
     const accentColor = colorManager.getColor() || '#5865F2';
     const lines = [
-        `**Status :** ${approved ? 'Accepted successfully' : 'Rejected'}`,
+        `**Status :** ${approved ? 'موافق' : 'مرفوض'}`,
+        '',
         targetUserId ? `**Applicant :** <@${targetUserId}>` : null,
+        targetUserId ? '' : null,
         `**${approved ? 'Approved by' : 'Rejected by'} :** <@${actorId}>`,
-        ...details.filter(Boolean),
-        `**Time (Asia/Riyadh) :** ${formatRiyadhTime()}`
-    ].filter(Boolean).join('\n');
+        '',
+        ...details.flatMap(detail => [detail, '']).filter(value => value !== null && value !== undefined),
+        `**الوقت :** ${formatRiyadhTime()}`
+    ].filter(value => value !== null && value !== undefined).join('\n');
 
     const section = new SectionBuilder()
         .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${heading}`))

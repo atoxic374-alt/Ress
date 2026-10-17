@@ -1,14 +1,38 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags, ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, SectionBuilder, ThumbnailBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const ms = require('ms');
 const colorManager = require('../utils/colorManager.js');
 const vacationManager = require('../utils/vacationManager.js');
 const { createDecisionContainer, decisionPayload } = require('../utils/decisionContainer.js');
-const { createStructuredContainer } = require('../utils/structuredContainer.js');
 
 const adminRolesPath = path.join(__dirname, '..', 'data', 'adminRoles.json');
 const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json'); // Added path for responsibilities.json
+
+function vacationAccentColor() {
+    const colorText = String(colorManager.getColor?.() || '#0099ff')
+        .replace(/^#/, '').replace(/^0x/i, '');
+    const color = Number.parseInt(colorText, 16);
+    return Number.isFinite(color) ? color : 0x0099ff;
+}
+
+function createVacationContainer({ title, lines = [], member = null, footer = 'Vacation System' }) {
+    const avatar = member?.user?.displayAvatarURL({ extension: 'png', size: 128 })
+        || member?.displayAvatarURL?.({ extension: 'png', size: 128 })
+        || 'https://cdn.discordapp.com/embed/avatars/0.png';
+    const section = new SectionBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${title}`))
+        .setThumbnailAccessory(new ThumbnailBuilder()
+            .setURL(avatar)
+            .setDescription(`صورة ${member?.displayName || 'المتقدم'}`));
+    return new ContainerBuilder()
+        .setAccentColor(vacationAccentColor())
+        .addSectionComponents(section)
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join('\n\n')))
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# ${footer}`));
+}
 
 // Helper to read a JSON file
 function readJson(filePath, defaultData = {}) {
@@ -87,8 +111,15 @@ async function execute(message, args, { BOT_OWNERS }) {
         return message.reply({ embeds: [replyEmbed], ephemeral: true });
     }
 
-    replyEmbed.setDescription("** اضغط عالزر وقدم اجازتك للمسؤولين **.")
-           .setThumbnail(member.user.displayAvatarURL({ size: 128 }));
+    const vacationPanel = createVacationContainer({
+        title: 'Vacation Request',
+        lines: [
+            '**اضغط على الزر أدناه لتقديم طلب إجازة للمسؤولين.**',
+            `**Applicant :** <@${member.id}>`
+        ],
+        member,
+        footer: 'Vacation System • Request'
+    });
     const requestButton = new ButtonBuilder()
         .setCustomId(`vac_request_start_${member.id}`)
         .setLabel("Vacation")
@@ -96,7 +127,10 @@ async function execute(message, args, { BOT_OWNERS }) {
         .setStyle(ButtonStyle.Secondary);
 
     const row = new ActionRowBuilder().addComponents(requestButton);
-    const sentMessage = await message.reply({ embeds: [replyEmbed], components: [row] });
+    await message.reply({
+        components: [vacationPanel, row],
+        flags: MessageFlags.IsComponentsV2
+    });
 }
 
 async function handleInteraction(interaction, context) {
@@ -225,16 +259,17 @@ async function handleInteraction(interaction, context) {
             const rolesToBeRemoved = member.roles.cache.filter(role => adminRoles.includes(role.id));
             const rolesDisplay = rolesToBeRemoved.map(r => `<@&${r.id}>`).join(', ') || 'لا توجد';
 
-            const vacationContainer = createStructuredContainer({
+            const vacationContainer = createVacationContainer({
                 title: 'Vacation Pending',
-                description: [
-                    `**الإداري :** ${member}`,
-                    `**المدة :** ${ms(durationMs, { long: true })}`,
-                    `**السبب :** ${reason}`,
-                    `**الرولات المراد إزالتها :** ${rolesDisplay}`
-                ].join('\n'),
-                footer: 'Vacation System • Pending',
-                accentColor: colorManager.getColor('pending') || '#E67E22'
+                lines: [
+                    '**Status :** معلق',
+                    `**Applicant :** <@${member.id}>`,
+                    `**Duration :** ${ms(durationMs, { long: true })}`,
+                    `**Reason :** ${reason}`,
+                    `**Roles to Remove :** ${rolesDisplay}`
+                ],
+                member,
+                footer: 'Vacation System • Pending'
             });
 
             const buttons = new ActionRowBuilder().addComponents(
@@ -347,10 +382,6 @@ async function handleInteraction(interaction, context) {
                 actorId: interaction.user.id,
                 guild: interaction.guild,
                 details: [
-                    '',
-                    '### Vacation Details',
-                    `**Applicant :** ${member.displayName || member.user.tag}`,
-                    `**Approved by :** ${interaction.user.tag}`,
                     `**Start Date :** ${new Date(pendingRequest.startDate).toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })}`,
                     `**End Date :** ${new Date(pendingRequest.endDate).toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })}`,
                     `**Reason :** ${pendingRequest.reason || 'Not specified'}`
@@ -362,18 +393,22 @@ async function handleInteraction(interaction, context) {
 
             // DM user
             try {
-                const dmEmbed = new EmbedBuilder()
-                    .setTitle('Vacation Accepted')
-                    .setColor(colorManager.getColor('approved') || '#2ECC71')
-                .setThumbnail(approverMember.user.displayAvatarURL({ size: 128 }))
-                    .setDescription(`** ياهلا، تم الموافقه على اجازتك\n سيرفر : ${interaction.guild.name}**`)
-                    .addFields(
-                        { name: " المسؤول", value: `${approverMember.user.tag}`, inline: true },
-                        { name: " تنتهي في", value: `<t:${Math.floor(new Date(pendingRequest.endDate).getTime() / 1000)}:f>`, inline: true },
-                        { name: " ملاحظة", value: 'للأنهاء اكتب اجازتي', inline: false }
-                    )
-                    .setTimestamp();
-                await member.user.send({ embeds: [dmEmbed] });
+                const dmContainer = createDecisionContainer({
+                    approved: true,
+                    title: '✅ تم قبول طلب الإجازة',
+                    targetMember: member,
+                    targetUserId: userId,
+                    actorId: interaction.user.id,
+                    guild: interaction.guild,
+                    details: [
+                        `**Start Date :** ${new Date(pendingRequest.startDate).toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })}`,
+                        `**End Date :** ${new Date(pendingRequest.endDate).toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })}`,
+                        `**Reason :** ${pendingRequest.reason || 'Not specified'}`,
+                        '**Note :** لإنهاء الإجازة مبكرًا اكتب `اجازتي`.'
+                    ],
+                    footer: 'Vacation System • Approved'
+                });
+                await member.user.send(decisionPayload(dmContainer));
             } catch (dmErr) {
                 console.log('Could not DM user for approval');
             }
@@ -445,13 +480,9 @@ async function handleInteraction(interaction, context) {
             actorId: interaction.user.id,
             guild: interaction.guild,
                 details: [
-                    '',
-                    '### Rejection Details',
-                    `**Applicant :** ${member?.displayName || member?.user?.tag || userId}`,
-                    `**Rejected by :** ${interaction.user.tag}`,
                     `**Rejection Reason :** ${rejectReason}`,
-                `**Original Reason :** ${pendingRequest.reason || 'Not specified'}`,
-                `**Cooldown :** ${rejectCooldownHours} hours`
+                    `**Original Reason :** ${pendingRequest.reason || 'Not specified'}`,
+                    `**Cooldown :** ${rejectCooldownHours} hours`
             ],
             footer: 'Vacation System • Rejected'
         });
@@ -461,18 +492,21 @@ async function handleInteraction(interaction, context) {
         // DM user
         if (member) {
             try {
-                const dmEmbed = new EmbedBuilder()
-                    .setTitle('Vacation Denied')
-                    .setColor(colorManager.getColor('rejected') || '#E74C3C')
-                .setThumbnail(approverMember.user.displayAvatarURL({ size: 128 }))
-                    .setDescription(`** لقد تم رفض طلب اجازتك\n سيرفر : ${interaction.guild.name}**`)
-                    .addFields(
-                        { name: " المسؤول", value: `${approverMember.user.tag}`, inline: true },
-                        { name: " سبب الرفض", value: rejectReason, inline: false },
-                        { name: " الكولداون", value: `${rejectCooldownHours} ساعة (لا يمكنك التقديم مجدداً خلال هذه الفترة)`, inline: false }
-                    )
-                    .setTimestamp();
-                await member.user.send({ embeds: [dmEmbed] });
+                const dmContainer = createDecisionContainer({
+                    approved: false,
+                    title: '❌ تم رفض طلب الإجازة',
+                    targetMember: member,
+                    targetUserId: userId,
+                    actorId: interaction.user.id,
+                    guild: interaction.guild,
+                    details: [
+                        `**Rejection Reason :** ${rejectReason}`,
+                        `**Original Reason :** ${pendingRequest.reason || 'Not specified'}`,
+                        `**Cooldown :** ${rejectCooldownHours} hours`
+                    ],
+                    footer: 'Vacation System • Rejected'
+                });
+                await member.user.send(decisionPayload(dmContainer));
             } catch (dmErr) {
                 console.log('Could not DM user for rejection');
             }

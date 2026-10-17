@@ -6,7 +6,12 @@ const {
     ModalBuilder, 
     TextInputBuilder, 
     TextInputStyle,
-    MessageFlags
+    MessageFlags,
+    ContainerBuilder,
+    TextDisplayBuilder,
+    SeparatorBuilder,
+    SectionBuilder,
+    ThumbnailBuilder
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
@@ -16,9 +21,26 @@ const vacationManager = require('../utils/vacationManager.js');
 const { createDecisionContainer, decisionPayload } = require('../utils/decisionContainer.js');
 const { buildVacationSummaryImage } = require('../utils/vacationSummaryRenderer.js');
 const { getGuildBannerHex } = require('../utils/guildBannerColor.js');
-const { createStructuredContainer } = require('../utils/structuredContainer.js');
-
 const adminRolesPath = path.join(__dirname, '..', 'data', 'adminRoles.json');
+
+function createVacationActionContainer({ title, lines, member, footer }) {
+    const avatar = member?.user?.displayAvatarURL({ extension: 'png', size: 128 })
+        || member?.displayAvatarURL?.({ extension: 'png', size: 128 })
+        || 'https://cdn.discordapp.com/embed/avatars/0.png';
+    const colorText = String(colorManager.getColor?.() || '#0099ff')
+        .replace(/^#/, '').replace(/^0x/i, '');
+    const parsedColor = Number.parseInt(colorText, 16);
+    const section = new SectionBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${title}`))
+        .setThumbnailAccessory(new ThumbnailBuilder().setURL(avatar).setDescription('صورة صاحب الطلب'));
+    return new ContainerBuilder()
+        .setAccentColor(Number.isFinite(parsedColor) ? parsedColor : 0x0099ff)
+        .addSectionComponents(section)
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join('\n\n')))
+        .addSeparatorComponents(new SeparatorBuilder())
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# ${footer}`));
+}
 
 function readJson(filePath, defaultData = {}) {
     try {
@@ -286,17 +308,17 @@ async function handleInteraction(interaction, context) {
             const user = await client.users.fetch(userId);
             const member = await interaction.guild.members.fetch(userId);
 
-            const terminationContainer = createStructuredContainer({
+            const terminationContainer = createVacationActionContainer({
                 title: 'Request for Early Termination',
-                description: [
-                    `**العضو :** ${member}`,
-                    `**السبب الأصلي للإجازة :** ${activeVacation.reason || 'غير محدد'}`,
-                    `**تاريخ انتهاء الإجازة :** <t:${Math.floor(new Date(activeVacation.endDate).getTime() / 1000)}:f>`,
-                    `**الرولات المحفوظة :** ${activeVacation.removedRoles?.map(r => `<@&${r}>`).join(' ') || 'لا توجد'}`,
-                    `**مقدم طلب الإنهاء :** ${member}`
-                ].join('\n'),
-                footer: 'Vacation System • Early Termination Pending',
-                accentColor: colorManager.getColor('pending') || '#E67E22'
+                lines: [
+                    '**Status :** معلق',
+                    `**Applicant :** <@${userId}>`,
+                    `**Original Reason :** ${activeVacation.reason || 'غير محدد'}`,
+                    `**Vacation Ends :** <t:${Math.floor(new Date(activeVacation.endDate).getTime() / 1000)}:f>`,
+                    `**Saved Roles :** ${activeVacation.removedRoles?.map(r => `<@&${r}>`).join(' ') || 'لا توجد'}`
+                ],
+                member,
+                footer: 'Vacation System • Early Termination Pending'
             });
 
             const buttons = new ActionRowBuilder().addComponents(
@@ -530,11 +552,7 @@ async function handleInteraction(interaction, context) {
                         actorId: interaction.user.id,
                         guild: interaction.guild,
                         details: [
-                            '',
-                            '### Termination Details',
                             '**Action :** Early vacation termination approved',
-                            `**Applicant :** ${requestedMember?.displayName || requestedUser?.globalName || requestedUser?.username || userId}`,
-                            `**Approved by :** ${interaction.user.tag}`,
                             `**End Date :** ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })}`,
                             `**Reason :** ${terminationRequest.reason || 'Not specified'}`
                         ],
@@ -542,6 +560,23 @@ async function handleInteraction(interaction, context) {
                     });
 
                     await interaction.editReply(decisionPayload(successContainer));
+
+                    if (requestedUser) {
+                        const dmContainer = createDecisionContainer({
+                            approved: true,
+                            title: '✅ تم قبول إنهاء الإجازة',
+                            targetMember: requestedMember,
+                            targetUserId: userId,
+                            actorId: interaction.user.id,
+                            guild: interaction.guild,
+                            details: [
+                                `**End Date :** ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })}`,
+                                `**Reason :** ${terminationRequest.reason || 'Not specified'}`
+                            ],
+                            footer: 'Vacation System • Early Termination Approved'
+                        });
+                        await requestedUser.send(decisionPayload(dmContainer)).catch(() => {});
+                    }
                   
         
                     if (interaction.message) {
@@ -593,10 +628,7 @@ async function handleInteraction(interaction, context) {
             actorId: interaction.user.id,
             guild: interaction.guild,
             details: [
-                '',
-                '### Termination Details',
                 '**Action :** Early vacation termination rejected',
-                `**Rejected by :** ${interaction.user.tag}`,
                 `**Rejection Reason :** ${reason}`,
                 `**Cooldown :** ${rejectCooldownHours} hours`
             ],
@@ -609,18 +641,20 @@ async function handleInteraction(interaction, context) {
         // تنبيه المستخدم في الخاص
         const user = await client.users.fetch(userId).catch(() => null);
         if (user) {
-            const dmEmbed = new EmbedBuilder()
-                .setColor(colorManager.getColor('rejected') || '#E74C3C')
-                .setTitle('❌Rejected')
-                .setDescription(`**نعتذر، لقد تم رفض طلب إنهاء الإجازة الخاص بك في ${interaction.guild.name}**`)
-                .setThumbnail(interaction.user.displayAvatarURL({ size: 128 }))
-                .addFields(
-                    { name: "المسؤول", value: `${interaction.user.tag}`, inline: true },
-                    { name: "سبب الرفض", value: reason, inline: false },
-                    { name: "الكولداون", value: `${rejectCooldownHours} ساعة`, inline: true }
-                )
-                .setTimestamp();
-            await user.send({ embeds: [dmEmbed] }).catch(() => {});
+            const dmContainer = createDecisionContainer({
+                approved: false,
+                title: '❌ تم رفض إنهاء الإجازة',
+                targetMember: rejectedMember,
+                targetUserId: userId,
+                actorId: interaction.user.id,
+                guild: interaction.guild,
+                details: [
+                    `**Rejection Reason :** ${reason}`,
+                    `**Cooldown :** ${rejectCooldownHours} hours`
+                ],
+                footer: 'Vacation System • Early Termination Rejected'
+            });
+            await user.send(decisionPayload(dmContainer)).catch(() => {});
         }
 
         if (sourceMessageId && sourceMessageId !== 'unknown' && interaction.channel) {

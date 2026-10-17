@@ -608,14 +608,10 @@ async function handleAdminApplicationInteraction(interaction) {
                 guild: interaction.guild,
                 details: [
                     '',
-                    '### Application Details',
-                    `**Application ID :** \`${applicationId}\``,
-                    `**Applicant :** ${candidateMember?.displayName || candidateId}`,
-                    `**Requested by :** <@${application.requesterId}>`,
-                    `**Rejected by :** ${interaction.user.tag}`,
+                    `**Applicant :** <@${candidateId}>`,
                     `**Rejection Reason :** ${reason}`,
                     `**Cooldown :** ${settings.settings.rejectCooldownHours} hours`,
-                    `**Cooldown Ends :** ${moment(cooldownEnd).tz('Asia/Riyadh').format('dddd, MMMM D, YYYY h:mm A')}`
+                    `**Cooldown Ends :** ${moment(cooldownEnd).tz('Asia/Riyadh').format('MMM D, YYYY h:mm A')}`
                 ],
                 footer: 'Admin Application • Rejected'
             });
@@ -626,12 +622,21 @@ async function handleAdminApplicationInteraction(interaction) {
             try {
                 const guild = interaction.guild;
                 const member = await guild.members.fetch(candidateId);
-                const rejectNotificationEmbed = colorManager.createEmbed()
-                    .setTitle('تم رفض تقديمك للإدارة')
-                    .setDescription(`**المسؤول :** <@${interaction.user.id}>\n**السبب :** ${reason}\n\n**عليك كولداون تقديم إدارة لمدة :** ${settings.settings.rejectCooldownHours} ساعة`)
-                    .setTimestamp();
-
-                await member.send({ embeds: [rejectNotificationEmbed] });
+                const rejectNotificationContainer = createDecisionContainer({
+                    approved: false,
+                    title: '❌ تم رفض تقديمك للإدارة',
+                    targetMember: member,
+                    targetUserId: candidateId,
+                    actorId: interaction.user.id,
+                    guild,
+                    details: [
+                        `**Rejection Reason :** ${reason}`,
+                        `**Cooldown :** ${settings.settings.rejectCooldownHours} hours`,
+                        `**Cooldown Ends :** ${moment(cooldownEnd).tz('Asia/Riyadh').format('MMM D, YYYY h:mm A')}`
+                    ],
+                    footer: 'Admin Application • Rejected'
+                });
+                await member.send(decisionPayload(rejectNotificationContainer));
             } catch (err) {
                 console.log('فشل إرسال رسالة الرفض للعضو');
             }
@@ -946,13 +951,9 @@ async function handleAdminApplicationInteraction(interaction) {
                 guild: interaction.guild,
                 details: [
                     '',
-                    '### Application Details',
-                    `**Application ID :** \`${applicationId}\``,
-                    `**Applicant :** ${candidate.displayName}`,
-                    `**Requested by :** <@${application.requesterId}>`,
-                    `**Approved by :** ${interaction.user.tag}`,
-                    `**Added Roles :** ${addedRoles.length > 0 ? addedRoles.map(r => r.name).slice(0, 10).join(' • ') : 'None'}`,
-                    failedRoles.length > 0 ? `**Failed Roles :** ${failedRoles.join(' • ')}` : null
+                    `**Applicant :** <@${application.candidateId}>`,
+                    `**Added Roles :** ${addedRoles.length > 0 ? addedRoles.map(r => `<@&${r.id}>`).slice(0, 10).join(' • ') : 'None'}`,
+                    failedRoles.length > 0 ? `**Failed Roles :** ${failedRoles.map(roleName => `\`${roleName}\``).join(' • ')}` : null
                 ],
                 footer: 'Admin Application • Accepted'
             });
@@ -962,17 +963,20 @@ async function handleAdminApplicationInteraction(interaction) {
             // إرسال إشعار للمرشح
             if (addedRoles.length > 0) {
                 try {
-                    const notificationEmbed = colorManager.createEmbed()
-                        .setTitle('تم قبول طلبك للإدارة')
-                        .setDescription(`**قبلك مسؤول الإدارة :** <@${interaction.user.id}>\n\n**رولك الذي عُطي :** ${addedRoles.map(r => r.name).join(', ')}\n\n**تاريخ الموافقة :** ${moment().tz('Asia/Riyadh').format('YYYY-MM-DD HH:mm')}`)
-                        .setTimestamp();
-
-                    notificationEmbed.addFields([
-                        { name: '**الرولات الإدارية الجديدة**', value: `**${addedRoles.map(r => `\`${r.name}\``).join(' • ')}**`, inline: false },
-                        { name: '**تذكير مهم**', value: 'راجع روم القوانين وكل المعلومات التي تحتاجها كإداري', inline: false }
-                    ]);
-
-                    await candidate.user.send({ embeds: [notificationEmbed] });
+                    const notificationContainer = createDecisionContainer({
+                        approved: true,
+                        title: '✅ تم قبول طلبك للإدارة',
+                        targetMember: candidate,
+                        targetUserId: application.candidateId,
+                        actorId: interaction.user.id,
+                        guild: interaction.guild,
+                        details: [
+                            `**Added Roles :** ${addedRoles.map(r => `<@&${r.id}>`).join(' • ')}`,
+                            '**Reminder :** راجع روم القوانين وكل المعلومات المهمة للإداريين.'
+                        ],
+                        footer: 'Admin Application • Accepted'
+                    });
+                    await candidate.user.send(decisionPayload(notificationContainer));
                     console.log(`📧 تم إرسال إشعار مفصل للمرشح <@${application.candidateId}>`);
                 } catch (dmError) {
                     console.log(`⚠️ تعذر إرسال إشعار خاص للمرشح <@${application.candidateId}>:`, dmError.message);
