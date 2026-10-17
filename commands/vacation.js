@@ -5,6 +5,7 @@ const ms = require('ms');
 const colorManager = require('../utils/colorManager.js');
 const vacationManager = require('../utils/vacationManager.js');
 const { createDecisionContainer, decisionPayload } = require('../utils/decisionContainer.js');
+const { createStructuredContainer } = require('../utils/structuredContainer.js');
 
 const adminRolesPath = path.join(__dirname, '..', 'data', 'adminRoles.json');
 const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json'); // Added path for responsibilities.json
@@ -224,18 +225,17 @@ async function handleInteraction(interaction, context) {
             const rolesToBeRemoved = member.roles.cache.filter(role => adminRoles.includes(role.id));
             const rolesDisplay = rolesToBeRemoved.map(r => `<@&${r.id}>`).join(', ') || 'لا توجد';
 
-            const embed = new EmbedBuilder()
-                .setTitle("Vacation Pending")
-                .setColor(colorManager.getColor('pending') || '#E67E22')
-                .setAuthor({ name: member.user.tag, iconURL: member.user.displayAvatarURL({ size: 128 }) })
-                .setThumbnail(member.user.displayAvatarURL({ size: 128 }))
-                .addFields(
-                    { name: "*الإداري*", value: `${member}`, inline: true },
-                    { name: "*المدة*", value: `___${ms(durationMs, { long: true })}___`, inline: true },
-                    { name: "*السبب*", value: reason, inline: false },
-                    { name: "*الرولات المراد إزالتها*", value: rolesDisplay, inline: false }
-                )
-                .setTimestamp();
+            const vacationContainer = createStructuredContainer({
+                title: 'Vacation Pending',
+                description: [
+                    `**الإداري :** ${member}`,
+                    `**المدة :** ${ms(durationMs, { long: true })}`,
+                    `**السبب :** ${reason}`,
+                    `**الرولات المراد إزالتها :** ${rolesDisplay}`
+                ].join('\n'),
+                footer: 'Vacation System • Pending',
+                accentColor: colorManager.getColor('pending') || '#E67E22'
+            });
 
             const buttons = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`vac_approve_${userId}`).setLabel("Allow?").setEmoji('<:emoji_41:1430334120839479449>').setStyle(ButtonStyle.Success),
@@ -246,11 +246,11 @@ async function handleInteraction(interaction, context) {
             if (settings.notificationMethod === 'channel' && settings.notificationChannel) {
                 const channel = await client.channels.fetch(settings.notificationChannel).catch(() => null);
                 if (channel) {
-                    await channel.send({ embeds: [embed], components: [buttons] });
+                    await channel.send({ components: [vacationContainer, buttons], flags: MessageFlags.IsComponentsV2 });
                 }
             } else { // DM by default
                 for (const approver of approvers) {
-                    await approver.send({ embeds: [embed], components: [buttons] }).catch(e => 
+                    await approver.send({ components: [vacationContainer, buttons], flags: MessageFlags.IsComponentsV2 }).catch(e =>
                         console.error(`Could not DM user ${approver.id}: ${e.message}`)
                     );
                 }

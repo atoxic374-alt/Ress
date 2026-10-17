@@ -1,12 +1,32 @@
-const { EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const moment = require('moment-timezone');
 const { collectUserStats, createUserStatsEmbed } = require('../utils/userStatsCollector');
 const colorManager = require('../utils/colorManager');
 const { createDecisionContainer, decisionPayload } = require('../utils/decisionContainer');
+const { createStructuredContainer } = require('../utils/structuredContainer');
 
 const adminApplicationsPath = path.join(__dirname, '..', 'data', 'adminApplications.json');
+
+function embedToApplicationContainer(embed, footer = 'Admin Applications', prefix = '') {
+    const data = embed?.data || {};
+    const fields = (data.fields || []).map(field => `**${field.name || 'Details'}**\n${field.value || 'N/A'}`);
+    const description = [prefix, data.description, ...fields].filter(Boolean).join('\n\n').slice(0, 3900);
+    return createStructuredContainer({
+        title: data.title || 'Administrative Application',
+        description: description || 'No application details available.',
+        footer,
+        accentColor: '#5865F2'
+    });
+}
+
+function applicationContainerPayload(container, rows = []) {
+    return {
+        components: [container, ...rows],
+        flags: MessageFlags.IsComponentsV2
+    };
+}
 
 // دالة لقراءة إعدادات التقديم الإداري
 function loadAdminApplicationSettings() {
@@ -375,11 +395,12 @@ module.exports = {
             // إرسال الطلب إلى قناة التقديم أولاً
             try {
                 const approverMentions = getApproverMentions(settings);
-                const sentMessage = await applicationChannel.send({
-                    content: approverMentions ? `${approverMentions} طلب تقديم إداري جديد` : 'طلب تقديم إداري جديد',
-                    embeds: [simpleEmbed],
-                    components: [row1, row2]
-                });
+                const requestContainer = embedToApplicationContainer(
+                    simpleEmbed,
+                    'Admin Application • Pending',
+                    approverMentions ? `${approverMentions}\n**طلب تقديم إداري جديد**` : '**طلب تقديم إداري جديد**'
+                );
+                const sentMessage = await applicationChannel.send(applicationContainerPayload(requestContainer, [row1, row2]));
 
                 // حفظ الطلب في البيانات فقط بعد نجاح الإرسال
                 settings.pendingApplications[applicationId] = {
@@ -791,10 +812,10 @@ async function handleAdminApplicationInteraction(interaction) {
             const row2 = new ActionRowBuilder()
                 .addComponents(detailsMenu);
 
-            await interaction.update({
-                embeds: [detailEmbed],
-                components: [row1, row2]
-            });
+            await interaction.update(applicationContainerPayload(
+                embedToApplicationContainer(detailEmbed, 'Admin Application • Details'),
+                [row1, row2]
+            ));
 
             return true;
         }
