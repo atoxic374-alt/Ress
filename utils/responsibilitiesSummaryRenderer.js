@@ -108,18 +108,9 @@ function buildResponsibilitiesSummaryImage({
     ctx.fillStyle = background;
     ctx.fillRect(0, 0, width, height);
 
-    const glow = ctx.createRadialGradient(120, 105, 10, 120, 105, 560);
-    glow.addColorStop(0, `${accent}55`);
-    glow.addColorStop(1, `${accent}00`);
-    ctx.fillStyle = glow;
-    ctx.fillRect(0, 0, 760, 460);
-
-    ctx.shadowColor = 'rgba(255,255,255,0.35)';
-    ctx.shadowBlur = 18;
-    ctx.fillStyle = '#FFFFFF';
+    ctx.fillStyle = accent;
     roundedRect(ctx, 55, 52, 10, 204, 5);
     ctx.fill();
-    ctx.shadowBlur = 0;
 
     drawText(ctx, 'My Responsibilities', width / 2, 82, {
         font: 'bold 48px Cairo',
