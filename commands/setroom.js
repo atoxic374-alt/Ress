@@ -2815,6 +2815,9 @@ function parseScheduleTime(timeString) {
         .replace(/\s+/g, ' ')
         .replace(/صباحا?/g, 'am')
         .replace(/مساءا?/g, 'pm')
+        .replace(/منتصف الليل|بعد منتصف الليل/g, 'am')
+        .replace(/الفجر|فجر/g, 'am')
+        .replace(/الظهر|ظهر|العصر|عصر|المغرب|مغرب|العشاء|عشاء/g, 'pm')
         .replace(/(^|\s)ص(?=\s|$)/g, '$1am')
         .replace(/(^|\s)م(?=\s|$)/g, '$1pm')
         .trim();
