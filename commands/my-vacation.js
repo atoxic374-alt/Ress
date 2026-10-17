@@ -13,6 +13,8 @@ const ms = require('ms');
 const colorManager = require('../utils/colorManager.js');
 const vacationManager = require('../utils/vacationManager.js');
 const { createDecisionContainer, decisionPayload } = require('../utils/decisionContainer.js');
+const { buildVacationSummaryImage } = require('../utils/vacationSummaryRenderer.js');
+const { getGuildBannerHex } = require('../utils/guildBannerColor.js');
 
 const adminRolesPath = path.join(__dirname, '..', 'data', 'adminRoles.json');
 
@@ -96,26 +98,10 @@ async function execute(message, args, { client, BOT_OWNERS }) {
     }
 
     const remainingTime = new Date(activeVacation.endDate).getTime() - Date.now();
-
-    const statusEmbed = new EmbedBuilder().setColor(colorManager.getColor() || '#0099ff')
-        .setTitle(`حالة إجازة ${targetUser.username}`)
-        .setColor(colorManager.getColor('active') || '#2ECC71')
-        .setThumbnail(targetUser.displayAvatarURL({ size: 128 }))
-        .addFields(
-            { name: "الحالة", value: "in vacation", inline: true },
-            { name: "وقتها", value: remainingTime > 0 ? ms(remainingTime, { long: true }) : "Ended", inline: true },
-            { name: "المعتمد", value: activeVacation.approvedBy ? `<@${activeVacation.approvedBy}>` : 'غير معروف', inline: true },
-            { name: "الرولات", value: activeVacation.removedRoles?.map(r => `<@&${r}>`).join(' ') || 'لا توجد', inline: false }
-        )
-        .setFooter({ text: `البداية: ${new Date(activeVacation.startDate).toLocaleString('en-US', {
-            timeZone: 'Asia/Riyadh',
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-        })}`})
-        .setTimestamp();
+    const approvedByUser = activeVacation.approvedBy
+        ? await client.users.fetch(activeVacation.approvedBy).catch(() => null)
+        : null;
+    const approvedByName = approvedByUser?.globalName || approvedByUser?.username || 'Unknown';
 
     const components = [];
     if (isSelfCheck) {
@@ -128,7 +114,27 @@ async function execute(message, args, { client, BOT_OWNERS }) {
         components.push(row);
     }
 
-    const sentMessage = await message.reply({ embeds: [statusEmbed], components: components });
+    const serverAccentColor = await getGuildBannerHex(
+        message.guild,
+        colorManager.getColor() || '#5865F2'
+    );
+
+    const buildImage = (vacation) => buildVacationSummaryImage({
+        guildName: message.guild.name,
+        memberName: targetUser.displayName || targetUser.username || targetUser.tag,
+        accentColor: serverAccentColor,
+        status: 'In Vacation',
+        timeRemaining: new Date(vacation.endDate).getTime() > Date.now() ? ms(new Date(vacation.endDate).getTime() - Date.now(), { long: true }) : 'Ended',
+        startDate: vacation.startDate,
+        endDate: vacation.endDate,
+        approvedBy: vacation.approvedBy ? approvedByName : 'Unknown',
+        reason: vacation.reason,
+        removedRoles: (vacation.removedRoles || []).map((roleId) =>
+            message.guild.roles.cache.get(roleId)?.name || roleId
+        )
+    });
+
+    const sentMessage = await message.reply({ files: [buildImage(activeVacation)], components: components });
 
     // إذا كان المستخدم يفحص إجازته الخاصة، ابدأ العداد التلقائي
     if (isSelfCheck && remainingTime > 0) {
@@ -150,8 +156,7 @@ async function execute(message, args, { client, BOT_OWNERS }) {
                     return;
                 }
 
-                const updatedEmbed = updateTimeRemaining(statusEmbed, currentVacation);
-                await sentMessage.edit({ embeds: [updatedEmbed], components: components });
+                await sentMessage.edit({ files: [buildImage(currentVacation)], components: components });
             } catch (error) {
                 clearInterval(updateInterval);
                 console.error('خطأ في تحديث العداد:', error);
