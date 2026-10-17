@@ -98,10 +98,13 @@ async function execute(message, args, { client, BOT_OWNERS }) {
     }
 
     const remainingTime = new Date(activeVacation.endDate).getTime() - Date.now();
-    const approvedByUser = activeVacation.approvedBy
-        ? await client.users.fetch(activeVacation.approvedBy).catch(() => null)
-        : null;
+    const [approvedByUser, targetMember, serverAccentColor] = await Promise.all([
+        activeVacation.approvedBy ? client.users.fetch(activeVacation.approvedBy, { force: true }).catch(() => null) : null,
+        message.guild.members.fetch({ user: targetUser.id, force: true }).catch(() => null),
+        getGuildBannerHex(message.guild, colorManager.getColor() || '#5865F2')
+    ]);
     const approvedByName = approvedByUser?.globalName || approvedByUser?.username || 'Unknown';
+    const memberName = targetMember?.displayName || targetUser.globalName || targetUser.username || targetUser.tag || 'Member';
 
     const components = [];
     if (isSelfCheck) {
@@ -114,14 +117,9 @@ async function execute(message, args, { client, BOT_OWNERS }) {
         components.push(row);
     }
 
-    const serverAccentColor = await getGuildBannerHex(
-        message.guild,
-        colorManager.getColor() || '#5865F2'
-    );
-
     const buildImage = (vacation) => buildVacationSummaryImage({
         guildName: message.guild.name,
-        memberName: targetUser.displayName || targetUser.username || targetUser.tag,
+        memberName,
         accentColor: serverAccentColor,
         status: 'In Vacation',
         timeRemaining: new Date(vacation.endDate).getTime() > Date.now() ? ms(new Date(vacation.endDate).getTime() - Date.now(), { long: true }) : 'Ended',
@@ -161,7 +159,7 @@ async function execute(message, args, { client, BOT_OWNERS }) {
                 clearInterval(updateInterval);
                 console.error('خطأ في تحديث العداد:', error);
             }
-        }, 5000); // تحديث كل 5 ثواني لجعله أكثر سلاسة
+        }, 30000); // تحديث خفيف للعداد بدون إعادة رفع صورة كل عدة ثوانٍ
 
         // إيقاف العداد بعد انتهاء الإجازة أو بعد ساعة
         setTimeout(() => {

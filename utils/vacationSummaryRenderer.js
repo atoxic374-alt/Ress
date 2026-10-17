@@ -1,36 +1,10 @@
-const { createCanvas } = require('canvas');
-const { AttachmentBuilder } = require('discord.js');
+const { buildTopSummaryImage } = require('./topSummaryRenderer.js');
 const { ensureCairoFontsRegistered } = require('./cairoFont');
 
 ensureCairoFontsRegistered();
 
 const imageCache = new Map();
-const CACHE_TTL_MS = 5 * 1000;
-
-function normalizeColor(color, fallback = '#5865F2') {
-    const value = String(color || '').trim();
-    if (/^#[0-9a-f]{6}$/i.test(value)) return value;
-    if (/^[0-9a-f]{6}$/i.test(value)) return `#${value}`;
-    return fallback;
-}
-
-function roundedRect(ctx, x, y, width, height, radius) {
-    const r = Math.min(radius, width / 2, height / 2);
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + width, y, x + width, y + height, r);
-    ctx.arcTo(x + width, y + height, x, y + height, r);
-    ctx.arcTo(x, y + height, x, y, r);
-    ctx.arcTo(x, y, x + width, y, r);
-    ctx.closePath();
-}
-
-function drawText(ctx, text, x, y, { font = '24px Cairo', color = '#ffffff', align = 'right' } = {}) {
-    ctx.font = font;
-    ctx.fillStyle = color;
-    ctx.textAlign = align;
-    ctx.fillText(String(text ?? ''), x, y);
-}
+const CACHE_TTL_MS = 15 * 1000;
 
 function formatRiyadh(dateValue) {
     if (!dateValue) return 'Not specified';
@@ -45,31 +19,9 @@ function formatRiyadh(dateValue) {
     }).format(new Date(dateValue));
 }
 
-function fitText(ctx, text, maxWidth, font, fallback = 'Not specified') {
-    const value = String(text || fallback);
-    ctx.font = font;
-    if (ctx.measureText(value).width <= maxWidth) return value;
-    let output = value;
-    while (output.length > 3 && ctx.measureText(`${output}…`).width > maxWidth) output = output.slice(0, -1);
-    return `${output}…`;
-}
-
-function wrapText(ctx, text, maxWidth, font) {
-    ctx.font = font;
-    const words = String(text || '').split(/\s+/).filter(Boolean);
-    const lines = [];
-    let current = '';
-    for (const word of words) {
-        const candidate = current ? `${current} ${word}` : word;
-        if (current && ctx.measureText(candidate).width > maxWidth) {
-            lines.push(current);
-            current = word;
-        } else {
-            current = candidate;
-        }
-    }
-    if (current) lines.push(current);
-    return lines.length ? lines : ['Not specified'];
+function cleanValue(value, fallback = 'Not specified') {
+    const text = String(value ?? '').trim();
+    return text || fallback;
 }
 
 function buildVacationSummaryImage({
@@ -84,93 +36,45 @@ function buildVacationSummaryImage({
     reason,
     removedRoles = []
 }) {
-    const cacheKey = JSON.stringify({ guildName, memberName, accentColor, status, timeRemaining, startDate, endDate, approvedBy, reason, removedRoles });
+    const normalizedRoles = Array.isArray(removedRoles) && removedRoles.length
+        ? removedRoles.join(', ')
+        : 'None';
+    const cacheKey = JSON.stringify({ guildName, memberName, accentColor, status, timeRemaining, startDate, endDate, approvedBy, reason, normalizedRoles });
     const cached = imageCache.get(cacheKey);
     if (cached && Date.now() - cached.createdAt < CACHE_TTL_MS) {
-        return new AttachmentBuilder(Buffer.from(cached.buffer), { name: 'vacation-summary.png' });
+        return new (require('discord.js').AttachmentBuilder)(Buffer.from(cached.buffer), { name: 'vacation-summary.png' });
     }
 
-    const width = 1200;
-    const roleNames = removedRoles.length ? removedRoles.map(role => `• ${role}`) : ['None'];
-    const rows = [
-        ['Status', status],
-        ['Time Remaining', timeRemaining],
-        ['Approved by', approvedBy || 'Unknown'],
-        ['Start Date', formatRiyadh(startDate)],
-        ['End Date', formatRiyadh(endDate)],
-        ['Reason', reason || 'Not specified'],
-        ['Removed Roles', roleNames]
-    ];
-    const rowHeight = 66;
-    const rolesHeight = Math.max(1, roleNames.length) * rowHeight;
-    const height = 300 + (rows.length - 1) * rowHeight + rolesHeight + 100;
-    const accent = normalizeColor(accentColor);
-    const canvas = createCanvas(width, height);
-    const ctx = canvas.getContext('2d');
-
-    const background = ctx.createLinearGradient(0, 0, width, height);
-    background.addColorStop(0, '#111318');
-    background.addColorStop(1, '#20242d');
-    ctx.fillStyle = background;
-    ctx.fillRect(0, 0, width, height);
-
-    const glows = [
-        [width * 0.14, height * 0.16, width * 0.72, '24'],
-        [width * 0.86, height * 0.42, width * 0.68, '16'],
-        [width * 0.42, height * 0.92, width * 0.72, '10']
-    ];
-    for (const [x, y, radius, alpha] of glows) {
-        const glow = ctx.createRadialGradient(x, y, 0, x, y, radius);
-        glow.addColorStop(0, `${accent}${alpha}`);
-        glow.addColorStop(1, `${accent}00`);
-        ctx.fillStyle = glow;
-        ctx.fillRect(0, 0, width, height);
-    }
-
-    drawText(ctx, 'My Vacation', width / 2, 94, { font: 'bold 52px Cairo', align: 'center' });
-    drawText(ctx, fitText(ctx, memberName || 'Member', 720, 'bold 29px Cairo'), width / 2, 145, {
-        font: 'bold 29px Cairo', color: 'rgba(255,255,255,0.68)', align: 'center'
+    const attachment = buildTopSummaryImage({
+        accentColor,
+        title: 'My Vacation',
+        subtitle: `Vacation for ${cleanValue(memberName, 'Member')} • ${cleanValue(guildName, 'Server')}`,
+        sections: [
+            {
+                title: 'Vacation',
+                rows: [
+                    { label: 'Status', value: cleanValue(status) },
+                    { label: 'Time Remaining', value: cleanValue(timeRemaining) },
+                    { label: 'Start Date', value: formatRiyadh(startDate) },
+                    { label: 'End Date', value: formatRiyadh(endDate) }
+                ]
+            },
+            {
+                title: 'Details',
+                rows: [
+                    { label: 'Approved by', value: cleanValue(approvedBy, 'Unknown') },
+                    { label: 'Reason', value: cleanValue(reason) },
+                    { label: 'Removed Roles', value: normalizedRoles }
+                ]
+            }
+        ],
+        yourRank: `Status :  ${cleanValue(status)}   •   Ends :  ${formatRiyadh(endDate)}`
     });
 
-    ctx.fillStyle = 'rgba(255,255,255,0.055)';
-    roundedRect(ctx, 95, 190, width - 190, 78, 18);
-    ctx.fill();
-    drawText(ctx, 'VACATION STATUS', width - 130, 241, { font: 'bold 27px Cairo' });
-    drawText(ctx, status, 135, 241, { font: 'bold 29px Cairo', color: '#FFFFFF', align: 'left' });
-
-    let y = 315;
-    rows.forEach(([label, value], index) => {
-        const isRolesRow = label === 'Removed Roles';
-        const blockHeight = isRolesRow ? rolesHeight : rowHeight;
-        if (index % 2 === 0) {
-            ctx.fillStyle = 'rgba(255,255,255,0.045)';
-            roundedRect(ctx, 70, y - 40, width - 140, blockHeight - 12, 13);
-            ctx.fill();
-        }
-        drawText(ctx, label, width - 110, y - 4, { font: 'bold 24px Cairo' });
-        if (isRolesRow) {
-            value.forEach((role, roleIndex) => {
-                const lines = wrapText(ctx, role, 680, '22px Cairo');
-                lines.forEach((line, lineIndex) => drawText(ctx, line, 110, y - 4 + ((roleIndex * 66) + (lineIndex * 25)), {
-                    font: '22px Cairo', color: 'rgba(255,255,255,0.84)', align: 'left'
-                }));
-            });
-        } else {
-            drawText(ctx, fitText(ctx, value, 680, '22px Cairo'), 110, y - 4, {
-                font: '22px Cairo', color: 'rgba(255,255,255,0.84)', align: 'left'
-            });
-        }
-        y += blockHeight;
-    });
-
-    drawText(ctx, `${String(guildName || 'Server').slice(0, 54)} • Vacation Summary`, 70, height - 28, {
-        font: '20px Cairo', color: 'rgba(255,255,255,0.52)', align: 'left'
-    });
-
-    const buffer = canvas.toBuffer('image/png');
+    const buffer = attachment.attachment;
     imageCache.set(cacheKey, { buffer, createdAt: Date.now() });
     if (imageCache.size > 100) imageCache.delete(imageCache.keys().next().value);
-    return new AttachmentBuilder(Buffer.from(buffer), { name: 'vacation-summary.png' });
+    return new (require('discord.js').AttachmentBuilder)(Buffer.from(buffer), { name: 'vacation-summary.png' });
 }
 
 module.exports = { buildVacationSummaryImage, formatRiyadh };
