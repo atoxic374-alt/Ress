@@ -14,7 +14,32 @@ const name = 'توب';
 
 const { getDatabasePath } = require('../utils/storagePaths');
 const streakDbPath = getDatabasePath('streak.db');
+const TOP_CACHE_TTL_MS = 15 * 1000;
+const topResultsCache = new Map();
 let streakDb = null;
+
+function invalidateTopsCache(guildId = null) {
+    if (!guildId) {
+        topResultsCache.clear();
+        return;
+    }
+    const prefix = `${String(guildId)}:`;
+    for (const key of topResultsCache.keys()) {
+        if (key.startsWith(prefix)) topResultsCache.delete(key);
+    }
+}
+
+function pruneTopResultsCache(now = Date.now()) {
+    for (const [key, entry] of topResultsCache) {
+        if (!entry || now - entry.createdAt >= TOP_CACHE_TTL_MS) topResultsCache.delete(key);
+    }
+    if (topResultsCache.size > 500) {
+        const oldest = [...topResultsCache.entries()]
+            .sort((a, b) => a[1].createdAt - b[1].createdAt)
+            .slice(0, topResultsCache.size - 500);
+        for (const [key] of oldest) topResultsCache.delete(key);
+    }
+}
 
 function initializeStreakDatabase() {
     return new Promise((resolve, reject) => {
@@ -160,6 +185,11 @@ function shouldShowSeconds(users) {
 
 async function getTopUsers(db, category, period, limit = 50, guildId = null) {
     try {
+        const cacheKey = `${String(guildId || 'global')}:${category}:${period}:${limit}`;
+        const cacheNow = Date.now();
+        pruneTopResultsCache(cacheNow);
+        const cached = topResultsCache.get(cacheKey);
+        if (cached && cacheNow - cached.createdAt < TOP_CACHE_TTL_MS) return cached.rows;
         const now = moment().tz('Asia/Riyadh');
         const nowMs = now.valueOf();
         let dateFilter = '';
@@ -299,9 +329,11 @@ async function getTopUsers(db, category, period, limit = 50, guildId = null) {
             }
 
             // إعادة الترتيب لضمان الدقة بعد الإضافة اللحظية
-            return updatedResults.sort((a, b) => b.value - a.value).slice(0, limit || 50);
+            const rows = updatedResults.sort((a, b) => b.value - a.value).slice(0, limit || 50);
+            topResultsCache.set(cacheKey, { rows, createdAt: cacheNow });
+            return rows;
         }
-
+        topResultsCache.set(cacheKey, { rows: results, createdAt: cacheNow });
         return results;
     } catch (error) {
         console.error('خطأ في جلب أفضل المستخدمين:', error);
@@ -377,10 +409,37 @@ async function execute(message, args, { client }) {
     let currentPeriod = 'monthly';
     let currentPage = 0;
     const pageSize = 10;
+    function getTopDisplayName(userId) {
+        const member = message.guild.members.cache.get(String(userId));
+        return member?.displayName
+            || member?.user?.globalName
+            || member?.user?.username
+            || `User ${userId}`;
+    }
+
+    function formatRankValue(category, value) {
+        if (category === 'voice') return formatDuration(value);
+        if (category === 'chat') return `${Math.floor(value / 10)}xp`;
+        if (category === 'reactions') return `${value}R`;
+        if (category === 'joins') return `${value}J`;
+        return String(value);
+    }
+
+    async function getYourRank(category, period) {
+        // العرض يبقى 5/10، لكن حساب رتبة العضو يبحث في كامل القائمة حتى لو كان #100 أو أبعد.
+        const rows = await getTopUsers(db, category, period, 100000, message.guild.id);
+        const rankIndex = rows.findIndex(row => String(row.user_id) === String(message.author.id));
+        if (rankIndex === -1) return 'Your Rank :  Unranked';
+        return `Your Rank :  #${rankIndex + 1}  •  ${formatRankValue(category, rows[rankIndex].value)}`;
+    }
 
     async function buildInitialImage() {
         const topVoice = await getTopUsers(db, 'voice', currentPeriod, 5, message.guild.id);
         const topChat = await getTopUsers(db, 'chat', currentPeriod, 5, message.guild.id);
+        const [voiceRank, chatRank] = await Promise.all([
+            getYourRank('voice', currentPeriod),
+            getYourRank('chat', currentPeriod)
+        ]);
         const periodNames = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', total: 'All' };
         const showSeconds = shouldShowSeconds(topVoice);
         return buildTopSummaryImage({
@@ -389,51 +448,57 @@ async function execute(message, args, { client }) {
             subtitle: `${periodNames[currentPeriod]} • Voice and Chat Leaderboard`,
             sections: [
                 { title: 'Top Voice', rows: topVoice.length ? topVoice.map((user, idx) => ({
-                    label: `#${idx + 1}  <@${user.user_id}>`, value: formatDuration(user.value, showSeconds)
+                    label: `#${idx + 1}  ${getTopDisplayName(user.user_id)}`, value: formatDuration(user.value, showSeconds)
                 })) : [{ label: 'No data', value: '—' }] },
                 { title: 'Top Chat', rows: topChat.length ? topChat.map((user, idx) => ({
-                    label: `#${idx + 1}  <@${user.user_id}>`, value: `${Math.floor(user.value / 10)}xp`
+                    label: `#${idx + 1}  ${getTopDisplayName(user.user_id)}`, value: `${Math.floor(user.value / 10)}xp`
                 })) : [{ label: 'No data', value: '—' }] }
             ],
-            controls: 'Voice • Chat • Reactions • Joins • Streaks'
+            yourRank: `${voiceRank.replace('Your Rank :  ', 'Voice :  ')}   |   ${chatRank.replace('Your Rank :  ', 'Chat :  ')}`
         });
     }
 
     async function buildStreakImage() {
         const isEnabled = await isStreakSystemEnabled(message.guild.id);
         if (!isEnabled) {
-            return buildTopSummaryImage({ accentColor: bannerAccentColor, title: 'Streak', subtitle: 'Top Streak', sections: [{ title: 'Status', rows: [{ label: 'System', value: 'Not enabled' }] }], controls: 'Voice • Chat • Reactions • Joins • Streaks' });
+            return buildTopSummaryImage({ accentColor: bannerAccentColor, title: 'Streak', subtitle: 'Top Streak', sections: [{ title: 'Status', rows: [{ label: 'System', value: 'Not enabled' }] }], yourRank: 'Your Rank :  Unranked' });
         }
         const allStreaks = await getStreakUsers(message.guild.id);
         if (!allStreaks.length) {
-            return buildTopSummaryImage({ accentColor: bannerAccentColor, title: 'Top Streak', subtitle: 'No active streaks', sections: [{ title: 'Status', rows: [{ label: 'Members', value: 'No data' }] }], controls: 'Voice • Chat • Reactions • Joins • Streaks' });
+            return buildTopSummaryImage({ accentColor: bannerAccentColor, title: 'Top Streak', subtitle: 'No active streaks', sections: [{ title: 'Status', rows: [{ label: 'Members', value: 'No data' }] }], yourRank: 'Your Rank :  Unranked' });
         }
         const totalPages = Math.ceil(allStreaks.length / pageSize);
         const startIndex = currentPage * pageSize;
         const pageStreaks = allStreaks.slice(startIndex, startIndex + pageSize);
         const today = moment().tz('Asia/Riyadh').format('YYYY-MM-DD');
+        const myStreakIndex = allStreaks.findIndex(streak => String(streak.user_id) === String(message.author.id));
+        const myStreak = myStreakIndex === -1
+            ? 'Your Rank :  Unranked'
+            : `Your Rank :  #${myStreakIndex + 1}  •  ${allStreaks[myStreakIndex].current_streak} days`;
         return buildTopSummaryImage({
             accentColor: bannerAccentColor,
             title: 'Top Streak',
             subtitle: `Page ${currentPage + 1} of ${totalPages}`,
             sections: [{ title: 'Streaks', rows: pageStreaks.map((streak, index) => ({
-                label: `#${startIndex + index + 1}  <@${streak.user_id}>`,
+                label: `#${startIndex + index + 1}  ${getTopDisplayName(streak.user_id)}`,
                 value: `${streak.current_streak} ${streak.last_post_date === today ? 'Active' : 'Not Active'}`
             })) }],
-            controls: 'Voice • Chat • Reactions • Joins • Streaks'
+            yourRank: myStreak
         });
     }
 
     async function buildCategoryImage() {
+        const categoryPageSize = currentCategory === 'voice' ? 5 : 10;
         const topUsers = await getTopUsers(db, currentCategory, currentPeriod, 100, message.guild.id);
         const categoryNames = { voice: 'Top Voice', chat: 'Top Chat', reactions: 'Reactions', joins: 'Joins' };
         const periodNames = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', total: 'All' };
         if (!topUsers.length) {
-            return buildTopSummaryImage({ accentColor: bannerAccentColor, title: categoryNames[currentCategory] || 'Top', subtitle: `${periodNames[currentPeriod]} • No data`, sections: [{ title: 'Status', rows: [{ label: 'Results', value: 'No data' }] }], controls: 'Voice • Chat • Reactions • Joins • Streaks' });
+            return buildTopSummaryImage({ accentColor: bannerAccentColor, title: categoryNames[currentCategory] || 'Top', subtitle: `${periodNames[currentPeriod]} • No data`, sections: [{ title: 'Status', rows: [{ label: 'Results', value: 'No data' }] }], yourRank: 'Your Rank :  Unranked' });
         }
-        const totalPages = Math.ceil(topUsers.length / pageSize);
-        const startIndex = currentPage * pageSize;
-        const pageUsers = topUsers.slice(startIndex, startIndex + pageSize);
+        const totalPages = Math.ceil(topUsers.length / categoryPageSize);
+        const startIndex = currentPage * categoryPageSize;
+        const pageUsers = topUsers.slice(startIndex, startIndex + categoryPageSize);
+        const yourRank = await getYourRank(currentCategory, currentPeriod);
         const showSeconds = currentCategory === 'voice' && shouldShowSeconds(pageUsers);
         const rows = pageUsers.map((user, index) => {
             let value = user.value;
@@ -441,14 +506,14 @@ async function execute(message, args, { client }) {
             else if (currentCategory === 'chat') value = `${Math.floor(user.value / 10)}xp`;
             else if (currentCategory === 'reactions') value = `${user.value}R`;
             else if (currentCategory === 'joins') value = `${user.value}J`;
-            return { label: `#${startIndex + index + 1}  <@${user.user_id}>`, value };
+            return { label: `#${startIndex + index + 1}  ${getTopDisplayName(user.user_id)}`, value };
         });
         return buildTopSummaryImage({
             accentColor: bannerAccentColor,
             title: categoryNames[currentCategory] || 'Top',
             subtitle: `${periodNames[currentPeriod]} • Page ${currentPage + 1} of ${totalPages}`,
             sections: [{ title: categoryNames[currentCategory] || 'Top', rows }],
-            controls: 'Voice • Chat • Reactions • Joins • Streaks'
+            yourRank
         });
     }
 
@@ -504,8 +569,9 @@ async function execute(message, args, { client }) {
             const allStreaks = await getStreakUsers(message.guild.id);
             totalPages = Math.ceil(allStreaks.length / pageSize);
         } else {
+            const categoryPageSize = currentCategory === 'voice' ? 5 : 10;
             const topUsers = await getTopUsers(db, currentCategory, currentPeriod, 100, message.guild.id);
-            totalPages = Math.ceil(topUsers.length / pageSize);
+            totalPages = Math.ceil(topUsers.length / categoryPageSize);
         }
 
         if (totalPages <= 1) {
@@ -560,8 +626,9 @@ async function execute(message, args, { client }) {
                     const allStreaks = await getStreakUsers(message.guild.id);
                     totalPages = Math.ceil(allStreaks.length / pageSize);
                 } else {
+                    const categoryPageSize = currentCategory === 'voice' ? 5 : 10;
                     const topUsers = await getTopUsers(db, currentCategory, currentPeriod, 100, message.guild.id);
-                    totalPages = Math.ceil(topUsers.length / pageSize);
+                    totalPages = Math.ceil(topUsers.length / categoryPageSize);
                 }
                 if (currentPage < totalPages - 1) {
                     currentPage++;
@@ -590,4 +657,4 @@ async function execute(message, args, { client }) {
     });
 }
 
-module.exports = { name, execute };
+module.exports = { name, execute, invalidateTopsCache, getTopUsers };

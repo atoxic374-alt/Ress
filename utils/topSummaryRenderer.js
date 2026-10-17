@@ -24,14 +24,14 @@ function buildTopSummaryImage({
     title = 'Rank',
     subtitle = 'Monthly • Voice and Chat Leaderboard',
     sections = [],
-    controls = 'Category • Day • Week • Month • All'
+    yourRank = 'Your Rank :  Unranked'
 }) {
     const accent = normalizeColor(accentColor);
     const rowHeight = 48;
     const sectionHeight = 42;
     const contentHeight = Math.max(250, sections.reduce((sum, section) => sum + sectionHeight + (section.rows?.length || 0) * rowHeight, 0));
     const width = 1200;
-    const panelHeight = contentHeight + 90;
+    const panelHeight = contentHeight + 45;
     const height = 165 + panelHeight + 190;
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
@@ -81,8 +81,7 @@ function buildTopSummaryImage({
     ctx.fillStyle = '#252933';
     roundedRect(ctx, 110, height - 145, width - 220, 48, 12);
     ctx.fill();
-    drawText(ctx, controls, width / 2, height - 121, { font: '18px Cairo', color: '#DCE2ED', align: 'center' });
-    drawText(ctx, 'R Sys • Top Summary', 110, height - 50, { font: '17px Cairo', color: '#777F91' });
+    drawText(ctx, yourRank, width / 2, height - 121, { font: 'bold 18px Cairo', color: '#DCE2ED', align: 'center' });
 
     return new AttachmentBuilder(canvas.toBuffer('image/png'), { name: 'top-summary.png' });
 }

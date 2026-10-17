@@ -4,10 +4,83 @@ const { isUserBlocked } = require('./block.js');
 const { isChannelBlocked } = require('./chatblock.js');
 const { getDatabase } = require('../utils/database.js');
 const moment = require('moment-timezone');
-const { createStructuredContainer, componentsV2Payload } = require('../utils/structuredContainer.js');
+const { buildTopSummaryImage } = require('../utils/topSummaryRenderer.js');
+const { getGuildBannerHex } = require('../utils/guildBannerColor.js');
+const topsCommand = require('./tops.js');
 
 const name = 'تفاعلي';
 const aliases = ['تواجدي', 'me'];
+const ACTIVITY_CACHE_TTL_MS = 15 * 1000;
+const activityCache = new Map();
+
+function getActivityCacheKey(guildId, userId, period) {
+    return `${guildId || 'global'}:${userId}:${period}`;
+}
+
+function invalidateActivityCache(guildId = null, userId = null) {
+    if (!guildId && !userId) return activityCache.clear();
+    for (const key of activityCache.keys()) {
+        if ((!guildId || key.startsWith(`${guildId}:`)) && (!userId || key.includes(`:${userId}:`))) activityCache.delete(key);
+    }
+}
+
+function formatRankValue(category, value) {
+    if (category === 'voice') return formatDuration(value);
+    return `${Math.floor(Number(value || 0) / 10)}xp`;
+}
+
+async function getActivityRanks(db, period, userId, guildId) {
+    const [voiceRows, chatRows] = await Promise.all([
+        topsCommand.getTopUsers(db, 'voice', period, 100000, guildId),
+        topsCommand.getTopUsers(db, 'chat', period, 100000, guildId)
+    ]);
+    const voiceIndex = voiceRows.findIndex(row => String(row.user_id) === String(userId));
+    const chatIndex = chatRows.findIndex(row => String(row.user_id) === String(userId));
+    return {
+        voice: voiceIndex === -1 ? 'Unranked' : `#${voiceIndex + 1}  •  ${formatRankValue('voice', voiceRows[voiceIndex].value)}`,
+        chat: chatIndex === -1 ? 'Unranked' : `#${chatIndex + 1}  •  ${formatRankValue('chat', chatRows[chatIndex].value)}`
+    };
+}
+
+async function buildActivityImage({ message, member, period, periodLabel, stats, activeDays, db, accentColor }) {
+    const guildId = message.guild?.id;
+    const cacheKey = getActivityCacheKey(guildId, member.id, period);
+    const now = Date.now();
+    const cached = activityCache.get(cacheKey);
+    if (cached && now - cached.createdAt < ACTIVITY_CACHE_TTL_MS) return cached.image;
+    const ranks = await getActivityRanks(db, period, member.id, guildId);
+    const topVoiceChannel = await db.getMostActiveVoiceChannel(member.id, period, guildId) || {};
+    const topMessageChannel = await db.getMostActiveMessageChannel(member.id, guildId) || {};
+    const voiceChannel = topVoiceChannel.channel_name && topVoiceChannel.channel_name !== 'unknown'
+        ? `#${topVoiceChannel.channel_name}` : 'No Data';
+    const messageChannel = topMessageChannel.channel_name && topMessageChannel.channel_name !== 'unknown'
+        ? `#${topMessageChannel.channel_name}` : 'No Data';
+    const image = buildTopSummaryImage({
+        accentColor,
+        title: periodLabel,
+        subtitle: `Activity for ${member.displayName}`,
+        sections: [{
+            title: 'Voice',
+            rows: [
+                { label: 'Time', value: formatDuration(stats.voiceTime || 0) },
+                { label: 'Joins', value: String(stats.voiceJoins || 0) },
+                { label: 'Most Active Room', value: voiceChannel }
+            ]
+        }, {
+            title: 'Chat',
+            rows: [
+                { label: 'Messages', value: String(stats.messages || 0) },
+                { label: 'XP', value: `${Math.floor((stats.messages || 0) / 10)}xp` },
+                { label: 'Reactions', value: String(stats.reactions || 0) },
+                { label: 'Most Active Chat', value: messageChannel },
+                { label: 'Active Days', value: `${activeDays || 0}${period === 'weekly' ? ' of 7' : ''}` }
+            ]
+        }],
+        yourRank: `Voice :  ${ranks.voice}   |   Chat :  ${ranks.chat}`
+    });
+    activityCache.set(cacheKey, { image, createdAt: now });
+    return image;
+}
 
 function formatDuration(milliseconds) {
     if (!milliseconds || milliseconds <= 0) return '0';
@@ -151,6 +224,7 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
             await message.channel.send('❌ قاعدة البيانات غير متاحة');
             return;
         }
+        const bannerAccentColor = await getGuildBannerHex(message.guild, colorManager.getColor?.() || '#5865F2');
 
         let stats, periodLabel, activeDays;
         if (period === 'daily') {
@@ -202,23 +276,8 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
             stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
         }
 
-        // جلب أكثر قناة صوتية مع قيمة افتراضية
-        const topVoiceChannel = await dbManager.getMostActiveVoiceChannel(user.id, period, message.guild?.id) || { channel_id: null, channel_name: 'No Data', total_time: 0, session_count: 0 };
-        // جلب أكثر قناة رسائل مع قيمة افتراضية
-        const topMessageChannel = await dbManager.getMostActiveMessageChannel(user.id, message.guild?.id) || { channel_id: null, channel_name: 'No Data', message_count: 0 };
-        // حساب XP (10 رسائل = 1 XP)
-        const xp = Math.floor((stats.messages || 0) / 10);
-        // تحضير منشن القنوات
-        const voiceChannelMention = formatChannelDisplay(topVoiceChannel, message.guild, 'No Data');
-        const messageChannelMention = formatChannelDisplay(topMessageChannel, message.guild, 'No Data');
-        const activityContainer = createStructuredContainer({
-            title: periodLabel,
-            description: `**تفاعل ${member.displayName}**\n\n**Voice**\nالوقت : **${formatDuration(stats.voiceTime || 0)}**\nالجويْنات : **${stats.voiceJoins || 0}**\nأكثر روم : ${voiceChannelMention}\n\n**Chat**\nالرسائل : **${stats.messages || 0}**\nXP : **${xp}xp**\nالرياكتات : **${stats.reactions || 0}**\nأكثر روم شات : ${messageChannelMention}\n\nأيام التفاعل : **${activeDays || 0}${period === 'weekly' ? ' من 7' : ''}**`,
-            footer: `${message.author.username} • ${periodLabel}`,
-            accentColor: colorManager.getColor?.()
-        });
-        activityContainer.addActionRowComponents(...buildActivityComponents(user.id, period, false));
-        const response = await message.channel.send(componentsV2Payload(activityContainer));
+        const activityImage = await buildActivityImage({ message, member, period, periodLabel, stats, activeDays, db: dbManager, accentColor: bannerAccentColor });
+        const response = await message.channel.send({ files: [activityImage], components: buildActivityComponents(user.id, period, false) });
         // جمع التفاعلات على الأزرار
         const collector = response.createMessageComponentCollector({
             filter: i => (i.customId.startsWith('activity_') || i.customId === `activity_after_menu_${user.id}`) && i.user.id === message.author.id,
@@ -314,19 +373,9 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
                     activeDays = (await dbManager.getActiveDaysCount(user.id, 365, interaction.guild?.id)) || 0;
                     stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
                 }
-                const topVoiceChannel = await dbManager.getMostActiveVoiceChannel(user.id, newPeriod, interaction.guild?.id) || { channel_id: null, channel_name: 'No Active Or Leave Channel', total_time: 0, session_count: 0 };
-                const topMessageChannel = await dbManager.getMostActiveMessageChannel(user.id, interaction.guild?.id) || { channel_id: null, channel_name: 'No Active In Chat', message_count: 0 };
-                const xp = Math.floor((stats.messages || 0) / 10);
-                const voiceChannelMention = formatChannelDisplay(topVoiceChannel, interaction.guild, 'No Active Or Leave Channel');
-                const messageChannelMention = formatChannelDisplay(topMessageChannel, interaction.guild, 'No Active In Chat');
-                const updatedContainer = createStructuredContainer({
-                    title: periodLabel,
-                    description: `**تفاعل ${member.displayName}**\n\n**Voice**\nالوقت : **${formatDuration(stats.voiceTime || 0)}**\nالجويْنات : **${stats.voiceJoins || 0}**\nأكثر روم : ${voiceChannelMention}\n\n**Chat**\nالرسائل : **${stats.messages || 0}**\nXP : **${xp}xp**\nالرياكتات : **${stats.reactions || 0}**\nأكثر روم شات : ${messageChannelMention}\n\nأيام التفاعل : **${activeDays || 0}${newPeriod === 'weekly' ? ' من 7' : ''}**`,
-                    footer: `${interaction.user.username} • ${periodLabel}`,
-                    accentColor: colorManager.getColor?.()
-                });
-                updatedContainer.addActionRowComponents(...buildActivityComponents(user.id, newPeriod, false));
-                await interaction.update(componentsV2Payload(updatedContainer));
+                invalidateActivityCache(message.guild?.id, user.id);
+                const activityImage = await buildActivityImage({ message, member, period: newPeriod, periodLabel, stats, activeDays, db: dbManager, accentColor: bannerAccentColor });
+                await interaction.update({ files: [activityImage], components: buildActivityComponents(user.id, newPeriod, false) });
             } catch (error) {
                 console.error('خطأ في تحديث الإحصائيات:', error);
             }
@@ -449,48 +498,32 @@ module.exports = {
         `, activityParams);
         const activeDays = activeDaysResult?.count || 0;
 
-        const topVoiceChannel = await dbManager.get(`
-            SELECT channel_id, channel_name, SUM(duration) as total_time, COUNT(*) as session_count
-            FROM voice_sessions
-            WHERE ${voiceScope} AND start_time >= ?
-            GROUP BY channel_id
-            ORDER BY total_time DESC
-            LIMIT 1
-        `, voiceParams) || { channel_id: null, channel_name: 'No Data', total_time: 0, session_count: 0 };
-
-        const voiceChannelMention = formatChannelDisplay(topVoiceChannel, interaction.guild, 'No Data');
-        const topMessageChannel = await dbManager.get(`
-            SELECT channel_id, channel_name, message_count, last_message
-            FROM guild_message_channels
-            WHERE guild_id = ? AND user_id = ? AND last_message >= ?
-            ORDER BY message_count DESC, last_message DESC
-            LIMIT 1
-        `, [interaction.guild?.id, targetUserId, fromTimestamp]) || await dbManager.get(`
-            SELECT channel_id, channel_name, message_count, last_message
-            FROM message_channels
-            WHERE user_id = ? AND last_message >= ?
-            ORDER BY message_count DESC, last_message DESC
-            LIMIT 1
-        `, [targetUserId, fromTimestamp]) || { channel_id: null, channel_name: 'No Data', message_count: 0 };
-        const messageChannelMention = formatChannelDisplay(topMessageChannel, interaction.guild, 'No Data');
-        const xp = Math.floor((messages || 0) / 10);
-
-        const summaryContainer = createStructuredContainer({
+        const ranks = await getActivityRanks(dbManager, 'total', targetUserId, interaction.guild?.id);
+        const bannerAccentColor = await getGuildBannerHex(interaction.guild, colorManager.getColor?.() || '#5865F2');
+        const summaryImage = buildTopSummaryImage({
+            accentColor: bannerAccentColor,
             title: 'After Date',
-            description: `**تفاعل ${memberDisplay}**\n**من :** ${dateMoment.format('YYYY-MM-DD hh:mm A')}${noActivity ? '\n**لا يوجد نشاط مسجل بعد هذا التاريخ.**' : ''}\n\n**Voice**\nالوقت : **${formatDuration(voiceTime)}**\nالجويْنات : **${voiceJoins}**\nأكثر روم : ${voiceChannelMention}\n\n**Chat**\nالرسائل : **${messages}**\nXP : **${xp}xp**\nالرياكتات : **${reactions}**\nأكثر روم شات : ${messageChannelMention}\n\nأيام التفاعل : **${activeDays}**`,
-            footer: 'After Date',
-            accentColor: colorManager.getColor?.()
+            subtitle: `Activity for ${memberDisplay} • From ${dateMoment.format('YYYY-MM-DD hh:mm A')}`,
+            sections: [{ title: 'Voice', rows: [
+                { label: 'Time', value: formatDuration(voiceTime) },
+                { label: 'Joins', value: String(voiceJoins) }
+            ] }, { title: 'Chat', rows: [
+                { label: 'Messages', value: String(messages) },
+                { label: 'XP', value: `${Math.floor(messages / 10)}xp` },
+                { label: 'Reactions', value: String(reactions) },
+                { label: 'Active Days', value: String(activeDays) }
+            ] }],
+            yourRank: `Voice :  ${ranks.voice}   |   Chat :  ${ranks.chat}`
         });
-        summaryContainer.addActionRowComponents(...buildActivityComponents(targetUserId, null, true));
 
         await interaction.deferReply({ ephemeral: true });
         try {
             const targetMessage = await interaction.channel.messages.fetch(targetMessageId);
-            await targetMessage.edit(componentsV2Payload(summaryContainer));
+            await targetMessage.edit({ files: [summaryImage], components: buildActivityComponents(targetUserId, null, true) });
             await interaction.editReply({ content: '✅ تم تحديث الإحصائيات بعد التاريخ.' });
         } catch (error) {
             await interaction.editReply({ content: '⚠️ تعذر تحديث الرسالة الأصلية، لكن تم إنشاء النتائج هنا.' });
-            await interaction.followUp({ ...componentsV2Payload(summaryContainer), ephemeral: true });
+            await interaction.followUp({ files: [summaryImage], components: buildActivityComponents(targetUserId, null, true), ephemeral: true });
         }
     }
 };

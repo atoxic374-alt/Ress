@@ -1233,6 +1233,7 @@ const dataCache = {
 };
 
 const topCommand = require('./commands/top_leaderboard.js');
+const topsCommand = require('./commands/tops.js');
 
 // دالة لوضع علامة للحفظ مع تأخير ذكي
 function scheduleSave() {
@@ -1251,6 +1252,9 @@ function scheduleSave() {
 
     if (topCommand.invalidateTopCache) {
         topCommand.invalidateTopCache();
+    }
+    if (topsCommand.invalidateTopsCache) {
+        topsCommand.invalidateTopsCache();
     }
 }
 
