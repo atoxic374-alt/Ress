@@ -649,6 +649,12 @@ async function execute(message, args, { client }) {
 
     const selectRow = new ActionRowBuilder().addComponents(categorySelect);
 
+    function getDisabledRows(rows) {
+        return rows.map(row => {
+            const data = row.toJSON();
+            return { ...data, components: data.components.map(component => ({ ...component, disabled: true })) };
+        });
+    }
     async function buildButtons() {
         const isStreakCategory = currentCategory === 'streaks';
         
@@ -728,7 +734,10 @@ async function execute(message, args, { client }) {
     const filter = i => i.user.id === message.author.id && i.message.id === sentMessage.id;
     const collector = message.channel.createMessageComponentCollector({ filter, time: 600000 });
 
-    let topInteractionQueue = Promise.resolve();
+    let isUpdatingTop = false;
+    let topCollectorEnded = false;
+    let visibleButtons = initialButtons;
+    let activeTopUpdate = Promise.resolve();
     collector.on('collect', interaction => {
         const acknowledged = interaction.deferUpdate()
             .then(() => true)
@@ -736,9 +745,13 @@ async function execute(message, args, { client }) {
                 console.error('تعذر إقرار تفاعل التوب:', error);
                 return false;
             });
-        topInteractionQueue = topInteractionQueue.then(async () => {
-            if (!(await acknowledged)) return;
+        if (isUpdatingTop) return;
+        isUpdatingTop = true;
+        activeTopUpdate = (async () => {
+            const previousState = { currentCategory, currentPeriod, currentPage };
             try {
+                if (!(await acknowledged)) return;
+                await sentMessage.edit({ components: getDisabledRows(visibleButtons) });
                 if (interaction.customId === 'tops_category_select') {
                     currentCategory = interaction.values[0];
                     currentPage = 0;
@@ -762,39 +775,34 @@ async function execute(message, args, { client }) {
                         const allStreaks = await getStreakUsers(message.guild.id);
                         totalPages = Math.ceil(allStreaks.length / pageSize);
                     } else {
-                        const categoryPageSize = 10;
                         const topUsers = await getTopUsers(db, currentCategory, currentPeriod, 100, message.guild.id);
-                        totalPages = Math.ceil(topUsers.length / categoryPageSize);
+                        totalPages = Math.ceil(topUsers.length / 10);
                     }
-                    if (currentPage < totalPages - 1) {
-                        currentPage++;
-                    }
+                    if (currentPage < totalPages - 1) currentPage++;
                 }
-
                 let newImage;
-                if (currentCategory === null) {
-                    newImage = await buildInitialImage();
-                } else if (currentCategory === 'streaks') {
-                    newImage = await buildStreakImage();
-                } else {
-                    newImage = await buildCategoryImage();
-                }
-            
+                if (currentCategory === null) newImage = await buildInitialImage();
+                else if (currentCategory === 'streaks') newImage = await buildStreakImage();
+                else newImage = await buildCategoryImage();
                 const newButtons = await buildButtons();
-
-                await sentMessage.edit({ files: [newImage], components: newButtons });
+                await sentMessage.edit({ files: [newImage], components: getDisabledRows(newButtons) });
+                visibleButtons = newButtons;
+                if (!topCollectorEnded) await sentMessage.edit({ components: visibleButtons });
             } catch (error) {
+                currentCategory = previousState.currentCategory;
+                currentPeriod = previousState.currentPeriod;
+                currentPage = previousState.currentPage;
                 console.error('Error in tops collector:', error);
+                if (!topCollectorEnded) await sentMessage.edit({ components: visibleButtons }).catch(() => {});
+            } finally {
+                isUpdatingTop = false;
             }
-        }).catch(error => {
-            console.error('Error in queued tops interaction:', error);
-        });
+        })();
     });
 
     collector.on('end', () => {
-        topInteractionQueue = topInteractionQueue
-            .then(() => sentMessage.edit({ components: [] }))
-            .catch(() => {});
+        topCollectorEnded = true;
+        void activeTopUpdate.catch(() => {}).then(() => sentMessage.edit({ components: [] }).catch(() => {}));
     });
 }
 

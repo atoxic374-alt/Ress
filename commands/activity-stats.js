@@ -164,35 +164,40 @@ function getLiveVoiceDuration(userId, fromTimestamp) {
     return 0;
 }
 
-function buildActivityComponents(userId, activePeriod, isAfterSelected) {
+function buildActivityComponents(userId, activePeriod, isAfterSelected, disabled = false) {
     const buttonRow = new ActionRowBuilder()
         .addComponents(
             new ButtonBuilder()
                 .setCustomId(`activity_daily_${userId}`)
                 .setLabel('Day')
                 .setEmoji('<:emoji_50:1430788365069848596>')
-                .setStyle(activePeriod === 'daily' ? ButtonStyle.Primary : ButtonStyle.Secondary),
+                .setStyle(activePeriod === 'daily' ? ButtonStyle.Primary : ButtonStyle.Secondary)
+                .setDisabled(disabled),
             new ButtonBuilder()
                 .setCustomId(`activity_weekly_${userId}`)
                 .setLabel('Week')
                 .setEmoji('<:emoji_49:1430788330416640000>')
-                .setStyle(activePeriod === 'weekly' ? ButtonStyle.Primary : ButtonStyle.Secondary),
+                .setStyle(activePeriod === 'weekly' ? ButtonStyle.Primary : ButtonStyle.Secondary)
+                .setDisabled(disabled),
             new ButtonBuilder()
                 .setCustomId(`activity_monthly_${userId}`)
                 .setLabel('Month')
                 .setEmoji('<:emoji_48:1430788303317368924>')
-                .setStyle(activePeriod === 'monthly' ? ButtonStyle.Primary : ButtonStyle.Secondary),
+                .setStyle(activePeriod === 'monthly' ? ButtonStyle.Primary : ButtonStyle.Secondary)
+                .setDisabled(disabled),
             new ButtonBuilder()
                 .setCustomId(`activity_total_${userId}`)
                 .setLabel('All')
                 .setEmoji('<:emoji_22:1463536623730954376>')
                 .setStyle(activePeriod === 'total' ? ButtonStyle.Primary : ButtonStyle.Secondary)
+                .setDisabled(disabled)
         );
 
     const menuRow = new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
             .setCustomId(`activity_after_menu_${userId}`)
             .setPlaceholder('After Date')
+            .setDisabled(disabled)
             .addOptions(
                 {
                     label: 'After Date',
@@ -319,7 +324,13 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
             filter: i => (i.customId.startsWith('activity_') || i.customId === `activity_after_menu_${user.id}`) && i.user.id === message.author.id,
             time: 300000 // 5 دقائق
         });
+        let isUpdatingActivity = false;
+        let selectedActivityPeriod = period;
         collector.on('collect', interaction => {
+            if (isUpdatingActivity) {
+                void interaction.deferUpdate().catch(error => console.error('تعذر إقرار النقرة الإضافية:', error));
+                return;
+            }
             if (interaction.customId === `activity_after_menu_${user.id}`) {
                 const currentYear = moment().tz('Asia/Riyadh').year();
                 const modal = new ModalBuilder()
@@ -370,66 +381,78 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
                     console.error('تعذر إقرار تفاعل تواجدي:', error);
                     return false;
                 });
+            isUpdatingActivity = true;
             void enqueueActivityUpdate(response.id, async () => {
-                if (!(await acknowledged)) return;
-                const [, newPeriod, clickedUserId] = interaction.customId.split('_');
-                if (clickedUserId !== user.id) return;
+                const previousPeriod = selectedActivityPeriod;
                 try {
-                // جلب الإحصائيات الجديدة
-                let stats, periodLabel, activeDays;
-                const liveDuration = getLiveVoiceDuration(user.id, 0);
-                if (newPeriod === 'daily') {
-                    stats = await dbManager.getDailyStats(user.id, interaction.guild?.id);
-                    periodLabel = 'Daily Active';
-                    activeDays = stats.activeDays;
-                    // إضافة الوقت الحي
-                    stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
-                } else if (newPeriod === 'weekly') {
-                    const [weeklyStats, weeklyActiveDays] = await Promise.all([
-                        dbManager.getWeeklyStats(user.id, interaction.guild?.id),
-                        dbManager.getWeeklyActiveDays(user.id, interaction.guild?.id)
-                    ]);
-                    stats = weeklyStats;
-                    periodLabel = 'Weekly Active';
-                    activeDays = weeklyActiveDays;
-                    stats.voiceTime = stats.weeklyTime;
-                    stats.messages = stats.weeklyMessages;
-                    stats.reactions = stats.weeklyReactions;
-                    stats.voiceJoins = stats.weeklyVoiceJoins;
-                    // إضافة الوقت الحي
-                    stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
-                } else if (newPeriod === 'monthly') {
-                    stats = await dbManager.getMonthlyStats(user.id, interaction.guild?.id);
-                    periodLabel = 'Monthly Active';
-                    activeDays = stats.activeDays;
-                    stats.voiceTime = stats.voiceTime || 0;
-                    stats.messages = stats.messages || 0;
-                    stats.reactions = stats.reactions || 0;
-                    stats.voiceJoins = stats.voiceJoins || 0;
-                    // إضافة الوقت الحي
-                    stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
-                } else if (newPeriod === 'total') {
-                    const [totals, totalActiveDays] = await Promise.all([
-                        dbManager.getUserStats(user.id),
-                        dbManager.getActiveDaysCount(user.id, 365, interaction.guild?.id)
-                    ]);
-                    stats = {
-                        voiceTime: totals.totalVoiceTime || 0,
-                        messages: totals.totalMessages || 0,
-                        reactions: totals.totalReactions || 0,
-                        voiceJoins: totals.totalVoiceJoins || 0
-                    };
-                    periodLabel = 'Total Active';
-                    activeDays = totalActiveDays || 0;
-                    stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
-                }
-                invalidateActivityCache(message.guild?.id, user.id);
-                const activityImage = await buildActivityImage({ message, member, period: newPeriod, periodLabel, stats, activeDays, db: dbManager, accentColor: bannerAccentColor });
-                await response.edit({ files: [activityImage], components: buildActivityComponents(user.id, newPeriod, false) });
+                    if (!(await acknowledged)) return;
+                    const [, newPeriod, clickedUserId] = interaction.customId.split('_');
+                    if (clickedUserId !== user.id || !['daily', 'weekly', 'monthly', 'total'].includes(newPeriod)) return;
+                    await response.edit({ components: buildActivityComponents(user.id, selectedActivityPeriod, false, true) });
+                    // جلب الإحصائيات الجديدة
+                    let stats, periodLabel, activeDays;
+                    const liveDuration = getLiveVoiceDuration(user.id, 0);
+                    if (newPeriod === 'daily') {
+                        stats = await dbManager.getDailyStats(user.id, interaction.guild?.id);
+                        periodLabel = 'Daily Active';
+                        activeDays = stats.activeDays;
+                        // إضافة الوقت الحي
+                        stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
+                    } else if (newPeriod === 'weekly') {
+                        const [weeklyStats, weeklyActiveDays] = await Promise.all([
+                            dbManager.getWeeklyStats(user.id, interaction.guild?.id),
+                            dbManager.getWeeklyActiveDays(user.id, interaction.guild?.id)
+                        ]);
+                        stats = weeklyStats;
+                        periodLabel = 'Weekly Active';
+                        activeDays = weeklyActiveDays;
+                        stats.voiceTime = stats.weeklyTime;
+                        stats.messages = stats.weeklyMessages;
+                        stats.reactions = stats.weeklyReactions;
+                        stats.voiceJoins = stats.weeklyVoiceJoins;
+                        // إضافة الوقت الحي
+                        stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
+                    } else if (newPeriod === 'monthly') {
+                        stats = await dbManager.getMonthlyStats(user.id, interaction.guild?.id);
+                        periodLabel = 'Monthly Active';
+                        activeDays = stats.activeDays;
+                        stats.voiceTime = stats.voiceTime || 0;
+                        stats.messages = stats.messages || 0;
+                        stats.reactions = stats.reactions || 0;
+                        stats.voiceJoins = stats.voiceJoins || 0;
+                        // إضافة الوقت الحي
+                        stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
+                    } else if (newPeriod === 'total') {
+                        const [totals, totalActiveDays] = await Promise.all([
+                            dbManager.getUserStats(user.id),
+                            dbManager.getActiveDaysCount(user.id, 365, interaction.guild?.id)
+                        ]);
+                        stats = {
+                            voiceTime: totals.totalVoiceTime || 0,
+                            messages: totals.totalMessages || 0,
+                            reactions: totals.totalReactions || 0,
+                            voiceJoins: totals.totalVoiceJoins || 0
+                        };
+                        periodLabel = 'Total Active';
+                        activeDays = totalActiveDays || 0;
+                        stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
+                    }
+                    invalidateActivityCache(message.guild?.id, user.id);
+                    const activityImage = await buildActivityImage({ message, member, period: newPeriod, periodLabel, stats, activeDays, db: dbManager, accentColor: bannerAccentColor });
+                    await response.edit({ files: [activityImage], components: buildActivityComponents(user.id, newPeriod, false, true) });
+                    selectedActivityPeriod = newPeriod;
+                    await response.edit({ components: buildActivityComponents(user.id, selectedActivityPeriod, false, false) });
                 } catch (error) {
+                    selectedActivityPeriod = previousPeriod;
                     console.error('خطأ في تحديث الإحصائيات:', error);
+                    await response.edit({ components: buildActivityComponents(user.id, selectedActivityPeriod, false, false) }).catch(() => {});
+                } finally {
+                    isUpdatingActivity = false;
                 }
-            }).catch(error => console.error('تعذر إكمال تحديث تواجدي:', error));
+            }).catch(error => {
+                isUpdatingActivity = false;
+                console.error('تعذر إكمال تحديث تواجدي:', error);
+            });
         });
         collector.on('end', () => {
             void enqueueActivityUpdate(response.id, () => response.edit({ components: [] })).catch(() => {});
