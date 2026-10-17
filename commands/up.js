@@ -61,10 +61,14 @@ module.exports = {
             return message.reply({ content: '**⚠️ لديك عملية قيد التنفيذ حالياً ، يرجى الانتظار .**', flags: MessageFlags.Ephemeral });
         }
 
+        const isOwner = BOT_OWNERS.includes(message.author.id) || message.guild.ownerId === message.author.id;
         let hasPermission = await promoteManager.hasPermission({ 
             user: message.author, 
             member: message.member 
         }, BOT_OWNERS);
+
+        // مالك السيرفر يُعامل كمالك للنظام في أمر الترقية/التنزيل.
+        if (isOwner) hasPermission = true;
 
         if (!hasPermission) {
             const settings = promoteManager.getSettings();
@@ -215,7 +219,7 @@ module.exports = {
                         for (const type of typePlan.types) {
                             const member = await message.guild.members.fetch({ user: target.id, force: true }).catch(() => target);
                             const memberRoles = [...member.roles.cache.values()];
-                            const typeName = type === 'rank' ? 'حرف' : 'ظاهرية';
+                            const typeName = type === 'rank' ? 'RANK' : 'VISUAL';
                             const availableRoles = getAvailableQuickRoles(sortedAdminRoles, type);
                             const resolution = resolveQuickPromotion({
                                 memberRoles,
@@ -227,11 +231,11 @@ module.exports = {
                             });
 
                             if (resolution.error === 'no-current-role') {
-                                memberOutcome.push(`❌ **${target.displayName} — ${typeName}**: لا يملك رتبًا إدارية مناسبة لهذا النوع.`);
+                                memberOutcome.push(`❌ **${target.displayName} — ${typeName}**\n> **REASON :** لا يملك رتبًا إدارية مناسبة لهذا النوع.`);
                                 continue;
                             }
                             if (resolution.error === 'out-of-range') {
-                                memberOutcome.push(`⚠️ **${target.displayName} — ${typeName}**: وصل إلى الحد الأقصى/الأدنى.`);
+                                memberOutcome.push(`⚠️ **${target.displayName} — ${typeName}**\n> **STATUS :** وصل إلى الحد الأقصى/الأدنى.`);
                                 continue;
                             }
 
@@ -239,11 +243,15 @@ module.exports = {
                             const res = await promoteManager.createPromotion(
                                 message.guild, client, target.id, newRole.id,
                                 'نهائي', `Shortcut ${selectedAction.toUpperCase()} (${typeName})`,
-                                message.author.id, false, true, true
+                                message.author.id, false, true, true, null, selectedAction
                             );
 
                             if (!res.success) {
-                                memberOutcome.push(`❌ **${target.displayName} — ${typeName}**: فشل (${res.error}).`);
+                                memberOutcome.push(
+                                    `❌ **${target.displayName} — ${typeName}**\n` +
+                                    `> **STATUS :** فشل\n` +
+                                    `> **REASON :** ${res.error}`
+                                );
                                 continue;
                             }
 
@@ -257,13 +265,18 @@ module.exports = {
                                 }
                             }
 
-                            promotionDetails[type].push(`• ${target} | ${currentRole.name} ➜ ${newRole.name}`);
+                            promotionDetails[type].push(`• **${target.displayName}** : **${currentRole.name}** ➜ **${newRole.name}**`);
                             undoData.push({
                                 memberId: target.id,
                                 addedRoleId: newRole.id,
                                 removedRoleIds: rolesToRemove
                             });
-                            memberOutcome.push(`✅ **${target.displayName} — ${typeName}**: ${selectedAction === 'up' ? 'تمت ترقيته' : 'تم تنزيله'} | من **${currentRole.name}** إلى **${newRole.name}**`);
+                            memberOutcome.push(
+                                `✅ **${target.displayName} — ${typeName}**\n` +
+                                `> **STATUS :** ${selectedAction === 'up' ? 'تمت ترقيته' : 'تم تنزيله'}\n` +
+                                `> **FROM :** ${currentRole.name}\n` +
+                                `> **TO :** ${newRole.name}`
+                            );
 
                             try {
                                 await target.send(`**✅ تم ${selectedAction === 'up' ? 'ترقيتك' : 'تنزيلك'} (${typeName}) في ${message.guild.name}\nمن الرتبة: ${currentRole.name}\nإلى الرتبة: ${newRole.name}**`).catch(() => {});
@@ -294,11 +307,10 @@ module.exports = {
                             client
                         });
 
-                        // حدّث آخر سجل للبوت بدل إرسال رسالة جديدة مع كل عملية.
+                        // Use only the stored quick-log ID so this never edits promote's main log.
                         let previousLog = settings.quickLogMessageId
                             ? await logChannel.messages.fetch(settings.quickLogMessageId).catch(() => null)
                             : null;
-
                         let savedLog = null;
                         if (previousLog) {
                             savedLog = await previousLog.edit(logPayload).catch(() => null);
@@ -345,9 +357,9 @@ module.exports = {
                     .setFooter({ text: undoData.length ? 'يمكنك التراجع عن العمليات الناجحة خلال دقيقة واحدة.' : 'انتهت المعالجة.' });
 
                 const resultGroups = [
-                    ['الحرف', outcome.filter(line => line.includes('— حرف'))],
-                    ['الظاهرية', outcome.filter(line => line.includes('— ظاهرية'))],
-                    ['ملاحظات أخرى', outcome.filter(line => !line.includes('— حرف') && !line.includes('— ظاهرية'))]
+                    ['RANK', outcome.filter(line => line.includes('— RANK'))],
+                    ['VISUAL', outcome.filter(line => line.includes('— VISUAL'))],
+                    ['OTHER NOTES', outcome.filter(line => !line.includes('— RANK') && !line.includes('— VISUAL'))]
                 ];
                 let remainingResultChars = 4700;
                 for (const [groupTitle, lines] of resultGroups) {
@@ -362,7 +374,7 @@ module.exports = {
                             ? `${line.slice(0, Math.max(0, Math.min(900, remainingResultChars) - 1))}…`
                             : line;
                         if (current && current.length + safeLine.length + 1 > Math.min(900, remainingResultChars)) {
-                            fieldsForGroup.push({ name: part === 1 ? `نتائج ${groupTitle}` : `نتائج ${groupTitle} (${part})`, value: current, lineCount: current.split('\n').length });
+                            fieldsForGroup.push({ name: part === 1 ? `${groupTitle} RESULTS` : `${groupTitle} RESULTS (${part})`, value: current, lineCount: current.split('\n').length });
                             remainingResultChars -= current.length;
                             current = '';
                             part++;
@@ -372,14 +384,14 @@ module.exports = {
                         if (remainingLines <= 1) break;
                     }
                     if (current && fieldsForGroup.length < 2) {
-                        fieldsForGroup.push({ name: part === 1 ? `نتائج ${groupTitle}` : `نتائج ${groupTitle} (${part})`, value: current, lineCount: current.split('\n').length });
+                        fieldsForGroup.push({ name: part === 1 ? `${groupTitle} RESULTS` : `${groupTitle} RESULTS (${part})`, value: current, lineCount: current.split('\n').length });
                         remainingResultChars -= current.length;
                     }
                     const shownLines = fieldsForGroup.reduce((sum, field) => sum + field.lineCount, 0);
                     for (const field of fieldsForGroup) finalResultEmbed.addFields({ name: field.name, value: field.value, inline: false });
                     if (shownLines < lines.length && remainingResultChars > 100) {
                         const note = `… تمت معالجة ${lines.length - shownLines} نتيجة إضافية.`;
-                        finalResultEmbed.addFields({ name: `بقية ${groupTitle}`, value: note, inline: false });
+                        finalResultEmbed.addFields({ name: `${groupTitle} REMAINING`, value: note, inline: false });
                         remainingResultChars -= note.length;
                     }
                 }

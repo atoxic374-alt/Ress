@@ -23,6 +23,9 @@ const net = require('net');
 const interactionRouter = require('../utils/interactionRouter.js');
 const colorManager = require('../utils/colorManager.js');
 const { problemLogPayload, problemLogFromEmbed } = require('../utils/problemLogContainer.js');
+const PROBLEM_DATA_DIR = path.join(__dirname, '..', 'data');
+const PROBLEM_CONFIG_PATH = path.join(PROBLEM_DATA_DIR, 'problemConfig.json');
+const PROBLEM_ASSETS_DIR = path.join(PROBLEM_DATA_DIR, 'problem-assets');
 
 // Default thumbnail URL for interactive embeds (problem creation flows).
 const LOG_THUMBNAIL_URL = 'https://cdn.discordapp.com/attachments/1294840822780526633/1465458307329167360/problem-solving.png?ex=69792de7&is=6977dc67&hm=876028d8022c57e8258ee956d753608a9d247e1e5f774a62f149f29f1200a673&';
@@ -92,9 +95,8 @@ function loadAdminRoles() {
 // the file does not exist, defaults are used.
 function loadProblemConfig() {
   try {
-    const configPath = path.join(__dirname, '..', 'data', 'problemConfig.json');
-    if (fs.existsSync(configPath)) {
-      const data = fs.readFileSync(configPath, 'utf8');
+    if (fs.existsSync(PROBLEM_CONFIG_PATH)) {
+      const data = fs.readFileSync(PROBLEM_CONFIG_PATH, 'utf8');
       const config = JSON.parse(data);
       // Validate types and provide defaults
         return {
@@ -121,8 +123,10 @@ function loadProblemConfig() {
 
 function saveProblemConfig(config) {
   try {
-    const configPath = path.join(__dirname, '..', 'data', 'problemConfig.json');
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+    fs.mkdirSync(PROBLEM_DATA_DIR, { recursive: true });
+    const tempPath = `${PROBLEM_CONFIG_PATH}.${process.pid}.tmp`;
+    fs.writeFileSync(tempPath, JSON.stringify(config, null, 2), 'utf8');
+    fs.renameSync(tempPath, PROBLEM_CONFIG_PATH);
   } catch (err) {
     console.error('Failed to save problemConfig:', err);
   }
@@ -358,26 +362,26 @@ async function validateSeparatorUrl(rawUrl) {
   return parsed;
 }
 
-async function downloadSeparatorImage(url, filePrefix = 'custom_separator') {
+async function downloadSeparatorImage(url) {
   const parsedUrl = await validateSeparatorUrl(url);
-  const safeFilePrefix = /^[a-z0-9_-]+$/i.test(filePrefix) ? filePrefix : 'custom_separator';
 
   return new Promise((resolve, reject) => {
     try {
       const extMatch = parsedUrl.pathname.match(/\.[a-zA-Z0-9]+$/);
       const ext = extMatch ? extMatch[0] : '.png';
-      const assetsDir = path.join(__dirname, '..', 'assets');
+      const assetsDir = PROBLEM_ASSETS_DIR;
       if (!fs.existsSync(assetsDir)) {
         fs.mkdirSync(assetsDir, { recursive: true });
       }
       // Save with a consistent name so that old custom images are overwritten
-      const dest = path.join(assetsDir, safeFilePrefix + ext.toLowerCase());
-      const file = fs.createWriteStream(dest);
+      const dest = path.join(assetsDir, 'custom_separator' + ext.toLowerCase());
+      const tempDest = `${dest}.${process.pid}.tmp`;
+      const file = fs.createWriteStream(tempDest);
       const protocol = require('https');
       const request = protocol.get(parsedUrl.toString(), (response) => {
         if (response.statusCode !== 200) {
           file.close(() => {
-            fs.unlink(dest, () => {});
+            fs.unlink(tempDest, () => {});
             reject(new Error('Failed to download image: status ' + response.statusCode));
           });
           return;
@@ -385,14 +389,27 @@ async function downloadSeparatorImage(url, filePrefix = 'custom_separator') {
         const contentType = String(response.headers['content-type'] || '').toLowerCase();
         if (!contentType.startsWith('image/')) {
           file.close(() => {
-            fs.unlink(dest, () => {});
+            fs.unlink(tempDest, () => {});
             reject(new Error('INVALID_CONTENT_TYPE'));
           });
           return;
         }
         response.pipe(file);
         file.on('finish', () => {
-          file.close(() => resolve(dest));
+          file.close(() => {
+            try {
+              fs.renameSync(tempDest, dest);
+              resolve(dest);
+            } catch (err) {
+              fs.unlink(tempDest, () => {});
+              reject(err);
+            }
+          });
+        });
+        file.on('error', (err) => {
+          request.destroy(err);
+          fs.unlink(tempDest, () => {});
+          reject(err);
         });
       });
       request.setTimeout(10000, () => {
@@ -400,7 +417,7 @@ async function downloadSeparatorImage(url, filePrefix = 'custom_separator') {
       });
       request.on('error', (err) => {
         file.close(() => {
-          fs.unlink(dest, () => {});
+          fs.unlink(tempDest, () => {});
           reject(err);
         });
       });
@@ -793,6 +810,11 @@ async function handleInteraction(interaction, context) {
 
       session.creating = true;
       try {
+        // Acknowledge the modal immediately: creating several cases can involve
+        // DMs and log lookups that exceed Discord's initial response deadline.
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.deferReply({ ephemeral: true });
+        }
         const reason = interaction.fields.getTextInputValue('problem_reason_input');
         session.reason = reason;
         await createProblems(interaction, session, context);
@@ -825,7 +847,9 @@ async function createProblems(interaction, session, context) {
   const owners = context.BOT_OWNERS || [];
   const guild = client.guilds.cache.get(session.guildId);
   if (!guild) {
-    await interaction.reply({ content: '❌ **حدث خطأ: لا يمكن العثور على السيرفر.**', ephemeral: true });
+    const content = '❌ **حدث خطأ: لا يمكن العثور على السيرفر.**';
+    if (interaction.deferred || interaction.replied) await interaction.editReply({ content });
+    else await interaction.reply({ content, ephemeral: true });
     return;
   }
   const config = session.config || loadProblemConfig();
@@ -981,10 +1005,15 @@ ${secondPartiesText}
 
   // Acknowledge to the moderator
   try {
-    if (createdProblemsCount === 0) {
-      await interaction.reply({ content: '⚠️ **البروبلم موجود مسبقًا بين نفس الأطراف، لم يتم إنشاء مشكلة جديدة.**', ephemeral: true });
+    const payload = createdProblemsCount === 0
+      ? { content: '⚠️ **البروبلم موجود مسبقًا بين نفس الأطراف، لم يتم إنشاء مشكلة جديدة.**' }
+      : { content: '✅ **تم إنشاء البروبلم بنجاح. سيتم مراقبة التفاعل بين الأطراف.**' };
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply(payload);
+    } else if (createdProblemsCount === 0) {
+      await interaction.reply({ ...payload, ephemeral: true });
     } else {
-      await interaction.reply({ content: '✅ **تم إنشاء البروبلم بنجاح. سيتم مراقبة التفاعل بين الأطراف.**', ephemeral: true });
+      await interaction.reply({ ...payload, ephemeral: true });
     }
   } catch (_) {}
 }
@@ -2108,7 +2137,7 @@ function getEffectiveRoleNameLength(name) {
         if (!msg.author || msg.author.id !== botId) continue;
         if (!isRecentLogMessage(msg)) continue;
         const embed = msg.embeds?.[0];
-        const desc = embed?.description || JSON.stringify(msg.components || []);
+        const desc = embed?.description || '';
         if (!desc) continue;
         const hasFirst = desc.includes(`<@${prob.firstId}>`);
         const hasSecond = desc.includes(`<@${prob.secondId}>`);
@@ -2128,7 +2157,7 @@ function getEffectiveRoleNameLength(name) {
       const botEmbedMessages = [];
       for (const msg of messages.values()) {
         if (!msg?.author || msg.author.id !== botId) continue;
-        if ((!msg.embeds || msg.embeds.length === 0) && (!msg.components || msg.components.length === 0)) continue;
+        if (!msg.embeds || msg.embeds.length === 0) continue;
         botEmbedMessages.push(msg);
       }
 
@@ -2275,15 +2304,18 @@ function getSeparatorAttachments() {
     // longer exists, fall back to the default separator.
     if (cfg.separatorImage) {
       const isRemote = /^https?:\/\//i.test(cfg.separatorImage);
-      const ext = path.extname(cfg.separatorImage).toLowerCase() || '.png';
+      const storedPath = path.isAbsolute(cfg.separatorImage)
+        ? cfg.separatorImage
+        : path.resolve(PROBLEM_DATA_DIR, cfg.separatorImage);
+      const ext = path.extname(storedPath).toLowerCase() || '.png';
       const fileName = 'separator' + ext;
       if (isRemote) {
         return [{ attachment: cfg.separatorImage, name: fileName }];
       }
       // If it's a local file path, verify it exists.  If it does, attach it
       try {
-        if (fs.existsSync(cfg.separatorImage)) {
-          return [{ attachment: cfg.separatorImage, name: path.basename(cfg.separatorImage) }];
+        if (fs.existsSync(storedPath)) {
+          return [{ attachment: storedPath, name: path.basename(storedPath) }];
         }
       } catch (_) {
         // fall through to default
@@ -2703,6 +2735,9 @@ async function handleSetupInteraction(interaction, context) {
     return interaction.reply({ content: '❌ **هذا التفاعل لا ينتمي لجلسة الإعداد الخاصة بك.**', ephemeral: true });
   }
   if (interaction.isModalSubmit() && id === 'problem_setup_separator_modal') {
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.deferReply({ ephemeral: true });
+    }
     const input = interaction.fields.getTextInputValue('separator_url').trim();
     const lowerInput = input.toLowerCase();
     const cfg = loadProblemConfig();
@@ -2710,7 +2745,7 @@ async function handleSetupInteraction(interaction, context) {
       cfg.separatorEnabled = false;
       cfg.separatorImage = null;
       saveProblemConfig(cfg);
-      await interaction.reply({ content: '✅ **تم تعطيل الخط الفاصل.**', ephemeral: true });
+      await interaction.editReply({ content: '✅ **تم تعطيل الخط الفاصل.**' });
       await refreshEmbed();
       return;
     }
@@ -2718,17 +2753,17 @@ async function handleSetupInteraction(interaction, context) {
       try {
         const filePath = await downloadSeparatorImage(input);
         cfg.separatorEnabled = true;
-        cfg.separatorImage = filePath;
+        cfg.separatorImage = path.relative(PROBLEM_DATA_DIR, filePath);
         saveProblemConfig(cfg);
-        await interaction.reply({ content: '✅ **تم تعيين الخط الفاصل بنجاح.**', ephemeral: true });
+        await interaction.editReply({ content: '✅ **تم تعيين الخط الفاصل بنجاح.**' });
         await refreshEmbed();
       } catch (err) {
         console.error('Error downloading separator image:', err);
-        await interaction.reply({ content: '❌ **فشل تعيين الخط الفاصل. يُسمح فقط بروابط HTTPS من Discord CDN (مثل cdn.discordapp.com) ويجب أن تكون صورة صالحة.**', ephemeral: true });
+        await interaction.editReply({ content: '❌ **فشل تعيين الخط الفاصل. يُسمح فقط بروابط HTTPS من Discord CDN (مثل cdn.discordapp.com) ويجب أن تكون صورة صالحة.**' });
       }
       return;
     }
-    await interaction.reply({ content: '❌ **يرجى إدخال رابط صورة صحيح أو كتابة "off".**', ephemeral: true });
+    await interaction.editReply({ content: '❌ **يرجى إدخال رابط صورة صحيح أو كتابة "off".**' });
     return;
   }
   if (id === 'problem_setup_set_separator') {
@@ -3037,7 +3072,6 @@ module.exports = {
   getProblemKey,
   getProblemHistory,
   closeProblem,
-  downloadSeparatorImage,
 
   saveActiveProblemsToDisk
 
