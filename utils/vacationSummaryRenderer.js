@@ -54,6 +54,24 @@ function fitText(ctx, text, maxWidth, font, fallback = 'Not specified') {
     return `${output}…`;
 }
 
+function wrapText(ctx, text, maxWidth, font) {
+    ctx.font = font;
+    const words = String(text || '').split(/\s+/).filter(Boolean);
+    const lines = [];
+    let current = '';
+    for (const word of words) {
+        const candidate = current ? `${current} ${word}` : word;
+        if (current && ctx.measureText(candidate).width > maxWidth) {
+            lines.push(current);
+            current = word;
+        } else {
+            current = candidate;
+        }
+    }
+    if (current) lines.push(current);
+    return lines.length ? lines : ['Not specified'];
+}
+
 function buildVacationSummaryImage({
     guildName,
     memberName,
@@ -73,6 +91,7 @@ function buildVacationSummaryImage({
     }
 
     const width = 1200;
+    const roleNames = removedRoles.length ? removedRoles.map(role => `• ${role}`) : ['None'];
     const rows = [
         ['Status', status],
         ['Time Remaining', timeRemaining],
@@ -80,10 +99,11 @@ function buildVacationSummaryImage({
         ['Start Date', formatRiyadh(startDate)],
         ['End Date', formatRiyadh(endDate)],
         ['Reason', reason || 'Not specified'],
-        ['Removed Roles', removedRoles.length ? removedRoles.join(' • ') : 'None']
+        ['Removed Roles', roleNames]
     ];
     const rowHeight = 66;
-    const height = 300 + rows.length * rowHeight + 100;
+    const rolesHeight = Math.max(1, roleNames.length) * rowHeight;
+    const height = 300 + (rows.length - 1) * rowHeight + rolesHeight + 100;
     const accent = normalizeColor(accentColor);
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
@@ -94,18 +114,18 @@ function buildVacationSummaryImage({
     ctx.fillStyle = background;
     ctx.fillRect(0, 0, width, height);
 
-    const glow = ctx.createRadialGradient(120, 105, 10, 120, 105, 520);
-    glow.addColorStop(0, `${accent}55`);
-    glow.addColorStop(1, `${accent}00`);
-    ctx.fillStyle = glow;
-    ctx.fillRect(0, 0, 720, 430);
-
-    ctx.shadowColor = 'rgba(255,255,255,0.35)';
-    ctx.shadowBlur = 18;
-    ctx.fillStyle = '#FFFFFF';
-    roundedRect(ctx, 55, 50, 10, 202, 5);
-    ctx.fill();
-    ctx.shadowBlur = 0;
+    const glows = [
+        [width * 0.14, height * 0.16, width * 0.72, '24'],
+        [width * 0.86, height * 0.42, width * 0.68, '16'],
+        [width * 0.42, height * 0.92, width * 0.72, '10']
+    ];
+    for (const [x, y, radius, alpha] of glows) {
+        const glow = ctx.createRadialGradient(x, y, 0, x, y, radius);
+        glow.addColorStop(0, `${accent}${alpha}`);
+        glow.addColorStop(1, `${accent}00`);
+        ctx.fillStyle = glow;
+        ctx.fillRect(0, 0, width, height);
+    }
 
     drawText(ctx, 'My Vacation', width / 2, 94, { font: 'bold 52px Cairo', align: 'center' });
     drawText(ctx, fitText(ctx, memberName || 'Member', 720, 'bold 29px Cairo'), width / 2, 145, {
@@ -120,16 +140,27 @@ function buildVacationSummaryImage({
 
     let y = 315;
     rows.forEach(([label, value], index) => {
+        const isRolesRow = label === 'Removed Roles';
+        const blockHeight = isRolesRow ? rolesHeight : rowHeight;
         if (index % 2 === 0) {
             ctx.fillStyle = 'rgba(255,255,255,0.045)';
-            roundedRect(ctx, 70, y - 40, width - 140, 54, 13);
+            roundedRect(ctx, 70, y - 40, width - 140, blockHeight - 12, 13);
             ctx.fill();
         }
         drawText(ctx, label, width - 110, y - 4, { font: 'bold 24px Cairo' });
-        drawText(ctx, fitText(ctx, value, 680, '22px Cairo'), 110, y - 4, {
-            font: '22px Cairo', color: 'rgba(255,255,255,0.84)', align: 'left'
-        });
-        y += rowHeight;
+        if (isRolesRow) {
+            value.forEach((role, roleIndex) => {
+                const lines = wrapText(ctx, role, 680, '22px Cairo');
+                lines.forEach((line, lineIndex) => drawText(ctx, line, 110, y - 4 + ((roleIndex * 66) + (lineIndex * 25)), {
+                    font: '22px Cairo', color: 'rgba(255,255,255,0.84)', align: 'left'
+                }));
+            });
+        } else {
+            drawText(ctx, fitText(ctx, value, 680, '22px Cairo'), 110, y - 4, {
+                font: '22px Cairo', color: 'rgba(255,255,255,0.84)', align: 'left'
+            });
+        }
+        y += blockHeight;
     });
 
     drawText(ctx, `${String(guildName || 'Server').slice(0, 54)} • Vacation Summary`, 70, height - 28, {
