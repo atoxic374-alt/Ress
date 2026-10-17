@@ -20,14 +20,15 @@ async function collectHistory(userId, guild) {
     const activeDowns = downManager.getUserDowns(userId, guild.id);
     const logs = downManager.getUserDownHistory(userId, guild.id);
     const roleCache = new Map();
-    const getRoleName = async roleId => {
-        if (!roleId) return 'Verbal Warning';
-        if (roleCache.has(roleId)) return roleCache.get(roleId);
+    const roleIds = [...new Set([
+        ...logs.map(log => log.data?.roleId),
+        ...activeDowns.map(down => down.roleId)
+    ].filter(Boolean))];
+    await Promise.all(roleIds.map(async roleId => {
         const role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
-        const name = role?.name || 'Deleted Role';
-        roleCache.set(roleId, name);
-        return name;
-    };
+        roleCache.set(roleId, role?.name || 'Deleted Role');
+    }));
+    const getRoleName = roleId => roleId ? (roleCache.get(roleId) || 'Deleted Role') : 'Verbal Warning';
 
     for (const log of logs) {
         const data = log.data || {};
@@ -37,7 +38,7 @@ async function collectHistory(userId, guild) {
         );
         records.push({
             action: isActive ? 'Active now' : (log.type === 'DOWN_ENDED' ? 'Ended' : (verbal ? 'Verbal warning' : 'Inactive')),
-            roleName: await getRoleName(verbal ? null : data.roleId),
+            roleName: getRoleName(verbal ? null : data.roleId),
             duration: verbal ? 'Verbal' : (data.duration || 'Permanent'),
             reason: data.reason || data.originalReason || 'Unspecified',
             moderatorId: data.byUserId || data.modifiedBy,
@@ -52,7 +53,7 @@ async function collectHistory(userId, guild) {
         if (hasAppliedLog) continue;
         records.push({
             action: 'Active now',
-            roleName: await getRoleName(down.roleId),
+            roleName: getRoleName(down.roleId),
             duration: down.duration || 'Permanent',
             reason: down.reason || 'Unspecified',
             moderatorId: down.byUserId,
@@ -109,7 +110,9 @@ async function buildHistoryImage(guild, client, user, targetMember, record, page
 async function sendHistory(message, context, targetId, viewerId, page = 0, interaction = null) {
     const guild = message?.guild || interaction?.guild;
     if (!guild) return;
-    const targetMember = await guild.members.fetch({ user: targetId, force: true }).catch(() => null);
+    const targetMember = targetId === viewerId
+        ? (message?.member || interaction?.member)
+        : await guild.members.fetch({ user: targetId, force: true }).catch(() => null);
     if (!targetMember) {
         const payload = { content: '❌ **العضو غير موجود في هذا السيرفر.**', components: [] };
         return interaction ? interaction.update(payload) : message.reply(payload);

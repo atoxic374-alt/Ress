@@ -16,6 +16,8 @@ const { getDatabasePath } = require('../utils/storagePaths');
 const streakDbPath = getDatabasePath('streak.db');
 const TOP_CACHE_TTL_MS = 15 * 1000;
 const topResultsCache = new Map();
+const TOP_NAME_CACHE_TTL_MS = 10 * 60 * 1000;
+const topNameCache = new Map();
 let streakDb = null;
 
 function invalidateTopsCache(guildId = null) {
@@ -409,41 +411,38 @@ async function execute(message, args, { client }) {
     let currentPeriod = 'monthly';
     let currentPage = 0;
     const pageSize = 10;
-    const topNameCache = new Map();
-    let allMembersFetchPromise = null;
     async function getTopDisplayName(userId) {
         const normalizedId = String(userId);
-        if (topNameCache.has(normalizedId)) return topNameCache.get(normalizedId);
+        if (topNameCache.size > 5000) {
+            for (const key of topNameCache.keys()) {
+                topNameCache.delete(key);
+                if (topNameCache.size <= 4500) break;
+            }
+        }
+        const nameCacheKey = `${message.guild.id}:${normalizedId}`;
+        const cachedName = topNameCache.get(nameCacheKey);
+        if (cachedName && Date.now() - cachedName.createdAt < TOP_NAME_CACHE_TTL_MS) return cachedName.name;
         const cachedMember = message.guild.members.cache.get(normalizedId);
         if (cachedMember?.displayName) {
-            topNameCache.set(normalizedId, cachedMember.displayName);
+            topNameCache.set(nameCacheKey, { name: cachedMember.displayName, createdAt: Date.now() });
             return cachedMember.displayName;
         }
         const fetchedMember = await message.guild.members.fetch({ user: normalizedId, force: true }).catch(() => null);
         if (fetchedMember?.displayName) {
-            topNameCache.set(normalizedId, fetchedMember.displayName);
+            topNameCache.set(nameCacheKey, { name: fetchedMember.displayName, createdAt: Date.now() });
             return fetchedMember.displayName;
         }
         const cachedUser = client.users.cache.get(normalizedId);
         if (cachedUser?.globalName || cachedUser?.username) {
             const name = cachedUser.globalName || cachedUser.username;
-            topNameCache.set(normalizedId, name);
+            topNameCache.set(nameCacheKey, { name, createdAt: Date.now() });
             return name;
         }
         const fetchedUser = await client.users.fetch(normalizedId, { force: true }).catch(() => null);
         if (fetchedUser?.globalName || fetchedUser?.username) {
             const name = fetchedUser.globalName || fetchedUser.username;
-            topNameCache.set(normalizedId, name);
+            topNameCache.set(nameCacheKey, { name, createdAt: Date.now() });
             return name;
-        }
-        // محاولة أخيرة من قائمة أعضاء السيرفر لمعالجة حالات الكاش أو مشاكل الـ gateway.
-        if (!allMembersFetchPromise) allMembersFetchPromise = message.guild.members.fetch().catch(() => null);
-        const allMembers = await allMembersFetchPromise;
-        const recoveredMember = allMembers?.get(normalizedId);
-        const recoveredName = recoveredMember?.displayName || recoveredMember?.user?.globalName || recoveredMember?.user?.username;
-        if (recoveredName) {
-            topNameCache.set(normalizedId, recoveredName);
-            return recoveredName;
         }
         return 'Unknown Member';
     }
@@ -457,8 +456,8 @@ async function execute(message, args, { client }) {
     }
 
     async function getYourRank(category, period) {
-        // العرض يبقى 5/10، لكن حساب رتبة العضو يبحث في كامل القائمة حتى لو كان #100 أو أبعد.
-        const rows = await getTopUsers(db, category, period, 100000, message.guild.id);
+        // نطاق 1000 يكفي للرتب العملية ويمنع تحميل قاعدة البيانات كاملة في كل صورة.
+        const rows = await getTopUsers(db, category, period, 1000, message.guild.id);
         const rankIndex = rows.findIndex(row => String(row.user_id) === String(message.author.id));
         if (rankIndex === -1) return 'Your Rank :  Unranked';
         return `Your Rank :  #${rankIndex + 1}  •  ${formatRankValue(category, rows[rankIndex].value)}`;

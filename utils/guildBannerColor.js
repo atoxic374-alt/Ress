@@ -1,6 +1,7 @@
 const sharp = require('sharp');
 
 const bannerColorCache = new Map();
+const bannerColorInFlight = new Map();
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_COLOR = '#5865F2';
 
@@ -44,18 +45,26 @@ async function getGuildBannerHex(guild, fallback = DEFAULT_COLOR) {
     const cached = bannerColorCache.get(cacheKey);
     if (cached && Date.now() - cached.createdAt < CACHE_TTL_MS) return cached.color;
 
-    try {
-        const response = await fetch(bannerUrl);
-        if (!response.ok) throw new Error(`Banner request failed: ${response.status}`);
-        const buffer = Buffer.from(await response.arrayBuffer());
-        const stats = await sharp(buffer).resize(64, 64, { fit: 'cover' }).stats();
-        const color = await extractBannerAccent(buffer, rgbToHex(stats.dominant));
-        bannerColorCache.set(cacheKey, { color, createdAt: Date.now() });
-        return color;
-    } catch (error) {
-        console.error(`تعذر استخراج لون بنر السيرفر ${guild?.id || 'unknown'}:`, error.message);
-        return fallback;
-    }
+    if (bannerColorInFlight.has(cacheKey)) return bannerColorInFlight.get(cacheKey);
+    const request = (async () => {
+        try {
+            const response = await fetch(bannerUrl);
+            if (!response.ok) throw new Error(`Banner request failed: ${response.status}`);
+            const buffer = Buffer.from(await response.arrayBuffer());
+            const stats = await sharp(buffer).resize(64, 64, { fit: 'cover' }).stats();
+            const color = await extractBannerAccent(buffer, rgbToHex(stats.dominant));
+            bannerColorCache.set(cacheKey, { color, createdAt: Date.now() });
+            if (bannerColorCache.size > 500) bannerColorCache.delete(bannerColorCache.keys().next().value);
+            return color;
+        } catch (error) {
+            console.error(`تعذر استخراج لون بنر السيرفر ${guild?.id || 'unknown'}:`, error.message);
+            return fallback;
+        } finally {
+            bannerColorInFlight.delete(cacheKey);
+        }
+    })();
+    bannerColorInFlight.set(cacheKey, request);
+    return request;
 }
 
 function clearGuildBannerColorCache(guildId) {

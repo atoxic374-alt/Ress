@@ -36,7 +36,7 @@ async function resolveTarget(message, client, args, canViewOthers) {
     }
     const [user, member] = await Promise.all([
         targetId === message.author.id ? Promise.resolve(message.author) : client.users.fetch(targetId, { force: true }).catch(() => targetUser),
-        message.guild.members.fetch({ user: targetId, force: true }).catch(() => null)
+        targetId === message.author.id ? Promise.resolve(message.member) : message.guild.members.fetch({ user: targetId, force: true }).catch(() => null)
     ]);
     return { targetId, targetUser: user || targetUser || message.author, targetMember: member };
 }

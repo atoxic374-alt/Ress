@@ -65,7 +65,7 @@ function updateTimeRemaining(embed, activeVacation) {
 async function execute(message, args, { client, BOT_OWNERS }) {
     const authorMember = message.member;
 
-    let targetUser = message.mentions.users.first() || await client.users.fetch(args[0]).catch(() => null);
+    let targetUser = message.mentions.users.first() || (args[0] ? await client.users.fetch(args[0]).catch(() => null) : null);
     const isSelfCheck = !targetUser || targetUser.id === message.author.id;
     if (!targetUser) {
         targetUser = message.author;
@@ -100,7 +100,7 @@ async function execute(message, args, { client, BOT_OWNERS }) {
     const remainingTime = new Date(activeVacation.endDate).getTime() - Date.now();
     const [approvedByUser, targetMember, serverAccentColor] = await Promise.all([
         activeVacation.approvedBy ? client.users.fetch(activeVacation.approvedBy, { force: true }).catch(() => null) : null,
-        message.guild.members.fetch({ user: targetUser.id, force: true }).catch(() => null),
+        isSelfCheck ? Promise.resolve(message.member) : message.guild.members.fetch({ user: targetUser.id, force: true }).catch(() => null),
         getGuildBannerHex(message.guild, colorManager.getColor() || '#5865F2')
     ]);
     const approvedByName = approvedByUser?.globalName || approvedByUser?.username || 'Unknown';

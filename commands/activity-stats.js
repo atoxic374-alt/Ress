@@ -24,6 +24,18 @@ function invalidateActivityCache(guildId = null, userId = null) {
     }
 }
 
+function pruneActivityCache(now = Date.now()) {
+    for (const [key, entry] of activityCache) {
+        if (!entry || now - entry.createdAt >= ACTIVITY_CACHE_TTL_MS) activityCache.delete(key);
+    }
+    if (activityCache.size > 500) {
+        const oldest = [...activityCache.entries()]
+            .sort((a, b) => a[1].createdAt - b[1].createdAt)
+            .slice(0, activityCache.size - 500);
+        for (const [key] of oldest) activityCache.delete(key);
+    }
+}
+
 function formatRankValue(category, value) {
     if (category === 'voice') return formatDuration(value);
     return `${Math.floor(Number(value || 0) / 10)}xp`;
@@ -31,8 +43,8 @@ function formatRankValue(category, value) {
 
 async function getActivityRanks(db, period, userId, guildId) {
     const [voiceRows, chatRows] = await Promise.all([
-        topsCommand.getTopUsers(db, 'voice', period, 100000, guildId),
-        topsCommand.getTopUsers(db, 'chat', period, 100000, guildId)
+        topsCommand.getTopUsers(db, 'voice', period, 1000, guildId),
+        topsCommand.getTopUsers(db, 'chat', period, 1000, guildId)
     ]);
     const voiceIndex = voiceRows.findIndex(row => String(row.user_id) === String(userId));
     const chatIndex = chatRows.findIndex(row => String(row.user_id) === String(userId));
@@ -46,6 +58,7 @@ async function buildActivityImage({ message, member, period, periodLabel, stats,
     const guildId = message.guild?.id;
     const cacheKey = getActivityCacheKey(guildId, member.id, period);
     const now = Date.now();
+    pruneActivityCache(now);
     const cached = activityCache.get(cacheKey);
     if (cached && now - cached.createdAt < ACTIVITY_CACHE_TTL_MS) return cached.image;
     const ranks = await getActivityRanks(db, period, member.id, guildId);
@@ -203,11 +216,15 @@ async function execute(message, args, { client }) {
     // لو كتب منشن
     if (message.mentions.users.size > 0) {
         targetUser = message.mentions.users.first();
-        targetMember = await message.guild.members.fetch(targetUser.id);
+        targetMember = message.guild.members.cache.get(targetUser.id)
+            || await message.guild.members.fetch({ user: targetUser.id }).catch(() => null);
+        if (!targetMember) return message.reply("❌ العضو غير موجود في السيرفر");
     // لو كتب ID
     } else if (args[0]) {
         try {
-            targetMember = await message.guild.members.fetch(args[0]);
+            targetMember = message.guild.members.cache.get(args[0])
+                || await message.guild.members.fetch({ user: args[0] }).catch(() => null);
+            if (!targetMember) throw new Error('member_not_found');
             targetUser = targetMember.user;
         } catch (err) {
             return message.reply("❌ الآيدي غير صحيح أو العضو غير موجود");
@@ -484,7 +501,9 @@ module.exports = {
         let memberDisplay = targetUserId;
         if (interaction.guild) {
             try {
-                const member = await interaction.guild.members.fetch(targetUserId);
+                const member = interaction.guild.members.cache.get(targetUserId)
+                    || await interaction.guild.members.fetch({ user: targetUserId }).catch(() => null);
+                if (!member) throw new Error('member_not_found');
                 memberDisplay = member.displayName;
             } catch (error) {}
         }
