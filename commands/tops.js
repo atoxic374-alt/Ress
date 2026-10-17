@@ -7,6 +7,7 @@ const moment = require('moment-timezone');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
+const { createStructuredContainer, componentsV2Payload } = require('../utils/structuredContainer.js');
 
 const name = 'توب';
 
@@ -382,11 +383,6 @@ async function execute(message, args, { client }) {
             total: 'All'
         };
 
-        const embed = colorManager.createEmbed()
-            .setTitle('**Rank**')
-            .setTimestamp()
-            .setThumbnail(client.user.displayAvatarURL({ format: 'png', size: 128 }));
-
         let description = '';
 
         // Voice section
@@ -413,33 +409,25 @@ async function execute(message, args, { client }) {
             }).join('\n');
         }
 
-        embed.setDescription(description)
-            .setFooter({ text: `${periodNames[currentPeriod]}` });
-
-        return embed;
+        return createStructuredContainer({
+            title: 'Rank',
+            description,
+            footer: `${periodNames[currentPeriod]} • Voice and Chat Leaderboard`,
+            accentColor: colorManager.getColor?.()
+        });
     }
 
     async function buildStreakEmbed() {
         const isEnabled = await isStreakSystemEnabled(message.guild.id);
         
-        const embed = colorManager.createEmbed()
-            .setTimestamp()
-            .setThumbnail(client.user.displayAvatarURL({ format: 'png', size: 128 }));
-
         if (!isEnabled) {
-            embed.setTitle('**نظام Streak غير مُفعّل**')
-                .setDescription('** يرجى التواصل مع المسؤولين لتفعيله **')
-                .setFooter({ text: 'الصفحة 1 من 1' });
-            return embed;
+            return createStructuredContainer({ title: 'نظام Streak غير مُفعّل', description: '**يرجى التواصل مع المسؤولين لتفعيله**', footer: 'الصفحة 1 من 1', accentColor: colorManager.getColor?.() });
         }
 
         const allStreaks = await getStreakUsers(message.guild.id);
 
         if (allStreaks.length === 0) {
-            embed.setTitle('**Rank Streak**')
-                .setDescription('لا يوجد أحد لديه Streak حالياً!\n\n**كن أول من يبدأ**')
-                .setFooter({ text: 'الصفحة 1 من 1' });
-            return embed;
+            return createStructuredContainer({ title: 'Rank Streak', description: 'لا يوجد أحد لديه Streak حالياً!\n\n**كن أول من يبدأ**', footer: 'الصفحة 1 من 1', accentColor: colorManager.getColor?.() });
         }
 
         const totalPages = Math.ceil(allStreaks.length / pageSize);
@@ -460,14 +448,12 @@ async function execute(message, args, { client }) {
             description += `**#${globalRank} -** <@${streak.user_id}> **${streak.current_streak}** Status : ${statusEmoji}\n`;
         }
 
-        embed.setTitle('**Top Streak**')
-            .setDescription(description.trim())
-            .addFields([
-                { name: '\u200b', value: '<:emoji_63:1442587778964525077> Active  •  <:emoji_64:1442587855447654522> Not Active', inline: false }
-            ])
-            .setFooter({ text: `الصفحة ${currentPage + 1} من ${totalPages} • إجمالي ${allStreaks.length} عضو ؛` });
-        
-        return embed;
+        return createStructuredContainer({
+            title: 'Top Streak',
+            description: `${description.trim()}\n\n<:emoji_63:1442587778964525077> Active  •  <:emoji_64:1442587855447654522> Not Active`,
+            footer: `الصفحة ${currentPage + 1} من ${totalPages} • إجمالي ${allStreaks.length} عضو`,
+            accentColor: colorManager.getColor?.()
+        });
     }
 
     async function buildCategoryEmbed() {
@@ -487,15 +473,8 @@ async function execute(message, args, { client }) {
             total: 'All'
         };
 
-        const embed = colorManager.createEmbed()
-            .setTimestamp()
-            .setThumbnail(client.user.displayAvatarURL({ format: 'png', size: 128 }));
-
         if (topUsers.length === 0) {
-            embed.setTitle(`**${categoryNames[currentCategory]}**`)
-                .setDescription('**لا توجد بيانات في هذه الفترة**')
-                .setFooter({ text: `${periodNames[currentPeriod]} • الصفحة 1 من 1` });
-            return embed;
+            return createStructuredContainer({ title: categoryNames[currentCategory], description: '**لا توجد بيانات في هذه الفترة**', footer: `${periodNames[currentPeriod]} • الصفحة 1 من 1`, accentColor: colorManager.getColor?.() });
         }
 
         const totalPages = Math.ceil(topUsers.length / pageSize);
@@ -505,8 +484,9 @@ async function execute(message, args, { client }) {
 
         let description = '';
         
+        let title;
         if (currentCategory === 'voice') {
-            embed.setTitle(`*top voice*`);
+            title = 'Top Voice';
             const showSeconds = shouldShowSeconds(pageUsers);
             description = pageUsers.map((user, idx) => {
                 const rank = startIndex + idx + 1;
@@ -514,30 +494,32 @@ async function execute(message, args, { client }) {
                 return `**#${rank}** - <@${user.user_id}> : **${time}**`;
             }).join('\n');
         } else if (currentCategory === 'chat') {
-            embed.setTitle(`*top chat*`);
+            title = 'Top Chat';
             description = pageUsers.map((user, idx) => {
                 const rank = startIndex + idx + 1;
                 const xp = Math.floor(user.value / 10);
                 return `**#${rank}** - <@${user.user_id}> : **${xp}xp**`;
             }).join('\n');
         } else if (currentCategory === 'reactions') {
-            embed.setTitle(`*Reactions*`);
+            title = 'Reactions';
             description = pageUsers.map((user, idx) => {
                 const rank = startIndex + idx + 1;
                 return `**#${rank}** - <@${user.user_id}> : **${user.value}R**`;
             }).join('\n');
         } else if (currentCategory === 'joins') {
-            embed.setTitle(`*Joins*`);
+            title = 'Joins';
             description = pageUsers.map((user, idx) => {
                 const rank = startIndex + idx + 1;
                 return `**#${rank}** - <@${user.user_id}> : **${user.value}J**`;
             }).join('\n');
         }
 
-        embed.setDescription(description)
-            .setFooter({ text: `${periodNames[currentPeriod]} • الصفحة ${currentPage + 1} من ${totalPages}` });
-
-        return embed;
+        return createStructuredContainer({
+            title,
+            description,
+            footer: `${periodNames[currentPeriod]} • الصفحة ${currentPage + 1} من ${totalPages}`,
+            accentColor: colorManager.getColor?.()
+        });
     }
 
     const categorySelect = new StringSelectMenuBuilder()
@@ -616,12 +598,10 @@ async function execute(message, args, { client }) {
         return [selectRow, periodRow, navigationRow];
     }
 
-    const initialEmbed = await buildInitialEmbed();
+    const initialContainer = await buildInitialEmbed();
     const initialButtons = await buildButtons();
-    const sentMessage = await message.channel.send({ 
-        embeds: [initialEmbed], 
-        components: initialButtons 
-    });
+    initialContainer.addActionRowComponents(...initialButtons);
+    const sentMessage = await message.channel.send(componentsV2Payload(initialContainer));
 
     const filter = i => i.user.id === message.author.id && i.message.id === sentMessage.id;
     const collector = message.channel.createMessageComponentCollector({ filter, time: 600000 });
@@ -659,21 +639,19 @@ async function execute(message, args, { client }) {
                 }
             }
 
-            let newEmbed;
+            let newContainer;
             if (currentCategory === null) {
-                newEmbed = await buildInitialEmbed();
+                newContainer = await buildInitialEmbed();
             } else if (currentCategory === 'streaks') {
-                newEmbed = await buildStreakEmbed();
+                newContainer = await buildStreakEmbed();
             } else {
-                newEmbed = await buildCategoryEmbed();
+                newContainer = await buildCategoryEmbed();
             }
             
             const newButtons = await buildButtons();
 
-            await interaction.update({ 
-                embeds: [newEmbed], 
-                components: newButtons 
-            });
+            newContainer.addActionRowComponents(...newButtons);
+            await interaction.update(componentsV2Payload(newContainer));
         } catch (error) {
             console.error('Error in tops collector:', error);
         }

@@ -4,6 +4,7 @@ const { isUserBlocked } = require('./block.js');
 const { isChannelBlocked } = require('./chatblock.js');
 const { getDatabase } = require('../utils/database.js');
 const moment = require('moment-timezone');
+const { createStructuredContainer, componentsV2Payload } = require('../utils/structuredContainer.js');
 
 const name = 'تفاعلي';
 const aliases = ['تواجدي', 'me'];
@@ -210,27 +211,14 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
         // تحضير منشن القنوات
         const voiceChannelMention = formatChannelDisplay(topVoiceChannel, message.guild, 'No Data');
         const messageChannelMention = formatChannelDisplay(topMessageChannel, message.guild, 'No Data');
-        // إنشاء Embed مصغر
-        const embed = colorManager.createEmbed()
-            .setTitle(`${periodLabel}`)
-            .setDescription(`**تفاعل ${member.displayName}**`)
-            .setThumbnail(user.displayAvatarURL({ dynamic: true }))
-            .addFields(
-                { name: '# <:emoji_85:1442986413510627530> **Voice**', value: '** **', inline: false },
-                { name: '**الوقت**', value: `**${formatDuration(stats.voiceTime || 0)}**`, inline: true },
-                { name: '**جوينات**', value: `**${stats.voiceJoins || 0}**`, inline: true },
-                { name: '**أكثر روم**', value: `${voiceChannelMention}`, inline: true },
-                { name: '# <:emoji_85:1442986444712054954> **Chat**', value: '** **', inline: false },
-                { name: '**رسائل**', value: `**${stats.messages || 0}**`, inline: true },
-                { name: '**XP**', value: `**${xp}xp**`, inline: true },
-                { name: '**رياكتات**', value: `**${stats.reactions || 0}**`, inline: true },
-                { name: '**أكثر روم شات**', value: `${messageChannelMention}`, inline: false },
-                { name: '**أيام التفاعل**', value: `**${activeDays || 0}${period === 'weekly' ? ' من 7' : ''}**`, inline: false }
-            )
-            .setFooter({ text: `${message.author.username}`, iconURL: message.author.displayAvatarURL() })
-            .setTimestamp();
-        const components = buildActivityComponents(user.id, period, false);
-        const response = await message.channel.send({ embeds: [embed], components });
+        const activityContainer = createStructuredContainer({
+            title: periodLabel,
+            description: `**تفاعل ${member.displayName}**\n\n**Voice**\nالوقت : **${formatDuration(stats.voiceTime || 0)}**\nالجويْنات : **${stats.voiceJoins || 0}**\nأكثر روم : ${voiceChannelMention}\n\n**Chat**\nالرسائل : **${stats.messages || 0}**\nXP : **${xp}xp**\nالرياكتات : **${stats.reactions || 0}**\nأكثر روم شات : ${messageChannelMention}\n\nأيام التفاعل : **${activeDays || 0}${period === 'weekly' ? ' من 7' : ''}**`,
+            footer: `${message.author.username} • ${periodLabel}`,
+            accentColor: colorManager.getColor?.()
+        });
+        activityContainer.addActionRowComponents(...buildActivityComponents(user.id, period, false));
+        const response = await message.channel.send(componentsV2Payload(activityContainer));
         // جمع التفاعلات على الأزرار
         const collector = response.createMessageComponentCollector({
             filter: i => (i.customId.startsWith('activity_') || i.customId === `activity_after_menu_${user.id}`) && i.user.id === message.author.id,
@@ -331,28 +319,14 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
                 const xp = Math.floor((stats.messages || 0) / 10);
                 const voiceChannelMention = formatChannelDisplay(topVoiceChannel, interaction.guild, 'No Active Or Leave Channel');
                 const messageChannelMention = formatChannelDisplay(topMessageChannel, interaction.guild, 'No Active In Chat');
-                // إنشاء الإمبد المحدث
-                const updatedEmbed = colorManager.createEmbed()
-                    .setTitle(`${periodLabel}`)
-                    .setDescription(`**تفاعل ${member.displayName}**`)
-                    .setThumbnail(user.displayAvatarURL({ dynamic: true }))
-                    .addFields(
-                        { name: '# <:emoji_85:1442986413510627530> **Voice**', value: '** **', inline: false },
-                        { name: '**الوقت**', value: `**${formatDuration(stats.voiceTime || 0)}**`, inline: true },
-                        { name: '**جوينات**', value: `**${stats.voiceJoins || 0}**`, inline: true },
-                        { name: '**أكثر روم**', value: `${voiceChannelMention}`, inline: true },
-                        { name: '# <:emoji_85:1442986444712054954> **Chat**', value: '** **', inline: false },
-                        { name: '**رسائل**', value: `**${stats.messages || 0}**`, inline: true },
-                        { name: '**XP**', value: `**${xp}xp**`, inline: true },
-                        { name: '**رياكتات**', value: `**${stats.reactions || 0}**`, inline: true },
-                        { name: '**أكثر روم شات**', value: `${messageChannelMention}`, inline: false },
-                        { name: '**أيام التفاعل**', value: `**${activeDays || 0}${newPeriod === 'weekly' ? ' من 7' : ''}**`, inline: false }
-                    )
-                    .setFooter({ text: `${interaction.user.username}`, iconURL: interaction.user.displayAvatarURL() })
-                    .setTimestamp();
-                // تحديث الأزرار مع زر "All"
-                // تحديث الرسالة
-                await interaction.update({ embeds: [updatedEmbed], components: buildActivityComponents(user.id, newPeriod, false) });
+                const updatedContainer = createStructuredContainer({
+                    title: periodLabel,
+                    description: `**تفاعل ${member.displayName}**\n\n**Voice**\nالوقت : **${formatDuration(stats.voiceTime || 0)}**\nالجويْنات : **${stats.voiceJoins || 0}**\nأكثر روم : ${voiceChannelMention}\n\n**Chat**\nالرسائل : **${stats.messages || 0}**\nXP : **${xp}xp**\nالرياكتات : **${stats.reactions || 0}**\nأكثر روم شات : ${messageChannelMention}\n\nأيام التفاعل : **${activeDays || 0}${newPeriod === 'weekly' ? ' من 7' : ''}**`,
+                    footer: `${interaction.user.username} • ${periodLabel}`,
+                    accentColor: colorManager.getColor?.()
+                });
+                updatedContainer.addActionRowComponents(...buildActivityComponents(user.id, newPeriod, false));
+                await interaction.update(componentsV2Payload(updatedContainer));
             } catch (error) {
                 console.error('خطأ في تحديث الإحصائيات:', error);
             }
@@ -501,31 +475,22 @@ module.exports = {
         const messageChannelMention = formatChannelDisplay(topMessageChannel, interaction.guild, 'No Data');
         const xp = Math.floor((messages || 0) / 10);
 
-        const summaryEmbed = colorManager.createEmbed()
-            .setTitle('After Date')
-            .setDescription(`**تفاعل ${memberDisplay}**\n**من :** ${dateMoment.format('YYYY-MM-DD hh:mm A')} ${noActivity ? '\n**لا يوجد نشاط مسجل بعد هذا التاريخ.**' : ''}`)
-            .addFields(
-                { name: '# <:emoji_85:1442986413510627530> **Voice**', value: '** **', inline: false },
-                { name: '**الوقت**', value: `**${formatDuration(voiceTime)}**`, inline: true },
-                { name: '**جوينات**', value: `**${voiceJoins}**`, inline: true },
-                { name: '**أكثر روم**', value: `${voiceChannelMention}`, inline: true },
-                { name: '# <:emoji_85:1442986444712054954> **Chat**', value: '** **', inline: false },
-                { name: '**رسائل**', value: `**${messages}**`, inline: true },
-                { name: '**XP**', value: `**${xp}xp**`, inline: true },
-                { name: '**رياكتات**', value: `**${reactions}**`, inline: true },
-                { name: '**أكثر روم شات**', value: `${messageChannelMention}`, inline: false },
-                { name: '**أيام التفاعل**', value: `**${activeDays}**`, inline: false }
-            )
-            .setTimestamp();
+        const summaryContainer = createStructuredContainer({
+            title: 'After Date',
+            description: `**تفاعل ${memberDisplay}**\n**من :** ${dateMoment.format('YYYY-MM-DD hh:mm A')}${noActivity ? '\n**لا يوجد نشاط مسجل بعد هذا التاريخ.**' : ''}\n\n**Voice**\nالوقت : **${formatDuration(voiceTime)}**\nالجويْنات : **${voiceJoins}**\nأكثر روم : ${voiceChannelMention}\n\n**Chat**\nالرسائل : **${messages}**\nXP : **${xp}xp**\nالرياكتات : **${reactions}**\nأكثر روم شات : ${messageChannelMention}\n\nأيام التفاعل : **${activeDays}**`,
+            footer: 'After Date',
+            accentColor: colorManager.getColor?.()
+        });
+        summaryContainer.addActionRowComponents(...buildActivityComponents(targetUserId, null, true));
 
         await interaction.deferReply({ ephemeral: true });
         try {
             const targetMessage = await interaction.channel.messages.fetch(targetMessageId);
-            await targetMessage.edit({ embeds: [summaryEmbed], components: buildActivityComponents(targetUserId, null, true) });
+            await targetMessage.edit(componentsV2Payload(summaryContainer));
             await interaction.editReply({ content: '✅ تم تحديث الإحصائيات بعد التاريخ.' });
         } catch (error) {
             await interaction.editReply({ content: '⚠️ تعذر تحديث الرسالة الأصلية، لكن تم إنشاء النتائج هنا.' });
-            await interaction.followUp({ embeds: [summaryEmbed], ephemeral: true });
+            await interaction.followUp({ ...componentsV2Payload(summaryContainer), ephemeral: true });
         }
     }
 };
