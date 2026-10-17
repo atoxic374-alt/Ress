@@ -2816,8 +2816,8 @@ function parseScheduleTime(timeString) {
         .replace(/صباحا?/g, 'am')
         .replace(/مساءا?/g, 'pm')
         .replace(/منتصف الليل|بعد منتصف الليل/g, 'am')
-        .replace(/الفجر|فجر/g, 'am')
-        .replace(/الظهر|ظهر|العصر|عصر|المغرب|مغرب|العشاء|عشاء/g, 'pm')
+        .replace(/(?:من\s+)?الفجر|(?:من\s+)?فجر/g, 'am')
+        .replace(/(?:من\s+)?الظهر|(?:من\s+)?ظهر|(?:من\s+)?العصر|(?:من\s+)?عصر|(?:من\s+)?المغرب|(?:من\s+)?مغرب|(?:من\s+)?العشاء|(?:من\s+)?عشاء/g, 'pm')
         .replace(/(^|\s)ص(?=\s|$)/g, '$1am')
         .replace(/(^|\s)م(?=\s|$)/g, '$1pm')
         .trim();
@@ -2848,6 +2848,14 @@ function parseScheduleTime(timeString) {
             cleanTime = `${wordClockPrefix[1]} ${remainder}`.trim();
             break;
         }
+    }
+    // قبول اسم الفترة قبل الوقت: الفجر 5:17، وكذلك الرقم المكتوب قبل الفترة: خمسة الفجر.
+    cleanTime = cleanTime.replace(/^(am|pm)\s+(.+)$/i, '$2 $1').trim();
+    for (const [word, number] of arabicHourWords) {
+        const wordPattern = new RegExp(`^(?:ال)?${word}(?=\\s|$)`, 'i');
+        if (!wordPattern.test(cleanTime) || /^(?:ال)?ساعة/i.test(cleanTime)) continue;
+        cleanTime = cleanTime.replace(wordPattern, String(number)).trim();
+        break;
     }
     cleanTime = cleanTime
         .replace(/^(الساعة|الساعه|ساعة|ساعه)\s+(\d{1,2})\s+و\s*نصف(?:\s+(am|pm))?$/i, '$1 $2:30 $3')
