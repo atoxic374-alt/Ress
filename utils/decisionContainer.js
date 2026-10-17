@@ -6,6 +6,7 @@ const {
     ThumbnailBuilder,
     MessageFlags
 } = require('discord.js');
+const colorManager = require('./colorManager.js');
 
 function formatRiyadhTime(date = new Date()) {
     return new Intl.DateTimeFormat('en-US', {
@@ -38,7 +39,7 @@ function createDecisionContainer({
     footer = 'R Sys'
 }) {
     const heading = title || (approved ? '✅ Accepted' : '❌ Rejected');
-    const accentColor = approved ? 0x57f287 : 0xed4245;
+    const accentColor = colorManager.getColor() || '#5865F2';
     const lines = [
         `**Status :** ${approved ? 'Accepted successfully' : 'Rejected'}`,
         targetUserId ? `**Applicant :** <@${targetUserId}>` : null,

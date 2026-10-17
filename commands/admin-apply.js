@@ -17,7 +17,7 @@ function embedToApplicationContainer(embed, footer = 'Admin Applications', prefi
         title: data.title || 'Administrative Application',
         description: description || 'No application details available.',
         footer,
-        accentColor: '#5865F2'
+        accentColor: colorManager.getColor() || '#5865F2'
     });
 }
 
@@ -873,7 +873,7 @@ async function handleAdminApplicationInteraction(interaction) {
                 title: '❌ Application Unavailable',
                 description: `**Application ID :** \`${applicationId}\`\n**Status :** لم يتم العثور على العضو في السيرفر، وتم حذف الطلب.`,
                 footer: 'Admin Application • Closed',
-                accentColor: '#ED4245'
+                accentColor: colorManager.getColor() || '#5865F2'
             });
 
             await interaction.update(applicationContainerPayload(errorContainer));
