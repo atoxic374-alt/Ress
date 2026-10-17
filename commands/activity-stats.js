@@ -5,13 +5,25 @@ const { isChannelBlocked } = require('./chatblock.js');
 const { getDatabase } = require('../utils/database.js');
 const moment = require('moment-timezone');
 const { buildTopSummaryImage } = require('../utils/topSummaryRenderer.js');
-const { getGuildBannerHex } = require('../utils/guildBannerColor.js');
+const { getGuildBannerHexFast } = require('../utils/guildBannerColor.js');
 const topsCommand = require('./tops.js');
 
 const name = 'تفاعلي';
 const aliases = ['تواجدي', 'me'];
 const ACTIVITY_CACHE_TTL_MS = 15 * 1000;
 const activityCache = new Map();
+const activityUpdateQueues = new Map();
+function enqueueActivityUpdate(messageId, operation) {
+    const key = String(messageId);
+    const previous = activityUpdateQueues.get(key) || Promise.resolve();
+    const queued = previous.catch(() => {}).then(operation);
+    activityUpdateQueues.set(key, queued);
+    queued.then(
+        () => { if (activityUpdateQueues.get(key) === queued) activityUpdateQueues.delete(key); },
+        () => { if (activityUpdateQueues.get(key) === queued) activityUpdateQueues.delete(key); }
+    );
+    return queued;
+}
 
 function getActivityCacheKey(guildId, userId, period) {
     return `${guildId || 'global'}:${userId}:${period}`;
@@ -42,18 +54,15 @@ function formatRankValue(category, value) {
 }
 
 async function getActivityRanks(db, period, userId, guildId) {
-    const [voiceRows, chatRows] = await Promise.all([
-        topsCommand.getTopUsers(db, 'voice', period, 1000, guildId),
-        topsCommand.getTopUsers(db, 'chat', period, 1000, guildId)
+    const [voiceResult, chatResult] = await Promise.all([
+        topsCommand.getUserRank(db, 'voice', period, userId, guildId),
+        topsCommand.getUserRank(db, 'chat', period, userId, guildId)
     ]);
-    const voiceIndex = voiceRows.findIndex(row => String(row.user_id) === String(userId));
-    const chatIndex = chatRows.findIndex(row => String(row.user_id) === String(userId));
     return {
-        voice: voiceIndex === -1 ? 'Unranked' : `#${voiceIndex + 1}  •  ${formatRankValue('voice', voiceRows[voiceIndex].value)}`,
-        chat: chatIndex === -1 ? 'Unranked' : `#${chatIndex + 1}  •  ${formatRankValue('chat', chatRows[chatIndex].value)}`
+        voice: !voiceResult.rank ? 'Unranked' : `#${voiceResult.rank}  •  ${formatRankValue('voice', voiceResult.value)}`,
+        chat: !chatResult.rank ? 'Unranked' : `#${chatResult.rank}  •  ${formatRankValue('chat', chatResult.value)}`
     };
 }
-
 async function buildActivityImage({ message, member, period, periodLabel, stats, activeDays, db, accentColor }) {
     const guildId = message.guild?.id;
     const cacheKey = getActivityCacheKey(guildId, member.id, period);
@@ -61,9 +70,11 @@ async function buildActivityImage({ message, member, period, periodLabel, stats,
     pruneActivityCache(now);
     const cached = activityCache.get(cacheKey);
     if (cached && now - cached.createdAt < ACTIVITY_CACHE_TTL_MS) return cached.image;
-    const ranks = await getActivityRanks(db, period, member.id, guildId);
-    const topVoiceChannel = await db.getMostActiveVoiceChannel(member.id, period, guildId) || {};
-    const topMessageChannel = await db.getMostActiveMessageChannel(member.id, guildId) || {};
+    const [ranks, topVoiceChannel, topMessageChannel] = await Promise.all([
+        getActivityRanks(db, period, member.id, guildId),
+        db.getMostActiveVoiceChannel(member.id, period, guildId),
+        db.getMostActiveMessageChannel(member.id, guildId)
+    ]);
     const voiceChannel = topVoiceChannel.channel_name && topVoiceChannel.channel_name !== 'unknown'
         ? `#${topVoiceChannel.channel_name}` : 'No Data';
     const messageChannel = topMessageChannel.channel_name && topMessageChannel.channel_name !== 'unknown'
@@ -235,13 +246,15 @@ async function execute(message, args, { client }) {
 }
 
 async function showActivityStats(message, user, member, period = 'weekly', client) {
+    let progressMessage = null;
     try {
         const dbManager = getDatabase();
         if (!dbManager || !dbManager.isInitialized) {
             await message.channel.send('❌ قاعدة البيانات غير متاحة');
             return;
         }
-        const bannerAccentColor = await getGuildBannerHex(message.guild, colorManager.getColor?.() || '#5865F2');
+        const bannerAccentColor = getGuildBannerHexFast(message.guild, colorManager.getColor?.() || '#5865F2');
+        progressMessage = await message.channel.send('جارٍ تجهيز إحصائياتك...');
 
         let stats, periodLabel, activeDays;
         if (period === 'daily') {
@@ -252,8 +265,11 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
             const liveDuration = getLiveVoiceDuration(user.id, 0);
             stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
         } else if (period === 'weekly') {
-            stats = await dbManager.getWeeklyStats(user.id, message.guild?.id);
-            const weeklyActiveDays = await dbManager.getWeeklyActiveDays(user.id, message.guild?.id);
+            const [weeklyStats, weeklyActiveDays] = await Promise.all([
+                dbManager.getWeeklyStats(user.id, message.guild?.id),
+                dbManager.getWeeklyActiveDays(user.id, message.guild?.id)
+            ]);
+            stats = weeklyStats;
             periodLabel = 'Weekly Active';
             activeDays = weeklyActiveDays;
             // إعادة تسمية المتغيرات للتناسق
@@ -278,7 +294,10 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
             stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
         } else if (period === 'total') {
             // إحصائيات كليّة (غير قابلة للتصفير تلقائياً)
-            const totals = await dbManager.getUserStats(user.id);
+            const [totals, totalActiveDays] = await Promise.all([
+                dbManager.getUserStats(user.id),
+                dbManager.getActiveDaysCount(user.id, 365, message.guild?.id)
+            ]);
             stats = {
                 voiceTime: totals.totalVoiceTime || 0,
                 messages: totals.totalMessages || 0,
@@ -287,20 +306,20 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
             };
             periodLabel = 'Total Active';
             // عدد أيام النشاط خلال السنة الماضية على الأقل
-            activeDays = (await dbManager.getActiveDaysCount(user.id, 365, message.guild?.id)) || 0;
+            activeDays = totalActiveDays || 0;
             // إضافة الوقت الحي للكلي
             const liveDuration = getLiveVoiceDuration(user.id, 0);
             stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
         }
 
         const activityImage = await buildActivityImage({ message, member, period, periodLabel, stats, activeDays, db: dbManager, accentColor: bannerAccentColor });
-        const response = await message.channel.send({ files: [activityImage], components: buildActivityComponents(user.id, period, false) });
+        const response = await progressMessage.edit({ content: '', files: [activityImage], components: buildActivityComponents(user.id, period, false) });
         // جمع التفاعلات على الأزرار
         const collector = response.createMessageComponentCollector({
             filter: i => (i.customId.startsWith('activity_') || i.customId === `activity_after_menu_${user.id}`) && i.user.id === message.author.id,
             time: 300000 // 5 دقائق
         });
-        collector.on('collect', async interaction => {
+        collector.on('collect', interaction => {
             if (interaction.customId === `activity_after_menu_${user.id}`) {
                 const currentYear = moment().tz('Asia/Riyadh').year();
                 const modal = new ModalBuilder()
@@ -342,12 +361,20 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
                     new ActionRowBuilder().addComponents(timeInput)
                 );
 
-                await interaction.showModal(modal);
+                void interaction.showModal(modal).catch(error => console.error('تعذر فتح نموذج التاريخ:', error));
                 return;
             }
-            const [, newPeriod, userId] = interaction.customId.split('_');
-            if (userId !== user.id) return;
-            try {
+            const acknowledged = interaction.deferUpdate()
+                .then(() => true)
+                .catch(error => {
+                    console.error('تعذر إقرار تفاعل تواجدي:', error);
+                    return false;
+                });
+            void enqueueActivityUpdate(response.id, async () => {
+                if (!(await acknowledged)) return;
+                const [, newPeriod, clickedUserId] = interaction.customId.split('_');
+                if (clickedUserId !== user.id) return;
+                try {
                 // جلب الإحصائيات الجديدة
                 let stats, periodLabel, activeDays;
                 const liveDuration = getLiveVoiceDuration(user.id, 0);
@@ -358,8 +385,11 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
                     // إضافة الوقت الحي
                     stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
                 } else if (newPeriod === 'weekly') {
-                    stats = await dbManager.getWeeklyStats(user.id, interaction.guild?.id);
-                    const weeklyActiveDays = await dbManager.getWeeklyActiveDays(user.id, interaction.guild?.id);
+                    const [weeklyStats, weeklyActiveDays] = await Promise.all([
+                        dbManager.getWeeklyStats(user.id, interaction.guild?.id),
+                        dbManager.getWeeklyActiveDays(user.id, interaction.guild?.id)
+                    ]);
+                    stats = weeklyStats;
                     periodLabel = 'Weekly Active';
                     activeDays = weeklyActiveDays;
                     stats.voiceTime = stats.weeklyTime;
@@ -379,7 +409,10 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
                     // إضافة الوقت الحي
                     stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
                 } else if (newPeriod === 'total') {
-                    const totals = await dbManager.getUserStats(user.id);
+                    const [totals, totalActiveDays] = await Promise.all([
+                        dbManager.getUserStats(user.id),
+                        dbManager.getActiveDaysCount(user.id, 365, interaction.guild?.id)
+                    ]);
                     stats = {
                         voiceTime: totals.totalVoiceTime || 0,
                         messages: totals.totalMessages || 0,
@@ -387,22 +420,24 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
                         voiceJoins: totals.totalVoiceJoins || 0
                     };
                     periodLabel = 'Total Active';
-                    activeDays = (await dbManager.getActiveDaysCount(user.id, 365, interaction.guild?.id)) || 0;
+                    activeDays = totalActiveDays || 0;
                     stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
                 }
                 invalidateActivityCache(message.guild?.id, user.id);
                 const activityImage = await buildActivityImage({ message, member, period: newPeriod, periodLabel, stats, activeDays, db: dbManager, accentColor: bannerAccentColor });
-                await interaction.update({ files: [activityImage], components: buildActivityComponents(user.id, newPeriod, false) });
-            } catch (error) {
-                console.error('خطأ في تحديث الإحصائيات:', error);
-            }
+                await response.edit({ files: [activityImage], components: buildActivityComponents(user.id, newPeriod, false) });
+                } catch (error) {
+                    console.error('خطأ في تحديث الإحصائيات:', error);
+                }
+            }).catch(error => console.error('تعذر إكمال تحديث تواجدي:', error));
         });
         collector.on('end', () => {
-            response.edit({ components: [] }).catch(() => {});
+            void enqueueActivityUpdate(response.id, () => response.edit({ components: [] })).catch(() => {});
         });
     } catch (error) {
         console.error('❌ خطأ في عرض إحصائيات التفاعل:', error);
-        await message.channel.send('❌ حدث خطأ أثناء جلب الإحصائيات');
+        if (progressMessage) await progressMessage.edit('❌ حدث خطأ أثناء جلب الإحصائيات').catch(() => {});
+        else await message.channel.send('❌ حدث خطأ أثناء جلب الإحصائيات');
     }
 }
 
@@ -464,6 +499,7 @@ module.exports = {
             return;
         }
 
+        await interaction.deferReply({ ephemeral: true });
         const fromDate = dateMoment.format('YYYY-MM-DD');
         const fromTimestamp = dateMoment.valueOf();
         const guildId = interaction.guild?.id;
@@ -475,50 +511,40 @@ module.exports = {
         const activityParams = guildId ? [guildId, targetUserId, targetUserId, fromDate] : [targetUserId, fromDate];
         const voiceScope = guildId ? '(guild_id = ? OR guild_id IS NULL) AND user_id = ?' : 'user_id = ?';
         const voiceParams = guildId ? [guildId, targetUserId, fromTimestamp] : [targetUserId, fromTimestamp];
-        const activityTotals = await dbManager.get(`
-            SELECT SUM(messages) as messages,
-                   SUM(reactions) as reactions
-            FROM ${activityTable}
-            WHERE ${activityScope} AND date >= ?
-        `, activityParams);
-
-        const voiceSessionStats = await dbManager.get(`
-            SELECT SUM(duration) as voiceTime,
-                   COUNT(*) as voiceJoins
-            FROM voice_sessions
-            WHERE ${voiceScope} AND start_time >= ?
-        `, voiceParams);
+        const [activityTotals, voiceSessionStats, activeDaysResult, ranks, memberDisplay] = await Promise.all([
+            dbManager.get(`
+                SELECT SUM(messages) as messages, SUM(reactions) as reactions
+                FROM ${activityTable}
+                WHERE ${activityScope} AND date >= ?
+            `, activityParams),
+            dbManager.get(`
+                SELECT SUM(duration) as voiceTime, COUNT(*) as voiceJoins
+                FROM voice_sessions
+                WHERE ${voiceScope} AND start_time >= ?
+            `, voiceParams),
+            dbManager.get(`
+                SELECT COUNT(DISTINCT date) as count
+                FROM ${activityTable}
+                WHERE ${activityScope} AND date >= ?
+                AND (voice_time > 0 OR messages > 0 OR reactions > 0 OR voice_joins > 0)
+            `, activityParams),
+            getActivityRanks(dbManager, 'total', targetUserId, interaction.guild?.id),
+            (async () => {
+                if (!interaction.guild) return targetUserId;
+                const member = interaction.guild.members.cache.get(targetUserId)
+                    || await interaction.guild.members.fetch({ user: targetUserId }).catch(() => null);
+                return member?.displayName || targetUserId;
+            })()
+        ]);
         let voiceTime = voiceSessionStats?.voiceTime || 0;
-
-        const liveDuration = getLiveVoiceDuration(targetUserId, fromTimestamp);
-        voiceTime += liveDuration;
-
+        voiceTime += getLiveVoiceDuration(targetUserId, fromTimestamp);
         const messages = activityTotals?.messages || 0;
         const reactions = activityTotals?.reactions || 0;
         const voiceJoins = voiceSessionStats?.voiceJoins || 0;
         const noActivity = !messages && !reactions && !voiceJoins && !voiceTime;
-
-        let memberDisplay = targetUserId;
-        if (interaction.guild) {
-            try {
-                const member = interaction.guild.members.cache.get(targetUserId)
-                    || await interaction.guild.members.fetch({ user: targetUserId }).catch(() => null);
-                if (!member) throw new Error('member_not_found');
-                memberDisplay = member.displayName;
-            } catch (error) {}
-        }
-
-        const activeDaysResult = await dbManager.get(`
-            SELECT COUNT(DISTINCT date) as count
-            FROM ${activityTable}
-            WHERE ${activityScope}
-            AND date >= ?
-            AND (voice_time > 0 OR messages > 0 OR reactions > 0 OR voice_joins > 0)
-        `, activityParams);
         const activeDays = activeDaysResult?.count || 0;
 
-        const ranks = await getActivityRanks(dbManager, 'total', targetUserId, interaction.guild?.id);
-        const bannerAccentColor = await getGuildBannerHex(interaction.guild, colorManager.getColor?.() || '#5865F2');
+        const bannerAccentColor = getGuildBannerHexFast(interaction.guild, colorManager.getColor?.() || '#5865F2');
         const summaryImage = buildTopSummaryImage({
             accentColor: bannerAccentColor,
             title: 'After Date',
@@ -535,10 +561,11 @@ module.exports = {
             yourRank: `Voice :  ${ranks.voice}   |   Chat :  ${ranks.chat}`
         });
 
-        await interaction.deferReply({ ephemeral: true });
         try {
-            const targetMessage = await interaction.channel.messages.fetch(targetMessageId);
-            await targetMessage.edit({ files: [summaryImage], components: buildActivityComponents(targetUserId, null, true) });
+            await enqueueActivityUpdate(targetMessageId, async () => {
+                const targetMessage = await interaction.channel.messages.fetch(targetMessageId);
+                await targetMessage.edit({ files: [summaryImage], components: buildActivityComponents(targetUserId, null, true) });
+            });
             await interaction.editReply({ content: '✅ تم تحديث الإحصائيات بعد التاريخ.' });
         } catch (error) {
             await interaction.editReply({ content: '⚠️ تعذر تحديث الرسالة الأصلية، لكن تم إنشاء النتائج هنا.' });

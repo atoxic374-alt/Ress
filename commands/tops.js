@@ -8,7 +8,7 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 const { buildTopSummaryImage } = require('../utils/topSummaryRenderer.js');
-const { getGuildBannerHex } = require('../utils/guildBannerColor.js');
+const { getGuildBannerHexFast } = require('../utils/guildBannerColor.js');
 
 const name = 'توب';
 
@@ -18,16 +18,22 @@ const TOP_CACHE_TTL_MS = 15 * 1000;
 const topResultsCache = new Map();
 const TOP_NAME_CACHE_TTL_MS = 10 * 60 * 1000;
 const topNameCache = new Map();
+const topNameInFlight = new Map();
+const topRankCache = new Map();
 let streakDb = null;
 
 function invalidateTopsCache(guildId = null) {
     if (!guildId) {
         topResultsCache.clear();
+        topRankCache.clear();
         return;
     }
     const prefix = `${String(guildId)}:`;
     for (const key of topResultsCache.keys()) {
         if (key.startsWith(prefix)) topResultsCache.delete(key);
+    }
+    for (const key of topRankCache.keys()) {
+        if (key.startsWith(prefix)) topRankCache.delete(key);
     }
 }
 
@@ -185,6 +191,86 @@ function shouldShowSeconds(users) {
     return hasDuplicates;
 }
 
+async function getUserRank(db, category, period, userId, guildId = null) {
+    const cacheKey = `${String(guildId || 'global')}:${category}:${period}:${String(userId)}`;
+    const now = Date.now();
+    const cached = topRankCache.get(cacheKey);
+    if (cached && now - cached.createdAt < TOP_CACHE_TTL_MS) return cached;
+    try {
+        const metricByCategory = { voice: 'voice_time', chat: 'messages', reactions: 'reactions', joins: 'voice_joins' };
+        const totalMetricByCategory = { voice: 'total_voice_time', chat: 'total_messages', reactions: 'total_reactions', joins: 'total_voice_joins' };
+        const metric = metricByCategory[category];
+        if (!metric) return { rank: null, value: 0 };
+        const nowMoment = moment().tz('Asia/Riyadh');
+        const nowMs = nowMoment.valueOf();
+        let periodFilter = '';
+        const params = [];
+        let periodStartMs = null;
+        if (period === 'daily') {
+            periodFilter = 'AND date = ?';
+            params.push(nowMoment.format('YYYY-MM-DD'));
+            periodStartMs = nowMoment.clone().startOf('day').valueOf();
+        } else if (period === 'weekly') {
+            periodFilter = 'AND date >= ?';
+            params.push(nowMoment.clone().startOf('week').format('YYYY-MM-DD'));
+            periodStartMs = nowMoment.clone().startOf('week').valueOf();
+        } else if (period === 'monthly') {
+            periodFilter = 'AND date >= ?';
+            params.push(nowMoment.clone().startOf('month').format('YYYY-MM-DD'));
+            periodStartMs = nowMoment.clone().startOf('month').valueOf();
+        }
+        let activityQuery;
+        if (period === 'total') {
+            activityQuery = `SELECT user_id, ${totalMetricByCategory[category]} AS value FROM user_totals WHERE ${totalMetricByCategory[category]} > 0`;
+        } else {
+            const source = guildId
+                ? '(SELECT user_id, date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ? UNION ALL SELECT user_id, date, voice_time, messages, reactions, voice_joins FROM daily_activity)'
+                : 'daily_activity';
+            if (guildId) params.unshift(String(guildId));
+            activityQuery = `SELECT user_id, SUM(${metric}) AS value FROM ${source} WHERE ${metric} > 0 ${periodFilter} GROUP BY user_id`;
+        }
+        const liveEntries = [];
+        if (category === 'voice' && global.client?.voiceSessions) {
+            for (const [liveUserId, session] of global.client.voiceSessions.entries()) {
+                if (session?.isAFK) continue;
+                const liveStart = session.lastTrackedTime || session.startTime || session.sessionStartTime || nowMs;
+                const effectiveStart = periodStartMs ? Math.max(liveStart, periodStartMs) : liveStart;
+                const liveDuration = Math.max(0, nowMs - effectiveStart);
+                if (liveDuration > 0) liveEntries.push([String(liveUserId), liveDuration]);
+            }
+        }
+        const liveQuery = liveEntries.length
+            ? liveEntries.map(() => 'SELECT ? AS user_id, ? AS value').join(' UNION ALL ')
+            : 'SELECT CAST(NULL AS TEXT) AS user_id, 0 AS value WHERE 0';
+        const liveParams = liveEntries.flat();
+        const query = `
+            WITH activity_scores AS (${activityQuery}),
+            live_scores AS (${liveQuery}),
+            scores AS (
+                SELECT user_id, SUM(value) AS value
+                FROM (SELECT user_id, value FROM activity_scores UNION ALL SELECT user_id, value FROM live_scores)
+                GROUP BY user_id
+            )
+            SELECT target.value AS value,
+                   (SELECT COUNT(*) + 1 FROM scores AS higher WHERE higher.value > target.value) AS rank
+            FROM scores AS target WHERE target.user_id = ?
+        `;
+        const result = await db.get(query, [...params, ...liveParams, String(userId)]);
+        const value = result ? Number(result.value || 0) : 0;
+        const entry = { rank: result ? Number(result.rank) : null, value, createdAt: now };
+        topRankCache.set(cacheKey, entry);
+        if (topRankCache.size > 5000) {
+            for (const [key, item] of topRankCache) {
+                if (now - item.createdAt >= TOP_CACHE_TTL_MS || topRankCache.size > 4500) topRankCache.delete(key);
+                if (topRankCache.size <= 4500) break;
+            }
+        }
+        return entry;
+    } catch (error) {
+        console.error('خطأ في حساب رتبة المستخدم:', error);
+        return { rank: null, value: 0 };
+    }
+}
 async function getTopUsers(db, category, period, limit = 50, guildId = null) {
     try {
         const cacheKey = `${String(guildId || 'global')}:${category}:${period}:${limit}`;
@@ -402,7 +488,7 @@ async function execute(message, args, { client }) {
         return;
     }
 
-    const bannerAccentColor = await getGuildBannerHex(
+    const bannerAccentColor = getGuildBannerHexFast(
         message.guild,
         colorManager.getColor?.() || '#5865F2'
     );
@@ -411,7 +497,7 @@ async function execute(message, args, { client }) {
     let currentPeriod = 'monthly';
     let currentPage = 0;
     const pageSize = 10;
-    async function getTopDisplayName(userId) {
+    function getTopDisplayName(userId) {
         const normalizedId = String(userId);
         if (topNameCache.size > 5000) {
             for (const key of topNameCache.keys()) {
@@ -427,26 +513,30 @@ async function execute(message, args, { client }) {
             topNameCache.set(nameCacheKey, { name: cachedMember.displayName, createdAt: Date.now() });
             return cachedMember.displayName;
         }
-        const fetchedMember = await message.guild.members.fetch({ user: normalizedId, force: true }).catch(() => null);
-        if (fetchedMember?.displayName) {
-            topNameCache.set(nameCacheKey, { name: fetchedMember.displayName, createdAt: Date.now() });
-            return fetchedMember.displayName;
-        }
         const cachedUser = client.users.cache.get(normalizedId);
-        if (cachedUser?.globalName || cachedUser?.username) {
-            const name = cachedUser.globalName || cachedUser.username;
-            topNameCache.set(nameCacheKey, { name, createdAt: Date.now() });
-            return name;
+        const immediateName = cachedUser?.globalName || cachedUser?.username || `Member ${normalizedId.slice(-4)}`;
+        // Cache miss network lookups are deliberately detached and deduplicated.
+        if (!topNameInFlight.has(nameCacheKey)) {
+            const request = (async () => {
+                try {
+                    const fetchedMember = await message.guild.members.fetch({ user: normalizedId }).catch(() => null);
+                    if (fetchedMember?.displayName) {
+                        topNameCache.set(nameCacheKey, { name: fetchedMember.displayName, createdAt: Date.now() });
+                        return;
+                    }
+                    const fetchedUser = cachedUser || await client.users.fetch(normalizedId).catch(() => null);
+                    const name = fetchedUser?.globalName || fetchedUser?.username;
+                    if (name) topNameCache.set(nameCacheKey, { name, createdAt: Date.now() });
+                } catch (error) {
+                    console.error('تعذر تحديث اسم عضو التوب:', error.message);
+                } finally {
+                    topNameInFlight.delete(nameCacheKey);
+                }
+            })();
+            topNameInFlight.set(nameCacheKey, request);
         }
-        const fetchedUser = await client.users.fetch(normalizedId, { force: true }).catch(() => null);
-        if (fetchedUser?.globalName || fetchedUser?.username) {
-            const name = fetchedUser.globalName || fetchedUser.username;
-            topNameCache.set(nameCacheKey, { name, createdAt: Date.now() });
-            return name;
-        }
-        return 'Unknown Member';
+        return immediateName;
     }
-
     function formatRankValue(category, value) {
         if (category === 'voice') return formatDuration(value);
         if (category === 'chat') return `${Math.floor(value / 10)}xp`;
@@ -456,17 +546,14 @@ async function execute(message, args, { client }) {
     }
 
     async function getYourRank(category, period) {
-        // نطاق 1000 يكفي للرتب العملية ويمنع تحميل قاعدة البيانات كاملة في كل صورة.
-        const rows = await getTopUsers(db, category, period, 1000, message.guild.id);
-        const rankIndex = rows.findIndex(row => String(row.user_id) === String(message.author.id));
-        if (rankIndex === -1) return 'Your Rank :  Unranked';
-        return `Your Rank :  #${rankIndex + 1}  •  ${formatRankValue(category, rows[rankIndex].value)}`;
+        const result = await getUserRank(db, category, period, message.author.id, message.guild.id);
+        if (!result.rank) return 'Your Rank :  Unranked';
+        return `Your Rank :  #${result.rank}  •  ${formatRankValue(category, result.value)}`;
     }
-
     async function buildInitialImage() {
-        const topVoice = await getTopUsers(db, 'voice', currentPeriod, 5, message.guild.id);
-        const topChat = await getTopUsers(db, 'chat', currentPeriod, 5, message.guild.id);
-        const [voiceRank, chatRank] = await Promise.all([
+        const [topVoice, topChat, voiceRank, chatRank] = await Promise.all([
+            getTopUsers(db, 'voice', currentPeriod, 5, message.guild.id),
+            getTopUsers(db, 'chat', currentPeriod, 5, message.guild.id),
             getYourRank('voice', currentPeriod),
             getYourRank('chat', currentPeriod)
         ]);
@@ -477,12 +564,12 @@ async function execute(message, args, { client }) {
             title: 'Rank',
             subtitle: `${periodNames[currentPeriod]} • Voice and Chat Leaderboard`,
             sections: [
-                { title: 'Top Voice', rows: topVoice.length ? await Promise.all(topVoice.map(async (user, idx) => ({
-                    label: `#${idx + 1}  ${await getTopDisplayName(user.user_id)}`, value: formatDuration(user.value, showSeconds)
-                }))) : [{ label: 'No data', value: '—' }] },
-                { title: 'Top Chat', rows: topChat.length ? await Promise.all(topChat.map(async (user, idx) => ({
-                    label: `#${idx + 1}  ${await getTopDisplayName(user.user_id)}`, value: `${Math.floor(user.value / 10)}xp`
-                }))) : [{ label: 'No data', value: '—' }] }
+                { title: 'Top Voice', rows: topVoice.length ? topVoice.map((user, idx) => ({
+                    label: `#${idx + 1}  ${getTopDisplayName(user.user_id)}`, value: formatDuration(user.value, showSeconds)
+                })) : [{ label: 'No data', value: '—' }] },
+                { title: 'Top Chat', rows: topChat.length ? topChat.map((user, idx) => ({
+                    label: `#${idx + 1}  ${getTopDisplayName(user.user_id)}`, value: `${Math.floor(user.value / 10)}xp`
+                })) : [{ label: 'No data', value: '—' }] }
             ],
             yourRank: `${voiceRank.replace('Your Rank :  ', 'Voice :  ')}   |   ${chatRank.replace('Your Rank :  ', 'Chat :  ')}`
         });
@@ -509,17 +596,20 @@ async function execute(message, args, { client }) {
             accentColor: bannerAccentColor,
             title: 'Top Streak',
             subtitle: `Page ${currentPage + 1} of ${totalPages}`,
-            sections: [{ title: 'Streaks', rows: await Promise.all(pageStreaks.map(async (streak, index) => ({
-                label: `#${startIndex + index + 1}  ${await getTopDisplayName(streak.user_id)}`,
+            sections: [{ title: 'Streaks', rows: pageStreaks.map((streak, index) => ({
+                label: `#${startIndex + index + 1}  ${getTopDisplayName(streak.user_id)}`,
                 value: `${streak.current_streak} ${streak.last_post_date === today ? 'Active' : 'Not Active'}`
-            }))) }],
+            })) }],
             yourRank: myStreak
         });
     }
 
     async function buildCategoryImage() {
         const categoryPageSize = 10;
-        const topUsers = await getTopUsers(db, currentCategory, currentPeriod, 100, message.guild.id);
+        const [topUsers, yourRank] = await Promise.all([
+            getTopUsers(db, currentCategory, currentPeriod, 100, message.guild.id),
+            getYourRank(currentCategory, currentPeriod)
+        ]);
         const categoryNames = { voice: 'Top Voice', chat: 'Top Chat', reactions: 'Reactions', joins: 'Joins' };
         const periodNames = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', total: 'All' };
         if (!topUsers.length) {
@@ -528,16 +618,15 @@ async function execute(message, args, { client }) {
         const totalPages = Math.ceil(topUsers.length / categoryPageSize);
         const startIndex = currentPage * categoryPageSize;
         const pageUsers = topUsers.slice(startIndex, startIndex + categoryPageSize);
-        const yourRank = await getYourRank(currentCategory, currentPeriod);
         const showSeconds = currentCategory === 'voice' && shouldShowSeconds(pageUsers);
-        const rows = await Promise.all(pageUsers.map(async (user, index) => {
+        const rows = pageUsers.map((user, index) => {
             let value = user.value;
             if (currentCategory === 'voice') value = formatDuration(user.value, showSeconds);
             else if (currentCategory === 'chat') value = `${Math.floor(user.value / 10)}xp`;
             else if (currentCategory === 'reactions') value = `${user.value}R`;
             else if (currentCategory === 'joins') value = `${user.value}J`;
-            return { label: `#${startIndex + index + 1}  ${await getTopDisplayName(user.user_id)}`, value };
-        }));
+            return { label: `#${startIndex + index + 1}  ${getTopDisplayName(user.user_id)}`, value };
+        });
         return buildTopSummaryImage({
             accentColor: bannerAccentColor,
             title: categoryNames[currentCategory] || 'Top',
@@ -624,67 +713,89 @@ async function execute(message, args, { client }) {
         return [selectRow, periodRow, navigationRow];
     }
 
-    const initialImage = await buildInitialImage();
-    const initialButtons = await buildButtons();
-    const sentMessage = await message.channel.send({ files: [initialImage], components: initialButtons });
+    const sentMessage = await message.channel.send('جارٍ تجهيز التوب...');
+    let initialImage;
+    let initialButtons;
+    try {
+        [initialImage, initialButtons] = await Promise.all([buildInitialImage(), buildButtons()]);
+        await sentMessage.edit({ content: '', files: [initialImage], components: initialButtons });
+    } catch (error) {
+        console.error('Error preparing initial tops image:', error);
+        await sentMessage.edit('❌ تعذر تجهيز صورة التوب. حاول مرة أخرى لاحقًا.').catch(() => {});
+        return;
+    }
 
     const filter = i => i.user.id === message.author.id && i.message.id === sentMessage.id;
     const collector = message.channel.createMessageComponentCollector({ filter, time: 600000 });
 
-    collector.on('collect', async interaction => {
-        try {
-            if (interaction.customId === 'tops_category_select') {
-                currentCategory = interaction.values[0];
-                currentPage = 0;
-            } else if (interaction.customId === 'tops_daily') {
-                currentPeriod = 'daily';
-                currentPage = 0;
-            } else if (interaction.customId === 'tops_weekly') {
-                currentPeriod = 'weekly';
-                currentPage = 0;
-            } else if (interaction.customId === 'tops_monthly') {
-                currentPeriod = 'monthly';
-                currentPage = 0;
-            } else if (interaction.customId === 'tops_total') {
-                currentPeriod = 'total';
-                currentPage = 0;
-            } else if (interaction.customId === 'tops_prev' && currentPage > 0) {
-                currentPage--;
-            } else if (interaction.customId === 'tops_next') {
-                let totalPages;
-                if (currentCategory === 'streaks') {
-                    const allStreaks = await getStreakUsers(message.guild.id);
-                    totalPages = Math.ceil(allStreaks.length / pageSize);
+    let topInteractionQueue = Promise.resolve();
+    collector.on('collect', interaction => {
+        const acknowledged = interaction.deferUpdate()
+            .then(() => true)
+            .catch(error => {
+                console.error('تعذر إقرار تفاعل التوب:', error);
+                return false;
+            });
+        topInteractionQueue = topInteractionQueue.then(async () => {
+            if (!(await acknowledged)) return;
+            try {
+                if (interaction.customId === 'tops_category_select') {
+                    currentCategory = interaction.values[0];
+                    currentPage = 0;
+                } else if (interaction.customId === 'tops_daily') {
+                    currentPeriod = 'daily';
+                    currentPage = 0;
+                } else if (interaction.customId === 'tops_weekly') {
+                    currentPeriod = 'weekly';
+                    currentPage = 0;
+                } else if (interaction.customId === 'tops_monthly') {
+                    currentPeriod = 'monthly';
+                    currentPage = 0;
+                } else if (interaction.customId === 'tops_total') {
+                    currentPeriod = 'total';
+                    currentPage = 0;
+                } else if (interaction.customId === 'tops_prev' && currentPage > 0) {
+                    currentPage--;
+                } else if (interaction.customId === 'tops_next') {
+                    let totalPages;
+                    if (currentCategory === 'streaks') {
+                        const allStreaks = await getStreakUsers(message.guild.id);
+                        totalPages = Math.ceil(allStreaks.length / pageSize);
+                    } else {
+                        const categoryPageSize = 10;
+                        const topUsers = await getTopUsers(db, currentCategory, currentPeriod, 100, message.guild.id);
+                        totalPages = Math.ceil(topUsers.length / categoryPageSize);
+                    }
+                    if (currentPage < totalPages - 1) {
+                        currentPage++;
+                    }
+                }
+
+                let newImage;
+                if (currentCategory === null) {
+                    newImage = await buildInitialImage();
+                } else if (currentCategory === 'streaks') {
+                    newImage = await buildStreakImage();
                 } else {
-                    const categoryPageSize = 10;
-                    const topUsers = await getTopUsers(db, currentCategory, currentPeriod, 100, message.guild.id);
-                    totalPages = Math.ceil(topUsers.length / categoryPageSize);
+                    newImage = await buildCategoryImage();
                 }
-                if (currentPage < totalPages - 1) {
-                    currentPage++;
-                }
-            }
-
-            let newImage;
-            if (currentCategory === null) {
-                newImage = await buildInitialImage();
-            } else if (currentCategory === 'streaks') {
-                newImage = await buildStreakImage();
-            } else {
-                newImage = await buildCategoryImage();
-            }
             
-            const newButtons = await buildButtons();
+                const newButtons = await buildButtons();
 
-            await interaction.update({ files: [newImage], components: newButtons });
-        } catch (error) {
-            console.error('Error in tops collector:', error);
-        }
+                await sentMessage.edit({ files: [newImage], components: newButtons });
+            } catch (error) {
+                console.error('Error in tops collector:', error);
+            }
+        }).catch(error => {
+            console.error('Error in queued tops interaction:', error);
+        });
     });
 
     collector.on('end', () => {
-        sentMessage.edit({ components: [] }).catch(() => {});
+        topInteractionQueue = topInteractionQueue
+            .then(() => sentMessage.edit({ components: [] }))
+            .catch(() => {});
     });
 }
 
-module.exports = { name, execute, invalidateTopsCache, getTopUsers };
+module.exports = { name, execute, invalidateTopsCache, getTopUsers, getUserRank };

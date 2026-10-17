@@ -37,6 +37,17 @@ async function extractBannerAccent(buffer, fallback) {
     return rgbToHex({ r: red / count, g: green / count, b: blue / count });
 }
 
+function getGuildBannerHexFast(guild, fallback = DEFAULT_COLOR) {
+    const bannerUrl = guild?.bannerURL?.({ extension: 'png', size: 1024 });
+    if (!bannerUrl) return fallback;
+    const cacheKey = `${guild.id}:${bannerUrl}`;
+    const cached = bannerColorCache.get(cacheKey);
+    if (!cached || Date.now() - cached.createdAt >= CACHE_TTL_MS) {
+        // لا ننتظر الشبكة أو تحليل الصورة؛ ستتوفر النتيجة للطلب التالي.
+        getGuildBannerHex(guild, fallback).catch(() => {});
+    }
+    return cached?.color || fallback;
+}
 async function getGuildBannerHex(guild, fallback = DEFAULT_COLOR) {
     const bannerUrl = guild?.bannerURL?.({ extension: 'png', size: 1024 });
     if (!bannerUrl) return fallback;
@@ -73,4 +84,4 @@ function clearGuildBannerColorCache(guildId) {
     }
 }
 
-module.exports = { getGuildBannerHex, clearGuildBannerColorCache, rgbToHex, extractBannerAccent, DEFAULT_COLOR };
+module.exports = { getGuildBannerHex, getGuildBannerHexFast, clearGuildBannerColorCache, rgbToHex, extractBannerAccent, DEFAULT_COLOR };
