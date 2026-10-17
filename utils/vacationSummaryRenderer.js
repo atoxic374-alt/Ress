@@ -94,9 +94,18 @@ function buildVacationSummaryImage({
     ctx.fillStyle = background;
     ctx.fillRect(0, 0, width, height);
 
-    ctx.fillStyle = accent;
+    const glow = ctx.createRadialGradient(120, 105, 10, 120, 105, 520);
+    glow.addColorStop(0, `${accent}55`);
+    glow.addColorStop(1, `${accent}00`);
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, 720, 430);
+
+    ctx.shadowColor = 'rgba(255,255,255,0.35)';
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = '#FFFFFF';
     roundedRect(ctx, 55, 50, 10, 202, 5);
     ctx.fill();
+    ctx.shadowBlur = 0;
 
     drawText(ctx, 'My Vacation', width / 2, 94, { font: 'bold 52px Cairo', align: 'center' });
     drawText(ctx, fitText(ctx, memberName || 'Member', 720, 'bold 29px Cairo'), width / 2, 145, {
@@ -107,7 +116,7 @@ function buildVacationSummaryImage({
     roundedRect(ctx, 95, 190, width - 190, 78, 18);
     ctx.fill();
     drawText(ctx, 'VACATION STATUS', width - 130, 241, { font: 'bold 27px Cairo' });
-    drawText(ctx, status, 135, 241, { font: 'bold 29px Cairo', color: accent, align: 'left' });
+    drawText(ctx, status, 135, 241, { font: 'bold 29px Cairo', color: '#FFFFFF', align: 'left' });
 
     let y = 315;
     rows.forEach(([label, value], index) => {
@@ -118,7 +127,7 @@ function buildVacationSummaryImage({
         }
         drawText(ctx, label, width - 110, y - 4, { font: 'bold 24px Cairo' });
         drawText(ctx, fitText(ctx, value, 680, '22px Cairo'), 110, y - 4, {
-            font: '22px Cairo', color: index === 0 ? accent : 'rgba(255,255,255,0.78)', align: 'left'
+            font: '22px Cairo', color: 'rgba(255,255,255,0.84)', align: 'left'
         });
         y += rowHeight;
     });
