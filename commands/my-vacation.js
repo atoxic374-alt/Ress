@@ -14,7 +14,7 @@ const colorManager = require('../utils/colorManager.js');
 const vacationManager = require('../utils/vacationManager.js');
 const { createDecisionContainer, decisionPayload } = require('../utils/decisionContainer.js');
 const { buildVacationSummaryImage } = require('../utils/vacationSummaryRenderer.js');
-const { getGuildBannerHex, lightenHex } = require('../utils/guildBannerColor.js');
+const { getGuildBannerHex } = require('../utils/guildBannerColor.js');
 
 const adminRolesPath = path.join(__dirname, '..', 'data', 'adminRoles.json');
 
@@ -114,10 +114,10 @@ async function execute(message, args, { client, BOT_OWNERS }) {
         components.push(row);
     }
 
-    const serverAccentColor = lightenHex(await getGuildBannerHex(
+    const serverAccentColor = await getGuildBannerHex(
         message.guild,
         colorManager.getColor() || '#5865F2'
-    ));
+    );
 
     const buildImage = (vacation) => buildVacationSummaryImage({
         guildName: message.guild.name,
