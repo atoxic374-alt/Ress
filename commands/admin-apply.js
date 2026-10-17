@@ -598,9 +598,11 @@ async function handleAdminApplicationInteraction(interaction) {
 
             // تحديث الرسالة
             const cooldownEnd = new Date(Date.now() + (settings.settings.rejectCooldownHours * 60 * 60 * 1000));
+            const candidateMember = await interaction.guild.members.fetch(candidateId).catch(() => null);
             const rejectContainer = createDecisionContainer({
                 approved: false,
                 title: '❌ Admin Application Rejected',
+                targetMember: candidateMember,
                 targetUserId: candidateId,
                 actorId: interaction.user.id,
                 guild: interaction.guild,
@@ -608,7 +610,9 @@ async function handleAdminApplicationInteraction(interaction) {
                     '',
                     '### Application Details',
                     `**Application ID :** \`${applicationId}\``,
+                    `**Applicant :** ${candidateMember?.displayName || candidateId}`,
                     `**Requested by :** <@${application.requesterId}>`,
+                    `**Rejected by :** ${interaction.user.tag}`,
                     `**Rejection Reason :** ${reason}`,
                     `**Cooldown :** ${settings.settings.rejectCooldownHours} hours`,
                     `**Cooldown Ends :** ${moment(cooldownEnd).tz('Asia/Riyadh').format('dddd, MMMM D, YYYY h:mm A')}`
@@ -865,15 +869,14 @@ async function handleAdminApplicationInteraction(interaction) {
             delete settings.pendingApplications[applicationId];
             saveAdminApplicationSettings(settings);
 
-            const errorEmbed = colorManager.createEmbed()
-                .setTitle('❌ خطأ')
-                .setDescription('**لم يتم العثور على العضو في السيرفر. تم حذف الطلب.**')
-                .setTimestamp();
-
-            await interaction.update({
-                embeds: [errorEmbed],
-                components: []
+            const errorContainer = createStructuredContainer({
+                title: '❌ Application Unavailable',
+                description: `**Application ID :** \`${applicationId}\`\n**Status :** لم يتم العثور على العضو في السيرفر، وتم حذف الطلب.`,
+                footer: 'Admin Application • Closed',
+                accentColor: '#ED4245'
             });
+
+            await interaction.update(applicationContainerPayload(errorContainer));
 
             return true;
         }
@@ -945,7 +948,9 @@ async function handleAdminApplicationInteraction(interaction) {
                     '',
                     '### Application Details',
                     `**Application ID :** \`${applicationId}\``,
+                    `**Applicant :** ${candidate.displayName}`,
                     `**Requested by :** <@${application.requesterId}>`,
+                    `**Approved by :** ${interaction.user.tag}`,
                     `**Added Roles :** ${addedRoles.length > 0 ? addedRoles.map(r => r.name).slice(0, 10).join(' • ') : 'None'}`,
                     failedRoles.length > 0 ? `**Failed Roles :** ${failedRoles.join(' • ')}` : null
                 ],
