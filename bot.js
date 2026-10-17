@@ -3177,7 +3177,15 @@ client.on('messageCreate', async message => {
     // Commands for everyone (help, tops, تفاعلي, ستريكي, profile, myprofile, داوني)
     if (commandName === 'رولي' || commandName === 'tops' || commandName === 'توب' || commandName === 'تفاعلي' || commandName === 'تواجدي' || commandName === 'انهاء' || commandName === 'user' || commandName === 'ستريكي' || commandName === 'profile' || commandName === 'id' || commandName === 'مشاكلي' || commandName === 'myprofile' || commandName === 'داوني' || commandName === 'داوناتي' || commandName === 'داونات' || commandName === 'مسؤولياتي') {
       if (commandName === 'مسؤولياتي') {
-        await showUserResponsibilities(message, message.author, responsibilities, client);
+        const requestedUser = message.mentions.users.first()
+          || (args[0] ? await client.users.fetch(String(args[0]).replace(/[<@!>]/g, '')).catch(() => null) : null);
+        const targetUser = requestedUser || message.author;
+        const isRequestingSomeoneElse = targetUser.id !== message.author.id;
+        if (isRequestingSomeoneElse && !isOwner && !hasAdminRole && !hasAdministrator) {
+          await message.reply({ content: '❌ لا تملك صلاحية عرض مسؤوليات عضو آخر.' });
+        } else {
+          await showUserResponsibilities(message, targetUser, responsibilities, client);
+        }
       } else {
         await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
       }
