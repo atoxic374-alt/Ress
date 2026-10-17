@@ -2138,7 +2138,7 @@ async function processRoomRequestAction(interaction, client) {
             missing: '❌ **لم يتم العثور على الطلب**',
             guild: '❌ **هذا الطلب لا يخص هذا السيرفر**',
             decided: `**هذا الطلب تم ${mutation.status === 'accepted' ? 'قبوله' : 'رفضه'} مسبقاً**`,
-            time: '❌ **لا يمكن قبول الطلب: الموعد غير مفهوم. عدّل الموعد أولًا إلى صيغة مثل `6:50 مساءً` أو `بعد 10 دقائق`.**',
+            time: '❌ **لا يمكن قبول الطلب: الموعد غير مفهوم. استخدم مثلًا: `6:50 مساءً` أو `6:50 PM` أو `18:30` أو `بعد 10 دقائق` أو `10m` أو `غدًا 9 صباحًا`.**',
             save: '❌ **تعذر حفظ قرار القبول/الرفض. لم يتم تغيير حالة الطلب.**'
         };
         await interaction.reply({ content: messages[mutation.reason] || '❌ تعذر تحديث الطلب.', flags: 64 });
@@ -2800,125 +2800,128 @@ async function createRoom(request, client, guildConfig) {
 // إعداد نظام الريآكت التلقائي
 
 
-// تحليل الوقت
+// تحليل الوقت بصيغ عربية وإنجليزية واختصارات شائعة.
 function parseScheduleTime(timeString) {
     const moment = require('moment-timezone');
     const now = moment().tz('Asia/Riyadh');
+    const raw = String(timeString || '').trim();
+    if (!raw) return null;
 
-    // تنظيف المدخل
-    const cleanTime = String(timeString || '')
-        .trim()
+    const cleanTime = raw
         .toLowerCase()
-        .replace(/[٠-٩]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
+        .replace(/[٠-٩]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+        .replace(/[ًٌٍَُِّْـ]/g, '')
+        .replace(/[،]/g, ',')
+        .replace(/\s+/g, ' ')
+        .replace(/صباحا?/g, 'am')
+        .replace(/مساءا?/g, 'pm')
+        .replace(/(^|\s)ص(?=\s|$)/g, '$1am')
+        .replace(/(^|\s)م(?=\s|$)/g, '$1pm')
+        .trim();
     if (!cleanTime) return null;
 
-    if (/^(بعد\s+)?نص\s+ساع[هة]$/.test(cleanTime) || /^(بعد\s+)?نصف\s+ساع[هة]$/.test(cleanTime)) {
-        return now.clone().add(30, 'minutes').toDate();
+    const immediate = /^(?:الآن|الان|الحين|دحين|حين|فوراً?|فورا|توني|حالاً?|حالا|now|right now|immediately|asap)$/i;
+    if (immediate.test(cleanTime)) return now.clone().add(1, 'second').toDate();
+
+    const addRelative = (amount, unit) => {
+        const value = Number(amount);
+        return Number.isFinite(value) && value > 0 ? now.clone().add(value, unit).toDate() : null;
+    };
+
+    const unitPatterns = [
+        { unit: 'seconds', pattern: '(?:ثانية|ثانيتين|ثواني?|second(?:s)?|sec(?:s)?|s)' },
+        { unit: 'minutes', pattern: '(?:دقيقة|دقيقتين|دقائق?|minute(?:s)?|min(?:s)?|m)' },
+        { unit: 'hours', pattern: '(?:ساعة|ساعتين|ساعات?|hour(?:s)?|hr(?:s)?|h)' },
+        { unit: 'days', pattern: '(?:يوم|يومين|أيام?|day(?:s)?|d)' },
+        { unit: 'weeks', pattern: '(?:أسبوع|أسبوعين|أسابيع|اسبوع|اسبوعين|اسابيع|week(?:s)?|wk(?:s)?|w)' }
+    ];
+    const numberPattern = '(\\d+(?:[.,]\\d+)?)';
+    for (const { unit, pattern } of unitPatterns) {
+        const relative = cleanTime.match(new RegExp(`^(?:بعد|خلال|in|after)\\s*${numberPattern}\\s*${pattern}$`, 'i'));
+        if (relative) return addRelative(relative[1].replace(',', '.'), unit);
+        const shorthand = cleanTime.match(new RegExp(`^${numberPattern}\\s*${pattern}$`, 'i'));
+        if (shorthand) return addRelative(shorthand[1].replace(',', '.'), unit);
+    }
+    if (/^(?:بعد\s+)?(?:نصف|نص)\s+(?:ساعة|ساعه|hour)$/i.test(cleanTime) || /^(?:بعد\s+)?half an? hour$/i.test(cleanTime)) {
+        return addRelative(30, 'minutes');
+    }
+    if (/^(?:بعد\s+)?ربع\s+(?:ساعة|ساعه)$/i.test(cleanTime) || /^quarter\s+of\s+an?\s+hour$/i.test(cleanTime)) {
+        return addRelative(15, 'minutes');
+    }
+    const arabicDual = cleanTime.match(/^(?:بعد|خلال)\s+(ساعتين|يومين|أسبوعين)$/);
+    if (arabicDual) return addRelative(arabicDual[1].startsWith('ساعة') ? 2 : 2, arabicDual[1].includes('يوم') ? 'days' : arabicDual[1].includes('أسبوع') ? 'weeks' : 'hours');
+    const bareRelative = cleanTime.match(/^(?:بعد|خلال|in|after)\s+(?:a|an|one|واحد|واحدة)\s*(second|minute|hour|day|week|ثانية|دقيقة|ساعة|يوم|أسبوع)$/i);
+    if (bareRelative) {
+        const token = bareRelative[1];
+        const unit = /second|ثانية/i.test(token) ? 'seconds' : /minute|دقيقة/i.test(token) ? 'minutes' : /hour|ساعة/i.test(token) ? 'hours' : /day|يوم/i.test(token) ? 'days' : 'weeks';
+        return addRelative(1, unit);
+    }
+    const singularRelative = cleanTime.match(/^(?:بعد|خلال|in|after)\s*(second|minute|hour|day|week|ثانية|دقيقة|ساعة|يوم|أسبوع)$/i);
+    if (singularRelative) {
+        const token = singularRelative[1];
+        const unit = /second|ثانية/i.test(token) ? 'seconds' : /minute|دقيقة/i.test(token) ? 'minutes' : /hour|ساعة/i.test(token) ? 'hours' : /day|يوم/i.test(token) ? 'days' : 'weeks';
+        return addRelative(1, unit);
     }
 
-    // الآن أو فوراً أو دحين أو الحين
-    if (cleanTime.includes('الآن') || cleanTime.includes('فوراً') || cleanTime.includes('فورا') || 
-        cleanTime.includes('دحين') || cleanTime.includes('الحين') || cleanTime.includes('حين') ||
-        cleanTime.includes('توني') || cleanTime === 'الان') {
-        return now.clone().add(1, 'second').toDate();
-    }
-
-    // بعد X ثانية
-    const secondsMatch = cleanTime.match(/بعد\s+(\d+)\s*ثوان[يی]?|بعد\s+ثانية/);
-    if (secondsMatch) {
-        const seconds = parseInt(secondsMatch[1] || 1);
-        return now.clone().add(seconds, 'seconds').toDate();
-    }
-
-    // بعد X دقائق
-    const minutesMatch = cleanTime.match(/بعد\s+(\d+)\s*دقائق?|بعد\s+دقيقة/);
-    if (minutesMatch) {
-        const minutes = parseInt(minutesMatch[1] || 1);
-        return now.clone().add(minutes, 'minutes').toDate();
-    }
-
-    // بعد X ساعات
-    const hoursMatch = cleanTime.match(/بعد\s+(\d+)\s*ساعات?|بعد\s+ساعتين|بعد\s+ساعة/);
-    if (hoursMatch) {
-        const hours = hoursMatch[0].includes('ساعتين') ? 2 : parseInt(hoursMatch[1] || 1);
-        return now.clone().add(hours, 'hours').toDate();
-    }
-
-    // بعد X أيام
-    const daysMatch = cleanTime.match(/بعد\s+(\d+)\s*أيام?|بعد\s+يوم/);
-    if (daysMatch) {
-        const days = parseInt(daysMatch[1] || 1);
-        return now.clone().add(days, 'days').toDate();
-    }
-
-    const clockPattern = '(?:الساعة\\s*)?(\\d{1,2})(?:\\s*[:.]\\s*(\\d{1,2}))?\\s*(صباحاً|صباحًا|مساءً|مساءً|ص|م)?';
-
+    const normalizeMeridiem = value => String(value || '')
+        .replace(/صباح(?:اً|ا)?|am|a\.m\./gi, 'am')
+        .replace(/مساء(?:ًا|ا)?|pm|p\.m\./gi, 'pm')
+        .trim();
+    const clockPattern = '(?:الساعة\\s*|at\\s*)?(\\d{1,2})(?:\\s*[:٫.]\\s*(\\d{1,2})|\\s+(\\d{1,2}))?\\s*(am|pm|ص|م)?';
     function buildClockDate(baseDate, clockMatch) {
         const hour = Number(clockMatch[1]);
-        const minute = Number(clockMatch[2] || 0);
-        const meridiem = clockMatch[3] || '';
-        if (minute > 59) return null;
-        if (meridiem && (hour < 1 || hour > 12)) return null;
-        if (!meridiem && hour > 23) return null;
-        const isPM = meridiem.includes('مساء') || meridiem === 'م';
-        const isAM = meridiem.includes('صباح') || meridiem === 'ص';
-        const candidateHours = meridiem
-            ? [isPM ? (hour % 12) + 12 : (isAM ? hour % 12 : hour)]
-            : (hour <= 12 ? [hour % 12, (hour % 12) + 12] : [hour]);
-        const candidates = candidateHours.map(targetHour => baseDate.clone()
-            .hour(targetHour).minute(minute).second(0).millisecond(0));
-        candidates.sort((a, b) => a.valueOf() - b.valueOf());
-        return candidates[0];
+        const minute = Number(clockMatch[2] ?? clockMatch[3] ?? 0);
+        const meridiem = normalizeMeridiem(clockMatch[4]);
+        if (minute > 59 || (meridiem && (hour < 1 || hour > 12)) || (!meridiem && hour > 23)) return null;
+        const targetHours = meridiem ? (meridiem === 'pm' ? (hour % 12) + 12 : hour % 12) : hour;
+        return baseDate.clone().hour(targetHours).minute(minute).second(0).millisecond(0);
     }
 
-    // تاريخ صريح: 2026-09-22 18:30 أو 2026/09/22 6:30 مساءً
-    const dateMatch = cleanTime.match(/(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\s*(.*)$/);
-    if (dateMatch) {
-        const dateBase = moment.tz({ year: Number(dateMatch[1]), month: Number(dateMatch[2]) - 1, date: Number(dateMatch[3]) }, 'Asia/Riyadh');
-        const dateClock = dateMatch[4].match(new RegExp(`^${clockPattern}$`));
-        if (!dateClock) return null;
-        const result = buildClockDate(dateBase, dateClock);
-        return result && result.isValid() && result.isAfter(now) ? result.toDate() : null;
+    const datePatterns = [
+        /^(20\d{2})[-/](\d{1,2})[-/](\d{1,2})(?:[ T,]+(.+))?$/,
+        /^(\d{1,2})[-/](\d{1,2})[-/](20\d{2})(?:[ T,،]+(.+))?$/
+    ];
+    for (const pattern of datePatterns) {
+        const match = cleanTime.match(pattern);
+        if (!match) continue;
+        const yearIsThird = match[3] && match[3].startsWith('20');
+        const year = Number(yearIsThird ? match[3] : match[1]);
+        const month = Number(match[2]);
+        const day = Number(yearIsThird ? match[1] : match[3]);
+        const baseDate = moment.tz({ year, month: month - 1, date: day }, 'Asia/Riyadh');
+        if (!baseDate.isValid() || baseDate.year() !== year || baseDate.month() !== month - 1 || baseDate.date() !== day) return null;
+        const clockMatch = (match[4] || '12:00').replace(/^(?:الساعة|at)\s*/i, '').match(new RegExp(`^${clockPattern}$`, 'i'));
+        const result = clockMatch && buildClockDate(baseDate, clockMatch);
+        return result && result.isAfter(now) ? result.toDate() : null;
     }
 
-    // اليوم / بكره / غداً مع وقت اختياري.
-    const dayMatch = cleanTime.match(/^(اليوم|بكره|بكرة|غدوة|غداً|غدا|غدًا)(?:\s+|،\s*)?(.*)$/);
+    const dayMatch = cleanTime.match(/^(today|tomorrow|tonight|اليوم|غداً|غدا|غدًا|بكره|بكرة|غدوة)(?:\s+(?:at|في|الساعة)\s*|\s+|،\s*)?(.*)$/i);
     if (dayMatch) {
-        const isTomorrow = !dayMatch[1].startsWith('اليوم');
+        const token = dayMatch[1];
+        const isTomorrow = /tomorrow|غد|بكر|غدو/i.test(token);
         const baseDate = now.clone().add(isTomorrow ? 1 : 0, 'day');
-        const dayClock = dayMatch[2].match(new RegExp(`^${clockPattern}$`));
-        if (!dayClock) return baseDate.hour(12).minute(0).second(0).millisecond(0).toDate();
-        const result = buildClockDate(baseDate, dayClock);
+        const clockText = dayMatch[2] || (/tonight/i.test(token) ? '9:00 pm' : '12:00 pm');
+        const clockMatch = clockText.match(new RegExp(`^${clockPattern}$`, 'i'));
+        const result = clockMatch && buildClockDate(baseDate, clockMatch);
         if (!result) return null;
-        if (!isTomorrow && result.isSameOrBefore(now)) result.add(1, 'day');
+        if (result.isSameOrBefore(now)) result.add(1, 'day');
         return result.toDate();
     }
 
-    // قبل شوي (بعد ساعة - كترجمة معكوسة)
-    if (cleanTime.includes('قبل شوي') || cleanTime.includes('شوي')) {
-        return now.clone().add(10, 'minutes').toDate();
+    const clockMatch = cleanTime.match(new RegExp(`^${clockPattern}$`, 'i'));
+    if (!clockMatch) return null;
+    const result = buildClockDate(now, clockMatch);
+    if (!result) return null;
+    if (clockMatch[4]) {
+        if (result.isSameOrBefore(now)) result.add(1, 'day');
+        return result.toDate();
     }
-
-    // الساعة X أو X:MM. عند عدم كتابة صباحاً/مساءً نختار أقرب موعد قادم
-    // بين AM و PM بدل افتراض أن الوقت صباحي دائمًا.
-    const clockMatch = cleanTime.match(new RegExp(`^${clockPattern}$`));
-    if (clockMatch) {
-        const result = buildClockDate(now, clockMatch);
-        if (!result) return null;
-        if (clockMatch[3]) {
-            if (result.isSameOrBefore(now)) result.add(1, 'day');
-            return result.toDate();
-        }
-        const candidates = [result, result.clone().add(12, 'hours')].map(candidate => {
-            if (candidate.isSameOrBefore(now)) candidate.add(1, 'day');
-            return candidate;
-        });
-        candidates.sort((a, b) => a.valueOf() - b.valueOf());
-        return candidates[0].toDate();
-    }
-
-    // لا نحول النص غير المفهوم إلى موعد عشوائي.
-    return null;
+    const candidates = [result, result.clone().add(12, 'hours')].map(candidate => {
+        if (candidate.isSameOrBefore(now)) candidate.add(1, 'day');
+        return candidate;
+    });
+    candidates.sort((a, b) => a.valueOf() - b.valueOf());
+    return candidates[0].toDate();
 }
 
 // معالجة اختيار الألوان
@@ -4077,7 +4080,7 @@ function registerHandlers(client) {
                     const newWhen = interaction.fields.getTextInputValue('when').trim();
                     const parsedWhen = parseScheduleTime(newWhen);
                     if (!parsedWhen || !Number.isFinite(parsedWhen.getTime())) {
-                        await interaction.reply({ content: '❌ **الموعد غير مفهوم. استخدم مثلًا: `6:50 مساءً` أو `بعد 10 دقائق` أو `غدًا 9 صباحًا`.**', flags: 64 });
+                        await interaction.reply({ content: '❌ **الموعد غير مفهوم. استخدم مثلًا: `6:50 مساءً` أو `6:50 PM` أو `18:30` أو `بعد 10 دقائق` أو `10m` أو `غدًا 9 صباحًا`.**', flags: 64 });
                         return;
                     }
                     const mutation = await withRoomRequestsMutation(latestRequests => {
@@ -4166,7 +4169,7 @@ function registerHandlers(client) {
                     if (editedWhen.length < 2 || editedWhen.length > 100) errors.push('حقل "الوقت" يجب أن يكون بين 2 و 100 حرف.');
                     if (editedMessage.length < 5 || editedMessage.length > 1000) errors.push('حقل "الرسالة" يجب أن يكون بين 5 و 1000 حرف.');
                     const parsedEditedWhen = parseScheduleTime(editedWhen);
-                    if (!parsedEditedWhen || !Number.isFinite(parsedEditedWhen.getTime())) errors.push('حقل "الوقت" غير مفهوم. مثال: 6:50 مساءً أو بعد 10 دقائق.');
+                    if (!parsedEditedWhen || !Number.isFinite(parsedEditedWhen.getTime())) errors.push('حقل "الوقت" غير مفهوم. أمثلة مدعومة: 6:50 مساءً، 6:50 PM، 18:30، بعد 10 دقائق، 10m، غدًا 9 صباحًا.');
                     if (finalImageUrl) {
                         const imageUrlPattern = /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp|bmp)/i;
                         if (!imageUrlPattern.test(finalImageUrl)) errors.push('رابط الصورة غير صالح.');
