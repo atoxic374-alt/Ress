@@ -2807,7 +2807,7 @@ function parseScheduleTime(timeString) {
     const raw = String(timeString || '').trim();
     if (!raw) return null;
 
-    const cleanTime = raw
+    let cleanTime = raw
         .toLowerCase()
         .replace(/[٠-٩]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
         .replace(/[ًٌٍَُِّْـ]/g, '')
@@ -2819,6 +2819,37 @@ function parseScheduleTime(timeString) {
         .replace(/(^|\s)م(?=\s|$)/g, '$1pm')
         .trim();
     if (!cleanTime) return null;
+
+    // تحويل أسماء الساعات العربية إلى أرقام: الساعة خمسة، الساعه وحده، الساعة التاسعة مساءً.
+    const arabicHourWords = [
+        ['اثنتا عشرة', 12], ['اثنا عشر', 12], ['اثني عشر', 12], ['اثناعشر', 12],
+        ['إحدى عشرة', 11], ['احدى عشرة', 11], ['أحد عشر', 11], ['احد عشر', 11],
+        ['عشرة', 10], ['عشره', 10], ['عشر', 10],
+        ['ثمانية', 8], ['ثمانيه', 8], ['ثمان', 8],
+        ['تسعة', 9], ['تسعه', 9], ['تاسعة', 9], ['تاسعه', 9], ['تسع', 9],
+        ['سبعة', 7], ['سبعه', 7], ['سبع', 7],
+        ['ستة', 6], ['سته', 6], ['ست', 6],
+        ['خمسة', 5], ['خمسه', 5], ['خمس', 5],
+        ['أربعة', 4], ['اربعة', 4], ['اربعه', 4], ['أربع', 4], ['اربع', 4],
+        ['ثلاثة', 3], ['ثلاثه', 3], ['ثلاث', 3],
+        ['اثنين', 2], ['اثنان', 2], ['ثنتين', 2], ['ثنتان', 2], ['اثنتين', 2],
+        ['واحدة', 1], ['واحده', 1], ['وحده', 1], ['واحد', 1]
+    ];
+    const wordClockPrefix = cleanTime.match(/^(الساعة|الساعه|ساعة|ساعه)\s+(.+)$/i);
+    if (wordClockPrefix) {
+        let remainder = wordClockPrefix[2].replace(/^ال(?=\D)/, '');
+        for (const [word, number] of arabicHourWords) {
+            const wordPattern = new RegExp(`^${word}(?=\\s|$)`, 'i');
+            if (!wordPattern.test(remainder)) continue;
+            remainder = remainder.replace(wordPattern, String(number)).trim();
+            cleanTime = `${wordClockPrefix[1]} ${remainder}`.trim();
+            break;
+        }
+    }
+    cleanTime = cleanTime
+        .replace(/^(الساعة|الساعه|ساعة|ساعه)\s+(\d{1,2})\s+و\s*نصف(?:\s+(am|pm))?$/i, '$1 $2:30 $3')
+        .replace(/\s+$/, '')
+        .trim();
 
     const immediate = /^(?:الآن|الان|الحين|دحين|حين|فوراً?|فورا|توني|حالاً?|حالا|now|right now|immediately|asap)$/i;
     if (immediate.test(cleanTime)) return now.clone().add(1, 'second').toDate();
@@ -2867,7 +2898,7 @@ function parseScheduleTime(timeString) {
         .replace(/صباح(?:اً|ا)?|am|a\.m\./gi, 'am')
         .replace(/مساء(?:ًا|ا)?|pm|p\.m\./gi, 'pm')
         .trim();
-    const clockPattern = '(?:الساعة\\s*|at\\s*)?(\\d{1,2})(?:\\s*[:٫.]\\s*(\\d{1,2})|\\s+(\\d{1,2}))?\\s*(am|pm|ص|م)?';
+    const clockPattern = '(?:(?:الساعة|الساعه)\\s*|at\\s*)?(\\d{1,2})(?:\\s*[:٫.]\\s*(\\d{1,2})|\\s+(\\d{1,2}))?\\s*(am|pm|ص|م)?';
     function buildClockDate(baseDate, clockMatch) {
         const hour = Number(clockMatch[1]);
         const minute = Number(clockMatch[2] ?? clockMatch[3] ?? 0);
