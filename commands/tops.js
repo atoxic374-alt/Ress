@@ -8,6 +8,7 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 const { createStructuredContainer, componentsV2Payload } = require('../utils/structuredContainer.js');
+const { getGuildBannerHex } = require('../utils/guildBannerColor.js');
 
 const name = 'توب';
 
@@ -367,6 +368,11 @@ async function execute(message, args, { client }) {
         return;
     }
 
+    const bannerAccentColor = await getGuildBannerHex(
+        message.guild,
+        colorManager.getColor?.() || '#5865F2'
+    );
+
     let currentCategory = null; // null means initial view (voice + chat)
     let currentPeriod = 'monthly';
     let currentPage = 0;
@@ -413,7 +419,7 @@ async function execute(message, args, { client }) {
             title: 'Rank',
             description,
             footer: `${periodNames[currentPeriod]} • Voice and Chat Leaderboard`,
-            accentColor: colorManager.getColor?.()
+            accentColor: bannerAccentColor
         });
     }
 
@@ -421,13 +427,13 @@ async function execute(message, args, { client }) {
         const isEnabled = await isStreakSystemEnabled(message.guild.id);
         
         if (!isEnabled) {
-            return createStructuredContainer({ title: 'نظام Streak غير مُفعّل', description: '**يرجى التواصل مع المسؤولين لتفعيله**', footer: 'الصفحة 1 من 1', accentColor: colorManager.getColor?.() });
+            return createStructuredContainer({ title: 'نظام Streak غير مُفعّل', description: '**يرجى التواصل مع المسؤولين لتفعيله**', footer: 'الصفحة 1 من 1', accentColor: bannerAccentColor });
         }
 
         const allStreaks = await getStreakUsers(message.guild.id);
 
         if (allStreaks.length === 0) {
-            return createStructuredContainer({ title: 'Rank Streak', description: 'لا يوجد أحد لديه Streak حالياً!\n\n**كن أول من يبدأ**', footer: 'الصفحة 1 من 1', accentColor: colorManager.getColor?.() });
+            return createStructuredContainer({ title: 'Rank Streak', description: 'لا يوجد أحد لديه Streak حالياً!\n\n**كن أول من يبدأ**', footer: 'الصفحة 1 من 1', accentColor: bannerAccentColor });
         }
 
         const totalPages = Math.ceil(allStreaks.length / pageSize);
@@ -474,7 +480,7 @@ async function execute(message, args, { client }) {
         };
 
         if (topUsers.length === 0) {
-            return createStructuredContainer({ title: categoryNames[currentCategory], description: '**لا توجد بيانات في هذه الفترة**', footer: `${periodNames[currentPeriod]} • الصفحة 1 من 1`, accentColor: colorManager.getColor?.() });
+            return createStructuredContainer({ title: categoryNames[currentCategory], description: '**لا توجد بيانات في هذه الفترة**', footer: `${periodNames[currentPeriod]} • الصفحة 1 من 1`, accentColor: bannerAccentColor });
         }
 
         const totalPages = Math.ceil(topUsers.length / pageSize);
@@ -518,7 +524,7 @@ async function execute(message, args, { client }) {
             title,
             description,
             footer: `${periodNames[currentPeriod]} • الصفحة ${currentPage + 1} من ${totalPages}`,
-            accentColor: colorManager.getColor?.()
+            accentColor: bannerAccentColor
         });
     }
 
