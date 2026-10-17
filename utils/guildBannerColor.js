@@ -10,7 +10,7 @@ function rgbToHex({ r, g, b }) {
         .join('')}`.toUpperCase();
 }
 
-function lightenHex(hex, minimumLightness = 0.66) {
+function lightenHex(hex, minimumLightness = 0.55) {
     const value = String(hex || DEFAULT_COLOR).replace(/^#/, '');
     const r = Number.parseInt(value.slice(0, 2), 16) / 255;
     const g = Number.parseInt(value.slice(2, 4), 16) / 255;
