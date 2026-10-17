@@ -7,7 +7,7 @@ const moment = require('moment-timezone');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
-const { createStructuredContainer, componentsV2Payload } = require('../utils/structuredContainer.js');
+const { buildTopSummaryImage } = require('../utils/topSummaryRenderer.js');
 const { getGuildBannerHex } = require('../utils/guildBannerColor.js');
 
 const name = 'توب';
@@ -378,153 +378,77 @@ async function execute(message, args, { client }) {
     let currentPage = 0;
     const pageSize = 10;
 
-    async function buildInitialEmbed() {
+    async function buildInitialImage() {
         const topVoice = await getTopUsers(db, 'voice', currentPeriod, 5, message.guild.id);
         const topChat = await getTopUsers(db, 'chat', currentPeriod, 5, message.guild.id);
-
-        const periodNames = {
-            daily: 'Daily',
-            weekly: 'Weekly',
-            monthly: 'Monthly',
-            total: 'All'
-        };
-
-        let description = '';
-
-        // Voice section
-        description += '**top voice :**\n';
-        if (topVoice.length === 0) {
-            description += 'لا توجد بيانات\n';
-        } else {
-            const showSeconds = shouldShowSeconds(topVoice);
-            description += topVoice.map((user, idx) => {
-                const rank = idx + 1;
-                const time = formatDuration(user.value, showSeconds);
-                return `**#${rank}** - <@${user.user_id}> : **${time}**`;
-            }).join('\n') + '\n';
-        }
-
-        description += '\n**top chat :**\n';
-        if (topChat.length === 0) {
-            description += 'لا توجد بيانات';
-        } else {
-            description += topChat.map((user, idx) => {
-                const rank = idx + 1;
-                const xp = Math.floor(user.value / 10);
-                return `**#${rank}** - <@${user.user_id}> : **${xp}xp**`;
-            }).join('\n');
-        }
-
-        return createStructuredContainer({
+        const periodNames = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', total: 'All' };
+        const showSeconds = shouldShowSeconds(topVoice);
+        return buildTopSummaryImage({
+            accentColor: bannerAccentColor,
             title: 'Rank',
-            description,
-            footer: `${periodNames[currentPeriod]} • Voice and Chat Leaderboard`,
-            accentColor: bannerAccentColor
+            subtitle: `${periodNames[currentPeriod]} • Voice and Chat Leaderboard`,
+            sections: [
+                { title: 'Top Voice', rows: topVoice.length ? topVoice.map((user, idx) => ({
+                    label: `#${idx + 1}  <@${user.user_id}>`, value: formatDuration(user.value, showSeconds)
+                })) : [{ label: 'No data', value: '—' }] },
+                { title: 'Top Chat', rows: topChat.length ? topChat.map((user, idx) => ({
+                    label: `#${idx + 1}  <@${user.user_id}>`, value: `${Math.floor(user.value / 10)}xp`
+                })) : [{ label: 'No data', value: '—' }] }
+            ],
+            controls: 'Voice • Chat • Reactions • Joins • Streaks'
         });
     }
 
-    async function buildStreakEmbed() {
+    async function buildStreakImage() {
         const isEnabled = await isStreakSystemEnabled(message.guild.id);
-        
         if (!isEnabled) {
-            return createStructuredContainer({ title: 'نظام Streak غير مُفعّل', description: '**يرجى التواصل مع المسؤولين لتفعيله**', footer: 'الصفحة 1 من 1', accentColor: bannerAccentColor });
+            return buildTopSummaryImage({ accentColor: bannerAccentColor, title: 'Streak', subtitle: 'Top Streak', sections: [{ title: 'Status', rows: [{ label: 'System', value: 'Not enabled' }] }], controls: 'Voice • Chat • Reactions • Joins • Streaks' });
         }
-
         const allStreaks = await getStreakUsers(message.guild.id);
-
-        if (allStreaks.length === 0) {
-            return createStructuredContainer({ title: 'Rank Streak', description: 'لا يوجد أحد لديه Streak حالياً!\n\n**كن أول من يبدأ**', footer: 'الصفحة 1 من 1', accentColor: bannerAccentColor });
+        if (!allStreaks.length) {
+            return buildTopSummaryImage({ accentColor: bannerAccentColor, title: 'Top Streak', subtitle: 'No active streaks', sections: [{ title: 'Status', rows: [{ label: 'Members', value: 'No data' }] }], controls: 'Voice • Chat • Reactions • Joins • Streaks' });
         }
-
         const totalPages = Math.ceil(allStreaks.length / pageSize);
         const startIndex = currentPage * pageSize;
-        const endIndex = Math.min(startIndex + pageSize, allStreaks.length);
-        const pageStreaks = allStreaks.slice(startIndex, endIndex);
-
+        const pageStreaks = allStreaks.slice(startIndex, startIndex + pageSize);
         const today = moment().tz('Asia/Riyadh').format('YYYY-MM-DD');
-        let description = '';
-        
-        for (let i = 0; i < pageStreaks.length; i++) {
-            const streak = pageStreaks[i];
-            const globalRank = startIndex + i + 1;
-            const isActiveToday = streak.last_post_date === today;
-            const statusEmoji = isActiveToday ? '<:emoji_64:1442587855447654522>' : '<:emoji_63:1442587778964525077>';
-            const fireEmojis = '🔥'.repeat(Math.min(Math.floor(streak.current_streak / 5) + 1, 3));
-            
-            description += `**#${globalRank} -** <@${streak.user_id}> **${streak.current_streak}** Status : ${statusEmoji}\n`;
-        }
-
-        return createStructuredContainer({
+        return buildTopSummaryImage({
+            accentColor: bannerAccentColor,
             title: 'Top Streak',
-            description: `${description.trim()}\n\n<:emoji_63:1442587778964525077> Active  •  <:emoji_64:1442587855447654522> Not Active`,
-            footer: `الصفحة ${currentPage + 1} من ${totalPages} • إجمالي ${allStreaks.length} عضو`,
-            accentColor: colorManager.getColor?.()
+            subtitle: `Page ${currentPage + 1} of ${totalPages}`,
+            sections: [{ title: 'Streaks', rows: pageStreaks.map((streak, index) => ({
+                label: `#${startIndex + index + 1}  <@${streak.user_id}>`,
+                value: `${streak.current_streak} ${streak.last_post_date === today ? 'Active' : 'Not Active'}`
+            })) }],
+            controls: 'Voice • Chat • Reactions • Joins • Streaks'
         });
     }
 
-    async function buildCategoryEmbed() {
+    async function buildCategoryImage() {
         const topUsers = await getTopUsers(db, currentCategory, currentPeriod, 100, message.guild.id);
-        
-        const categoryNames = {
-            voice: 'Voice',
-            chat: 'chat',
-            reactions: 'Reactions',
-            joins: 'Joins'
-        };
-
-        const periodNames = {
-            daily: 'Daily',
-            weekly: 'Weekly',
-            monthly: 'Monthly',
-            total: 'All'
-        };
-
-        if (topUsers.length === 0) {
-            return createStructuredContainer({ title: categoryNames[currentCategory], description: '**لا توجد بيانات في هذه الفترة**', footer: `${periodNames[currentPeriod]} • الصفحة 1 من 1`, accentColor: bannerAccentColor });
+        const categoryNames = { voice: 'Top Voice', chat: 'Top Chat', reactions: 'Reactions', joins: 'Joins' };
+        const periodNames = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', total: 'All' };
+        if (!topUsers.length) {
+            return buildTopSummaryImage({ accentColor: bannerAccentColor, title: categoryNames[currentCategory] || 'Top', subtitle: `${periodNames[currentPeriod]} • No data`, sections: [{ title: 'Status', rows: [{ label: 'Results', value: 'No data' }] }], controls: 'Voice • Chat • Reactions • Joins • Streaks' });
         }
-
         const totalPages = Math.ceil(topUsers.length / pageSize);
         const startIndex = currentPage * pageSize;
-        const endIndex = Math.min(startIndex + pageSize, topUsers.length);
-        const pageUsers = topUsers.slice(startIndex, endIndex);
-
-        let description = '';
-        
-        let title;
-        if (currentCategory === 'voice') {
-            title = 'Top Voice';
-            const showSeconds = shouldShowSeconds(pageUsers);
-            description = pageUsers.map((user, idx) => {
-                const rank = startIndex + idx + 1;
-                const time = formatDuration(user.value, showSeconds);
-                return `**#${rank}** - <@${user.user_id}> : **${time}**`;
-            }).join('\n');
-        } else if (currentCategory === 'chat') {
-            title = 'Top Chat';
-            description = pageUsers.map((user, idx) => {
-                const rank = startIndex + idx + 1;
-                const xp = Math.floor(user.value / 10);
-                return `**#${rank}** - <@${user.user_id}> : **${xp}xp**`;
-            }).join('\n');
-        } else if (currentCategory === 'reactions') {
-            title = 'Reactions';
-            description = pageUsers.map((user, idx) => {
-                const rank = startIndex + idx + 1;
-                return `**#${rank}** - <@${user.user_id}> : **${user.value}R**`;
-            }).join('\n');
-        } else if (currentCategory === 'joins') {
-            title = 'Joins';
-            description = pageUsers.map((user, idx) => {
-                const rank = startIndex + idx + 1;
-                return `**#${rank}** - <@${user.user_id}> : **${user.value}J**`;
-            }).join('\n');
-        }
-
-        return createStructuredContainer({
-            title,
-            description,
-            footer: `${periodNames[currentPeriod]} • الصفحة ${currentPage + 1} من ${totalPages}`,
-            accentColor: bannerAccentColor
+        const pageUsers = topUsers.slice(startIndex, startIndex + pageSize);
+        const showSeconds = currentCategory === 'voice' && shouldShowSeconds(pageUsers);
+        const rows = pageUsers.map((user, index) => {
+            let value = user.value;
+            if (currentCategory === 'voice') value = formatDuration(user.value, showSeconds);
+            else if (currentCategory === 'chat') value = `${Math.floor(user.value / 10)}xp`;
+            else if (currentCategory === 'reactions') value = `${user.value}R`;
+            else if (currentCategory === 'joins') value = `${user.value}J`;
+            return { label: `#${startIndex + index + 1}  <@${user.user_id}>`, value };
+        });
+        return buildTopSummaryImage({
+            accentColor: bannerAccentColor,
+            title: categoryNames[currentCategory] || 'Top',
+            subtitle: `${periodNames[currentPeriod]} • Page ${currentPage + 1} of ${totalPages}`,
+            sections: [{ title: categoryNames[currentCategory] || 'Top', rows }],
+            controls: 'Voice • Chat • Reactions • Joins • Streaks'
         });
     }
 
@@ -604,10 +528,9 @@ async function execute(message, args, { client }) {
         return [selectRow, periodRow, navigationRow];
     }
 
-    const initialContainer = await buildInitialEmbed();
+    const initialImage = await buildInitialImage();
     const initialButtons = await buildButtons();
-    initialContainer.addActionRowComponents(...initialButtons);
-    const sentMessage = await message.channel.send(componentsV2Payload(initialContainer));
+    const sentMessage = await message.channel.send({ files: [initialImage], components: initialButtons });
 
     const filter = i => i.user.id === message.author.id && i.message.id === sentMessage.id;
     const collector = message.channel.createMessageComponentCollector({ filter, time: 600000 });
@@ -645,19 +568,18 @@ async function execute(message, args, { client }) {
                 }
             }
 
-            let newContainer;
+            let newImage;
             if (currentCategory === null) {
-                newContainer = await buildInitialEmbed();
+                newImage = await buildInitialImage();
             } else if (currentCategory === 'streaks') {
-                newContainer = await buildStreakEmbed();
+                newImage = await buildStreakImage();
             } else {
-                newContainer = await buildCategoryEmbed();
+                newImage = await buildCategoryImage();
             }
             
             const newButtons = await buildButtons();
 
-            newContainer.addActionRowComponents(...newButtons);
-            await interaction.update(componentsV2Payload(newContainer));
+            await interaction.update({ files: [newImage], components: newButtons });
         } catch (error) {
             console.error('Error in tops collector:', error);
         }
