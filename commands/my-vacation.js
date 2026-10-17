@@ -5,7 +5,8 @@ const {
     ButtonStyle, 
     ModalBuilder, 
     TextInputBuilder, 
-    TextInputStyle 
+    TextInputStyle,
+    MessageFlags
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
@@ -15,6 +16,7 @@ const vacationManager = require('../utils/vacationManager.js');
 const { createDecisionContainer, decisionPayload } = require('../utils/decisionContainer.js');
 const { buildVacationSummaryImage } = require('../utils/vacationSummaryRenderer.js');
 const { getGuildBannerHex } = require('../utils/guildBannerColor.js');
+const { createStructuredContainer } = require('../utils/structuredContainer.js');
 
 const adminRolesPath = path.join(__dirname, '..', 'data', 'adminRoles.json');
 
@@ -284,19 +286,18 @@ async function handleInteraction(interaction, context) {
             const user = await client.users.fetch(userId);
             const member = await interaction.guild.members.fetch(userId);
 
-            const embed = new EmbedBuilder()
-                .setTitle("Request for end")
-                .setColor(colorManager.getColor('pending') || '#E67E22')
-                .setAuthor({ name: user.tag, iconURL: user.displayAvatarURL({ size: 128 }) })
-                .setThumbnail(user.displayAvatarURL({ size: 128 }))
-                .addFields(
-                    { name: "العضو", value: `${member}`, inline: true },
-                    { name: "السبب", value: activeVacation.reason || 'غير محدد', inline: false },
-                    { name: "انتهاء الإجازة", value: `<t:${Math.floor(new Date(activeVacation.endDate).getTime() / 1000)}:f>`, inline: true },
-                    { name: "الرولات", value: activeVacation.removedRoles?.map(r => `<@&${r}>`).join(' ') || 'لا توجد', inline: false }
-                )
-                .setFooter({ text: 'طلب إنهاء إجازة • Space' })
-                .setTimestamp();
+            const terminationContainer = createStructuredContainer({
+                title: 'Request for Early Termination',
+                description: [
+                    `**العضو :** ${member}`,
+                    `**السبب الأصلي للإجازة :** ${activeVacation.reason || 'غير محدد'}`,
+                    `**تاريخ انتهاء الإجازة :** <t:${Math.floor(new Date(activeVacation.endDate).getTime() / 1000)}:f>`,
+                    `**الرولات المحفوظة :** ${activeVacation.removedRoles?.map(r => `<@&${r}>`).join(' ') || 'لا توجد'}`,
+                    `**مقدم طلب الإنهاء :** ${member}`
+                ].join('\n'),
+                footer: 'Vacation System • Early Termination Pending',
+                accentColor: colorManager.getColor('pending') || '#E67E22'
+            });
 
             const buttons = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`vac_approve_termination_${userId}`).setLabel("Accept?").setEmoji('<:emoji_23:1463998510319013929>').setStyle(ButtonStyle.Success),
@@ -310,11 +311,7 @@ async function handleInteraction(interaction, context) {
                 try {
                     const channel = await client.channels.fetch(settings.notificationChannel);
                     if (channel && channel.isTextBased()) {
-                        await channel.send({
-                            content: '**Vacation Sys;**',
-                            embeds: [embed],
-                            components: [buttons]
-                        });
+                        await channel.send({ components: [terminationContainer, buttons], flags: MessageFlags.IsComponentsV2 });
                         notificationSent = true;
                         console.log(`تم إرسال طلب إنهاء الإجازة إلى القناة: ${channel.name}`);
                     } else {
@@ -329,11 +326,7 @@ async function handleInteraction(interaction, context) {
                     console.log('فشل الإرسال للقناة، جاري المحاولة عبر الرسائل الخاصة...');
                     for (const approver of approvers) {
                         try {
-                            await approver.send({
-                                content: '**Vacation Sys;**',
-                                embeds: [embed],
-                                components: [buttons]
-                            });
+                            await approver.send({ components: [terminationContainer, buttons], flags: MessageFlags.IsComponentsV2 });
                             notificationSent = true;
                             console.log(`تم إرسال رسالة خاصة لـ ${approver.tag}`);
                         } catch (dmError) {
@@ -345,11 +338,7 @@ async function handleInteraction(interaction, context) {
                 // إرسال رسائل خاصة (الافتراضي أو عند عدم تحديد قناة)
                 for (const approver of approvers) {
                     try {
-                        await approver.send({
-                            content: '**Vacation Sys;**',
-                            embeds: [embed],
-                            components: [buttons]
-                        });
+                        await approver.send({ components: [terminationContainer, buttons], flags: MessageFlags.IsComponentsV2 });
                         notificationSent = true;
                         console.log(`تم إرسال رسالة خاصة لـ ${approver.tag}`);
                     } catch (dmError) {
@@ -515,7 +504,10 @@ async function handleInteraction(interaction, context) {
             });
         }
 
-        const requestedUser = await client.users.fetch(userId).catch(() => null);
+        const [requestedUser, requestedMember] = await Promise.all([
+            client.users.fetch(userId).catch(() => null),
+            interaction.guild.members.fetch({ user: userId }).catch(() => null)
+        ]);
         
         if (action === 'approve') {
             try {
@@ -533,6 +525,7 @@ async function handleInteraction(interaction, context) {
                     const successContainer = createDecisionContainer({
                         approved: true,
                         title: '✅ Vacation Ended',
+                        targetMember: requestedMember,
                         targetUserId: userId,
                         actorId: interaction.user.id,
                         guild: interaction.guild,
@@ -540,6 +533,8 @@ async function handleInteraction(interaction, context) {
                             '',
                             '### Termination Details',
                             '**Action :** Early vacation termination approved',
+                            `**Applicant :** ${requestedMember?.displayName || requestedUser?.globalName || requestedUser?.username || userId}`,
+                            `**Approved by :** ${interaction.user.tag}`,
                             `**End Date :** ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })}`,
                             `**Reason :** ${terminationRequest.reason || 'Not specified'}`
                         ],
@@ -558,7 +553,7 @@ async function handleInteraction(interaction, context) {
                                   .setEmoji("<:emoji_42:1430334150057001042>")
                                 .setDisabled(true),
 );
-                        await interaction.message.edit({ components: [disabledRow] }).catch(() => {});
+                        await interaction.message.edit({ components: [successContainer, disabledRow] }).catch(() => {});
                     }
                 } else {
                     await interaction.editReply({ content: `❌ فشل في إنهاء الإجازة: ${result.message}` });
@@ -589,9 +584,11 @@ async function handleInteraction(interaction, context) {
         
         vacationManager.saveVacations(vacations);
 
+        const rejectedMember = await interaction.guild.members.fetch({ user: userId }).catch(() => null);
         const rejectContainer = createDecisionContainer({
             approved: false,
             title: '❌ Early Termination Rejected',
+            targetMember: rejectedMember,
             targetUserId: userId,
             actorId: interaction.user.id,
             guild: interaction.guild,
@@ -599,6 +596,7 @@ async function handleInteraction(interaction, context) {
                 '',
                 '### Termination Details',
                 '**Action :** Early vacation termination rejected',
+                `**Rejected by :** ${interaction.user.tag}`,
                 `**Rejection Reason :** ${reason}`,
                 `**Cooldown :** ${rejectCooldownHours} hours`
             ],
@@ -636,7 +634,7 @@ async function handleInteraction(interaction, context) {
                         .setStyle(ButtonStyle.Danger)
                         .setDisabled(true),
                                    );
-                await originalMessage.edit({ components: [disabledRow] }).catch(() => {});
+                await originalMessage.edit({ components: [rejectContainer, disabledRow] }).catch(() => {});
             }
         }
     }

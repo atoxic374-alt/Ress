@@ -349,6 +349,8 @@ async function handleInteraction(interaction, context) {
                 details: [
                     '',
                     '### Vacation Details',
+                    `**Applicant :** ${member.displayName || member.user.tag}`,
+                    `**Approved by :** ${interaction.user.tag}`,
                     `**Start Date :** ${new Date(pendingRequest.startDate).toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })}`,
                     `**End Date :** ${new Date(pendingRequest.endDate).toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })}`,
                     `**Reason :** ${pendingRequest.reason || 'Not specified'}`
@@ -442,10 +444,12 @@ async function handleInteraction(interaction, context) {
             targetUserId: userId,
             actorId: interaction.user.id,
             guild: interaction.guild,
-            details: [
-                '',
-                '### Rejection Details',
-                `**Rejection Reason :** ${rejectReason}`,
+                details: [
+                    '',
+                    '### Rejection Details',
+                    `**Applicant :** ${member?.displayName || member?.user?.tag || userId}`,
+                    `**Rejected by :** ${interaction.user.tag}`,
+                    `**Rejection Reason :** ${rejectReason}`,
                 `**Original Reason :** ${pendingRequest.reason || 'Not specified'}`,
                 `**Cooldown :** ${rejectCooldownHours} hours`
             ],

@@ -355,7 +355,8 @@ async function handleInteraction(interaction, context) {
                     const res = await vacationManager.approveVacation(interaction, userId, interaction.user.id);
                     if (res.success) {
                         // تحديث الرسالة الأصلية
-                        await updateOriginalMessage(interaction.guild, userId, 'vacation', 'approved', { adminId: interaction.user.id });
+                        const approvedVacation = readJson(vacationsPath).active?.[userId];
+                        await updateOriginalMessage(interaction.guild, userId, 'vacation', 'approved', { adminId: interaction.user.id, adminTag: interaction.user.tag, requestData: approvedVacation });
 
                         const member = await interaction.guild.members.fetch(userId).catch(() => null);
                         if (member) {
@@ -470,10 +471,11 @@ async function handleInteraction(interaction, context) {
             
             for (const userId of userIds) {
                 try {
+                    const terminationData = readJson(vacationsPath).pendingTermination?.[userId];
                     const res = await vacationManager.endVacation(interaction.guild, client, userId, `تم قبول الإنهاء بواسطة المسؤول: ${interaction.user.tag}`);
                     if (res.success) {
                         // تحديث الرسالة الأصلية
-                        await updateOriginalMessage(interaction.guild, userId, 'termination', 'approved', { adminId: interaction.user.id });
+                        await updateOriginalMessage(interaction.guild, userId, 'termination', 'approved', { adminId: interaction.user.id, adminTag: interaction.user.tag, requestData: terminationData });
 
                         const currentVacations = readJson(vacationsPath);
                         if (currentVacations.pendingTermination) delete currentVacations.pendingTermination[userId];
@@ -598,6 +600,7 @@ async function updateOriginalMessage(guild, userId, type, status, data = {}) {
             const targetMember = await guild.members.fetch(userId).catch(() => null);
             const fields = targetMsg.embeds[0]?.fields || [];
             const fieldValue = (name) => fields.find(field => field.name === name)?.value;
+            const requestData = data.requestData || {};
             const details = [
                 '',
                 '### Decision Details',
@@ -607,7 +610,11 @@ async function updateOriginalMessage(guild, userId, type, status, data = {}) {
                 fieldValue('السبب') ? `**Reason :** ${fieldValue('السبب')}` : null,
                 fieldValue('سبب الرفض') ? `**Rejection Reason :** ${fieldValue('سبب الرفض')}` : null,
                 fieldValue('تاريخ البدء') ? `**Start Date :** ${fieldValue('تاريخ البدء')}` : null,
-                fieldValue('تاريخ الانتهاء') ? `**End Date :** ${fieldValue('تاريخ الانتهاء')}` : null
+                fieldValue('تاريخ الانتهاء') ? `**End Date :** ${fieldValue('تاريخ الانتهاء')}` : null,
+                requestData.reason ? `**Original Reason :** ${requestData.reason}` : null,
+                requestData.startDate ? `**Start Date :** ${new Date(requestData.startDate).toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })}` : null,
+                requestData.endDate ? `**End Date :** ${new Date(requestData.endDate).toLocaleString('en-US', { timeZone: 'Asia/Riyadh' })}` : null,
+                data.adminTag ? `**Decision by :** ${data.adminTag}` : null
             ];
             const container = createDecisionContainer({
                 approved: status === 'approved',
@@ -656,7 +663,7 @@ async function rejectVacation(interaction, userId) {
         writeJson(vacationsPath, vacationsData);
 
         // تحديث الرسالة الأصلية
-        await updateOriginalMessage(interaction.guild, userId, 'vacation', 'rejected', { adminId: interaction.user.id });
+        await updateOriginalMessage(interaction.guild, userId, 'vacation', 'rejected', { adminId: interaction.user.id, adminTag: interaction.user.tag, requestData: pendingRequest });
 
         // إشعار العضو
         const member = await interaction.guild.members.fetch(userId).catch(() => null);
@@ -696,7 +703,7 @@ async function rejectTermination(interaction, userId) {
         writeJson(vacationsPath, vacationsData);
 
         // تحديث الرسالة الأصلية
-        await updateOriginalMessage(interaction.guild, userId, 'termination', 'rejected', { adminId: interaction.user.id });
+        await updateOriginalMessage(interaction.guild, userId, 'termination', 'rejected', { adminId: interaction.user.id, adminTag: interaction.user.tag, requestData: pendingRequest });
 
         // إشعار العضو
         const member = await interaction.guild.members.fetch(userId).catch(() => null);
