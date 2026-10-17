@@ -34,7 +34,7 @@ const warnManager = require('./utils/warnManager');
 const { checkCooldown, startCooldown } = require('./commands/cooldown.js');
 const colorManager = require('./utils/colorManager.js');
 const { buildResponsibilitiesSummaryImage } = require('./utils/responsibilitiesSummaryRenderer.js');
-const { getGuildBannerHex } = require('./utils/guildBannerColor.js');
+const { getGuildBannerHex, lightenHex } = require('./utils/guildBannerColor.js');
 
 // كولداون اختصارات المسؤوليات: الزران يشتركان في نفس الكولداون لكل مستخدم ومسؤولية.
 const SHORTCUT_CALL_COOLDOWN_MS = 10 * 60 * 1000;
@@ -6430,10 +6430,10 @@ async function showUserResponsibilities(message, targetUser, responsibilities, c
         }
     }
 
-    const accentHex = await getGuildBannerHex(
+    const accentHex = lightenHex(await getGuildBannerHex(
         message.guild,
         colorManager.getColor?.() || '#5865F2'
-    );
+    ));
     const summaryImage = buildResponsibilitiesSummaryImage({
         guildName: message.guild.name,
         memberName: targetMember?.displayName || targetUser.globalName || targetUser.username,
