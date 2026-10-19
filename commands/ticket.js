@@ -17,9 +17,12 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { createCanvas, loadImage } = require('canvas');
 const { registerTicketInteractionRouter } = require('../utils/ticketInteractionRouter');
 const colorManager = require('../utils/colorManager');
+const { createStructuredContainer, componentsV2Payload, colorToNumber } = require('../utils/structuredContainer');
+const { normalizeMentionableIds, roleMention, userMention } = require('../utils/mentions');
 const { getDatabase, dbManager } = require('../utils/database');
 const { getDataDir, ensureDirSync } = require('../utils/storagePaths');
 const { getResponsibilitiesSnapshot } = require('../utils/responsibilitiesStore');
@@ -48,6 +51,7 @@ const pingCooldowns = new Map();
 
 const ticketClaimLocks = new Set();
 const ticketClaimOwners = new Map();
+const transferDmNotificationJobs = new Map();
 const ticketCloseLocks = new Set();
 const ticketOpenRequestLocks = new Set();
 const activeTicketSetupSessions = new Map();
@@ -1342,22 +1346,31 @@ async function retryAsync(fn, attempts = 3) {
   return null;
 }
 
-async function finalizeTransferDmNotifications(ticket, guild, closedByLabel = 'غير محدد') {
+async function finalizeTransferDmNotifications(ticket, guild, claimedById = null) {
   const notices = Array.isArray(ticket?.transferDmNotifications) ? ticket.transferDmNotifications : [];
-  if (!notices.length || !guild?.client) return;
+  if (!notices.length || !guild?.client || !claimedById) return;
   for (const notice of notices) {
+    if (notice.resolvedById === String(claimedById)) continue;
     const user = await guild.client.users.fetch(notice.userId).catch(() => null);
     if (!user) continue;
     const dm = await user.createDM().catch(() => null);
     if (!dm) continue;
     const msg = notice.messageId ? await dm.messages.fetch(notice.messageId).catch(() => null) : null;
     if (!msg?.editable) continue;
-    const resolvedBy = closedByLabel || 'غير محدد';
+    const resolvedBy = userMention(claimedById) || 'غير محدد';
     const transferredBy = notice.transferredById ? `<@${notice.transferredById}>` : 'غير محدد';
-    await msg.edit({
-      embeds: [makeTicketEmbed('Change To Resp', `**من الذي حوّل التكت :** ${transferredBy}\n**ولكن تم حلها بنجاح بواسطة :** ${resolvedBy}`)]
-    }).catch((error) => logSilentError('suppressed', error));
+    const updated = await msg.edit({
+      embeds: [makeTicketEmbed('Change To Resp', `**من الذي حوّل التكت :** ${transferredBy}\n**تم حلها من المسؤول :** ${resolvedBy}`)]
+    }).then(() => true).catch((error) => {
+      logSilentError('suppressed', error);
+      return false;
+    });
+    if (updated) {
+      notice.resolvedById = String(claimedById);
+      notice.resolvedAt = Date.now();
+    }
   }
+  ticket.transferDmNotificationsFinalizedAt = Date.now();
 }
 
 async function syncTicketLogMessage({
@@ -1508,6 +1521,41 @@ function buildClaimRequestContent(ticket, config, claimerId = null) {
   if (reason.description) lines.push(`**الوصف :** ${reason.description}`);
   if (claimerId) lines.push(`**الإداري :** <@${claimerId}>`);
   return lines.join('\n');
+}
+
+function buildResponsibilityTransferPayload({ responsibilityName, roleIds = [], userIds = [], claimedById = null, takeButton = null } = {}) {
+  const safeRoleIds = normalizeMentionableIds(roleIds);
+  const safeUserIds = normalizeMentionableIds(userIds);
+  const responsibleMentions = [
+    ...safeRoleIds.map(roleMention),
+    ...safeUserIds.map(userMention)
+  ].filter(Boolean);
+  const lines = [
+    `تم التحويل الى مسؤولين : ${String(responsibilityName || '—')}`,
+    `**المسؤولين :** ${responsibleMentions.join(', ') || 'N/A'}`
+  ];
+  if (claimedById) {
+    lines.push(`**تم الاستلام من المسؤول :** ${userMention(claimedById) || 'المستلم'}`);
+  }
+
+  const container = createStructuredContainer({
+    title: 'Changed',
+    description: lines.join('\n\n'),
+    accentColor: colorToNumber(colorManager.getColor?.() || '#0099ff', 0x0099ff)
+  });
+  if (takeButton) {
+    container.addActionRowComponents(new ActionRowBuilder().addComponents(takeButton));
+  }
+
+  return {
+    ...componentsV2Payload(container),
+    allowedMentions: {
+      parse: [],
+      roles: safeRoleIds,
+      users: normalizeMentionableIds([...safeUserIds, claimedById]),
+      repliedUser: false
+    }
+  };
 }
 
 function buildPostCloseControls(guildId, panelId, channelId, ticket = {}) {
@@ -2658,6 +2706,10 @@ function hasStrictClaimAccess(member, config, reasonKey = null) {
 
 function hasResponsibleTicketAccess(member, config, guild, ticket = null) {
   if (resolveTicketBlockForMember(guild?.id, member)) return false;
+  if (ticket?.transferredTo) {
+    const memberUserId = String(member?.id || member?.user?.id || '');
+    return Boolean(memberUserId && ticket.responsibilityClaimedBy === memberUserId);
+  }
   const allowedRoleIds = getActiveResponsibleRoleIds(config, guild, ticket);
   let memberRoleIds = [];
   const memberUserId = String(member?.id || member?.user?.id || '');
@@ -2693,6 +2745,10 @@ function getOnlineResponsibleMentions(guild, roleIds = [], userIds = []) {
 }
 
 function canManageTicket(interaction, ticket, config) {
+  if (ticket?.transferredTo) {
+    return ticket.responsibilityClaimedBy === interaction.user.id
+      || hasStrictClaimAccess(interaction.member, config, ticket.reasonKey);
+  }
   if (interaction.user.id === ticket.claimedBy) return true;
   return hasResponsibleTicketAccess(interaction.member, config, interaction.guild, ticket);
 }
@@ -2847,8 +2903,12 @@ function canUserWriteInTicket(message, ticket, config) {
   if (resolveTicketBlockForMember(message.guild?.id, message.member)) return false;
   if (!ticket) return true;
   if (ticket.memberId === userId) return true;
-  if (ticket.claimedBy === userId) return true;
   if (Array.isArray(ticket.extraMembers) && ticket.extraMembers.includes(userId)) return true;
+  if (ticket.transferredTo) {
+    return ticket.responsibilityClaimedBy === userId
+      || hasStrictClaimAccess(message.member, config, ticket.reasonKey);
+  }
+  if (ticket.claimedBy === userId) return true;
   return hasResponsibleTicketAccess(message.member, config, message.guild, ticket);
 }
 
@@ -4282,8 +4342,7 @@ async function closeTicketCoreUnsafe({
       },
       actor: interaction?.user || null,
       transcriptFile: logTranscriptFile
-    }),
-    finalizeTransferDmNotifications(ticket, channel.guild, closedByLabel || (autoClose ? 'خمول التكت' : 'غير محدد'))
+    })
   ]);
   if (!config.keepClosedTickets) {
     delete tickets[channelId];
@@ -7051,18 +7110,30 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   }
 
   const previousClaimer = ticket.claimedBy || null;
+  const previousResponsibilityClaimer = ticket.responsibilityClaimedBy || null;
   const previousTransferredUserIds = Array.isArray(ticket.transferredUserIds)
     ? ticket.transferredUserIds.map((id) => String(id || '').trim()).filter((id) => /^\d{16,20}$/.test(id))
     : [];
+  const previousTransferredRoleIds = Array.isArray(ticket.transferredRoleIds)
+    ? ticket.transferredRoleIds.map((id) => String(id || '').trim()).filter((id) => /^\d{16,20}$/.test(id))
+    : [];
+  const responsibleUsers = (selected.responsibles || [])
+    .map((id) => String(id || '').trim())
+    .filter((id) => /^\d{16,20}$/.test(id));
+  const existingResponsibleUsers = [...new Set(responsibleUsers)];
 
-  // بعد التحويل إلى مسؤولية: نحرر خانة الاستلام من الإداري السابق فوراً
-  // حتى لا يبقى محسوباً ضمن حد الاستلام، لكن نحافظ على pointsReceiverId
-  // لاحتساب النقاط عند الإغلاق لنفس المستلم السابق.
+  // Keep ticket-point attribution independent from the responsibility Take ledger.
   if (!ticket.pointsReceiverId && previousClaimer) {
     ticket.pointsReceiverId = previousClaimer;
   }
   ticket.claimedBy = null;
   ticket.transferredTo = respName;
+  ticket.responsibilityClaimedBy = null;
+  ticket.responsibilityClaimedAt = null;
+  ticket.responsibilityTakeClaimId = crypto.randomUUID();
+  ticket.transferTakeMessageId = null;
+  ticket.transferDmNotifications = [];
+  delete ticket.transferDmNotificationsFinalizedAt;
 
   const targetRoles = (selected.roles || [])
     .map((id) => String(id || '').trim())
@@ -7071,18 +7142,17 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     .map((id) => String(id || '').trim())
     .filter((id) => /^\d{16,20}$/.test(id) && interaction.guild.roles.cache.has(id));
   const adminRoles = getAdminRoles(config, ticket?.reasonKey);
-  const allKnownRoles = [...new Set([...generalResponsibleRoles, ...targetRoles, ...adminRoles])];
-
-  const rolesPermissionTasks = allKnownRoles.map((roleId) => {
-    const shouldSee = targetRoles.includes(roleId) || generalResponsibleRoles.includes(roleId);
-    return () => editOverwriteFast(interaction.channel, roleId, {
-      ViewChannel: shouldSee,
-      SendMessages: shouldSee,
-      ReadMessageHistory: shouldSee
-    });
-  });
+  const allKnownRoles = [...new Set([
+    ...generalResponsibleRoles,
+    ...targetRoles,
+    ...previousTransferredRoleIds.filter((id) => interaction.guild.roles.cache.has(id)),
+    ...adminRoles
+  ])];
+  const visibleResponsibleRoles = new Set([...generalResponsibleRoles, ...targetRoles]);
 
   ticket.transferredRoleIds = [...targetRoles];
+  ticket.transferredUserIds = [...existingResponsibleUsers];
+  setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
   await syncTicketLogMessage({
     guild: interaction.guild,
     config,
@@ -7091,38 +7161,39 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     actionText: `تم تحويل التكت عن طريق : <@${interaction.user.id}> -> ${respName}`,
     actor: interaction.user
   });
-  setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
 
-  const responsibleUsers = (selected.responsibles || [])
-    .map((id) => String(id || '').trim())
-    .filter((id) => /^\d{16,20}$/.test(id));
-  const existingResponsibleUsers = [...new Set(responsibleUsers)];
-  const shouldGrantIndividualTransferUsers = true;
-
-  const usersPermissionTasks = [...new Set([...previousTransferredUserIds, ...existingResponsibleUsers])].map((userId) => {
-    const shouldSee = shouldGrantIndividualTransferUsers && existingResponsibleUsers.includes(userId);
+  const rolesPermissionTasks = allKnownRoles.map((roleId) => {
+    const shouldSee = visibleResponsibleRoles.has(roleId);
+    return () => editOverwriteFast(interaction.channel, roleId, {
+      ViewChannel: shouldSee,
+      SendMessages: false,
+      SendMessagesInThreads: false,
+      CreatePublicThreads: false,
+      CreatePrivateThreads: false,
+      ReadMessageHistory: shouldSee
+    });
+  });
+  const affectedUserIds = [...new Set([
+    ...previousTransferredUserIds,
+    ...existingResponsibleUsers,
+    ...(previousClaimer ? [String(previousClaimer)] : []),
+    ...(previousResponsibilityClaimer ? [String(previousResponsibilityClaimer)] : [])
+  ])];
+  const usersPermissionTasks = affectedUserIds.map((userId) => {
+    const member = interaction.guild.members.cache.get(userId);
+    const memberRoleIds = member?.roles?.cache ? [...member.roles.cache.keys()].map(String) : [];
+    const shouldSee = existingResponsibleUsers.includes(userId)
+      || memberRoleIds.some((roleId) => visibleResponsibleRoles.has(roleId));
     return () => editOverwriteFast(interaction.channel, userId, {
       ViewChannel: shouldSee,
-      SendMessages: shouldSee,
-      ReadMessageHistory: true
+      SendMessages: false,
+      SendMessagesInThreads: false,
+      CreatePublicThreads: false,
+      CreatePrivateThreads: false,
+      ReadMessageHistory: shouldSee
     });
   });
 
-  const mentions = [
-    ...targetRoles.map((id) => `<@&${id}>`),
-    ...existingResponsibleUsers.map((id) => `<@${id}>`)
-  ];
-
-  const onlineResponsibleMentions = getOnlineResponsibleMentions(
-    interaction.guild,
-    targetRoles,
-    existingResponsibleUsers
-  );
-
-  const previousClaimerHideTasks = previousClaimer
-    ? [() => editOverwriteFast(interaction.channel, previousClaimer, { ViewChannel: false, SendMessages: false })]
-    : [];
-  ticket.transferredUserIds = [...existingResponsibleUsers];
   const dmEmbed = makeTicketEmbed(
     'Ticket Change',
     [
@@ -7130,7 +7201,37 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
       `**الاداري الذي حول :** <@${interaction.user.id}>`
     ].join('\n')
   ).setThumbnail(interaction.user.displayAvatarURL({ dynamic: true, size: 256 }));
-  if (!Array.isArray(ticket.transferDmNotifications)) ticket.transferDmNotifications = [];
+  const transferClaimId = ticket.responsibilityTakeClaimId;
+  let dmPromise;
+  dmPromise = Promise.allSettled(
+    existingResponsibleUsers.map(async (uid) => {
+      const user = await interaction.client.users.fetch(uid).catch(() => null);
+      if (!user) return null;
+      const sentDm = await user.send({ embeds: [dmEmbed] }).catch(() => null);
+      if (!sentDm) return null;
+      return {
+        userId: uid,
+        messageId: sentDm.id,
+        transferredById: interaction.user.id
+      };
+    })
+  ).then(async (dmResults) => {
+    for (const item of dmResults) {
+      if (item.status === 'fulfilled' && item.value) {
+        ticket.transferDmNotifications.push(item.value);
+      }
+    }
+    setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
+    if (ticket.responsibilityClaimedBy) {
+      await finalizeTransferDmNotifications(ticket, interaction.guild, ticket.responsibilityClaimedBy);
+      setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
+    }
+  }).catch((error) => logSilentError('transfer.dm.notifications', error)).finally(() => {
+    if (transferDmNotificationJobs.get(transferClaimId) === dmPromise) {
+      transferDmNotificationJobs.delete(transferClaimId);
+    }
+  });
+  transferDmNotificationJobs.set(transferClaimId, dmPromise);
 
   const renamed = `مسؤولين-${sanitizeName(respName)}`.slice(0, 90);
   const transferUiTasks = [() => interaction.channel.setName(renamed)];
@@ -7146,37 +7247,169 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   }
 
   await runTransferParallelPipeline({
-    permissions: [...rolesPermissionTasks, ...usersPermissionTasks, ...previousClaimerHideTasks],
-    ui: transferUiTasks,
-    feedback: [
-      () => interaction.channel.send({
-        content: mentions.join(' ') || undefined,
-        ...buildTicketMessagePayload('Changed', `**تم تحويل التكت لمسؤولين : ${respName}**\n**المتصلون الآن :** ${onlineResponsibleMentions.join(' ') || 'N/A'}\n**الرولات :** ${targetRoles.map((id) => `<@&${id}>`).join(' ') || 'N/A'}`, { user: interaction.user })
-      }).catch((error) => logSilentError('suppressed', error)),
-      () => interaction.editReply(buildTicketMessagePayload('Changed', '**تم التحويل بنجاح.**', { ephemeral: true, user: interaction.user })).catch((error) => logSilentError('suppressed', error))
-    ]
+    permissions: [...rolesPermissionTasks, ...usersPermissionTasks],
+    ui: transferUiTasks
   }, 'transfer.parallel');
 
-  Promise.allSettled(
-    existingResponsibleUsers.map(async (uid) => {
-      const user = await interaction.client.users.fetch(uid).catch(() => null);
-      if (!user) return null;
-      const sentDm = await user.send({ embeds: [dmEmbed] }).catch(() => null);
-      if (!sentDm) return null;
-      return {
-        userId: uid,
-        messageId: sentDm.id,
-        transferredById: interaction.user.id
-      };
-    })
-  ).then((dmResults) => {
-    for (const item of dmResults) {
-      if (item.status === 'fulfilled' && item.value) {
-        ticket.transferDmNotifications.push(item.value);
+  const takeButtonId = `ticket_resp_take_${guildId}_${resolvedPanelId}_${actionChannelId}`;
+  const takeButton = new ButtonBuilder()
+    .setCustomId(takeButtonId)
+    .setLabel('Take')
+    .setEmoji('<:emoji_3:1484364952780144710>')
+    .setStyle(ButtonStyle.Success);
+  const transferMessage = await interaction.channel.send(buildResponsibilityTransferPayload({
+    responsibilityName: respName,
+    roleIds: targetRoles,
+    userIds: existingResponsibleUsers,
+    takeButton
+  })).catch((error) => {
+    logSilentError('transfer.container.send', error);
+    return null;
+  });
+
+  if (transferMessage) {
+    ticket.transferTakeMessageId = transferMessage.id;
+    setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
+  }
+  await interaction.editReply(buildTicketMessagePayload(
+    transferMessage ? 'Changed' : 'Error',
+    transferMessage ? '**تم التحويل بنجاح.**' : '**تم التحويل لكن تعذر إرسال Container الاستلام.**',
+    { ephemeral: true, user: interaction.user }
+  )).catch((error) => logSilentError('suppressed', error));
+
+}
+
+function isResponsibilityTransferAssignee(member, userId, ticket) {
+  const normalizedUserId = String(userId || '').trim();
+  const assignedUsers = (Array.isArray(ticket?.transferredUserIds) ? ticket.transferredUserIds : []).map(String);
+  if (normalizedUserId && assignedUsers.includes(normalizedUserId)) return true;
+  const assignedRoles = new Set((Array.isArray(ticket?.transferredRoleIds) ? ticket.transferredRoleIds : []).map(String));
+  let memberRoleIds = [];
+  if (member?.roles?.cache) memberRoleIds = [...member.roles.cache.keys()];
+  else if (Array.isArray(member?.roles)) memberRoleIds = member.roles;
+  else if (Array.isArray(member?.roles?.value)) memberRoleIds = member.roles.value;
+  else if (Array.isArray(member?.roles?.ids)) memberRoleIds = member.roles.ids;
+  return memberRoleIds.map(String).some((roleId) => assignedRoles.has(roleId));
+}
+
+async function handleResponsibilityTransferTake(interaction, guildId, panelId, channelId) {
+  await interaction.deferReply({ ephemeral: true }).catch((error) => logSilentError('transfer.take.defer', error));
+  const { panelId: resolvedPanelId, config, tickets, pendingRequests, ticket, actionChannelId } =
+    getTicketContextFromInteraction(guildId, interaction, channelId, panelId || 'default');
+  if (!ticket || interaction.channelId !== actionChannelId || !isTicketOpenForFlow(ticket)
+    || !ticket.transferredTo
+    || String(ticket.transferTakeMessageId || '') !== String(interaction.message?.id || '')
+    || !ticket.responsibilityTakeClaimId) {
+    await interaction.editReply(buildTicketMessagePayload('Alert', '**زر الاستلام لم يعد صالحًا لهذا التحويل.**', { user: interaction.user }));
+    return;
+  }
+
+  const currentUserId = String(interaction.user.id);
+  const currentClaimantId = String(ticket.responsibilityClaimedBy || '');
+  if (!isResponsibilityTransferAssignee(interaction.member, currentUserId, ticket)) {
+    await interaction.editReply(buildTicketMessagePayload('Alert', '**زر Take مخصص لمسؤولي هذه المسؤولية فقط.**', { user: interaction.user }));
+    return;
+  }
+
+  const lockKey = `transfer-take:${guildId}:${actionChannelId}`;
+  if (ticketClaimLocks.has(lockKey)) {
+    await interaction.editReply(buildTicketMessagePayload('Alert', '**يتم استلام التكت الآن، حاول بعد لحظات.**', { user: interaction.user }));
+    return;
+  }
+  ticketClaimLocks.add(lockKey);
+  try {
+    const intendedUserId = currentClaimantId || currentUserId;
+    const permissionResult = await editOverwriteFast(interaction.channel, intendedUserId, {
+      ViewChannel: true,
+      SendMessages: true,
+      SendMessagesInThreads: true,
+      CreatePublicThreads: true,
+      CreatePrivateThreads: true,
+      ReadMessageHistory: true
+    });
+    if (!permissionResult) {
+      await interaction.editReply(buildTicketMessagePayload('Error', '**تعذر تفعيل الكتابة للمستلم؛ لم تُسجل نقطة. حاول مرة أخرى.**', { user: interaction.user }));
+      return;
+    }
+
+    const pointResult = await awardShortcutTakePoint({
+      claimId: `ticket-transfer:${guildId}:${actionChannelId}:${ticket.responsibilityTakeClaimId}`,
+      responsibilityName: ticket.transferredTo,
+      userId: intendedUserId
+    });
+    const claimantId = String(pointResult?.claim?.userId || intendedUserId);
+    if (!claimantId) {
+      await interaction.editReply(buildTicketMessagePayload('Error', '**تعذر تسجيل استلام المسؤولية. حاول مرة أخرى.**', { user: interaction.user }));
+      return;
+    }
+
+    if (claimantId !== intendedUserId) {
+      await editOverwriteFast(interaction.channel, intendedUserId, {
+        ViewChannel: true,
+        SendMessages: false,
+        SendMessagesInThreads: false,
+        CreatePublicThreads: false,
+        CreatePrivateThreads: false,
+        ReadMessageHistory: true
+      });
+      const winnerPermission = await editOverwriteFast(interaction.channel, claimantId, {
+        ViewChannel: true,
+        SendMessages: true,
+        SendMessagesInThreads: true,
+        CreatePublicThreads: true,
+        CreatePrivateThreads: true,
+        ReadMessageHistory: true
+      });
+      if (!winnerPermission) {
+        await interaction.editReply(buildTicketMessagePayload('Error', `**تم حفظ الاستلام، لكن تعذر تفعيل الكتابة للمستلم <@${claimantId}>. يرجى مراجعة صلاحيات القناة.**`, { user: interaction.user }));
+        return;
       }
     }
+
+    // Responsibility Take points stay in the Take ledger; ticket claim/point fields remain untouched.
+    ticket.responsibilityClaimedBy = claimantId;
+    ticket.responsibilityClaimedAt = Number(pointResult?.claim?.at || ticket.responsibilityClaimedAt || Date.now());
     setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
-  }).catch((error) => logSilentError('transfer.dm.notifications', error));
+
+    const claimedButton = new ButtonBuilder()
+      .setCustomId(interaction.customId)
+      .setLabel('Claimed')
+      .setEmoji('<:emoji_3:1484364952780144710>')
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(true);
+    await interaction.message.edit(buildResponsibilityTransferPayload({
+      responsibilityName: ticket.transferredTo,
+      roleIds: ticket.transferredRoleIds || [],
+      userIds: ticket.transferredUserIds || [],
+      claimedById: claimantId,
+      takeButton: claimedButton
+    })).catch((error) => logSilentError('transfer.take.message-edit', error));
+
+    const dmJob = transferDmNotificationJobs.get(ticket.responsibilityTakeClaimId);
+    if (dmJob) await withTimeout(dmJob, 5000);
+    await finalizeTransferDmNotifications(ticket, interaction.guild, claimantId);
+    setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
+    await syncTicketLogMessage({
+      guild: interaction.guild,
+      config,
+      ticket,
+      channelId: actionChannelId,
+      actionText: `تم استلام مسؤولية ${ticket.transferredTo} عن طريق : <@${claimantId}>`,
+      actor: claimantId === currentUserId ? interaction.user : null
+    }).catch((error) => logSilentError('transfer.take.log', error));
+
+    if (claimantId !== currentUserId) {
+      await interaction.editReply(buildTicketMessagePayload('Alert', `**تم استلام التكت مسبقًا بواسطة :** <@${claimantId}>`, { user: interaction.user }));
+    } else {
+      const pointText = pointResult?.awarded ? '**تم استلام التكت وإضافة نقطة للمسؤولية.**' : '**أنت مستلم هذا التحويل بالفعل.**';
+      await interaction.editReply(buildTicketMessagePayload('Claimed', pointText, { user: interaction.user }));
+    }
+  } catch (error) {
+    logSilentError('transfer.take', error);
+    await interaction.editReply(buildTicketMessagePayload('Error', '**تعذر إكمال الاستلام الآن. يمكنك المحاولة مرة أخرى.**', { user: interaction.user })).catch(() => null);
+  } finally {
+    ticketClaimLocks.delete(lockKey);
+  }
 }
 
 async function showInputModal(interaction, customId, title, label, placeholder = '') {
@@ -7538,6 +7771,12 @@ function registerHandlers(client) {
         if (id.startsWith('ticket_claimreq_')) {
           const reqId = id.replace('ticket_claimreq_', '');
           await handleClaimFromRequest(interaction, reqId);
+          return;
+        }
+
+        if (id.startsWith('ticket_resp_take_')) {
+          const { guildId, panelId, channelId } = parseTicketGuildPanelChannel(id, 3);
+          await handleResponsibilityTransferTake(interaction, guildId, panelId, channelId);
           return;
         }
 
