@@ -19,6 +19,8 @@ const path = require('path');
 const { getDataDir } = require('../utils/storagePaths');
 
 const name = 'top';
+const PERIOD_OPTION_EMOJI = '<:emoji_37:1561749126662848572>';
+const RESPONSIBILITY_OPTION_EMOJI = '<:emoji_1:1484364853832319056>';
 
 // مسارات الملفات
 const ticketState = require('./ticket.js');
@@ -166,27 +168,29 @@ async function execute(message, args, { points, responsibilities, client }) {
         .setCustomId('top_type_select')
         .setPlaceholder('Select ranking period...')
         .addOptions([
-            { label: 'Daily Ranking', value: 'daily', description: 'النقاط المكتسبة خلال آخر 24 ساعة' },
-            { label: 'Weekly Ranking', value: 'weekly', description: 'النقاط المكتسبة خلال آخر 7 أيام' },
-            { label: 'Monthly Ranking', value: 'monthly', description: 'النقاط المكتسبة خلال آخر 30 يوم' },
-            { label: 'All-Time Ranking', value: 'all', description: 'جميع النقاط منذ البداية' }
+            { label: 'Daily Ranking', value: 'daily', description: 'النقاط المكتسبة خلال آخر 24 ساعة', emoji: PERIOD_OPTION_EMOJI },
+            { label: 'Weekly Ranking', value: 'weekly', description: 'النقاط المكتسبة خلال آخر 7 أيام', emoji: PERIOD_OPTION_EMOJI },
+            { label: 'Monthly Ranking', value: 'monthly', description: 'النقاط المكتسبة خلال آخر 30 يوم', emoji: PERIOD_OPTION_EMOJI },
+            { label: 'All-Time Ranking', value: 'all', description: 'جميع النقاط منذ البداية', emoji: PERIOD_OPTION_EMOJI }
         ]);
 
     // إضافة منيو اختيار المسؤولية
     const { createPaginatedResponsibilityArray, handlePaginationInteraction } = require('../utils/responsibilityPagination.js');
     
-    const respList = [{ name: 'جميع المسؤوليات', description: 'عرض ترتيب جميع المسؤولين' }];
+    const respList = [{ name: 'جميع المسؤوليات', description: 'عرض ترتيب جميع المسؤولين', emoji: RESPONSIBILITY_OPTION_EMOJI }];
     Object.keys(currentResponsibilities).forEach(respName => {
         respList.push({
             name: respName,
-            description: `ترتيب مسؤولي ${respName} فقط`
+            description: `ترتيب مسؤولي ${respName} فقط`,
+            emoji: RESPONSIBILITY_OPTION_EMOJI
         });
     });
 
     const pagination = createPaginatedResponsibilityArray(respList.map((r, i) => ({
         name: r.name,
         value: i === 0 ? 'all_responsibilities' : `resp_${r.name}`,
-        description: r.description
+        description: r.description,
+        emoji: r.emoji
     })), 0, 'top_resp_select', 'Select responsibility...');
 
     const selectRow1 = new ActionRowBuilder().addComponents(typeSelect);
@@ -255,18 +259,20 @@ async function execute(message, args, { points, responsibilities, client }) {
             );
 
             // إعادة بناء pagination للمسؤوليات
-            const respList = [{ name: 'جميع المسؤوليات', description: 'عرض ترتيب جميع المسؤولين' }];
+            const respList = [{ name: 'جميع المسؤوليات', description: 'عرض ترتيب جميع المسؤولين', emoji: RESPONSIBILITY_OPTION_EMOJI }];
             Object.keys(currentResponsibilities).forEach(respName => {
                 respList.push({
                     name: respName,
-                    description: `ترتيب مسؤولي ${respName} فقط`
+                    description: `ترتيب مسؤولي ${respName} فقط`,
+                    emoji: RESPONSIBILITY_OPTION_EMOJI
                 });
             });
 
             const newPagination = createPaginatedResponsibilityArray(respList.map((r, i) => ({
                 name: r.name,
                 value: i === 0 ? 'all_responsibilities' : `resp_${r.name}`,
-                description: r.description
+                description: r.description,
+                emoji: r.emoji
             })), 0, 'top_resp_select', 'Select responsibility...');
 
             await interaction.update(
