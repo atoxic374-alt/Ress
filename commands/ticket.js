@@ -52,6 +52,7 @@ const pingCooldowns = new Map();
 const ticketClaimLocks = new Set();
 const ticketClaimOwners = new Map();
 const transferDmNotificationJobs = new Map();
+const ticketLogSyncJobs = new Map();
 const ticketCloseLocks = new Set();
 const ticketOpenRequestLocks = new Set();
 const activeTicketSetupSessions = new Map();
@@ -7132,6 +7133,7 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   ticket.responsibilityClaimedAt = null;
   ticket.responsibilityTakeClaimId = crypto.randomUUID();
   ticket.transferTakeMessageId = null;
+  ticket.transferPermissionsReady = false;
   ticket.transferDmNotifications = [];
   delete ticket.transferDmNotificationsFinalizedAt;
 
@@ -7149,22 +7151,34 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     ...adminRoles
   ])];
   const visibleResponsibleRoles = new Set([...generalResponsibleRoles, ...targetRoles]);
+  const applyRequiredOverwrite = async (targetId, permissions) => {
+    const overwrite = await editOverwriteFast(interaction.channel, targetId, permissions);
+    if (!overwrite) throw new Error(`Could not update ticket overwrite for ${targetId}`);
+    return overwrite;
+  };
 
   ticket.transferredRoleIds = [...targetRoles];
   ticket.transferredUserIds = [...existingResponsibleUsers];
   setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
-  await syncTicketLogMessage({
+  const transferLogJob = syncTicketLogMessage({
     guild: interaction.guild,
     config,
     ticket,
     channelId: actionChannelId,
     actionText: `تم تحويل التكت عن طريق : <@${interaction.user.id}> -> ${respName}`,
     actor: interaction.user
+  }).then((result) => {
+    setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
+    return result;
+  }).catch((error) => logSilentError('transfer.log.sync', error));
+  ticketLogSyncJobs.set(actionChannelId, transferLogJob);
+  void transferLogJob.then(() => {
+    if (ticketLogSyncJobs.get(actionChannelId) === transferLogJob) ticketLogSyncJobs.delete(actionChannelId);
   });
 
   const rolesPermissionTasks = allKnownRoles.map((roleId) => {
     const shouldSee = visibleResponsibleRoles.has(roleId);
-    return () => editOverwriteFast(interaction.channel, roleId, {
+    return () => applyRequiredOverwrite(roleId, {
       ViewChannel: shouldSee,
       SendMessages: false,
       SendMessagesInThreads: false,
@@ -7184,7 +7198,7 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     const memberRoleIds = member?.roles?.cache ? [...member.roles.cache.keys()].map(String) : [];
     const shouldSee = existingResponsibleUsers.includes(userId)
       || memberRoleIds.some((roleId) => visibleResponsibleRoles.has(roleId));
-    return () => editOverwriteFast(interaction.channel, userId, {
+    return () => applyRequiredOverwrite(userId, {
       ViewChannel: shouldSee,
       SendMessages: false,
       SendMessagesInThreads: false,
@@ -7246,34 +7260,82 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     });
   }
 
-  await runTransferParallelPipeline({
-    permissions: [...rolesPermissionTasks, ...usersPermissionTasks],
-    ui: transferUiTasks
-  }, 'transfer.parallel');
-
   const takeButtonId = `ticket_resp_take_${guildId}_${resolvedPanelId}_${actionChannelId}`;
-  const takeButton = new ButtonBuilder()
+  const disabledTakeButton = new ButtonBuilder()
     .setCustomId(takeButtonId)
     .setLabel('Take')
     .setEmoji('<:emoji_3:1484364952780144710>')
-    .setStyle(ButtonStyle.Success);
+    .setStyle(ButtonStyle.Success)
+    .setDisabled(true);
+
+  // Start slower permission/UI work without delaying the first transfer notice.
+  const permissionsPromise = runTransferParallelPipeline({
+    permissions: [...rolesPermissionTasks, ...usersPermissionTasks]
+  }, 'transfer.permissions');
+  void runTransferParallelPipeline({ ui: transferUiTasks }, 'transfer.ui');
+
   const transferMessage = await interaction.channel.send(buildResponsibilityTransferPayload({
     responsibilityName: respName,
     roleIds: targetRoles,
     userIds: existingResponsibleUsers,
-    takeButton
+    takeButton: disabledTakeButton
   })).catch((error) => {
     logSilentError('transfer.container.send', error);
     return null;
   });
 
-  if (transferMessage) {
-    ticket.transferTakeMessageId = transferMessage.id;
+  if (!transferMessage) {
+    await permissionsPromise;
+    await interaction.editReply(buildTicketMessagePayload('Error', '**تعذر إرسال Container الاستلام.**', { ephemeral: true, user: interaction.user }))
+      .catch((error) => logSilentError('suppressed', error));
+    return;
+  }
+
+  ticket.transferTakeMessageId = transferMessage.id;
+  setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
+
+  const pipelineResults = await permissionsPromise;
+  const permissionStage = pipelineResults[0];
+  const permissionResults = permissionStage?.status === 'fulfilled' && Array.isArray(permissionStage.value)
+    ? permissionStage.value
+    : [];
+  const permissionsReady = permissionResults.length === rolesPermissionTasks.length + usersPermissionTasks.length
+    && permissionResults.every((result) => result.status === 'fulfilled');
+  if (!permissionsReady) {
+    ticket.transferPermissionsReady = false;
+    setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
+    await interaction.editReply(buildTicketMessagePayload(
+      'Error',
+      '**تم إرسال Container، لكن تعذر تجهيز صلاحيات القراءة فقط. بقي زر Take معطلًا حتى مراجعة صلاحيات القناة.**',
+      { ephemeral: true, user: interaction.user }
+    )).catch((error) => logSilentError('suppressed', error));
+    return;
+  }
+
+  ticket.transferPermissionsReady = true;
+  setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
+  const activeTakeButton = new ButtonBuilder()
+    .setCustomId(takeButtonId)
+    .setLabel('Take')
+    .setEmoji('<:emoji_3:1484364952780144710>')
+    .setStyle(ButtonStyle.Success);
+  const activated = await transferMessage.edit(buildResponsibilityTransferPayload({
+    responsibilityName: respName,
+    roleIds: targetRoles,
+    userIds: existingResponsibleUsers,
+    takeButton: activeTakeButton
+  })).then(() => true).catch((error) => {
+    logSilentError('transfer.container.activate', error);
+    return false;
+  });
+  if (!activated) {
+    ticket.transferPermissionsReady = false;
     setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
   }
+
   await interaction.editReply(buildTicketMessagePayload(
-    transferMessage ? 'Changed' : 'Error',
-    transferMessage ? '**تم التحويل بنجاح.**' : '**تم التحويل لكن تعذر إرسال Container الاستلام.**',
+    activated ? 'Changed' : 'Error',
+    activated ? '**تم التحويل بنجاح.**' : '**تم إرسال Container، لكن تعذر تفعيل زر Take.**',
     { ephemeral: true, user: interaction.user }
   )).catch((error) => logSilentError('suppressed', error));
 
@@ -7298,6 +7360,7 @@ async function handleResponsibilityTransferTake(interaction, guildId, panelId, c
     getTicketContextFromInteraction(guildId, interaction, channelId, panelId || 'default');
   if (!ticket || interaction.channelId !== actionChannelId || !isTicketOpenForFlow(ticket)
     || !ticket.transferredTo
+    || ticket.transferPermissionsReady !== true
     || String(ticket.transferTakeMessageId || '') !== String(interaction.message?.id || '')
     || !ticket.responsibilityTakeClaimId) {
     await interaction.editReply(buildTicketMessagePayload('Alert', '**زر الاستلام لم يعد صالحًا لهذا التحويل.**', { user: interaction.user }));
@@ -7389,6 +7452,8 @@ async function handleResponsibilityTransferTake(interaction, guildId, panelId, c
     if (dmJob) await withTimeout(dmJob, 5000);
     await finalizeTransferDmNotifications(ticket, interaction.guild, claimantId);
     setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
+    const pendingTransferLog = ticketLogSyncJobs.get(actionChannelId);
+    if (pendingTransferLog) await pendingTransferLog;
     await syncTicketLogMessage({
       guild: interaction.guild,
       config,
