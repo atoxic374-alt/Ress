@@ -3294,10 +3294,24 @@ client.on('messageCreate', async message => {
       try {
         const activeRequest = findActiveShortcutRequest(message.guild.id, matchedResponsibility, timestamp);
         if (activeRequest) {
-          await message.channel.send({
-            content: `<@${message.author.id}> يوجد مشكلة مفتوحة بالفعل لهذه المسؤولية.`,
-            allowedMentions: { users: [String(message.author.id)] }
-          }).catch(error => console.error('تعذر إرسال تنبيه الطلب المكرر:', error.message));
+          const originalChannel = activeRequest.channelId === message.channel.id
+            ? message.channel
+            : await client.channels.fetch(activeRequest.channelId).catch(() => null);
+          const originalMessage = originalChannel?.messages?.fetch
+            ? await originalChannel.messages.fetch(activeRequest.messageId).catch(() => null)
+            : null;
+          const duplicateNotice = `<@${message.author.id}> توجد مشكلة مفتوحة بالفعل لهذه المسؤولية.`;
+          if (originalMessage?.reply) {
+            await originalMessage.reply({
+              content: duplicateNotice,
+              allowedMentions: { users: [String(message.author.id)] }
+            }).catch(error => console.error('تعذر إرسال رد الطلب المكرر على رسالة المشكلة:', error.message));
+          } else {
+            await message.channel.send({
+              content: duplicateNotice,
+              allowedMentions: { users: [String(message.author.id)] }
+            }).catch(error => console.error('تعذر إرسال تنبيه الطلب المكرر:', error.message));
+          }
           startShortcutUsageCooldown(message.guild.id, message.author.id, matchedResponsibility);
           return;
         }
