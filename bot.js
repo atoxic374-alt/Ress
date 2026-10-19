@@ -18,7 +18,7 @@ if (global.v8debug === undefined) {
 require('events').EventEmitter.defaultMaxListeners = Infinity;
 process.setMaxListeners(0);
 
-const { Client, GatewayIntentBits, Partials, Collection, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, EmbedBuilder, Events, MessageFlags, PermissionsBitField, ChannelType, AuditLogEvent } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, Collection, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, EmbedBuilder, Events, MessageFlags, PermissionsBitField, ChannelType, ComponentType, AuditLogEvent } = require('discord.js');
 const dotenv = require('dotenv');
 dotenv.config();
 const fs = require('fs');
@@ -1210,6 +1210,23 @@ function findActiveShortcutRequest(guildId, responsibilityName, now = Date.now()
         return request;
     }
     return null;
+}
+function startShortcutRequestCollector(sentMessage, requestToken) {
+    const collector = sentMessage.createMessageComponentCollector({
+        componentType: ComponentType.Button,
+        time: SHORTCUT_REQUEST_COOLDOWN_MS
+    });
+    collector.on('end', async () => {
+        const request = client.shortcutRequests.get(requestToken);
+        if (!request || request.messageId !== sentMessage.id) return;
+        const disabledRows = sentMessage.components.map(row => new ActionRowBuilder().addComponents(
+            row.components.map(component => ButtonBuilder.from(component).setDisabled(true))
+        ));
+        await sentMessage.edit({ components: disabledRows }).catch(error => {
+            console.error('تعذر تعطيل أزرار اختصار المسؤولية بعد انتهاء المهلة:', error.message);
+        });
+    });
+    return collector;
 }
 const shortcutRequestCleanupTimer = setInterval(() => pruneRuntimeShortcutRequests(true), 60 * 60 * 1000);
 shortcutRequestCleanupTimer.unref?.();
@@ -3318,6 +3335,7 @@ client.on('messageCreate', async message => {
         };
         client.shortcutRequests.set(requestToken, requestData);
         shortcutStore.requests[requestToken] = requestData;
+        startShortcutRequestCollector(sentMessage, requestToken);
         pruneRuntimeShortcutRequests();
         startShortcutUsageCooldown(message.guild.id, message.author.id, matchedResponsibility);
         // The request and cooldown are included in the store's debounced batch write.
