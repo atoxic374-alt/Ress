@@ -5,19 +5,19 @@ const { isUserBlocked, clearAllBlocks, getBlockedUsers } = require('./block.js')
 const fs = require('fs');
 const path = require('path');
 const ticketState = require('./ticket.js');
+const topCommand = require('./top_leaderboard.js');
+const { getDataDir } = require('../utils/storagePaths');
 
-// تعريف دالة وهمية لـ invalidateTopCache لأنها غير موجودة في الكود الأصلي
-// في بيئة الإنتاج، يجب استيراد هذه الدالة من مكانها الصحيح.
 function invalidateTopCache() {
-    // console.log('KASH WAS INVALIDATED'); // للمساعدة في التصحيح
+    if (typeof topCommand.invalidateTopCache === 'function') topCommand.invalidateTopCache();
 }
-
 
 const name = 'reset';
 
-// مسارات الملفات
-const pointsPath = path.join(__dirname, '..', 'data', 'points.json');
-const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
+// مسارات الملفات الموحدة مع مخزن التكت والـ volume.
+const dataDir = getDataDir();
+const pointsPath = path.join(dataDir, 'points.json');
+const responsibilitiesPath = path.join(dataDir, 'responsibilities.json');
 
 // دوال قراءة وحفظ البيانات
 function readJSONFile(filePath, defaultValue = {}) {
@@ -34,10 +34,15 @@ function readJSONFile(filePath, defaultValue = {}) {
     }
 }
 
-function writeJSONFile(filePath, data) {
+async function writeJSONFile(filePath, data) {
     if (filePath === pointsPath) {
-        ticketState.savePoints(data);
-        return true;
+        try {
+            await ticketState.savePointsDurably(data);
+            return true;
+        } catch (error) {
+            console.error(`خطأ في حفظ النقاط ${filePath}:`, error);
+            return false;
+        }
     }
     try {
         fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
@@ -250,7 +255,7 @@ async function handleTimeBasedReset(interaction, resetType, points, responsibili
                 const result = await performTimeBasedReset(resetType, points);
 
                 // حفظ البيانات في الملفات
-                const saveSuccess = writeJSONFile(pointsPath, points);
+                const saveSuccess = await writeJSONFile(pointsPath, points);
 
                 if (!saveSuccess) {
                     throw new Error('فشل في حفظ البيانات');
@@ -439,13 +444,23 @@ async function executeResponsibilityReset(interaction, respName, points, respons
     try {
         const deletedPoints = calculateResponsibilityPoints(points, respName);
 
-        // حذف النقاط
-        if (points[respName]) {
-            points[respName] = {};
+        // تصفير سجل Take للمسؤولية مع إبقاء مفاتيح claims لمنع إعادة احتساب نفس الطلب.
+        const claims = points.__shortcutClaims && typeof points.__shortcutClaims === 'object' ? points.__shortcutClaims : {};
+        const removedEntryIds = new Set();
+        for (const claim of Object.values(claims)) {
+            if (claim && String(claim.responsibilityName || '') === String(respName) && claim.pointsAwarded !== false) {
+                claim.pointsAwarded = false;
+                if (claim.entryId) removedEntryIds.add(String(claim.entryId));
+            }
         }
+        points.__audit = (Array.isArray(points.__audit) ? points.__audit : []).filter(entry =>
+            !(entry?.source === 'shortcut_take' &&
+                (String(entry.respName || '') === String(respName) || removedEntryIds.has(String(entry.id || ''))))
+        );
+        if (respName !== 'general' && points[respName]) points[respName] = {};
 
         // حفظ البيانات
-        const saveSuccess = writeJSONFile(pointsPath, points);
+        const saveSuccess = await writeJSONFile(pointsPath, points);
 
         if (!saveSuccess) {
             throw new Error('فشل في حفظ البيانات');
@@ -708,33 +723,26 @@ async function executeUserReset(interaction, userId, respType, points, responsib
             console.log('فشل في جلب معلومات المستخدم');
         }
 
+        const audit = Array.isArray(points.__audit) ? points.__audit : [];
+        const selected = getTakePointAudit(points).filter(entry =>
+            String(entry.targetId || '') === String(userId) &&
+            (respType === 'all_responsibilities' || String(entry.respName || '') === String(respType)));
+        deletedPoints = selected.reduce((sum, entry) => sum + Math.max(0, Number(entry.delta || 0)), 0);
+        const ids = new Set(selected.map(entry => String(entry.id || '')));
+        const claims = points.__shortcutClaims && typeof points.__shortcutClaims === 'object' ? points.__shortcutClaims : {};
+        for (const entry of selected) if (entry.claimKey && claims[entry.claimKey]) claims[entry.claimKey].pointsAwarded = false;
+        points.__audit = audit.filter(entry => !(entry?.source === 'shortcut_take' && ids.has(String(entry.id || ''))));
         if (respType === 'all_responsibilities') {
-            // حذف نقاط المستخدم من جميع المسؤوليات
-            for (const responsibility in points) {
-                if (responsibility.startsWith('__')) continue;
-                if (points[responsibility][userId]) {
-                    if (typeof points[responsibility][userId] === 'object') {
-                        deletedPoints += Object.values(points[responsibility][userId]).reduce((sum, val) => sum + val, 0);
-                    } else {
-                        deletedPoints += points[responsibility][userId] || 0;
-                    }
-                    delete points[responsibility][userId];
-                }
+            for (const responsibility of Object.keys(points)) {
+                if (responsibility.startsWith('__') || responsibility === 'general') continue;
+                if (points[responsibility] && typeof points[responsibility] === 'object') delete points[responsibility][userId];
             }
-        } else {
-            // حذف نقاط المستخدم من مسؤولية محددة فقط
-            if (points[respType] && points[respType][userId]) {
-                if (typeof points[respType][userId] === 'object') {
-                    deletedPoints = Object.values(points[respType][userId]).reduce((sum, val) => sum + val, 0);
-                } else {
-                    deletedPoints = points[respType][userId] || 0;
-                }
-                delete points[respType][userId];
-            }
+        } else if (respType && !String(respType).startsWith('__') && respType !== 'general') {
+            if (points[respType] && typeof points[respType] === 'object') delete points[respType][userId];
         }
 
         // حفظ البيانات
-        const saveSuccess = writeJSONFile(pointsPath, points);
+        const saveSuccess = await writeJSONFile(pointsPath, points);
 
         if (!saveSuccess) {
             throw new Error('فشل في حفظ البيانات');
@@ -903,19 +911,14 @@ async function handlePointsEditStart(interaction, points, responsibilities, clie
 
 async function handleUserResponsibilityChoice(interaction, userData, points, responsibilities, client) {
     // التحقق من المسؤوليات التي يوجد بها المستخدم
-    const userResponsibilities = [];
-    for (const resp in points) {
-        if (resp.startsWith('__')) continue;
-        if (points[resp][userData.userId]) {
-            const respPoints = typeof points[resp][userData.userId] === 'object' 
-                ? Object.values(points[resp][userData.userId]).reduce((sum, val) => sum + val, 0)
-                : points[resp][userData.userId];
-            userResponsibilities.push({
-                name: resp,
-                points: respPoints
-            });
-        }
+    const responsibilityTotals = new Map();
+    for (const entry of getTakePointAudit(points)) {
+        if (String(entry.targetId || '') !== String(userData.userId)) continue;
+        const name = String(entry.respName || '');
+        if (!name) continue;
+        responsibilityTotals.set(name, (responsibilityTotals.get(name) || 0) + Math.max(0, Number(entry.delta || 0)));
     }
+    const userResponsibilities = [...responsibilityTotals.entries()].map(([name, points]) => ({ name, points }));
 
     if (userResponsibilities.length === 0) {
         await interaction.followUp({
@@ -1008,7 +1011,7 @@ async function handlePointsModification(interaction, userData, responsibilityNam
 
             if (result.success) {
                 // حفظ البيانات
-                const saveSuccess = writeJSONFile(pointsPath, points);
+                const saveSuccess = await writeJSONFile(pointsPath, points);
 
                 if (!saveSuccess) {
                     throw new Error('فشل في حفظ البيانات');
@@ -1093,70 +1096,35 @@ function processPointsModification(userData, responsibilityName, pointsInput, po
         if (operation !== 'حذف') {
             return { success: false, error: 'إضافة أو تعديل نقاط المسؤوليات يدوياً متوقف؛ النقاط تُحتسب من زر Take فقط.' };
         }
-
-        if (responsibilityName === 'all_responsibilities') {
-            // تطبيق العملية على جميع المسؤوليات
-            for (const resp in points) {
-                if (resp.startsWith('__')) continue;
-                if (points[resp][userData.userId]) {
-                    if (operation === 'تعديل مطلق') {
-                        points[resp][userData.userId] = { [now]: value };
-                        newPoints += value;
-                    } else if (operation === 'إضافة') {
-                        if (typeof points[resp][userData.userId] === 'object') {
-                            points[resp][userData.userId][now] = value;
-                        } else {
-                            const oldPoints = points[resp][userData.userId];
-                            points[resp][userData.userId] = { 
-                                [now - 1000]: oldPoints,
-                                [now]: value 
-                            };
-                        }
-                        newPoints += Object.values(points[resp][userData.userId]).reduce((sum, val) => sum + val, 0);
-                    } else if (operation === 'حذف') {
-                        const currentPoints = typeof points[resp][userData.userId] === 'object' 
-                            ? Object.values(points[resp][userData.userId]).reduce((sum, val) => sum + val, 0)
-                            : points[resp][userData.userId];
-
-                        const remainingPoints = Math.max(0, currentPoints - value);
-                        points[resp][userData.userId] = { [now]: remainingPoints };
-                        newPoints += remainingPoints;
-                    }
-                }
-            }
-        } else {
-            // تطبيق العملية على مسؤولية محددة
-            if (!points[responsibilityName]) {
-                points[responsibilityName] = {};
-            }
-
-            if (operation === 'تعديل مطلق') {
-                points[responsibilityName][userData.userId] = { [now]: value };
-                newPoints = value;
-            } else if (operation === 'إضافة') {
-                if (!points[responsibilityName][userData.userId]) {
-                    points[responsibilityName][userData.userId] = { [now]: value };
-                } else if (typeof points[responsibilityName][userData.userId] === 'object') {
-                    points[responsibilityName][userData.userId][now] = value;
-                } else {
-                    const oldPoints = points[responsibilityName][userData.userId];
-                    points[responsibilityName][userData.userId] = { 
-                        [now - 1000]: oldPoints,
-                        [now]: value 
-                    };
-                }
-                newPoints = Object.values(points[responsibilityName][userData.userId]).reduce((sum, val) => sum + val, 0);
-            } else if (operation === 'حذف') {
-                const currentPoints = points[responsibilityName][userData.userId] 
-                    ? (typeof points[responsibilityName][userData.userId] === 'object' 
-                        ? Object.values(points[responsibilityName][userData.userId]).reduce((sum, val) => sum + val, 0)
-                        : points[responsibilityName][userData.userId])
-                    : 0;
-
-                newPoints = Math.max(0, currentPoints - value);
-                points[responsibilityName][userData.userId] = { [now]: newPoints };
-            }
+        const isAllResponsibilities = responsibilityName === 'all_responsibilities';
+        const matching = getTakePointAudit(points).filter(entry =>
+            String(entry.targetId || '') === String(userData.userId) &&
+            (isAllResponsibilities || String(entry.respName || '') === String(responsibilityName))
+        ).sort((a, b) => Number.parseInt(String(b.at || b.id || ''), 10) - Number.parseInt(String(a.at || a.id || ''), 10));
+        const idsToRemove = new Set();
+        let remainingToRemove = Math.max(0, Number(value) || 0);
+        const claims = points.__shortcutClaims && typeof points.__shortcutClaims === 'object' ? points.__shortcutClaims : {};
+        for (const entry of matching) {
+            if (remainingToRemove <= 0) break;
+            idsToRemove.add(String(entry.id || ''));
+            if (entry.claimKey && claims[entry.claimKey]) claims[entry.claimKey].pointsAwarded = false;
+            remainingToRemove -= Math.max(0, Number(entry.delta || 0));
         }
+        points.__audit = (Array.isArray(points.__audit) ? points.__audit : []).filter(entry =>
+            !(entry?.source === 'shortcut_take' && idsToRemove.has(String(entry.id || '')))
+        );
+        if (isAllResponsibilities) {
+            for (const resp of Object.keys(points)) {
+                if (resp.startsWith('__') || resp === 'general') continue;
+                if (points[resp] && typeof points[resp] === 'object') delete points[resp][userData.userId];
+            }
+        } else if (responsibilityName !== 'general' && points[responsibilityName] && typeof points[responsibilityName] === 'object') {
+            delete points[responsibilityName][userData.userId];
+        }
+        newPoints = getTakePointAudit(points)
+            .filter(entry => String(entry.targetId || '') === String(userData.userId) &&
+                (isAllResponsibilities || String(entry.respName || '') === String(responsibilityName)))
+            .reduce((sum, entry) => sum + Math.max(0, Number(entry.delta || 0)), 0);
 
         return {
             success: true,
@@ -2014,8 +1982,8 @@ async function handleResponsibilitiesReset(interaction, points, responsibilities
                 resetPointScores(points);
 
                 // حفظ البيانات
-                const pointsSave = writeJSONFile(pointsPath, points);
-                const respSave = writeJSONFile(responsibilitiesPath, responsibilities);
+                const pointsSave = await writeJSONFile(pointsPath, points);
+                const respSave = await writeJSONFile(responsibilitiesPath, responsibilities);
 
                 if (!pointsSave || !respSave) {
                     throw new Error('فشل في حفظ البيانات');
@@ -2148,54 +2116,50 @@ function createMainComponents() {
 }
 
 // دوال الحسابات
+function getTakePointAudit(points) {
+    const audit = Array.isArray(points?.__audit) ? points.__audit.filter(entry => entry?.source === 'shortcut_take') : [];
+    const claims = points?.__shortcutClaims;
+    if (claims && typeof claims === 'object' && !Array.isArray(claims) && Object.keys(claims).length > 0) {
+        const auditedIds = new Set(audit.map(entry => String(entry.id || '')));
+        return Object.entries(claims)
+            .filter(([, claim]) => claim && (claim.pointsAwarded === true ||
+                (claim.pointsAwarded !== false && auditedIds.has(String(claim.entryId || '')))))
+            .map(([claimKey, claim]) => ({
+                id: String(claim.entryId || claimKey),
+                claimKey,
+                targetId: String(claim.userId || ''),
+                respName: String(claim.responsibilityName || ''),
+                delta: 1,
+                at: claim.at || claim.entryId || ''
+            }))
+            .filter(entry => entry.targetId && entry.respName);
+    }
+    return audit;
+}
+
 function resetPointScores(points) {
     for (const key of Object.keys(points || {})) {
-        if (key === '__shortcutClaims') continue;
-        if (key.startsWith('__')) {
-            points[key] = Array.isArray(points[key]) ? [] : {};
-        } else {
-            points[key] = {};
-        }
+        if (!key.startsWith('__') && key !== 'general') points[key] = {};
     }
+    const claims = points?.__shortcutClaims;
+    if (claims && typeof claims === 'object' && !Array.isArray(claims)) {
+        for (const claim of Object.values(claims)) if (claim && typeof claim === 'object') claim.pointsAwarded = false;
+    }
+    if (Array.isArray(points?.__audit)) points.__audit = points.__audit.filter(entry => entry?.source !== 'shortcut_take');
 }
 
 function calculateTotalPoints(points) {
-    let total = 0;
-    for (const responsibility in points) {
-        if (responsibility.startsWith('__')) continue;
-        for (const userId in points[responsibility]) {
-            if (typeof points[responsibility][userId] === 'object') {
-                total += Object.values(points[responsibility][userId]).reduce((sum, val) => sum + val, 0);
-            } else {
-                total += points[responsibility][userId] || 0;
-            }
-        }
-    }
-    return total;
+    return getTakePointAudit(points).reduce((sum, entry) => sum + Math.max(0, Number(entry?.delta || 0)), 0);
 }
 
 function calculateTotalUsers(points) {
-    const uniqueUsers = new Set();
-    for (const responsibility in points) {
-        if (responsibility.startsWith('__')) continue;
-        for (const userId in points[responsibility]) {
-            uniqueUsers.add(userId);
-        }
-    }
-    return uniqueUsers.size;
+    return new Set(getTakePointAudit(points).map(entry => String(entry?.targetId || '')).filter(Boolean)).size;
 }
 
 function calculateResponsibilityPoints(points, responsibility) {
-    if (!points[responsibility]) return 0;
-    let total = 0;
-    for (const userId in points[responsibility]) {
-        if (typeof points[responsibility][userId] === 'object') {
-            total += Object.values(points[responsibility][userId]).reduce((sum, val) => sum + val, 0);
-        } else {
-            total += points[responsibility][userId] || 0;
-        }
-    }
-    return total;
+    return getTakePointAudit(points)
+        .filter(entry => String(entry?.respName || '') === String(responsibility || ''))
+        .reduce((sum, entry) => sum + Math.max(0, Number(entry?.delta || 0)), 0);
 }
 
 function calculateAffectedPoints(points, resetType) {
@@ -2211,26 +2175,12 @@ function calculateAffectedPoints(points, resetType) {
 
     const timeLimit = timeRanges[resetType];
 
-    for (const responsibility in points) {
-
-        if (responsibility.startsWith('__')) continue;
-        for (const userId in points[responsibility]) {
-            if (resetType === 'all_points') {
-                if (typeof points[responsibility][userId] === 'object') {
-                    affected += Object.values(points[responsibility][userId]).reduce((sum, val) => sum + val, 0);
-                } else {
-                    affected += points[responsibility][userId] || 0;
-                }
-            } else if (typeof points[responsibility][userId] === 'object') {
-                for (const timestamp in points[responsibility][userId]) {
-                    if (now - parseInt(timestamp) <= timeLimit) {
-                        affected += points[responsibility][userId][timestamp];
-                    }
-                }
-            }
+    for (const entry of getTakePointAudit(points)) {
+        const time = Number.parseInt(String(entry?.at || entry?.id || ''), 10);
+        if (resetType === 'all_points' || (Number.isFinite(time) && now - time <= timeLimit)) {
+            affected += Math.max(0, Number(entry?.delta || 0));
         }
     }
-
     return affected;
 }
 
@@ -2247,7 +2197,7 @@ function performTimeBasedReset(resetType, points) {
 
     if (resetType === 'all_points') {
         for (const responsibility in points) {
-            if (responsibility.startsWith('__')) continue;
+            if (responsibility.startsWith('__') || responsibility === 'general') continue;
             for (const userId in points[responsibility]) {
                 if (typeof points[responsibility][userId] === 'object') {
                     deletedPoints += Object.values(points[responsibility][userId]).reduce((sum, val) => sum + val, 0);
@@ -2258,6 +2208,8 @@ function performTimeBasedReset(resetType, points) {
             }
             points[responsibility] = {};
         }
+        deletedPoints = calculateTotalPoints(points);
+        affectedUsers = calculateTotalUsers(points);
         resetPointScores(points);
     } else {
         const timeLimit = timeRanges[resetType];
@@ -2265,7 +2217,7 @@ function performTimeBasedReset(resetType, points) {
 
         for (const responsibility in points) {
 
-            if (responsibility.startsWith('__')) continue;
+            if (responsibility.startsWith('__') || responsibility === 'general') continue;
             for (const userId in points[responsibility]) {
                 let userAffected = false;
 
@@ -2296,6 +2248,20 @@ function performTimeBasedReset(resetType, points) {
                 if (userAffected) affectedUsers++;
             }
         }
+        const removedEntries = [];
+        for (const entry of getTakePointAudit(points)) {
+            const time = Number.parseInt(String(entry?.at || entry?.id || ''), 10);
+            if (Number.isFinite(time) && time >= cutoffTime) {
+                removedEntries.push(entry);
+                if (entry.claimKey && points.__shortcutClaims?.[entry.claimKey]) points.__shortcutClaims[entry.claimKey].pointsAwarded = false;
+            }
+        }
+        const removedIds = new Set(removedEntries.map(entry => String(entry.id || '')));
+        points.__audit = (Array.isArray(points.__audit) ? points.__audit : []).filter(entry =>
+            !(entry?.source === 'shortcut_take' && removedIds.has(String(entry.id || '')))
+        );
+        deletedPoints = removedEntries.reduce((sum, entry) => sum + Math.max(0, Number(entry?.delta || 0)), 0);
+        affectedUsers = new Set(removedEntries.map(entry => String(entry?.targetId || '')).filter(Boolean)).size;
     }
 
     return { deletedPoints, affectedUsers };
@@ -2303,56 +2269,29 @@ function performTimeBasedReset(resetType, points) {
 
 function getAllUsersWithPoints(points, responsibilities) {
     const userMap = new Map();
-
-    for (const responsibility in points) {
-
-        if (responsibility.startsWith('__')) continue;
-        for (const userId in points[responsibility]) {
-            if (!userMap.has(userId)) {
-                userMap.set(userId, {
-                    id: userId,
-                    username: `مسؤول ${userId.slice(-4)}`,
-                    totalPoints: 0,
-                    responsibilities: 0
-                });
-            }
-
-            const user = userMap.get(userId);
-            user.responsibilities++;
-
-            if (typeof points[responsibility][userId] === 'object') {
-                user.totalPoints += Object.values(points[responsibility][userId]).reduce((sum, val) => sum + val, 0);
-            } else {
-                user.totalPoints += points[responsibility][userId] || 0;
-            }
-        }
+    for (const entry of getTakePointAudit(points)) {
+        const userId = String(entry?.targetId || '');
+        const delta = Math.max(0, Number(entry?.delta || 0));
+        if (!userId || !delta) continue;
+        if (!userMap.has(userId)) userMap.set(userId, { id: userId, username: `مسؤول ${userId.slice(-4)}`, totalPoints: 0, responsibilities: 0 });
+        const user = userMap.get(userId);
+        user.totalPoints += delta;
+        user.responsibilities++;
     }
-
     return Array.from(userMap.values()).sort((a, b) => b.totalPoints - a.totalPoints);
 }
 
 function getUsersFromResponsibility(points, responsibilities, responsibilityName) {
     const userMap = new Map();
-
-    if (points[responsibilityName]) {
-        for (const userId in points[responsibilityName]) {
-            let totalPoints = 0;
-
-            if (typeof points[responsibilityName][userId] === 'object') {
-                totalPoints = Object.values(points[responsibilityName][userId]).reduce((sum, val) => sum + val, 0);
-            } else {
-                totalPoints = points[responsibilityName][userId] || 0;
-            }
-
-            userMap.set(userId, {
-                id: userId,
-                username: `مسؤول ${userId.slice(-4)}`,
-                totalPoints,
-                responsibilities: 1
-            });
-        }
+    for (const entry of getTakePointAudit(points)) {
+        if (String(entry?.respName || '') !== String(responsibilityName || '')) continue;
+        const userId = String(entry?.targetId || '');
+        const delta = Math.max(0, Number(entry?.delta || 0));
+        if (!userId || !delta) continue;
+        const user = userMap.get(userId) || { id: userId, username: `مسؤول ${userId.slice(-4)}`, totalPoints: 0, responsibilities: 1 };
+        user.totalPoints += delta;
+        userMap.set(userId, user);
     }
-
     return Array.from(userMap.values()).sort((a, b) => b.totalPoints - a.totalPoints);
 }
 
@@ -2385,7 +2324,7 @@ async function handleDirectReset(message, args, points, responsibilities, saveDa
                 for (const resp in responsibilities) {
                     delete responsibilities[resp];
                 }
-                writeJSONFile(responsibilitiesPath, responsibilities);
+                await writeJSONFile(responsibilitiesPath, responsibilities);
 
                 // مسح كاش الترتيب بعد التصفير
                 invalidateTopCache();
@@ -2408,7 +2347,7 @@ async function handleDirectReset(message, args, points, responsibilities, saveDa
             case 'points':
                 const pointsCount = calculateTotalPoints(points);
                 resetPointScores(points);
-                writeJSONFile(pointsPath, points);
+                await writeJSONFile(pointsPath, points);
 
                 // مسح كاش الترتيب بعد التصفير
                 invalidateTopCache();
@@ -2438,8 +2377,8 @@ async function handleDirectReset(message, args, points, responsibilities, saveDa
                 }
                 resetPointScores(points);
 
-                writeJSONFile(pointsPath, points);
-                writeJSONFile(responsibilitiesPath, responsibilities);
+                await writeJSONFile(pointsPath, points);
+                await writeJSONFile(responsibilitiesPath, responsibilities);
 
                 // مسح كاش الترتيب بعد التصفير
                 invalidateTopCache();

@@ -9,7 +9,7 @@ const { getDataDir } = require('../utils/storagePaths');
 const name = 'top';
 
 // مسارات الملفات
-const pointsPath = path.join(getDataDir(), 'points.json');
+const ticketState = require('./ticket.js');
 const responsibilitiesPath = path.join(getDataDir(), 'responsibilities.json');
 
 // --- Caching Mechanism ---
@@ -48,7 +48,6 @@ async function execute(message, args, { points, responsibilities, client }) {
     }
 
     // قراءة البيانات المحدثة من الملفات
-    const currentPoints = readJSONFile(pointsPath, {});
     const currentResponsibilities = readJSONFile(responsibilitiesPath, {});
     let currentType = 'all';
     let currentResponsibility = null;
@@ -73,45 +72,32 @@ async function execute(message, args, { points, responsibilities, client }) {
         }
 
         // If not in cache or expired, calculate
-        const freshPoints = readJSONFile(pointsPath, {});
+        const freshPoints = ticketState.loadPoints();
         const userPoints = {};
         const oneDayAgo = now - (24 * 60 * 60 * 1000);
         const oneWeekAgo = now - (7 * 24 * 60 * 60 * 1000);
         const oneMonthAgo = now - (30 * 24 * 60 * 60 * 1000);
 
-        const pointsToCheck = responsibilityName ?
-            { [responsibilityName]: freshPoints[responsibilityName] || {} } :
-            freshPoints;
-
-        for (const responsibility in pointsToCheck) {
-            if (responsibility.startsWith('__')) continue;
-            for (const userId in pointsToCheck[responsibility]) {
-                if (typeof pointsToCheck[responsibility][userId] === 'object') {
-                    const userHistory = pointsToCheck[responsibility][userId];
-                    let userTotal = 0;
-
-                    for (const timestamp in userHistory) {
-                        const time = parseInt(timestamp);
-                        if (type === 'daily' && time >= oneDayAgo) {
-                            userTotal += userHistory[timestamp];
-                        } else if (type === 'weekly' && time >= oneWeekAgo) {
-                            userTotal += userHistory[timestamp];
-                        } else if (type === 'monthly' && time >= oneMonthAgo) {
-                            userTotal += userHistory[timestamp];
-                        } else if (type === 'all') {
-                            userTotal += userHistory[timestamp];
-                        }
-                    }
-
-                    if (userTotal > 0) {
-                        userPoints[userId] = (userPoints[userId] || 0) + userTotal;
-                    }
-                } else {
-                    if (type === 'all') {
-                        userPoints[userId] = (userPoints[userId] || 0) + pointsToCheck[responsibility][userId];
-                    }
-                }
-            }
+        const claims = freshPoints.__shortcutClaims;
+        const audit = Array.isArray(freshPoints.__audit) ? freshPoints.__audit.filter(entry => entry?.source === 'shortcut_take') : [];
+        const auditedIds = new Set(audit.map(entry => String(entry.id || '')));
+        const takeEntries = claims && typeof claims === 'object' && !Array.isArray(claims) && Object.keys(claims).length > 0
+            ? Object.values(claims)
+                .filter(claim => claim && (claim.pointsAwarded === true ||
+                    (claim.pointsAwarded !== false && auditedIds.has(String(claim.entryId || '')))))
+                .map(claim => ({ targetId: claim.userId, respName: claim.responsibilityName, at: claim.at, delta: 1 }))
+            : audit;
+        for (const entry of takeEntries) {
+            if (responsibilityName && String(entry.respName || '') !== responsibilityName) continue;
+            const userId = String(entry.targetId || '');
+            const delta = Number(entry.delta || 0);
+            const time = Number.parseInt(String(entry.at || entry.id || ''), 10);
+            if (!userId || !Number.isFinite(delta) || delta <= 0) continue;
+            const inRange = type === 'all'
+                || (type === 'daily' && time >= oneDayAgo)
+                || (type === 'weekly' && time >= oneWeekAgo)
+                || (type === 'monthly' && time >= oneMonthAgo);
+            if (inRange) userPoints[userId] = (userPoints[userId] || 0) + delta;
         }
 
         const sortedData = Object.entries(userPoints).sort((a, b) => b[1] - a[1]);

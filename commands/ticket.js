@@ -667,6 +667,13 @@ function savePoints(points) {
   return true;
 }
 
+async function savePointsDurably(points) {
+  storeCache[STATE_KEY_POINTS] = points;
+  const snapshot = JSON.parse(JSON.stringify(points ?? {}));
+  await queueStateWrite(STATE_SNAPSHOT_QUEUE_KEY, () => persistStateSnapshot(STATE_KEY_POINTS, pointsPath, snapshot));
+  return true;
+}
+
 function addPointsForResponsibility({ responsibilityName, userId, amount = 1, actorId = 'system', source = 'responsibility' } = {}) {
   // Legacy task-claim awards are disabled: Take is the sole responsibility-points source.
   return 0;
@@ -688,16 +695,10 @@ async function awardShortcutTakePoint({ claimId, responsibilityName, userId } = 
     const existingClaim = points.__shortcutClaims[safeClaimId];
     if (existingClaim) return { awarded: false, claim: existingClaim };
 
-    if (!points[respName] || typeof points[respName] !== 'object' || Array.isArray(points[respName])) points[respName] = {};
-    const existingBucket = points[respName][targetId];
-    const bucket = existingBucket && typeof existingBucket === 'object' && !Array.isArray(existingBucket) ? existingBucket : {};
-    if (typeof existingBucket === 'number') bucket[`legacy_${Date.now()}`] = existingBucket;
     const at = Date.now();
     const entryId = `${at}_shortcut_take_${safeClaimId}`;
-    bucket[entryId] = 1;
-    points[respName][targetId] = bucket;
 
-    const claim = { userId: targetId, responsibilityName: respName, at, entryId };
+    const claim = { userId: targetId, responsibilityName: respName, at, entryId, pointsAwarded: true };
     points.__shortcutClaims[safeClaimId] = claim;
     appendPointAuditEntry(points, {
       id: entryId,
@@ -745,29 +746,72 @@ function sumPointBucket(bucket) {
   return Number(bucket || 0);
 }
 
+function ensureTicketPoints(points) {
+  if (!points.__ticketPoints || typeof points.__ticketPoints !== 'object' || Array.isArray(points.__ticketPoints)) {
+    points.__ticketPoints = {};
+  }
+  return points.__ticketPoints;
+}
+
+function ensureTicketPointClaims(points) {
+  if (!points.__ticketPointClaims || typeof points.__ticketPointClaims !== 'object' || Array.isArray(points.__ticketPointClaims)) {
+    points.__ticketPointClaims = {};
+  }
+  return points.__ticketPointClaims;
+}
+
+function isLegacyTicketPointAudit(entry) {
+  const source = String(entry?.source || '');
+  return source === 'ticket_button' || (source === 'manual_command' && String(entry?.respName || 'general') === 'general');
+}
+
+function getLegacyGeneralPointRemainder(points, targetId) {
+  const bucket = points?.general?.[targetId];
+  const manualEntries = (Array.isArray(points?.__audit) ? points.__audit : []).filter(entry =>
+    String(entry?.targetId || '') === targetId && entry?.source === 'manual_command' && String(entry?.respName || 'general') === 'general'
+  );
+  if (typeof bucket !== 'object' || bucket === null) return manualEntries.length ? 0 : Number(bucket || 0);
+  const auditedIds = new Set(manualEntries.map(entry => String(entry?.id || '')));
+  return Object.entries(bucket).reduce((sum, [id, value]) => sum + (auditedIds.has(id) ? 0 : Number(value || 0)), 0);
+}
+
+function getTicketPointCategoryTotal(points, category, targetId) {
+  const newCategory = points?.__ticketPoints?.[category];
+  let total = sumPointBucket(newCategory?.[targetId]);
+  for (const entry of Array.isArray(points?.__audit) ? points.__audit : []) {
+    if (entry?.source === 'ticket_button' && String(entry?.respName || '') === String(category) && String(entry?.targetId || '') === String(targetId)) {
+      total += Number(entry?.delta || 0);
+    }
+  }
+  return total;
+}
+
 function getUserTotalPoints(points, userId) {
   const targetId = String(userId || '').trim();
   if (!targetId) return 0;
-  let total = 0;
-  for (const [key, bucket] of Object.entries(points || {})) {
-    if (key.startsWith('__')) continue;
-    if (!bucket || typeof bucket !== 'object') continue;
-    total += sumPointBucket(bucket[targetId]);
+  let total = getLegacyGeneralPointRemainder(points, targetId);
+  for (const category of Object.values(points?.__ticketPoints || {})) {
+    if (category && typeof category === 'object') total += sumPointBucket(category[targetId]);
+  }
+  for (const entry of Array.isArray(points?.__audit) ? points.__audit : []) {
+    if (isLegacyTicketPointAudit(entry) && String(entry?.targetId || '') === targetId) total += Number(entry?.delta || 0);
   }
   return total;
 }
 
 function getTopPointUsers(points, limit = 10) {
-  const totals = new Map();
-  for (const [key, bucket] of Object.entries(points || {})) {
-    if (key.startsWith('__')) continue;
-    if (!bucket || typeof bucket !== 'object') continue;
-    for (const [userId, userBucket] of Object.entries(bucket)) {
-      totals.set(userId, (totals.get(userId) || 0) + sumPointBucket(userBucket));
-    }
+  const userIds = new Set();
+  for (const category of Object.values(points?.__ticketPoints || {})) {
+    if (category && typeof category === 'object') Object.keys(category).forEach(userId => userIds.add(userId));
   }
-  return [...totals.entries()]
-    .map(([userId, total]) => ({ userId, total }))
+  const legacyGeneral = points?.general && typeof points.general === 'object' ? points.general : {};
+  Object.keys(legacyGeneral).forEach(userId => userIds.add(userId));
+  for (const entry of Array.isArray(points?.__audit) ? points.__audit : []) {
+    if (isLegacyTicketPointAudit(entry) && entry?.targetId) userIds.add(String(entry.targetId));
+  }
+  return [...userIds]
+    .map(userId => ({ userId, total: getUserTotalPoints(points, userId) }))
+    .filter(entry => entry.total !== 0)
     .sort((a, b) => b.total - a.total || a.userId.localeCompare(b.userId))
     .slice(0, Math.max(1, limit));
 }
@@ -777,7 +821,7 @@ function getTopPointAwarder(points, userId) {
   const awards = new Map();
   const auditEntries = Array.isArray(points?.__audit) ? points.__audit : [];
   for (const entry of auditEntries) {
-    if (String(entry?.targetId || '') !== targetId || !entry?.actorId) continue;
+    if (String(entry?.targetId || '') !== targetId || !entry?.actorId || !['ticket_button', 'manual_command', 'ticket_system'].includes(String(entry?.source || ''))) continue;
     awards.set(entry.actorId, (awards.get(entry.actorId) || 0) + Number(entry.delta || 0));
   }
   if (!awards.size) return null;
@@ -4201,7 +4245,24 @@ async function closeTicketCoreUnsafe({
   ticket.closedBy = closedByUserId || null;
   delete ticket.autoCloseWarningSentAt;
 
-  // Automatic ticket-close points are disabled; responsibility points come only from Take.
+  if (!autoClose && closedByUserId) {
+    const closerMember = await resolveGuildMember(channel.guild, closedByUserId);
+    const closerActor = closerMember
+      ? { user: { id: closedByUserId }, member: closerMember, guild: channel.guild }
+      : null;
+    if (closerMember && canManageTicket(closerActor, ticket, config)) {
+      const points = loadPoints();
+      const appended = recordManagerClosePoint(points, {
+        guildId,
+        panelId,
+        channelId,
+        actorId: closedByUserId,
+        targetId: ticket.memberId || '',
+        at: ticket.closedAt
+      });
+      if (appended) await savePointsDurably(points);
+    }
+  }
 
   setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
 
@@ -4652,30 +4713,34 @@ async function handleMyTicketPointsMessage(message, targetInput = null, { thumbn
   return message.reply({ embeds: [embed] }).catch((error) => logSilentError('suppressed', error));
 }
 
-function applyManualPointsDelta({ targetId, actorId, delta }) {
+async function applyManualPointsDelta({ targetId, actorId, delta }) {
   const points = loadPoints();
   const respName = 'general';
-  if (!points[respName] || typeof points[respName] !== 'object') points[respName] = {};
-  const existing = points[respName][targetId];
-  const total = sumPointBucket(existing);
-  const next = Math.max(0, total + delta);
-  const actualDelta = next - total;
-  const auditId = `${Date.now()}_${actorId}_${targetId}`;
-  points[respName][targetId] = { ...(typeof existing === 'object' && existing ? existing : {}), [auditId]: actualDelta };
+  const ticketPoints = ensureTicketPoints(points);
+  if (!ticketPoints[respName] || typeof ticketPoints[respName] !== 'object') ticketPoints[respName] = {};
+  const existing = ticketPoints[respName][targetId];
+  const currentTotal = getUserTotalPoints(points, targetId);
+  const nextTotal = Math.max(0, currentTotal + Number(delta || 0));
+  const actualDelta = nextTotal - currentTotal;
+  const auditId = `${Date.now()}_${actorId}_${targetId}_${Math.random().toString(36).slice(2, 8)}`;
+  ticketPoints[respName][targetId] = {
+    ...(existing && typeof existing === 'object' ? existing : {}),
+    [auditId]: actualDelta
+  };
   appendPointAuditEntry(points, {
     id: auditId,
     targetId,
     actorId,
     delta: actualDelta,
     respName,
-    source: 'manual_command',
+    source: 'ticket_system',
     at: auditId
   });
-  savePoints(points);
+  await savePointsDurably(points);
   return actualDelta;
 }
 
-function applyManagerPointsDelta({ targetId, delta }) {
+async function applyManagerPointsDelta({ targetId, delta }) {
   const points = loadPoints();
   if (!Array.isArray(points.__managerPointsAudit)) points.__managerPointsAudit = [];
   const amount = Math.max(0, Math.abs(Number(delta || 0)));
@@ -4690,7 +4755,7 @@ function applyManagerPointsDelta({ targetId, delta }) {
         at: `${Date.now()}_${i}`
       });
     }
-    savePoints(points);
+    await savePointsDurably(points);
     return amount;
   }
 
@@ -4701,7 +4766,7 @@ function applyManagerPointsDelta({ targetId, delta }) {
       removed += 1;
     }
   }
-  savePoints(points);
+  await savePointsDurably(points);
   return -removed;
 }
 
@@ -4824,15 +4889,6 @@ async function handlePointsAdjustActionInteraction(interaction, sessionId, mode)
 }
 
 async function handlePointsAdjustAmountInteraction(interaction, sessionId, mode, amount) {
-  if (mode === 'add') {
-    const response = { content: '**تم إيقاف إضافة النقاط اليدوية؛ تُحتسب نقاط المسؤوليات حصرياً عبر زر Take.**' };
-    if (interaction.deferred || interaction.replied) {
-      await interaction.editReply(response).catch((error) => logSilentError('suppressed', error));
-    } else {
-      await interaction.reply({ ...response, flags: 64 }).catch((error) => logSilentError('suppressed', error));
-    }
-    return;
-  }
   // Acknowledge before loading state, writing points, or fetching the target
   // user; otherwise Discord can report a failure after the write succeeds.
   if (!interaction.deferred && !interaction.replied) {
@@ -4854,10 +4910,10 @@ async function handlePointsAdjustAmountInteraction(interaction, sessionId, mode,
     await interaction.editReply(buildTicketMessagePayload('Error', '**خيار غير صالح.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
     return;
   }
-  const delta = -Math.abs(amount);
+  const delta = mode === 'remove' ? -Math.abs(amount) : Math.abs(amount);
   const actualDelta = session.targetIsResponsible
-    ? applyManagerPointsDelta({ targetId: session.targetId, delta })
-    : applyManualPointsDelta({ targetId: session.targetId, actorId: session.actorId, delta });
+    ? await applyManagerPointsDelta({ targetId: session.targetId, delta })
+    : await applyManualPointsDelta({ targetId: session.targetId, actorId: session.actorId, delta });
   const targetUser = await interaction.client.users.fetch(session.targetId).catch(() => null);
   pointsAdjustSessions.delete(sessionId);
   deleteRuntimeSession('ticket-points-adjust', sessionId);
@@ -4996,12 +5052,12 @@ async function handleResetPointsMessage(message, { ownerOnly = false } = {}) {
       nextPoints.__managerAudit = [];
       nextPoints.__managerPointsAudit = [];
     } else {
-      for (const key of Object.keys(nextPoints)) {
-        if (!key.startsWith('__')) delete nextPoints[key];
-      }
-      nextPoints.__audit = [];
+      nextPoints.__ticketPoints = {};
+      nextPoints.general = {};
+      nextPoints.__audit = (Array.isArray(nextPoints.__audit) ? nextPoints.__audit : [])
+        .filter(entry => !['ticket_system', 'ticket_button', 'manual_command'].includes(String(entry?.source || '')));
     }
-    savePoints(nextPoints);
+    await savePointsDurably(nextPoints);
     collector.stop();
     await interaction.update({
       components: [],
@@ -7605,10 +7661,6 @@ function registerHandlers(client) {
           const delta = id.startsWith('ticket_down2_') ? -2
             : id.startsWith('ticket_down_') ? -1
               : id.startsWith('ticket_up1_') ? 1 : 2;
-          if (delta > 0) {
-            await interaction.editReply(buildTicketMessagePayload('النقاط من Take فقط', '**إضافة النقاط من أزرار التقييم متوقفة؛ تُحتسب نقاط المسؤوليات حصرياً عبر زر Take.**', { ephemeral: true }));
-            return;
-          }
           const reasonName = config.reasons?.[ticket.reasonKey]?.name;
           const respName = ticket.transferredTo || reasonName || 'ticket';
           const targetId = ticket.pointsReceiverId || ticket.claimedBy;
@@ -7618,11 +7670,21 @@ function registerHandlers(client) {
           }
 
           const points = loadPoints();
-          // Include the actor in the bucket key: Date.now() alone can collide
-          // when two point actions are processed in the same millisecond.
-          const now = `${Date.now()}_${interaction.user.id}`;
-          if (!points[respName] || typeof points[respName] !== 'object') points[respName] = {};
-          const existingAward = ticket.pointAward && typeof ticket.pointAward === 'object' ? ticket.pointAward : null;
+          // Keep ticket evaluations in their own namespace, separate from responsibility Take scores.
+          const ticketPoints = ensureTicketPoints(points);
+          if (!ticketPoints[respName] || typeof ticketPoints[respName] !== 'object') ticketPoints[respName] = {};
+          const ticketPointClaims = ensureTicketPointClaims(points);
+          const ticketPointKey = `${guildId}:${resolvedPanelId}:${channelId}`;
+          // Include the actor and a random suffix: timestamps alone can collide for rapid actions.
+          const now = `${Date.now()}_${interaction.user.id}_${Math.random().toString(36).slice(2, 8)}`;
+          const persistedTicketAward = ticketPointClaims[ticketPointKey] && typeof ticketPointClaims[ticketPointKey] === 'object'
+            ? ticketPointClaims[ticketPointKey]
+            : null;
+          if (!ticket.pointAward && persistedTicketAward) {
+            ticket.pointAward = persistedTicketAward;
+            setGuildData(guildId, config, tickets, pendingRequests || {}, resolvedPanelId);
+          }
+          const existingAward = ticket.pointAward && typeof ticket.pointAward === 'object' ? ticket.pointAward : persistedTicketAward;
           if (existingAward) {
             if (existingAward.actorId === interaction.user.id) {
               await interaction.editReply({
@@ -7642,10 +7704,8 @@ function registerHandlers(client) {
             }
             return;
           }
-          const existing = points[respName][targetId];
-          const total = typeof existing === 'object'
-            ? Object.values(existing).reduce((s, v) => s + Number(v || 0), 0)
-            : Number(existing || 0);
+          const existing = ticketPoints[respName][targetId];
+          const total = getTicketPointCategoryTotal(points, respName, targetId);
           const next = Math.max(0, total + delta);
           const actualDelta = next - total;
           if (actualDelta === 0) {
@@ -7653,11 +7713,9 @@ function registerHandlers(client) {
             return;
           }
           if (typeof existing === 'object' && existing !== null) {
-            points[respName][targetId][now] = actualDelta;
-          } else if (existing !== undefined) {
-            points[respName][targetId] = { [now]: actualDelta };
+            ticketPoints[respName][targetId][now] = actualDelta;
           } else {
-            points[respName][targetId] = { [now]: actualDelta };
+            ticketPoints[respName][targetId] = { ...(typeof existing === 'number' ? { legacy: existing } : {}), [now]: actualDelta };
           }
           appendPointAuditEntry(points, {
             id: now,
@@ -7665,7 +7723,15 @@ function registerHandlers(client) {
             actorId: interaction.user.id,
             delta: actualDelta,
             respName,
-            source: 'ticket_button',
+            source: 'ticket_system',
+            at: now
+          });
+          recordManagerPoint(points, {
+            guildId,
+            panelId: resolvedPanelId,
+            channelId,
+            actorId: interaction.user.id,
+            targetId: ticket.memberId || '',
             at: now
           });
           ticket.pointAward = {
@@ -7675,9 +7741,10 @@ function registerHandlers(client) {
             targetId,
             at: now,
             auditId: now,
-            managerPointKey: `${guildId}:${resolvedPanelId}:${channelId}`
+            managerPointKey: ticketPointKey
           };
-          savePoints(points);
+          ticketPointClaims[ticketPointKey] = ticket.pointAward;
+          await savePointsDurably(points);
 
           await syncTicketLogMessage({
             guild: interaction.guild,
@@ -7705,24 +7772,34 @@ function registerHandlers(client) {
             await interaction.editReply(buildTicketMessagePayload('Error', '**لا توجد بيانات لهذا التكت.**', { ephemeral: true }));
             return;
           }
-          const existingAward = ticket.pointAward && typeof ticket.pointAward === 'object' ? ticket.pointAward : null;
+          const points = loadPoints();
+          const ticketPointKey = `${guildId}:${resolvedPanelId}:${channelId}`;
+          const persistedTicketAward = points.__ticketPointClaims?.[ticketPointKey];
+          const existingAward = ticket.pointAward && typeof ticket.pointAward === 'object' ? ticket.pointAward : persistedTicketAward;
           if (!existingAward) {
             await interaction.editReply({ components: [] });
             return;
+          }
+          if (!ticket.pointAward) {
+            ticket.pointAward = existingAward;
+            setGuildData(guildId, config, tickets, pendingRequests || {}, resolvedPanelId);
           }
           if (existingAward.actorId !== interaction.user.id) {
             await interaction.editReply(buildTicketMessagePayload('Alert', '**فقط المسؤول الذي قيّم يمكنه التراجع عن النقاط.**', { ephemeral: true }));
             return;
           }
-          const points = loadPoints();
-          const bucket = points?.[existingAward.respName]?.[existingAward.targetId];
-          if (bucket && typeof bucket === 'object') {
-            delete bucket[existingAward.at];
-          }
+          const ticketBucket = points?.__ticketPoints?.[existingAward.respName]?.[existingAward.targetId];
+          const legacyBucket = points?.[existingAward.respName]?.[existingAward.targetId];
+          const bucket = ticketBucket && Object.prototype.hasOwnProperty.call(ticketBucket, existingAward.at) ? ticketBucket : legacyBucket;
+          if (bucket && typeof bucket === 'object') delete bucket[existingAward.at];
           removePointAuditEntry(points, existingAward.auditId || existingAward.at);
           removeManagerPointEntry(points, existingAward.managerPointKey || `${guildId}:${resolvedPanelId}:${channelId}`);
+          const ticketPointClaims = points.__ticketPointClaims;
+          if (ticketPointClaims && typeof ticketPointClaims === 'object') {
+            delete ticketPointClaims[`${guildId}:${resolvedPanelId}:${channelId}`];
+          }
           delete ticket.pointAward;
-          savePoints(points);
+          await savePointsDurably(points);
           setGuildData(guildId, config, tickets, pendingRequests || {}, resolvedPanelId);
           await interaction.editReply({
             ...buildTicketMessagePayload('Done✅️', '**تم التراجع عن النقاط السابقة، يمكنك اختيار نقاط جديدة الآن.**', { ephemeral: true }),
@@ -8219,6 +8296,7 @@ module.exports = {
   // legacy JSON file directly, otherwise SQLite/cache can resurrect points.
   loadPoints,
   savePoints,
+  savePointsDurably,
   addPointsForResponsibility,
   awardShortcutTakePoint
 };

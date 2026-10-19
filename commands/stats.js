@@ -5,6 +5,7 @@ const path = require('path');
 const colorManager = require('../utils/colorManager.js');
 const { isUserBlocked } = require('./block.js');
 const { createPaginatedResponsibilityStats, handlePaginationInteraction } = require('../utils/responsibilityPagination.js');
+const ticketState = require('./ticket.js');
 
 
 const name = 'stats';
@@ -35,6 +36,27 @@ const DATA_FILES = {
     notifications: path.join(dataDir, 'notifications.json')
 };
 
+function getResponsibilityTakeScores(points, responsibilityName = null) {
+    const scores = {};
+    const claims = points?.__shortcutClaims;
+    const audit = Array.isArray(points?.__audit) ? points.__audit.filter(entry => entry?.source === 'shortcut_take') : [];
+    const auditedIds = new Set(audit.map(entry => String(entry.id || '')));
+    const entries = claims && typeof claims === 'object' && !Array.isArray(claims) && Object.keys(claims).length > 0
+        ? Object.values(claims)
+            .filter(claim => claim && (claim.pointsAwarded === true ||
+                (claim.pointsAwarded !== false && auditedIds.has(String(claim.entryId || '')))))
+            .map(claim => ({ targetId: claim.userId, respName: claim.responsibilityName, delta: 1 }))
+        : audit;
+    for (const entry of entries) {
+        if (responsibilityName && String(entry.respName || '') !== responsibilityName) continue;
+        const userId = String(entry.targetId || '');
+        const delta = Number(entry.delta || 0);
+        if (!userId || !Number.isFinite(delta) || delta <= 0) continue;
+        scores[userId] = (scores[userId] || 0) + delta;
+    }
+    return scores;
+}
+
 async function execute(message, args, { responsibilities, points, client, BOT_OWNERS, ADMIN_ROLES }) {
     // فحص البلوك أولاً
     if (isUserBlocked(message.author.id)) {
@@ -57,7 +79,7 @@ async function execute(message, args, { responsibilities, points, client, BOT_OW
 
     // تحميل جميع البيانات من ملفات JSON
     const allData = {
-        points: readJSONFile(DATA_FILES.points, {}),
+        points: ticketState.loadPoints(),
         responsibilities: readJSONFile(DATA_FILES.responsibilities, {}),
         logConfig: readJSONFile(DATA_FILES.logConfig, {}),
         adminRoles: readJSONFile(DATA_FILES.adminRoles, []),
@@ -97,13 +119,8 @@ async function showMainStatsMenu(message, allData, client) {
     // ترتيب المسؤوليات حسب النشاط
     const responsibilityStats = [];
     Object.entries(allData.responsibilities).forEach(([respName, respData]) => {
-        const respPoints = allData.points[respName] || {};
-        const totalPoints = Object.values(respPoints).reduce((sum, userPoints) => {
-            if (typeof userPoints === 'object') {
-                return sum + Object.values(userPoints).reduce((a, b) => a + b, 0);
-            }
-            return sum + userPoints;
-        }, 0);
+        const respPoints = getResponsibilityTakeScores(allData.points, respName);
+        const totalPoints = Object.values(respPoints).reduce((sum, value) => sum + value, 0);
 
         const membersCount = respData.responsibles ? respData.responsibles.length : 0;
         const activeMembersCount = Object.keys(respPoints).length;
@@ -248,22 +265,10 @@ function calculateCompleteStats(allData, guild) {
         }
     });
 
-    // حساب إحصائيات النقاط
-    const uniqueActiveUsers = new Set();
-    Object.entries(allData.points).forEach(([respName, respPoints]) => {
-        if (respName.startsWith('__')) return;
-        Object.entries(respPoints).forEach(([userId, userPoints]) => {
-            if (typeof userPoints === 'object') {
-                const totalUserPoints = Object.values(userPoints).reduce((sum, pts) => sum + pts, 0);
-                stats.totalTasksCompleted += totalUserPoints;
-                if (totalUserPoints > 0) uniqueActiveUsers.add(userId);
-            } else {
-                stats.totalTasksCompleted += userPoints;
-                if (userPoints > 0) uniqueActiveUsers.add(userId);
-            }
-        });
-    });
-    stats.activeResponsibles = uniqueActiveUsers.size;
+    // نقاط المسؤوليات مصدرها الوحيد سجل الضغط على Take، لا نقاط التكت.
+    const takeScores = getResponsibilityTakeScores(allData.points);
+    stats.totalTasksCompleted = Object.values(takeScores).reduce((sum, value) => sum + value, 0);
+    stats.activeResponsibles = Object.keys(takeScores).length;
 
     // حساب إحصائيات التنبيهات
     if (allData.notifications.sent) {
@@ -306,7 +311,7 @@ async function showResponsibilityDetails(messageOrInteraction, responsibilityNam
     const path = require('path');
     let currentResponsibilities = {};
     try {
-        const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
+        const responsibilitiesPath = path.join(dataDir, 'responsibilities.json');
         if (fs.existsSync(responsibilitiesPath)) {
             const data = fs.readFileSync(responsibilitiesPath, 'utf8');
             currentResponsibilities = JSON.parse(data);
@@ -329,7 +334,7 @@ async function showResponsibilityDetails(messageOrInteraction, responsibilityNam
         return;
     }
 
-    const respPoints = allData.points[responsibilityName] || {};
+    const respPoints = getResponsibilityTakeScores(allData.points, responsibilityName);
     const responsibles = responsibility.responsibles || [];
 
     // حساب إحصائيات المسؤولية بشكل شامل
@@ -358,16 +363,9 @@ async function showResponsibilityDetails(messageOrInteraction, responsibilityNam
 
     // حساب ترتيب المسؤولية بين جميع المسؤوليات
     const allRespStats = [];
-    Object.entries(allData.points).forEach(([respName, respPointsData]) => {
-        if (respName.startsWith('__')) return;
-        let total = 0;
-        Object.values(respPointsData).forEach(userPoints => {
-            if (typeof userPoints === 'object') {
-                total += Object.values(userPoints).reduce((sum, pts) => sum + pts, 0);
-            } else {
-                total += userPoints;
-            }
-        });
+    Object.keys(allData.responsibilities).forEach(respName => {
+        const scores = getResponsibilityTakeScores(allData.points, respName);
+        const total = Object.values(scores).reduce((sum, value) => sum + value, 0);
         allRespStats.push({ name: respName, total });
     });
     allRespStats.sort((a, b) => b.total - a.total);
@@ -446,47 +444,23 @@ async function showUserDetails(interaction, responsibilityName, userId, allData,
         const member = await interaction.guild.members.fetch(userId);
         const displayName = member.displayName || member.user.username;
 
-        const respPoints = allData.points[responsibilityName] || {};
-        let userPointsInResp = 0;
-        if (typeof respPoints[userId] === 'object') {
-            userPointsInResp = Object.values(respPoints[userId]).reduce((sum, pts) => sum + pts, 0);
-        } else {
-            userPointsInResp = respPoints[userId] || 0;
-        }
+        const respPoints = getResponsibilityTakeScores(allData.points, responsibilityName);
+        const userPointsInResp = Number(respPoints[userId] || 0);
 
-        // حساب الترتيب في المسؤولية
-        const respUserStats = [];
-        Object.entries(respPoints).forEach(([uid, pts]) => {
-            let totalPts = 0;
-            if (typeof pts === 'object') {
-                totalPts = Object.values(pts).reduce((sum, p) => sum + p, 0);
-            } else {
-                totalPts = pts;
-            }
-            respUserStats.push({ userId: uid, points: totalPts });
-        });
+        // حساب الترتيب في المسؤولية من سجل Take فقط.
+        const respUserStats = Object.entries(respPoints).map(([uid, points]) => ({ userId: uid, points }));
         respUserStats.sort((a, b) => b.points - a.points);
 
         const respRank = respUserStats.findIndex(u => u.userId === userId) + 1;
 
         // حساب الترتيب بين جميع المسؤوليات
         const allUserStats = [];
-        Object.entries(allData.points).forEach(([respName, respPointsData]) => {
-            if (respName.startsWith('__')) return;
-            Object.entries(respPointsData).forEach(([uid, pts]) => {
-                let totalPts = 0;
-                if (typeof pts === 'object') {
-                    totalPts = Object.values(pts).reduce((sum, p) => sum + p, 0);
-                } else {
-                    totalPts = pts;
-                }
-
+        Object.keys(allData.responsibilities).forEach(respName => {
+            const respScores = getResponsibilityTakeScores(allData.points, respName);
+            Object.entries(respScores).forEach(([uid, totalPts]) => {
                 const existing = allUserStats.find(u => u.userId === uid);
-                if (existing) {
-                    existing.totalPoints += totalPts;
-                } else {
-                    allUserStats.push({ userId: uid, totalPoints: totalPts });
-                }
+                if (existing) existing.totalPoints += totalPts;
+                else allUserStats.push({ userId: uid, totalPoints: totalPts });
             });
         });
 
@@ -576,15 +550,8 @@ async function showMainStatsMenuForInteraction(interaction, allData, client) {
 
     const responsibilityStats = [];
     Object.entries(allData.responsibilities).forEach(([respName, respData]) => {
-        const respPoints = allData.points[respName] || {};
-        let totalPoints = 0;
-        Object.values(respPoints).forEach(userPoints => {
-            if (typeof userPoints === 'object') {
-                totalPoints += Object.values(userPoints).reduce((sum, pts) => sum + pts, 0);
-            } else {
-                totalPoints += userPoints;
-            }
-        });
+        const respPoints = getResponsibilityTakeScores(allData.points, respName);
+        const totalPoints = Object.values(respPoints).reduce((sum, value) => sum + value, 0);
 
         const membersCount = respData.responsibles ? respData.responsibles.length : 0;
         const activeMembersCount = Object.keys(respPoints).length;

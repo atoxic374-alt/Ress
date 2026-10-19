@@ -922,7 +922,8 @@ async function removeMemberFromResponsibilityAssignmentsOnLeave(member) {
 
 // تحميل البيانات مباشرة من قاعدة البيانات والملفات
 const { dbManager } = require('./utils/database.js');
-let points = readJSONFile(DATA_FILES.points, {});
+const ticketState = require('./commands/ticket.js');
+let points = ticketState.loadPoints();
 global.responsibilities = {};
 
 
@@ -1533,7 +1534,6 @@ async function saveData(force = false) {
 
         await Promise.all([
             ...dbPromises,
-            fs.promises.writeFile(DATA_FILES.points, JSON.stringify(points, null, 2)),
             fs.promises.writeFile(DATA_FILES.logConfig, JSON.stringify(client.logConfig || logConfig, null, 2))
         ]);
 
@@ -1688,7 +1688,7 @@ function updatePrefix(newPrefix) {
 // دالة لإعادة تحميل البيانات من الملفات
 function reloadData() {
     try {
-        points = readJSONFile(DATA_FILES.points, {});
+        points = ticketState.loadPoints();
         responsibilities = readJSONFile(DATA_FILES.responsibilities, {});
         logConfig = readJSONFile(DATA_FILES.logConfig, logConfig);
         client.logConfig = logConfig;
@@ -1727,6 +1727,8 @@ function cleanInvalidUserIds() {
 
         // تنظيف points
         for (const [respName, respData] of Object.entries(points)) {
+            // Internal ticket/Take records are not responsibility buckets or user IDs.
+            if (respName.startsWith('__')) continue;
             if (respData && typeof respData === 'object') {
                 for (const userId of Object.keys(respData)) {
                     if (!/^\d{17,19}$/.test(userId)) {
@@ -1739,6 +1741,7 @@ function cleanInvalidUserIds() {
         }
 
         if (needsSave) {
+            ticketState.savePoints(points);
             saveData();
             console.log('✅ تم تنظيف البيانات من المعرفات غير الصحيحة');
         }
