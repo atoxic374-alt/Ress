@@ -1,6 +1,16 @@
-const { ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const {
+    ActionRowBuilder,
+    StringSelectMenuBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    ContainerBuilder,
+    SectionBuilder,
+    TextDisplayBuilder,
+    SeparatorBuilder,
+    ThumbnailBuilder
+} = require('discord.js');
 const colorManager = require('../utils/colorManager.js');
-const { createStructuredContainer, componentsV2Payload, colorToNumber } = require('../utils/structuredContainer');
+const { componentsV2Payload, colorToNumber } = require('../utils/structuredContainer');
 const { isUserBlocked } = require('./block.js');
 
 const fs = require('fs');
@@ -54,6 +64,9 @@ async function execute(message, args, { points, responsibilities, client }) {
     let currentResponsibility = null;
     let page = 0;
     const pageSize = 10;
+    const guild = message.guild || message.channel.guild;
+    const guildIconUrl = guild?.iconURL?.({ extension: 'png', size: 128 })
+        || 'https://cdn.discordapp.com/embed/avatars/0.png';
 
     // التحقق من الأرغيومنت لمسؤولية معينة
     if (args.length > 0) {
@@ -120,7 +133,7 @@ async function execute(message, args, { points, responsibilities, client }) {
         const current = sorted.slice(page * pageSize, (page + 1) * pageSize);
         const typeNames = { daily: 'اليومي', weekly: 'الأسبوعي', monthly: 'الشهري', all: 'الكل' };
         const pageCount = Math.max(1, Math.ceil(sorted.length / pageSize));
-        const filterDescription = `**الفترة:** ${typeNames[currentType]}\n**المسؤولية:** ${currentResponsibility || 'جميع المسؤوليات'}`;
+        const filterDescription = `**الفترة :** ${typeNames[currentType]}\n**المسؤولية :** ${currentResponsibility || 'جميع المسؤوليات'}`;
         let rankingDescription;
         if (sorted.length === 0) {
             rankingDescription = '**لا توجد نقاط في هذه الفترة.**';
@@ -132,12 +145,19 @@ async function execute(message, args, { points, responsibilities, client }) {
             }).join('\n');
         }
 
-        const container = createStructuredContainer({
-            title: 'Top Leaderboard',
-            description: `${filterDescription}\n\n${rankingDescription}`,
-            footer: `الصفحة ${page + 1} من ${pageCount}`,
-            accentColor: colorToNumber(colorManager.getColor?.() || '#0099ff', 0x0099ff)
-        });
+        const accentColor = colorToNumber(colorManager.getColor?.() || '#0099ff', 0x0099ff);
+        const header = new SectionBuilder()
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent('## Top Responsibilities'))
+            .setThumbnailAccessory(new ThumbnailBuilder()
+                .setURL(guildIconUrl)
+                .setDescription(`شعار ${guild?.name || 'السيرفر'}`));
+        const container = new ContainerBuilder()
+            .setAccentColor(accentColor)
+            .addSectionComponents(header)
+            .addSeparatorComponents(new SeparatorBuilder())
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent(`${filterDescription}\n\n${rankingDescription}`))
+            .addSeparatorComponents(new SeparatorBuilder())
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Page ${page + 1} / ${pageCount}`));
         rows.forEach((row) => container.addActionRowComponents(row));
         return container;
     }
