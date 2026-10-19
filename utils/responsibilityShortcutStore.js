@@ -4,13 +4,19 @@ const { getDataDir } = require('./storagePaths');
 
 const STORE_PATH = path.join(getDataDir(), 'responsibility-shortcuts.json');
 const STORE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const COOLDOWN_TTL_MS = 10 * 60 * 1000;
 const MAX_STORED_REQUESTS = 10000;
 const MAX_STORED_COOLDOWN_KEYS = 50000;
 const PRUNE_WATERMARK = 500;
-const SAVE_DEBOUNCE_MS = 200;
+const SAVE_DEBOUNCE_MS = 500;
+const SAVE_RETRY_MS = 5000;
+const PRUNE_INTERVAL_MS = 60 * 1000;
+
 let storeCache = null;
 let saveTimer = null;
-let writeQueue = Promise.resolve();
+let flushPromise = null;
+let storeDirty = false;
+let lastPruneAt = 0;
 
 function normalizeStore(value) {
   const state = value && typeof value === 'object' ? value : {};
@@ -30,30 +36,42 @@ function pruneOldestEntries(collection, maxEntries, getTimestamp) {
 }
 
 function pruneStore(state, now = Date.now()) {
-  const cutoff = now - STORE_TTL_MS;
+  const requestCutoff = now - STORE_TTL_MS;
+  const cooldownCutoff = now - COOLDOWN_TTL_MS;
   let changed = false;
+
   for (const [token, request] of Object.entries(state.requests)) {
-    if (!request || !Number.isFinite(Number(request.createdAt)) || Number(request.createdAt) < cutoff) {
+    if (!request || !Number.isFinite(Number(request.createdAt)) || Number(request.createdAt) < requestCutoff) {
       delete state.requests[token];
       changed = true;
     }
   }
   for (const [key, at] of Object.entries(state.cooldowns)) {
-    if (!Number.isFinite(Number(at)) || Number(at) < cutoff) {
+    if (!Number.isFinite(Number(at)) || Number(at) < cooldownCutoff) {
       delete state.cooldowns[key];
       changed = true;
     }
   }
   for (const [key, at] of Object.entries(state.callCooldowns)) {
-    if (!Number.isFinite(Number(at)) || Number(at) < cutoff) {
+    if (!Number.isFinite(Number(at)) || Number(at) < cooldownCutoff) {
       delete state.callCooldowns[key];
       changed = true;
     }
   }
+
   changed = pruneOldestEntries(state.requests, MAX_STORED_REQUESTS, request => Number(request?.createdAt || 0)) || changed;
   changed = pruneOldestEntries(state.cooldowns, MAX_STORED_COOLDOWN_KEYS, value => Number(value || 0)) || changed;
   changed = pruneOldestEntries(state.callCooldowns, MAX_STORED_COOLDOWN_KEYS, value => Number(value || 0)) || changed;
   return changed;
+}
+
+function scheduleSave(delayMs = SAVE_DEBOUNCE_MS) {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    void flushShortcutStore();
+  }, delayMs);
+  saveTimer.unref?.();
 }
 
 function loadShortcutStore() {
@@ -63,46 +81,86 @@ function loadShortcutStore() {
   } catch {
     storeCache = normalizeStore({});
   }
-  if (pruneStore(storeCache)) saveShortcutStore();
+  lastPruneAt = Date.now();
+  if (pruneStore(storeCache, lastPruneAt)) {
+    storeDirty = true;
+    scheduleSave();
+  }
   return storeCache;
 }
 
-function flushShortcutStore() {
+async function writeSnapshot(snapshot) {
+  const tempPath = `${STORE_PATH}.${process.pid}.${Date.now()}.tmp`;
+  await fs.promises.mkdir(path.dirname(STORE_PATH), { recursive: true });
+  try {
+    await fs.promises.writeFile(tempPath, snapshot, 'utf8');
+    await fs.promises.rename(tempPath, STORE_PATH);
+  } catch (error) {
+    await fs.promises.rm(tempPath, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+async function flushShortcutStore() {
+  const state = loadShortcutStore();
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
-  const snapshot = JSON.stringify((() => {
-    const state = loadShortcutStore();
-    pruneStore(state);
-    return state;
-  })(), null, 2);
-  const tempPath = `${STORE_PATH}.${process.pid}.${Date.now()}.tmp`;
-  const operation = writeQueue.then(async () => {
-    await fs.promises.mkdir(path.dirname(STORE_PATH), { recursive: true });
+
+  if (flushPromise) {
+    const pendingFlush = flushPromise;
+    const succeeded = await pendingFlush;
+    if (!succeeded) return false;
+    if (storeDirty) return flushShortcutStore();
+    return true;
+  }
+  if (!storeDirty) return true;
+
+  const now = Date.now();
+  if (now - lastPruneAt >= PRUNE_INTERVAL_MS) {
+    lastPruneAt = now;
+    pruneStore(state, now);
+  }
+
+  // Compact JSON reduces serialization CPU and disk traffic for the snapshot.
+  const snapshot = JSON.stringify(state);
+  storeDirty = false;
+
+  const operation = (async () => {
     try {
-      await fs.promises.writeFile(tempPath, snapshot, 'utf8');
-      await fs.promises.rename(tempPath, STORE_PATH);
+      await writeSnapshot(snapshot);
+      return true;
     } catch (error) {
-      await fs.promises.rm(tempPath, { force: true }).catch(() => {});
-      throw error;
+      storeDirty = true;
+      console.error('تعذر حفظ مخزن اختصارات المسؤوليات:', error.message);
+      return false;
     }
-  });
-  writeQueue = operation.catch(error => {
-    console.error('تعذر حفظ مخزن اختصارات المسؤوليات:', error.message);
-  });
-  return operation.then(() => true, () => false);
-}
+  })();
+  flushPromise = operation;
 
-function flushScheduledSave() {
-  saveTimer = null;
-  void flushShortcutStore();
-}
-
-function saveShortcutStore() {
-  pruneStore(loadShortcutStore());
-  if (!saveTimer) saveTimer = setTimeout(flushScheduledSave, SAVE_DEBOUNCE_MS);
+  const succeeded = await operation;
+  if (flushPromise === operation) flushPromise = null;
+  if (!succeeded) {
+    scheduleSave(SAVE_RETRY_MS);
+    return false;
+  }
+  if (storeDirty) return flushShortcutStore();
   return true;
 }
 
-module.exports = { loadShortcutStore, saveShortcutStore, flushShortcutStore, STORE_PATH, STORE_TTL_MS };
+function saveShortcutStore() {
+  loadShortcutStore();
+  storeDirty = true;
+  scheduleSave();
+  return true;
+}
+
+module.exports = {
+  loadShortcutStore,
+  saveShortcutStore,
+  flushShortcutStore,
+  STORE_PATH,
+  STORE_TTL_MS,
+  COOLDOWN_TTL_MS
+};

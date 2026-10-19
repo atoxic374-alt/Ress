@@ -3289,7 +3289,8 @@ client.on('messageCreate', async message => {
         shortcutStore.requests[requestToken] = requestData;
         pruneRuntimeShortcutRequests();
         startShortcutUsageCooldown(message.guild.id, message.author.id, matchedResponsibility);
-        if (!await shortcutStateStore.flushShortcutStore()) console.error('تعذر حفظ طلب اختصار المسؤولية فورًا.');
+        // The request and cooldown are included in the store's debounced batch write.
+        // Avoid serializing and rewriting the entire shortcut store on every trigger.
       } finally {
         shortcutUsageLocks.delete(usageKey);
       }
@@ -6270,7 +6271,7 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
         callData.claimedAt = Number(pointResult.claim.at || Date.now());
         callData.claimedByName = displayName;
         shortcutStore.requests[requestToken] = callData;
-        if (!await shortcutStateStore.flushShortcutStore()) throw new Error('تعذر حفظ حالة الاستلام على القرص');
+        shortcutStateStore.saveShortcutStore();
         const updatedRows = interaction.message.components.map(row => new ActionRowBuilder().addComponents(
           row.components.map(component => {
             const button = ButtonBuilder.from(component);
