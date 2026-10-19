@@ -1,5 +1,6 @@
-const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const colorManager = require('../utils/colorManager.js');
+const { createStructuredContainer, componentsV2Payload, colorToNumber } = require('../utils/structuredContainer');
 const { isUserBlocked } = require('./block.js');
 
 const fs = require('fs');
@@ -114,47 +115,48 @@ async function execute(message, args, { points, responsibilities, client }) {
     const medals = ['🥇', '🥈', '🥉'];
     const badge = (points) => points >= 50 ? '🏆' : points >= 25 ? '⭐' : points >= 10 ? '🎖️' : '';
 
-    function buildEmbed() {
+    function buildLeaderboardContainer(rows = []) {
         const sorted = getOrCalculateUserPoints(currentType, currentResponsibility);
         const current = sorted.slice(page * pageSize, (page + 1) * pageSize);
-
+        const typeNames = { daily: 'اليومي', weekly: 'الأسبوعي', monthly: 'الشهري', all: 'الكل' };
+        const pageCount = Math.max(1, Math.ceil(sorted.length / pageSize));
+        const filterDescription = `**الفترة:** ${typeNames[currentType]}\n**المسؤولية:** ${currentResponsibility || 'جميع المسؤوليات'}`;
+        let rankingDescription;
         if (sorted.length === 0) {
-            const typeNames = { daily: 'اليومي', weekly: 'الأسبوعي', monthly: 'الشهري', all: 'الكل' };
-            const titleSuffix = currentResponsibility ? ` - ${currentResponsibility}` : '';
-            const embed = colorManager.createEmbed()
-                .setTitle(`🏅 **أفضل المسؤولين - ${typeNames[currentType]}${titleSuffix}**`)
-                .setDescription('**لا توجد نقاط في هذه الفترة.**')
-               
-                .setThumbnail('https://cdn.discordapp.com/attachments/1373799493111386243/1400670537776369765/images__4_-removebg-preview_1.png?ex=688d7b97&is=688c2a17&hm=be9c1a81b818961ab6b6de9d14a2cbefe4f323a47d84c6a012ef9d0165e162e7&')
-                .setFooter({ text: 'الصفحة 1 من 1' });
-            return embed;
+            rankingDescription = '**لا توجد نقاط في هذه الفترة.**';
+        } else {
+            rankingDescription = current.map(([id, pts], idx) => {
+                const rank = page * pageSize + idx + 1;
+                const emoji = medals[rank - 1] || `${rank}.`;
+                return `${emoji} <@${id}> - **${pts} نقطة** ${badge(pts)}`;
+            }).join('\n');
         }
 
-        const desc = current.map(([id, pts], idx) => {
-            const rank = page * pageSize + idx + 1;
-            const emoji = medals[rank - 1] || `${rank}.`;
-            return `${emoji} <@${id}> - **${pts} نقطة** ${badge(pts)}`;
-        }).join('\n');
+        const container = createStructuredContainer({
+            title: 'Top Leaderboard',
+            description: `${filterDescription}\n\n${rankingDescription}`,
+            footer: `الصفحة ${page + 1} من ${pageCount}`,
+            accentColor: colorToNumber(colorManager.getColor?.() || '#0099ff', 0x0099ff)
+        });
+        rows.forEach((row) => container.addActionRowComponents(row));
+        return container;
+    }
 
-        const typeNames = { daily: 'اليومي', weekly: 'الأسبوعي', monthly: 'الشهري', all: 'الكل' };
-        const titleSuffix = currentResponsibility ? ` - ${currentResponsibility}` : '';
-        const embed = colorManager.createEmbed()
-            .setTitle(`🏅 **أفضل المسؤولين - ${typeNames[currentType]}${titleSuffix}**`)
-            .setDescription(desc)
-            
-            .setThumbnail('https://cdn.discordapp.com/attachments/1373799493111386243/1400670503437598861/download__10_-removebg-preview.png?ex=688d7b8f&is=688c2a0f&hm=bb6f36937f98326d082768a35c61e39f96dd0c7268d0f938c82a53d3d7a81ed8&')
-            .setFooter({ text: `الصفحة ${page + 1} من ${Math.ceil(sorted.length / pageSize)}` });
-        return embed;
+    function buildLeaderboardPayload(rows = []) {
+        return {
+            ...componentsV2Payload(buildLeaderboardContainer(rows)),
+            allowedMentions: { parse: [], repliedUser: false }
+        };
     }
 
     const typeSelect = new StringSelectMenuBuilder()
         .setCustomId('top_type_select')
-        .setPlaceholder('اختر نوع الترتيب...')
+        .setPlaceholder('Select ranking period...')
         .addOptions([
-            { label: 'ترتيب اليوم', value: 'daily', description: 'النقاط المكتسبة خلال آخر 24 ساعة' },
-            { label: 'ترتيب الأسبوع', value: 'weekly', description: 'النقاط المكتسبة خلال آخر 7 أيام' },
-            { label: 'ترتيب الشهر', value: 'monthly', description: 'النقاط المكتسبة خلال آخر 30 يوم' },
-            { label: 'ترتيب الكل', value: 'all', description: 'جميع النقاط منذ البداية' }
+            { label: 'Daily Ranking', value: 'daily', description: 'النقاط المكتسبة خلال آخر 24 ساعة' },
+            { label: 'Weekly Ranking', value: 'weekly', description: 'النقاط المكتسبة خلال آخر 7 أيام' },
+            { label: 'Monthly Ranking', value: 'monthly', description: 'النقاط المكتسبة خلال آخر 30 يوم' },
+            { label: 'All-Time Ranking', value: 'all', description: 'جميع النقاط منذ البداية' }
         ]);
 
     // إضافة منيو اختيار المسؤولية
@@ -172,7 +174,7 @@ async function execute(message, args, { points, responsibilities, client }) {
         name: r.name,
         value: i === 0 ? 'all_responsibilities' : `resp_${r.name}`,
         description: r.description
-    })), 0, 'top_resp_select', 'اختر المسؤولية...');
+    })), 0, 'top_resp_select', 'Select responsibility...');
 
     const selectRow1 = new ActionRowBuilder().addComponents(typeSelect);
     const selectRow2Components = pagination.components;
@@ -193,10 +195,9 @@ async function execute(message, args, { points, responsibilities, client }) {
             .setDisabled(page >= maxPages - 1 || maxPages === 0)
     );
 
-    const sentMessage = await message.channel.send({ 
-        embeds: [buildEmbed()], 
-        components: [selectRow1, ...selectRow2Components, buttonRow] 
-    });
+    const sentMessage = await message.channel.send(
+        buildLeaderboardPayload([selectRow1, ...selectRow2Components, buttonRow])
+    );
 
     const filter = i => i.user.id === message.author.id && i.message.id === sentMessage.id;
     const collector = message.channel.createMessageComponentCollector({ filter, time: 600000 });
@@ -253,19 +254,18 @@ async function execute(message, args, { points, responsibilities, client }) {
                 name: r.name,
                 value: i === 0 ? 'all_responsibilities' : `resp_${r.name}`,
                 description: r.description
-            })), 0, 'top_resp_select', 'اختر المسؤولية...');
+            })), 0, 'top_resp_select', 'Select responsibility...');
 
-            await interaction.update({ 
-                embeds: [buildEmbed()], 
-                components: [selectRow1, ...newPagination.components, newButtonRow] 
-            });
+            await interaction.update(
+                buildLeaderboardPayload([selectRow1, ...newPagination.components, newButtonRow])
+            );
         } catch (error) {
             console.error('Error in top leaderboard collector:', error);
         }
     });
 
     collector.on('end', () => {
-        sentMessage.edit({ components: [] }).catch(() => {});
+        sentMessage.edit(buildLeaderboardPayload([])).catch(() => {});
     });
 }
 
