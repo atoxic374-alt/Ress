@@ -27,6 +27,8 @@ const path = require('path');
 // تسجيل خط Cairo بجميع أوزانه عند بدء التشغيل
 require('./utils/cairoFont').ensureCairoFontsRegistered();
 const { logEvent } = require('./utils/logs_system.js');
+const { createStructuredContainer, componentsV2Payload } = require('./utils/structuredContainer.js');
+const { normalizeDiscordId, normalizeMentionableIds, userMention } = require('./utils/mentions.js');
 const { startReminderSystem } = require('./commands/notifications.js');
 // تعريف downManager في المستوى العلوي للوصول عبر جميع معالجات الأحداث
 const downManager = require('./utils/downManager');
@@ -6278,17 +6280,25 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
           })
         ));
         await interaction.message.edit({ components: updatedRows }).catch(error => console.error('تعذر تحديث أزرار الاستلام:', error.message));
-        const claimEmbed = colorManager.createEmbed()
-          .setTitle('تم استلام المشكلة')
-          .setDescription(`**<@${actualClaimerId}> : استلم المشكلة الخاصة بك.**`)
-          .addFields(
-            { name: 'المسؤولية', value: callData.responsibilityName, inline: true },
-            { name: 'المستلم', value: `<@${actualClaimerId}>`, inline: true }
-          )
-          .setTimestamp(new Date(callData.claimedAt));
+        const requesterId = normalizeDiscordId(callData.requesterId);
+        const requesterMention = requesterId ? userMention(requesterId) : 'صاحب الاختصار';
+        const claimerMention = userMention(actualClaimerId) || 'المستلم';
+        const claimContainer = createStructuredContainer({
+          title: 'Claimed',
+          description: [
+            `تم استلام مشكلتك : ${requesterMention}`,
+            '',
+            `**المسؤولية :** ${callData.responsibilityName}`,
+            `**المستلم :** ${claimerMention}`
+          ].join('\n')
+        });
         await interaction.message.reply({
-          embeds: [claimEmbed],
-          allowedMentions: { users: [actualClaimerId] }
+          ...componentsV2Payload(claimContainer),
+          allowedMentions: {
+            parse: [],
+            users: normalizeMentionableIds([requesterId, actualClaimerId]),
+            repliedUser: false
+          }
         }).catch(error => console.error('تعذر إرسال رد استلام المشكلة:', error.message));
         if (topCommand?.invalidateTopCache) topCommand.invalidateTopCache();
         await interaction.editReply({
