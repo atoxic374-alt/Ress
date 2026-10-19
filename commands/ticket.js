@@ -2709,7 +2709,8 @@ function hasResponsibleTicketAccess(member, config, guild, ticket = null) {
   if (resolveTicketBlockForMember(guild?.id, member)) return false;
   if (ticket?.transferredTo) {
     const memberUserId = String(member?.id || member?.user?.id || '');
-    return Boolean(memberUserId && ticket.responsibilityClaimedBy === memberUserId);
+    if (memberUserId && ticket.responsibilityClaimedBy === memberUserId) return true;
+    if (hasStrictClaimAccess(member, config, ticket.reasonKey)) return true;
   }
   const allowedRoleIds = getActiveResponsibleRoleIds(config, guild, ticket);
   let memberRoleIds = [];
@@ -7180,10 +7181,10 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     const shouldSee = visibleResponsibleRoles.has(roleId);
     return () => applyRequiredOverwrite(roleId, {
       ViewChannel: shouldSee,
-      SendMessages: false,
-      SendMessagesInThreads: false,
-      CreatePublicThreads: false,
-      CreatePrivateThreads: false,
+      SendMessages: shouldSee,
+      SendMessagesInThreads: shouldSee,
+      CreatePublicThreads: shouldSee,
+      CreatePrivateThreads: shouldSee,
       ReadMessageHistory: shouldSee
     });
   });
@@ -7200,10 +7201,10 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
       || memberRoleIds.some((roleId) => visibleResponsibleRoles.has(roleId));
     return () => applyRequiredOverwrite(userId, {
       ViewChannel: shouldSee,
-      SendMessages: false,
-      SendMessagesInThreads: false,
-      CreatePublicThreads: false,
-      CreatePrivateThreads: false,
+      SendMessages: shouldSee,
+      SendMessagesInThreads: shouldSee,
+      CreatePublicThreads: shouldSee,
+      CreatePrivateThreads: shouldSee,
       ReadMessageHistory: shouldSee
     });
   });
