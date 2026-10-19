@@ -40,6 +40,8 @@ const { getGuildBannerHex } = require('./utils/guildBannerColor.js');
 
 // كولداون اختصارات المسؤوليات: الزران يشتركان في نفس الكولداون لكل مستخدم ومسؤولية.
 const SHORTCUT_CALL_COOLDOWN_MS = 10 * 60 * 1000;
+// يمنع تكرار نفس طلب المسؤولية خلال خمس دقائق، ويدمج أصحاب الطلبات في الرسالة الأولى.
+const SHORTCUT_REQUEST_COOLDOWN_MS = 5 * 60 * 1000;
 const MEMBER_REFRESH_RETRY_MS = 1500;
 const MEMBER_REFRESH_QUEUE_TIMEOUT_MS = 5000;
 const MEMBER_REFRESH_FETCH_TIMEOUT_MS = 10000;
@@ -53,6 +55,7 @@ const MAX_SHORTCUT_REQUESTS = 10000;
 const shortcutCallCooldowns = new Map();
 const shortcutCallLocks = new Set();
 const shortcutUsageLocks = new Set();
+const shortcutRequestLocks = new Set();
 const shortcutActionLocks = new Set();
 const memberRefreshAttemptAt = new Map();
 const memberRefreshWaiters = [];
@@ -149,6 +152,9 @@ function tryAcquireShortcutCallLock(guildId, userId, responsibilityName) {
 
 function getShortcutUsageKey(guildId, userId, responsibilityName) {
     return JSON.stringify([String(guildId), String(userId), String(responsibilityName)]);
+}
+function getShortcutRequestKey(guildId, responsibilityName) {
+    return JSON.stringify([String(guildId), String(responsibilityName)]);
 }
 function getShortcutUsageCooldown(guildId, userId, responsibilityName) {
     const key = getShortcutUsageKey(guildId, userId, responsibilityName);
@@ -1195,7 +1201,42 @@ function pruneRuntimeShortcutRequests(force = false) {
   }
   if (changed) shortcutStateStore.saveShortcutStore();
 }
+function findActiveShortcutRequest(guildId, responsibilityName, now = Date.now()) {
+    const cutoff = now - SHORTCUT_REQUEST_COOLDOWN_MS;
+    for (const request of client.shortcutRequests.values()) {
+        if (String(request?.guildId) !== String(guildId)) continue;
+        if (String(request?.responsibilityName) !== String(responsibilityName)) continue;
+        if (Number(request?.createdAt || 0) < cutoff) continue;
+        return request;
+    }
+    return null;
+}
+async function appendShortcutRequesterMention(request, requesterId, fallbackChannel) {
+    const normalizedRequesterId = normalizeDiscordId(requesterId);
+    if (!normalizedRequesterId) return false;
+    const requesterIds = Array.isArray(request.requesterIds)
+        ? request.requesterIds.map(String)
+        : [String(request.requesterId)].filter(Boolean);
+    if (requesterIds.includes(normalizedRequesterId)) return true;
 
+    const channel = fallbackChannel?.id === request.channelId
+        ? fallbackChannel
+        : await client.channels.fetch(request.channelId).catch(() => null);
+    const firstMessage = channel?.messages?.fetch
+        ? await channel.messages.fetch(request.messageId).catch(() => null)
+        : null;
+    if (!firstMessage) return false;
+
+    const mentionLine = `\nطلب إضافي لنفس المسؤولية: <@${normalizedRequesterId}>`;
+    await firstMessage.edit({
+        content: `${firstMessage.content || ''}${mentionLine}`,
+        allowedMentions: { users: [normalizedRequesterId] }
+    });
+    request.requesterIds = [...requesterIds, normalizedRequesterId];
+    shortcutStore.requests[request.requestToken] = request;
+    shortcutStateStore.saveShortcutStore();
+    return true;
+}
 const shortcutRequestCleanupTimer = setInterval(() => pruneRuntimeShortcutRequests(true), 60 * 60 * 1000);
 shortcutRequestCleanupTimer.unref?.();
 
@@ -3252,7 +3293,25 @@ client.on('messageCreate', async message => {
         return;
       }
       shortcutUsageLocks.add(usageKey);
+      const requestCooldownKey = getShortcutRequestKey(message.guild.id, matchedResponsibility);
+      if (shortcutRequestLocks.has(requestCooldownKey)) {
+        await message.react('⏳').catch(() => {});
+        shortcutUsageLocks.delete(usageKey);
+        return;
+      }
+      shortcutRequestLocks.add(requestCooldownKey);
       try {
+        const activeRequest = findActiveShortcutRequest(message.guild.id, matchedResponsibility, timestamp);
+        if (activeRequest) {
+          await appendShortcutRequesterMention(activeRequest, message.author.id, message.channel);
+          const originalMessageUrl = `https://discord.com/channels/${activeRequest.guildId}/${activeRequest.channelId}/${activeRequest.messageId}`;
+          await message.channel.send({
+            content: `<@${message.author.id}> يوجد مشكلة بالفعل مفتوحة لهذه المسؤولية، وتمت إضافة منشنك على رسالة الاختصار الأولى: ${originalMessageUrl}`,
+            allowedMentions: { users: [String(message.author.id)] }
+          }).catch(error => console.error('تعذر إرسال تنبيه الطلب المكرر:', error.message));
+          startShortcutUsageCooldown(message.guild.id, message.author.id, matchedResponsibility);
+          return;
+        }
         const requestToken = require('crypto').randomUUID().replace(/-/g, '');
         const callButtonId = `shortcut_call_${requestToken}`;
         const takeButtonId = `shortcut_take_${requestToken}`;
@@ -3283,7 +3342,8 @@ client.on('messageCreate', async message => {
           timestamp,
           createdAt: Date.now(),
           claimedBy: null,
-          claimedAt: null
+          claimedAt: null,
+          requesterIds: [String(message.author.id)]
         };
         client.shortcutRequests.set(requestToken, requestData);
         shortcutStore.requests[requestToken] = requestData;
@@ -3292,6 +3352,7 @@ client.on('messageCreate', async message => {
         // The request and cooldown are included in the store's debounced batch write.
         // Avoid serializing and rewriting the entire shortcut store on every trigger.
       } finally {
+        shortcutRequestLocks.delete(requestCooldownKey);
         shortcutUsageLocks.delete(usageKey);
       }
       return; // انتهاء المعالجة
