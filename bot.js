@@ -3468,9 +3468,9 @@ client.on('messageCreate', async message => {
         return;
       }
     }
-    // Commands for owners only (call, stats, setup, report, set-vacation, top, test)
+    // top يقبل المالك والإدارة؛ بقية الأوامر في هذا الفرع تبقى للمالك فقط.
     else if (commandName === 'call' || commandName === 'stats' || commandName === 'setup' || commandName === 'report' || commandName === 'set-vacation' || commandName === 'top' || commandName === 'test') {
-      if (isOwner) {
+      if (isOwner || (commandName === 'top' && (hasAdminRole || hasAdministrator))) {
         await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
       } else {
         await message.react('❌');
@@ -6806,7 +6806,9 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
 // دالة لعرض مسؤوليات المستخدم
 async function showUserResponsibilities(message, targetUser, responsibilities, client) {
     const { getSupervisedResponsibilities } = require('./utils/responsibilitySupervisors.js');
+    const { getUserResponsibilityPointTotals } = require('./utils/responsibilityPoints.js');
     const targetMember = await message.guild.members.fetch(targetUser.id).catch(() => null);
+    const responsibilityPointTotals = getUserResponsibilityPointTotals(ticketState.loadPoints(), targetUser.id);
     const supervisedNames = new Set(
         getSupervisedResponsibilities(message.guild.id, targetMember || targetUser, responsibilities)
     );
@@ -6816,12 +6818,9 @@ async function showUserResponsibilities(message, targetUser, responsibilities, c
         const isResponsible = Array.isArray(respData.responsibles)
             && respData.responsibles.map(String).includes(String(targetUser.id));
         if (isResponsible) {
-            const otherResponsibles = (respData.responsibles || [])
-                .map(String)
-                .filter(id => id !== String(targetUser.id));
             assignedResponsibilities.push({
                 name: respName,
-                otherResponsiblesCount: otherResponsibles.length
+                responsibilityPoints: responsibilityPointTotals[respName] || 0
             });
         }
     }

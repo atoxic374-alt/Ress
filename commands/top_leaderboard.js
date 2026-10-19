@@ -11,6 +11,7 @@ const {
 } = require('discord.js');
 const colorManager = require('../utils/colorManager.js');
 const { componentsV2Payload, colorToNumber } = require('../utils/structuredContainer');
+const { getResponsibilityPointEntries } = require('../utils/responsibilityPoints');
 const { isUserBlocked } = require('./block.js');
 
 const fs = require('fs');
@@ -92,20 +93,12 @@ async function execute(message, args, { points, responsibilities, client }) {
         const oneWeekAgo = now - (7 * 24 * 60 * 60 * 1000);
         const oneMonthAgo = now - (30 * 24 * 60 * 60 * 1000);
 
-        const claims = freshPoints.__shortcutClaims;
-        const audit = Array.isArray(freshPoints.__audit) ? freshPoints.__audit.filter(entry => entry?.source === 'shortcut_take') : [];
-        const auditedIds = new Set(audit.map(entry => String(entry.id || '')));
-        const takeEntries = claims && typeof claims === 'object' && !Array.isArray(claims) && Object.keys(claims).length > 0
-            ? Object.values(claims)
-                .filter(claim => claim && (claim.pointsAwarded === true ||
-                    (claim.pointsAwarded !== false && auditedIds.has(String(claim.entryId || '')))))
-                .map(claim => ({ targetId: claim.userId, respName: claim.responsibilityName, at: claim.at, delta: 1 }))
-            : audit;
+        const takeEntries = getResponsibilityPointEntries(freshPoints);
         for (const entry of takeEntries) {
-            if (responsibilityName && String(entry.respName || '') !== responsibilityName) continue;
-            const userId = String(entry.targetId || '');
+            if (responsibilityName && entry.responsibilityName !== responsibilityName) continue;
+            const userId = entry.userId;
             const delta = Number(entry.delta || 0);
-            const time = Number.parseInt(String(entry.at || entry.id || ''), 10);
+            const time = Number.parseInt(String(entry.at || ''), 10);
             if (!userId || !Number.isFinite(delta) || delta <= 0) continue;
             const inRange = type === 'all'
                 || (type === 'daily' && time >= oneDayAgo)

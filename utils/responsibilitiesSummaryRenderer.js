@@ -68,8 +68,8 @@ function drawSection(ctx, { title, rows, y, accent, width }) {
         drawText(ctx, row.name, width - 110, rowY - 7, {
             font: 'bold 23px Cairo'
         });
-        if (row.otherResponsiblesCount !== undefined) {
-            drawText(ctx, `مسؤولون آخرون : ${row.otherResponsiblesCount}`, 110, rowY - 7, {
+        if (row.responsibilityPoints !== undefined) {
+            drawText(ctx, `نقاطك بالمسؤولية : ${row.responsibilityPoints}`, 110, rowY - 7, {
                 font: '20px Cairo',
                 color: 'rgba(255,255,255,0.68)',
                 align: 'left'
