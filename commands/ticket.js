@@ -250,19 +250,14 @@ async function persistStateSnapshot(key, filePath, value) {
   if (!db) return;
 
   const now = Date.now();
-  await execTicketDb(db, 'BEGIN IMMEDIATE TRANSACTION');
-  try {
-    await db.run(
+  await db.transaction(async ({ run }) => {
+    await run(
       `INSERT INTO ticket_state (state_key, value, updated_at)
        VALUES (?, ?, ?)
        ON CONFLICT(state_key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
       [key, JSON.stringify(value ?? {}), now]
     );
-    await execTicketDb(db, 'COMMIT');
-  } catch (error) {
-    await execTicketDb(db, 'ROLLBACK').catch((error) => logSilentError('suppressed', error));
-    throw error;
-  }
+  }, `ticket.persist.${key}`);
 }
 
 /**
@@ -2915,8 +2910,7 @@ function canUserWriteInTicket(message, ticket, config) {
   if (ticket.memberId === userId) return true;
   if (Array.isArray(ticket.extraMembers) && ticket.extraMembers.includes(userId)) return true;
   if (ticket.transferredTo) {
-    return ticket.responsibilityClaimedBy === userId
-      || hasStrictClaimAccess(message.member, config, ticket.reasonKey);
+    return hasResponsibleTicketAccess(message.member, config, message.guild, ticket);
   }
   if (ticket.claimedBy === userId) return true;
   return hasResponsibleTicketAccess(message.member, config, message.guild, ticket);
@@ -7284,26 +7278,6 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   }, 'transfer.permissions');
   void runTransferParallelPipeline({ ui: transferUiTasks }, 'transfer.ui');
 
-  const transferMessage = await interaction.channel.send(buildResponsibilityTransferPayload({
-    responsibilityName: respName,
-    roleIds: targetRoles,
-    userIds: existingResponsibleUsers,
-    takeButton: activeTakeButton
-  })).catch((error) => {
-    logSilentError('transfer.container.send', error);
-    return null;
-  });
-
-  if (!transferMessage) {
-    await permissionsPromise;
-    await interaction.editReply(buildTicketMessagePayload('Error', '**تعذر إرسال Container الاستلام.**', { ephemeral: true, user: interaction.user }))
-      .catch((error) => logSilentError('suppressed', error));
-    return;
-  }
-
-  ticket.transferTakeMessageId = transferMessage.id;
-  setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
-
   const pipelineResults = await permissionsPromise;
   const permissionStage = pipelineResults[0];
   const permissionResults = permissionStage?.status === 'fulfilled' && Array.isArray(permissionStage.value)
@@ -7324,23 +7298,28 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
 
   ticket.transferPermissionsReady = true;
   setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
-  const activated = await transferMessage.edit(buildResponsibilityTransferPayload({
+  const transferMessage = await interaction.channel.send(buildResponsibilityTransferPayload({
     responsibilityName: respName,
     roleIds: targetRoles,
     userIds: existingResponsibleUsers,
     takeButton: activeTakeButton
-  })).then(() => true).catch((error) => {
-    logSilentError('transfer.container.activate', error);
-    return false;
+  })).catch((error) => {
+    logSilentError('transfer.container.send', error);
+    return null;
   });
-  if (!activated) {
+  if (!transferMessage) {
     ticket.transferPermissionsReady = false;
     setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
+    await interaction.editReply(buildTicketMessagePayload('Error', '**تعذر إرسال Container الاستلام.**', { ephemeral: true, user: interaction.user }))
+      .catch((error) => logSilentError('suppressed', error));
+    return;
   }
+  ticket.transferTakeMessageId = transferMessage.id;
+  setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
 
   await interaction.editReply(buildTicketMessagePayload(
-    activated ? 'Changed' : 'Error',
-    activated ? '**تم التحويل بنجاح.**' : '**تم إرسال Container، لكن تعذر تفعيل زر Take.**',
+    'Changed',
+    '**تم التحويل بنجاح.**',
     { ephemeral: true, user: interaction.user }
   )).catch((error) => logSilentError('suppressed', error));
 
@@ -7349,18 +7328,12 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
 function isResponsibilityTransferAssignee(member, userId, ticket) {
   const normalizedUserId = String(userId || '').trim();
   const assignedUsers = (Array.isArray(ticket?.transferredUserIds) ? ticket.transferredUserIds : []).map(String);
-  if (normalizedUserId && assignedUsers.includes(normalizedUserId)) return true;
-  const assignedRoles = new Set((Array.isArray(ticket?.transferredRoleIds) ? ticket.transferredRoleIds : []).map(String));
-  let memberRoleIds = [];
-  if (member?.roles?.cache) memberRoleIds = [...member.roles.cache.keys()];
-  else if (Array.isArray(member?.roles)) memberRoleIds = member.roles;
-  else if (Array.isArray(member?.roles?.value)) memberRoleIds = member.roles.value;
-  else if (Array.isArray(member?.roles?.ids)) memberRoleIds = member.roles.ids;
-  return memberRoleIds.map(String).some((roleId) => assignedRoles.has(roleId));
+  return Boolean(normalizedUserId && assignedUsers.includes(normalizedUserId));
 }
-
 async function handleResponsibilityTransferTake(interaction, guildId, panelId, channelId) {
-  await interaction.deferReply({ ephemeral: true }).catch((error) => logSilentError('transfer.take.defer', error));
+  if (!interaction.deferred && !interaction.replied) {
+    await interaction.deferReply({ ephemeral: true }).catch((error) => logSilentError('transfer.take.defer', error));
+  }
   const { panelId: resolvedPanelId, config, tickets, pendingRequests, ticket, actionChannelId } =
     getTicketContextFromInteraction(guildId, interaction, channelId, panelId || 'default');
   if (!ticket || interaction.channelId !== actionChannelId || !isTicketOpenForFlow(ticket)
@@ -7437,6 +7410,10 @@ async function handleResponsibilityTransferTake(interaction, guildId, panelId, c
     // Responsibility Take points stay in the Take ledger; ticket claim/point fields remain untouched.
     ticket.responsibilityClaimedBy = claimantId;
     ticket.responsibilityClaimedAt = Number(pointResult?.claim?.at || ticket.responsibilityClaimedAt || Date.now());
+    if (pointResult?.awarded) {
+      incrementReceivedTicketsCounter(guildId, claimantId);
+      recordReceivedTicket(guildId, claimantId, actionChannelId);
+    }
     setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
 
     const claimedButton = new ButtonBuilder()
