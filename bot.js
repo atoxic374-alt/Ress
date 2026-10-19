@@ -1211,32 +1211,6 @@ function findActiveShortcutRequest(guildId, responsibilityName, now = Date.now()
     }
     return null;
 }
-async function appendShortcutRequesterMention(request, requesterId, fallbackChannel) {
-    const normalizedRequesterId = normalizeDiscordId(requesterId);
-    if (!normalizedRequesterId) return false;
-    const requesterIds = Array.isArray(request.requesterIds)
-        ? request.requesterIds.map(String)
-        : [String(request.requesterId)].filter(Boolean);
-    if (requesterIds.includes(normalizedRequesterId)) return true;
-
-    const channel = fallbackChannel?.id === request.channelId
-        ? fallbackChannel
-        : await client.channels.fetch(request.channelId).catch(() => null);
-    const firstMessage = channel?.messages?.fetch
-        ? await channel.messages.fetch(request.messageId).catch(() => null)
-        : null;
-    if (!firstMessage) return false;
-
-    const mentionLine = `\nطلب إضافي لنفس المسؤولية: <@${normalizedRequesterId}>`;
-    await firstMessage.edit({
-        content: `${firstMessage.content || ''}${mentionLine}`,
-        allowedMentions: { users: [normalizedRequesterId] }
-    });
-    request.requesterIds = [...requesterIds, normalizedRequesterId];
-    shortcutStore.requests[request.requestToken] = request;
-    shortcutStateStore.saveShortcutStore();
-    return true;
-}
 const shortcutRequestCleanupTimer = setInterval(() => pruneRuntimeShortcutRequests(true), 60 * 60 * 1000);
 shortcutRequestCleanupTimer.unref?.();
 
@@ -3303,10 +3277,8 @@ client.on('messageCreate', async message => {
       try {
         const activeRequest = findActiveShortcutRequest(message.guild.id, matchedResponsibility, timestamp);
         if (activeRequest) {
-          await appendShortcutRequesterMention(activeRequest, message.author.id, message.channel);
-          const originalMessageUrl = `https://discord.com/channels/${activeRequest.guildId}/${activeRequest.channelId}/${activeRequest.messageId}`;
           await message.channel.send({
-            content: `<@${message.author.id}> يوجد مشكلة بالفعل مفتوحة لهذه المسؤولية، وتمت إضافة منشنك على رسالة الاختصار الأولى: ${originalMessageUrl}`,
+            content: `<@${message.author.id}> يوجد مشكلة مفتوحة بالفعل لهذه المسؤولية.`,
             allowedMentions: { users: [String(message.author.id)] }
           }).catch(error => console.error('تعذر إرسال تنبيه الطلب المكرر:', error.message));
           startShortcutUsageCooldown(message.guild.id, message.author.id, matchedResponsibility);
@@ -3342,8 +3314,7 @@ client.on('messageCreate', async message => {
           timestamp,
           createdAt: Date.now(),
           claimedBy: null,
-          claimedAt: null,
-          requesterIds: [String(message.author.id)]
+          claimedAt: null
         };
         client.shortcutRequests.set(requestToken, requestData);
         shortcutStore.requests[requestToken] = requestData;
