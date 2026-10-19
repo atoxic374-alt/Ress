@@ -4,12 +4,13 @@ const { isUserBlocked } = require('./block.js');
 
 const fs = require('fs');
 const path = require('path');
+const { getDataDir } = require('../utils/storagePaths');
 
 const name = 'top';
 
 // مسارات الملفات
-const pointsPath = path.join(__dirname, '..', 'data', 'points.json');
-const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
+const pointsPath = path.join(getDataDir(), 'points.json');
+const responsibilitiesPath = path.join(getDataDir(), 'responsibilities.json');
 
 // --- Caching Mechanism ---
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
@@ -83,6 +84,7 @@ async function execute(message, args, { points, responsibilities, client }) {
             freshPoints;
 
         for (const responsibility in pointsToCheck) {
+            if (responsibility.startsWith('__')) continue;
             for (const userId in pointsToCheck[responsibility]) {
                 if (typeof pointsToCheck[responsibility][userId] === 'object') {
                     const userHistory = pointsToCheck[responsibility][userId];

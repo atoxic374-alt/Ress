@@ -1,4 +1,4 @@
-const { getBotConfigPath } = require('../utils/storagePaths');
+const { getBotConfigPath, getDataDir } = require('../utils/storagePaths');
 const { EmbedBuilder, StringSelectMenuBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
@@ -24,7 +24,7 @@ function readJSONFile(filePath, defaultValue = {}) {
 }
 
 // مسارات ملفات البيانات
-const dataDir = path.join(__dirname, '..', 'data');
+const dataDir = getDataDir();
 const DATA_FILES = {
     points: path.join(dataDir, 'points.json'),
     responsibilities: path.join(dataDir, 'responsibilities.json'),
@@ -250,7 +250,8 @@ function calculateCompleteStats(allData, guild) {
 
     // حساب إحصائيات النقاط
     const uniqueActiveUsers = new Set();
-    Object.values(allData.points).forEach(respPoints => {
+    Object.entries(allData.points).forEach(([respName, respPoints]) => {
+        if (respName.startsWith('__')) return;
         Object.entries(respPoints).forEach(([userId, userPoints]) => {
             if (typeof userPoints === 'object') {
                 const totalUserPoints = Object.values(userPoints).reduce((sum, pts) => sum + pts, 0);
@@ -358,6 +359,7 @@ async function showResponsibilityDetails(messageOrInteraction, responsibilityNam
     // حساب ترتيب المسؤولية بين جميع المسؤوليات
     const allRespStats = [];
     Object.entries(allData.points).forEach(([respName, respPointsData]) => {
+        if (respName.startsWith('__')) return;
         let total = 0;
         Object.values(respPointsData).forEach(userPoints => {
             if (typeof userPoints === 'object') {
@@ -469,7 +471,8 @@ async function showUserDetails(interaction, responsibilityName, userId, allData,
 
         // حساب الترتيب بين جميع المسؤوليات
         const allUserStats = [];
-        Object.values(allData.points).forEach(respPointsData => {
+        Object.entries(allData.points).forEach(([respName, respPointsData]) => {
+            if (respName.startsWith('__')) return;
             Object.entries(respPointsData).forEach(([uid, pts]) => {
                 let totalPts = 0;
                 if (typeof pts === 'object') {

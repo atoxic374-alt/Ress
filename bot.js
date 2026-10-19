@@ -38,17 +38,147 @@ const { getGuildBannerHex } = require('./utils/guildBannerColor.js');
 
 // كولداون اختصارات المسؤوليات: الزران يشتركان في نفس الكولداون لكل مستخدم ومسؤولية.
 const SHORTCUT_CALL_COOLDOWN_MS = 10 * 60 * 1000;
+const MEMBER_REFRESH_RETRY_MS = 1500;
+const MEMBER_REFRESH_QUEUE_TIMEOUT_MS = 5000;
+const MEMBER_REFRESH_FETCH_TIMEOUT_MS = 10000;
+const MAX_CONCURRENT_MEMBER_REFRESHES = 8;
+const MAX_QUEUED_MEMBER_REFRESHES = 50;
+const SHORTCUT_COOLDOWN_REACTION_MS = 30 * 1000;
+const MAX_CONCURRENT_SHORTCUT_NOTIFICATION_JOBS = 2;
+const MAX_SHORTCUT_CALL_RECIPIENTS = 100;
+const SHORTCUT_REQUEST_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+const MAX_SHORTCUT_REQUESTS = 10000;
 const shortcutCallCooldowns = new Map();
+const shortcutCallLocks = new Set();
+const shortcutUsageLocks = new Set();
+const shortcutActionLocks = new Set();
+const memberRefreshAttemptAt = new Map();
+const memberRefreshWaiters = [];
+const shortcutCooldownReactionAt = new Map();
+let activeShortcutNotificationJobs = 0;
+let activeMemberRefreshes = 0;
+let shortcutMatcherCache = null;
+const RESPONSIBLE_KEYWORDS_NORMALIZED = ['مسؤولين', 'مسؤوليه', 'مسؤولية', 'مسيولين', 'مسيوليه'].map(normalizeArabicWord);
+
+function normalizeArabicWord(text) {
+    if (!text) return '';
+    return String(text)
+        .replace(/ى/g, 'ي')
+        .replace(/ة/g, 'ه')
+        .replace(/أ|إ|آ/g, 'ا')
+        .replace(/ئ/g, 'ي')
+        .trim()
+        .toLowerCase();
+}
+
+function removeArabicArticle(word) {
+    return String(word || '').startsWith('ال') ? String(word).slice(2) : String(word || '');
+}
+
+function setBoundedMapEntry(map, key, value, limit = 5000) {
+    if (map.has(key)) map.delete(key);
+    map.set(key, value);
+    while (map.size > limit) map.delete(map.keys().next().value);
+}
+
+function getShortcutMatcherCache(responsibilities) {
+    const source = responsibilities && typeof responsibilities === 'object' ? responsibilities : {};
+    if (shortcutMatcherCache?.source === source) return shortcutMatcherCache;
+    const byPrefix = new Map();
+    const prefixesByFirstCharacter = new Map();
+    let order = 0;
+    for (const [responsibilityName, config] of Object.entries(source)) {
+        if (!config?.mentShortcut) continue;
+        const prefix = String(config.mentPrefix || '-');
+        const entry = {
+            order: order++,
+            responsibilityName,
+            config,
+            prefix,
+            normalizedShortcut: normalizeArabicWord(removeArabicArticle(config.mentShortcut))
+        };
+        if (!byPrefix.has(prefix)) byPrefix.set(prefix, []);
+        byPrefix.get(prefix).push(entry);
+    }
+    const prefixes = [...byPrefix.keys()];
+    for (const prefix of prefixes) {
+        const firstCharacter = prefix[0];
+        if (!prefixesByFirstCharacter.has(firstCharacter)) prefixesByFirstCharacter.set(firstCharacter, []);
+        prefixesByFirstCharacter.get(firstCharacter).push(prefix);
+    }
+    shortcutMatcherCache = { source, byPrefix, prefixes, prefixesByFirstCharacter };
+    return shortcutMatcherCache;
+}
+
+function invalidateShortcutMatcherCache() {
+    shortcutMatcherCache = null;
+}
+
+function shouldReactToShortcutCooldown(guildId, userId, responsibilityName, now = Date.now()) {
+    const key = getShortcutUsageKey(guildId, userId, responsibilityName);
+    const lastReacted = Number(shortcutCooldownReactionAt.get(key) || 0);
+    if (now - lastReacted < SHORTCUT_COOLDOWN_REACTION_MS) return false;
+    setBoundedMapEntry(shortcutCooldownReactionAt, key, now);
+    return true;
+}
+
+function tryAcquireShortcutNotificationSlot() {
+    if (activeShortcutNotificationJobs >= MAX_CONCURRENT_SHORTCUT_NOTIFICATION_JOBS) return null;
+    activeShortcutNotificationJobs += 1;
+    let released = false;
+    return () => {
+        if (released) return;
+        released = true;
+        activeShortcutNotificationJobs = Math.max(0, activeShortcutNotificationJobs - 1);
+    };
+}
+
+function tryAcquireShortcutCallLock(guildId, userId, responsibilityName) {
+    const key = getShortcutUsageKey(guildId, userId, responsibilityName);
+    if (shortcutCallLocks.has(key)) return null;
+    shortcutCallLocks.add(key);
+    let released = false;
+    return () => {
+        if (released) return;
+        released = true;
+        shortcutCallLocks.delete(key);
+    };
+}
+
+function getShortcutUsageKey(guildId, userId, responsibilityName) {
+    return JSON.stringify([String(guildId), String(userId), String(responsibilityName)]);
+}
+function getShortcutUsageCooldown(guildId, userId, responsibilityName) {
+    const key = getShortcutUsageKey(guildId, userId, responsibilityName);
+    const lastUsed = Number(shortcutStore.cooldowns[key] || 0);
+    const timeLeft = lastUsed + SHORTCUT_CALL_COOLDOWN_MS - Date.now();
+    if (timeLeft > 0) return timeLeft;
+    const expired = Object.prototype.hasOwnProperty.call(shortcutStore.cooldowns, key);
+    delete shortcutStore.cooldowns[key];
+    if (expired) shortcutStateStore.saveShortcutStore();
+    return 0;
+}
+function startShortcutUsageCooldown(guildId, userId, responsibilityName) {
+    shortcutStore.cooldowns[getShortcutUsageKey(guildId, userId, responsibilityName)] = Date.now();
+    shortcutStateStore.saveShortcutStore();
+}
 function getShortcutCallCooldown(guildId, userId, responsibilityName) {
-    const key = `${guildId}:${userId}:${responsibilityName}`;
-    const lastUsed = shortcutCallCooldowns.get(key) || 0;
+    const key = getShortcutUsageKey(guildId, userId, responsibilityName);
+    const lastUsed = Number(shortcutStore.callCooldowns[key] || shortcutCallCooldowns.get(key) || 0);
     const timeLeft = lastUsed + SHORTCUT_CALL_COOLDOWN_MS - Date.now();
     if (timeLeft > 0) return timeLeft;
     shortcutCallCooldowns.delete(key);
+    const expired = Object.prototype.hasOwnProperty.call(shortcutStore.callCooldowns, key);
+    delete shortcutStore.callCooldowns[key];
+    if (expired) shortcutStateStore.saveShortcutStore();
     return 0;
 }
 function startShortcutCallCooldown(guildId, userId, responsibilityName) {
-    shortcutCallCooldowns.set(`${guildId}:${userId}:${responsibilityName}`, Date.now());
+    const key = getShortcutUsageKey(guildId, userId, responsibilityName);
+    const now = Date.now();
+    setBoundedMapEntry(shortcutCallCooldowns, key, now);
+    shortcutStore.callCooldowns[key] = now;
+    shortcutStateStore.saveShortcutStore();
 }
 const vacationManager = require('./utils/vacationManager');
 const promoteManager = require('./utils/promoteManager');
@@ -60,6 +190,8 @@ const { restoreTopSchedules, restorePanelCleanups, handlePanelMessageDelete } = 
 const { handleChannelDelete, handleRoleDelete } = require('./utils/protectionManager.js');
 const problemCommand = require('./commands/problem.js');
 const { getDataDir, getRailwayVolumeMountPath, getBotConfigPath, writeBotConfigFile } = require('./utils/storagePaths');
+const shortcutStateStore = require('./utils/responsibilityShortcutStore.js');
+const shortcutStore = shortcutStateStore.loadShortcutStore();
 const { isSupervisorForResponsibility, removeUserFromAllSupervisors } = require('./utils/responsibilitySupervisors');
 const { ownersPath, normalizeIds, loadOwners, saveOwners, isOwnerMember } = require('./utils/ownersStore');
 let interactiveRolesManager;
@@ -869,6 +1001,80 @@ function loadAdminRoles() {
     }
 }
 
+const memberRefreshInFlight = new Map();
+
+function releaseMemberRefreshSlot() {
+    const nextWaiter = memberRefreshWaiters.shift();
+    if (nextWaiter) {
+        clearTimeout(nextWaiter.timer);
+        nextWaiter.resolve(true);
+    } else {
+        activeMemberRefreshes = Math.max(0, activeMemberRefreshes - 1);
+    }
+}
+
+async function acquireMemberRefreshSlot() {
+    if (activeMemberRefreshes < MAX_CONCURRENT_MEMBER_REFRESHES) {
+        activeMemberRefreshes += 1;
+        return true;
+    }
+    if (memberRefreshWaiters.length >= MAX_QUEUED_MEMBER_REFRESHES) return false;
+    return new Promise(resolve => {
+        const waiter = { resolve, timer: null };
+        waiter.timer = setTimeout(() => {
+            const index = memberRefreshWaiters.indexOf(waiter);
+            if (index !== -1) {
+                memberRefreshWaiters.splice(index, 1);
+                resolve(false);
+            }
+        }, MEMBER_REFRESH_QUEUE_TIMEOUT_MS);
+        memberRefreshWaiters.push(waiter);
+    });
+}
+
+async function fetchGuildMemberWithLimit(guild, userId) {
+    if (!await acquireMemberRefreshSlot()) return null;
+    let releaseWhenNetworkSettles = true;
+    let timeoutTimer = null;
+    const request = Promise.resolve()
+        .then(() => guild.members.fetch({ user: userId, force: true }))
+        .then(member => ({ member: member || null }), () => ({ member: null }));
+    try {
+        const timedOut = Symbol('member-fetch-timeout');
+        const outcome = await Promise.race([
+            request,
+            new Promise(resolve => { timeoutTimer = setTimeout(() => resolve(timedOut), MEMBER_REFRESH_FETCH_TIMEOUT_MS); })
+        ]);
+        if (outcome === timedOut) {
+            releaseWhenNetworkSettles = false;
+            request.finally(releaseMemberRefreshSlot);
+            return null;
+        }
+        return outcome.member;
+    } finally {
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        if (releaseWhenNetworkSettles) releaseMemberRefreshSlot();
+    }
+}
+
+async function refreshMessageMember(message) {
+    if (!message?.guild || !message.author?.id) return message?.member || null;
+    const key = `${message.guild.id}:${message.author.id}`;
+    let refreshPromise = memberRefreshInFlight.get(key);
+    if (!refreshPromise) {
+        const now = Date.now();
+        const lastAttempt = Number(memberRefreshAttemptAt.get(key) || 0);
+        if (now - lastAttempt < MEMBER_REFRESH_RETRY_MS) return message.member || null;
+        setBoundedMapEntry(memberRefreshAttemptAt, key, now);
+        refreshPromise = fetchGuildMemberWithLimit(message.guild, message.author.id);
+        memberRefreshInFlight.set(key, refreshPromise);
+    }
+    const freshMember = await refreshPromise;
+    if (memberRefreshInFlight.get(key) === refreshPromise) memberRefreshInFlight.delete(key);
+    if (freshMember) message.member = freshMember;
+    return freshMember || message.member || null;
+}
+
 let botConfig = readJSONFile(DATA_FILES.botConfig, {
     prefix: null,
     settings: {},
@@ -958,6 +1164,37 @@ const client = new Client({
 
 // تعريف client كمتغير عام للوصول من الأنظمة الأخرى
 global.client = client;
+client.shortcutRequests = new Map(Object.entries(shortcutStore.requests || {}));
+client.on('responsibilityUpdate', invalidateShortcutMatcherCache);
+
+function pruneRuntimeShortcutRequests(force = false) {
+  const now = Date.now();
+  if (!force && client.shortcutRequests.size <= MAX_SHORTCUT_REQUESTS) return;
+  const cutoff = now - SHORTCUT_REQUEST_RETENTION_MS;
+  let changed = false;
+  for (const [token, request] of client.shortcutRequests) {
+    if (!request || Number(request.createdAt || 0) < cutoff) {
+      client.shortcutRequests.delete(token);
+      delete shortcutStore.requests[token];
+      changed = true;
+    }
+  }
+  if (client.shortcutRequests.size > MAX_SHORTCUT_REQUESTS) {
+    const oldestFirst = [...client.shortcutRequests.entries()]
+      .sort((a, b) => Number(a[1]?.createdAt || 0) - Number(b[1]?.createdAt || 0));
+    const targetSize = Math.max(0, MAX_SHORTCUT_REQUESTS - 500);
+    const excess = client.shortcutRequests.size - targetSize;
+    for (const [token] of oldestFirst.slice(0, excess)) {
+      client.shortcutRequests.delete(token);
+      delete shortcutStore.requests[token];
+      changed = true;
+    }
+  }
+  if (changed) shortcutStateStore.saveShortcutStore();
+}
+
+const shortcutRequestCleanupTimer = setInterval(() => pruneRuntimeShortcutRequests(true), 60 * 60 * 1000);
+shortcutRequestCleanupTimer.unref?.();
 
 // استخدام نظام المهام النشطة من masoul.js
 if (!client.activeTasks) {
@@ -2878,7 +3115,29 @@ client.on('messageCreate', async message => {
       // تشغيل الأوامر بشكل غير متزامن لضمان عدم تأثر سرعة البوت الكلية
       setImmediate(async () => {
         try {
-          await command.execute(message, args, { client, BOT_OWNERS, BOT_OWNER_ROLES });
+          const publicCommands = new Set([
+            'help', 'مساعدة', 'رولي', 'tops', 'توب', 'تفاعلي', 'تواجدي', 'انهاء', 'user',
+            'ستريكي', 'profile', 'id', 'مشاكلي', 'myprofile', 'داوني', 'داوناتي', 'داونات'
+          ]);
+          const currentAdminRoles = getCachedAdminRoles();
+          const cachedMember = message.member;
+          const cachedMemberHasAdminAccess = isBotOwner(cachedMember || message.author)
+            || message.guild?.ownerId === message.author.id
+            || Boolean(cachedMember?.permissions?.has('Administrator'))
+            || currentAdminRoles.some(roleId => cachedMember?.roles?.cache?.has(String(roleId)));
+          if (message.guild && !publicCommands.has(commandName) && !cachedMemberHasAdminAccess) {
+            await refreshMessageMember(message);
+          }
+          await command.execute(message, args, {
+            client,
+            BOT_OWNERS,
+            BOT_OWNER_ROLES,
+            ADMIN_ROLES: currentAdminRoles,
+            responsibilities: global.responsibilities || {},
+            points,
+            scheduleSave,
+            colorManager
+          });
         } catch (error) {
           console.error(`Error executing command ${commandName}:`, error);
           message.reply('حدث خطأ أثناء تنفيذ هذا الأمر.').catch(() => {});
@@ -2891,80 +3150,51 @@ client.on('messageCreate', async message => {
   // ===== معالج اختصارات المنشن للمسؤوليات =====
   try {
     const content = message.content.trim();
-    
-    // دالة لتطبيع النص العربي (تحافظ على الكلمات منفصلة)
-    function normalizeArabicWord(text) {
-      if (!text) return '';
-      return text
-        .replace(/ى/g, 'ي')
-        .replace(/ة/g, 'ه')
-        .replace(/أ|إ|آ/g, 'ا')
-        .replace(/ئ/g, 'ي')
-        .trim()
-        .toLowerCase();
-    }
-    
-    // دالة لإزالة ال التعريف من كلمة واحدة
-    function removeArticle(word) {
-      if (word.startsWith('ال')) {
-        return word.slice(2);
-      }
-      return word;
-    }
-    
-    // الكلمات المفتاحية للمسؤولين (بدون ال التعريف، مُطبّعة)
-    const responsibleKeywordsNormalized = [
-      'مسؤولين', 'مسؤوليه', 'مسؤولية', 'مسيولين', 'مسيوليه'
-    ].map(normalizeArabicWord);
-    
+    const responsibilities = global.responsibilities || {};
+    const matcherCache = message.guild ? getShortcutMatcherCache(responsibilities) : { byPrefix: new Map(), prefixes: [] };
+    const candidatePrefixes = matcherCache.prefixesByFirstCharacter.get(content[0]) || [];
+    const candidateEntries = candidatePrefixes
+      .filter(prefix => content.startsWith(prefix))
+      .flatMap(prefix => matcherCache.byPrefix.get(prefix) || [])
+      .sort((a, b) => a.order - b.order);
+
     // البحث عن المسؤولية المطابقة
     let matchedResponsibility = null;
     let extractedReason = '';
-    
-    for (const respName of Object.keys(responsibilities)) {
-      const resp = responsibilities[respName];
-      const prefix = resp.mentPrefix || '-';
-      const shortcut = resp.mentShortcut;
-      
-      if (!shortcut) continue;
-      
-      // التحقق من أن الرسالة تبدأ بالبريفكس الخاص بهذه المسؤولية
-      if (!content.startsWith(prefix)) continue;
-      
+
+    for (const { responsibilityName: respName, config: resp, prefix, normalizedShortcut } of candidateEntries) {
       const afterPrefix = content.slice(prefix.length).trim();
       if (!afterPrefix) continue;
-      
-      // تقسيم إلى كلمات
+
       const words = afterPrefix.split(/\s+/);
-      const normalizedShortcut = normalizeArabicWord(removeArticle(shortcut));
-      
+
       // الصيغة 1: الاختصار مباشرة (مثل: -دعم)
-      const firstWordNormalized = normalizeArabicWord(removeArticle(words[0]));
+      const firstWordNormalized = normalizeArabicWord(removeArabicArticle(words[0]));
       if (firstWordNormalized === normalizedShortcut) {
         matchedResponsibility = respName;
         extractedReason = words.slice(1).join(' ') || 'غير محدد';
         break;
       }
-      
+
       // الصيغة 2: كلمة مسؤولين + الاختصار (مثل: -مسؤولين دعم، -المسؤولين الدعم)
-      const firstWordWithoutArticle = normalizeArabicWord(removeArticle(words[0]));
-      const isResponsibleKeyword = responsibleKeywordsNormalized.some(kw => 
+      const firstWordWithoutArticle = normalizeArabicWord(removeArabicArticle(words[0]));
+      const isResponsibleKeyword = RESPONSIBLE_KEYWORDS_NORMALIZED.some(kw =>
         firstWordWithoutArticle.includes(kw) || kw.includes(firstWordWithoutArticle)
       );
-      
+
       if (isResponsibleKeyword && words.length >= 2) {
-        const secondWordNormalized = normalizeArabicWord(removeArticle(words[1]));
+        const secondWordNormalized = normalizeArabicWord(removeArabicArticle(words[1]));
         if (secondWordNormalized === normalizedShortcut) {
           matchedResponsibility = respName;
           extractedReason = words.slice(2).join(' ') || 'غير محدد';
           break;
         }
       }
-      
+
       // الصيغة 3: كلمة ملتصقة (مثل: -مسؤوليندعم)
       if (firstWordWithoutArticle.endsWith(normalizedShortcut)) {
         const potentialKeyword = firstWordWithoutArticle.slice(0, -normalizedShortcut.length);
-        if (responsibleKeywordsNormalized.some(kw => potentialKeyword.includes(kw) || kw.includes(potentialKeyword))) {
+        if (RESPONSIBLE_KEYWORDS_NORMALIZED.some(kw => potentialKeyword.includes(kw) || kw.includes(potentialKeyword))) {
           matchedResponsibility = respName;
           extractedReason = words.slice(1).join(' ') || 'غير محدد';
           break;
@@ -2979,9 +3209,13 @@ client.on('messageCreate', async message => {
       
       // التحقق من صلاحية الأدمن إذا كان الاختصار للأدمن فقط
       if (resp.mentAdminOnly) {
-        const adminRoles = loadAdminRoles();
-        const member = message.member;
-        const hasAdminRole = member && member.roles.cache.some(role => adminRoles.includes(role.id));
+        const adminRoles = loadAdminRoles().map(String);
+        let member = message.member;
+        let hasAdminRole = member && member.roles.cache.some(role => adminRoles.includes(String(role.id)));
+        if (!hasAdminRole) {
+          member = await refreshMessageMember(message);
+          hasAdminRole = member && member.roles.cache.some(role => adminRoles.includes(String(role.id)));
+        }
         
         if (!hasAdminRole) {
           const noPermEmbed = colorManager.createEmbed()
@@ -3004,59 +3238,56 @@ client.on('messageCreate', async message => {
       const numberedMentions = responsibles.map((id, index) => `${index + 1}. <@${id}>`).join('\n');
       const timestamp = Date.now();
       
-      // إنشاء زر الاستدعاء التفاعلي (يطلب السبب عند الضغط)
-      let callButtonId = `shortcut_call_${matchedResponsibility}_${timestamp}_${message.author.id}`;
-      if (callButtonId.length > 95) {
-        callButtonId = `shortcut_call_${matchedResponsibility}_${timestamp}`;
+      const usageKey = getShortcutUsageKey(message.guild.id, message.author.id, matchedResponsibility);
+      const usageCooldownLeft = getShortcutUsageCooldown(message.guild.id, message.author.id, matchedResponsibility);
+      if (usageCooldownLeft > 0 || shortcutUsageLocks.has(usageKey)) {
+        if (shouldReactToShortcutCooldown(message.guild.id, message.author.id, matchedResponsibility)) {
+          await message.react('⏰').catch(() => {});
+        }
+        return;
       }
-      
-      const callButton = new ButtonBuilder()
-        .setCustomId(callButtonId)
-        .setLabel('Call')
-.setEmoji('<:emoji_11:1448570617950371861>')
-        .setStyle(ButtonStyle.Secondary);
-
-      let supervisorCallButtonId = `shortcut_supervisor_call_${matchedResponsibility}_${timestamp}_${message.author.id}`;
-      if (supervisorCallButtonId.length > 95) {
-        supervisorCallButtonId = `shortcut_supervisor_call_${timestamp}_${message.author.id}`;
+      shortcutUsageLocks.add(usageKey);
+      try {
+        const requestToken = require('crypto').randomUUID().replace(/-/g, '');
+        const callButtonId = `shortcut_call_${requestToken}`;
+        const takeButtonId = `shortcut_take_${requestToken}`;
+        const callButton = new ButtonBuilder()
+          .setCustomId(callButtonId)
+          .setLabel('Call')
+          .setEmoji('<:emoji_11:1448570617950371861>')
+          .setStyle(ButtonStyle.Secondary);
+        const takeButton = new ButtonBuilder()
+          .setCustomId(takeButtonId)
+          .setLabel('Take')
+          .setEmoji('<:emoji_3:1484364952780144710>')
+          .setStyle(ButtonStyle.Success);
+        const row = new ActionRowBuilder().addComponents(callButton, takeButton);
+        const textMessage = `- **مسؤولين ال${matchedResponsibility}**\n\n${numberedMentions}`;
+        const sentMessage = await message.channel.send({
+          content: textMessage,
+          components: [row]
+        });
+        const requestData = {
+          requestToken,
+          responsibilityName: matchedResponsibility,
+          responsibles: responsibles.map(String),
+          requesterId: message.author.id,
+          channelId: message.channel.id,
+          messageId: sentMessage.id,
+          guildId: message.guild.id,
+          timestamp,
+          createdAt: Date.now(),
+          claimedBy: null,
+          claimedAt: null
+        };
+        client.shortcutRequests.set(requestToken, requestData);
+        shortcutStore.requests[requestToken] = requestData;
+        pruneRuntimeShortcutRequests();
+        startShortcutUsageCooldown(message.guild.id, message.author.id, matchedResponsibility);
+        if (!await shortcutStateStore.flushShortcutStore()) console.error('تعذر حفظ طلب اختصار المسؤولية فورًا.');
+      } finally {
+        shortcutUsageLocks.delete(usageKey);
       }
-      const supervisorCallButton = new ButtonBuilder()
-        .setCustomId(supervisorCallButtonId)
-        .setLabel('Call Supervisors')
-        .setEmoji('<:emoji_11:1448570617950371861>')
-        .setStyle(ButtonStyle.Secondary);
-
-      const row = new ActionRowBuilder().addComponents(callButton, supervisorCallButton);
-      
-      // إنشاء رسالة نصية منظمة بدلاً من الإيمبد
-      const textMessage = `- **مسؤولين ال${matchedResponsibility}**\n\n${numberedMentions}`;
-      
-      const sentMessage = await message.channel.send({ 
-        content: textMessage,
-        components: [row] 
-      });
-      
-      // حفظ بيانات الرسالة للاستخدام لاحقاً عند الضغط على زر الاستدعاء
-      if (!client.shortcutCallData) client.shortcutCallData = new Map();
-      client.shortcutCallData.set(callButtonId, {
-        responsibilityName: matchedResponsibility,
-        responsibles: responsibles,
-        requesterId: message.author.id,
-        channelId: message.channel.id,
-        messageId: sentMessage.id,
-        guildId: message.guild.id,
-        timestamp: timestamp
-      });
-      client.shortcutCallData.set(supervisorCallButtonId, {
-        responsibilityName: matchedResponsibility,
-        requesterId: message.author.id,
-        channelId: message.channel.id,
-        messageId: sentMessage.id,
-        guildId: message.guild.id,
-        timestamp: timestamp,
-        supervisorCall: true
-      });
-      
       return; // انتهاء المعالجة
     }
   } catch (error) {
@@ -3159,9 +3390,17 @@ client.on('messageCreate', async message => {
     if (!command) return;
 
     // Check permissions - محسن مع الكاش
-    const isOwner = isBotOwner(message.member || message.author) || message.guild.ownerId === message.author.id;
-    const member = message.member || await message.guild.members.fetch(message.author.id);
-    const hasAdministrator = member.permissions.has('Administrator');
+    const CURRENT_ADMIN_ROLES = getCachedAdminRoles();
+    let member = message.member || null;
+    let isOwner = isBotOwner(member || message.author) || message.guild?.ownerId === message.author.id;
+    let hasAdminRole = CURRENT_ADMIN_ROLES.some(roleId => member?.roles?.cache?.has(String(roleId)));
+    let hasAdministrator = Boolean(member?.permissions?.has('Administrator'));
+    if (message.guild && !isOwner && !hasAdminRole && !hasAdministrator) {
+      member = await refreshMessageMember(message) || member;
+      isOwner = isBotOwner(member || message.author) || message.guild.ownerId === message.author.id;
+      hasAdminRole = CURRENT_ADMIN_ROLES.some(roleId => member?.roles?.cache?.has(String(roleId)));
+      hasAdministrator = Boolean(member?.permissions?.has('Administrator'));
+    }
 
     // صلاحيات نظام البونس تُفحص داخليًا من إعدادات كل سيرفر، لذلك لا يُربط
     // بصلاحيات المالك العام/الرولات الإدارية المشتركة للأوامر الأخرى.
@@ -3173,10 +3412,6 @@ client.on('messageCreate', async message => {
       await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, client, colorManager });
       return;
     }
-
-    // تحميل أحدث رولات المشرفين بشكل فوري لضمان الدقة
-    const CURRENT_ADMIN_ROLES = getCachedAdminRoles();
-    const hasAdminRole = CURRENT_ADMIN_ROLES.length > 0 && member.roles.cache.some(role => CURRENT_ADMIN_ROLES.includes(role.id));
 
     // Commands for everyone (help, tops, تفاعلي, ستريكي, profile, myprofile, داوني)
     if (commandName === 'رولي' || commandName === 'tops' || commandName === 'توب' || commandName === 'تفاعلي' || commandName === 'تواجدي' || commandName === 'انهاء' || commandName === 'user' || commandName === 'ستريكي' || commandName === 'profile' || commandName === 'id' || commandName === 'مشاكلي' || commandName === 'myprofile' || commandName === 'داوني' || commandName === 'داوناتي' || commandName === 'داونات' || commandName === 'مسؤولياتي') {
@@ -5671,10 +5906,21 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
 
     // معالج report تم نقله إلى ملف report.js كمعالج مستقل
 
-    // === معالج زر استدعاء مشرفي المسؤولية من اختصارات المنشن ===
     if (interaction.isButton() && interaction.customId.startsWith('shortcut_supervisor_call_')) {
-      const callData = client.shortcutCallData?.get(interaction.customId);
-      if (!callData) {
+      await interaction.reply({ content: '**تم دمج استدعاء المشرفين داخل زر Call الجديد؛ استخدم الاختصار مرة أخرى.**', flags: 64 }).catch(() => {});
+      return;
+    }
+
+    // === معالج زر Call الموحّد: اختيار استدعاء المسؤولين أو المشرفين ===
+    if (interaction.isButton() && interaction.customId.startsWith('shortcut_call_')) {
+      const { isUserBlocked } = require('./commands/block.js');
+      if (isUserBlocked(interaction.user.id)) {
+        await interaction.reply({ content: '**لا يمكنك استخدام هذه الميزة حالياً.**', flags: 64 }).catch(() => {});
+        return;
+      }
+      const requestToken = interaction.customId.slice('shortcut_call_'.length);
+      const callData = client.shortcutRequests?.get(requestToken);
+      if (!callData || interaction.message?.id !== callData.messageId) {
         await interaction.reply({ content: '**انتهت صلاحية هذا الزر. يرجى استخدام الاختصار مرة أخرى.**', flags: 64 }).catch(() => {});
         return;
       }
@@ -5682,145 +5928,42 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
         await interaction.reply({ content: '**هذا الزر مخصص فقط للشخص الذي استخدم الاختصار.**', flags: 64 }).catch(() => {});
         return;
       }
-
-      const supervisorCooldownLeft = getShortcutCallCooldown(callData.guildId, interaction.user.id, callData.responsibilityName);
-      if (supervisorCooldownLeft > 0) {
-        await interaction.reply({
-          content: `**عليك الانتظار ${Math.ceil(supervisorCooldownLeft / 60000)} دقائق قبل استدعاء مسؤولي أو مشرفي نفس المسؤولية مرة أخرى.**`,
-          flags: 64
-        }).catch(() => {});
+      if (callData.claimedBy) {
+        await interaction.reply({ content: `**تم استلام هذه المشكلة من قبل <@${callData.claimedBy}>، لذلك تم إيقاف الاستدعاء.**`, flags: 64 }).catch(() => {});
         return;
       }
-
-      const { getSupervisors } = require('./utils/responsibilitySupervisors.js');
-      const supervisorData = getSupervisors(callData.guildId, callData.responsibilityName);
-      const supervisorMentions = [
-        ...supervisorData.userIds.map(id => `<@${id}>`),
-        ...supervisorData.roleIds.map(id => `<@&${id}>`)
-      ];
-      if (supervisorMentions.length === 0) {
-        await interaction.reply({ content: `**لا يوجد مشرفين معينين لمسؤولية : ${callData.responsibilityName}**`, flags: 64 }).catch(() => {});
-        return;
-      }
-
-      const confirmationEmbed = colorManager.createEmbed()
-        .setTitle('Call Responsibility Supervisors')
-        .setDescription(`**هل أنت متأكد من طلب مشرفين المسؤولية : ${callData.responsibilityName} ؟**`)
-        .addFields({
-          name: 'Supervisors',
-          value: supervisorMentions.join(' , ').slice(0, 1024),
-          inline: false
-        })
-        .setThumbnail(interaction.guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL())
+      const menuEmbed = colorManager.createEmbed()
+        .setTitle('Call')
+        .setDescription(`**اختر من تريد استدعاءه لمسؤولية ${callData.responsibilityName}:**`)
         .setTimestamp();
-
-      const confirmationRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`shortcut_supervisor_confirm_${interaction.id}`).setLabel('Confirm').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId(`shortcut_supervisor_cancel_${interaction.id}`).setLabel('Cancel').setStyle(ButtonStyle.Danger)
+      const menuRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`shortcut_do_responsibles_${requestToken}`).setLabel('Call Responsibles').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`shortcut_do_supervisors_${requestToken}`).setLabel('Call Supervisors').setStyle(ButtonStyle.Secondary)
       );
-      const confirmationMessage = await interaction.reply({
-        embeds: [confirmationEmbed],
-        components: [confirmationRow],
-        flags: 64,
-        fetchReply: true
-      });
-
-      try {
-        const confirmation = await confirmationMessage.awaitMessageComponent({
-          filter: i => i.user.id === interaction.user.id
-            && [`shortcut_supervisor_confirm_${interaction.id}`, `shortcut_supervisor_cancel_${interaction.id}`].includes(i.customId),
-          time: 60000
-        });
-        if (confirmation.customId.endsWith('_cancel_' + interaction.id)) {
-          await confirmation.update({ content: '**تم إلغاء طلب استدعاء المشرفين.**', embeds: [], components: [] });
-          return;
-        }
-
-        await confirmation.deferUpdate();
-        startShortcutCallCooldown(callData.guildId, interaction.user.id, callData.responsibilityName);
-        const recipientIds = new Set(supervisorData.userIds.map(String));
-        for (const roleId of supervisorData.roleIds) {
-          const role = await interaction.guild.roles.fetch(roleId).catch(() => null);
-          role?.members?.forEach(member => recipientIds.add(String(member.id)));
-        }
-        const messageLink = `https://discord.com/channels/${callData.guildId}/${callData.channelId}/${callData.messageId}`;
-        const dmEmbed = colorManager.createEmbed()
-          .setTitle('Responsibility Supervisor Call')
-          .setDescription(`**تم استدعاؤك كمشرف على مسؤولية : ${callData.responsibilityName}**\n\n**المستدعي :** <@${interaction.user.id}>\n**الرابط :** [اذهب للرسالة](${messageLink})`)
-          .setThumbnail(interaction.guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL())
-          .setTimestamp();
-        let sentCount = 0;
-        for (const userId of recipientIds) {
-          const user = await client.users.fetch(userId).catch(() => null);
-          if (user && await user.send({ embeds: [dmEmbed] }).then(() => true).catch(() => false)) sentCount++;
-        }
-        await confirmation.editReply({
-          content: `**تم استدعاء مشرفي مسؤولية ${callData.responsibilityName} بنجاح.**\n**تم الإرسال إلى :** ${sentCount}`,
-          embeds: [],
-          components: []
-        });
-        client.shortcutCallData.delete(interaction.customId);
-      } catch (error) {
-        await interaction.editReply({ content: '**انتهت مهلة التأكيد ولم يتم استدعاء المشرفين.**', embeds: [], components: [] }).catch(() => {});
-      }
+      await interaction.reply({ embeds: [menuEmbed], components: [menuRow], flags: 64 });
       return;
     }
 
-    // === معالج زر الاستدعاء من اختصارات المنشن ===
-    if (interaction.isButton() && interaction.customId.startsWith('shortcut_call_')) {
-      console.log(`[SHORTCUT_CALL] زر استدعاء: ${interaction.customId}`);
-      
-      // فحص البلوك
-      const { isUserBlocked } = require('./commands/block.js');
-      if (isUserBlocked(interaction.user.id)) {
+    // اختيار استدعاء المسؤولين: يبقى تدفق كتابة السبب كما هو.
+    if (interaction.isButton() && interaction.customId.startsWith('shortcut_do_responsibles_')) {
+      const requestToken = interaction.customId.slice('shortcut_do_responsibles_'.length);
+      const callData = client.shortcutRequests?.get(requestToken);
+      if (!callData || interaction.user.id !== callData.requesterId) {
+        await interaction.reply({ content: '**انتهت صلاحية هذا الخيار أو ليس مخصصًا لك.**', flags: 64 }).catch(() => {});
         return;
       }
-      
-      // جلب البيانات المحفوظة
-      const callData = client.shortcutCallData?.get(interaction.customId);
-      if (!callData) {
-        // الرد بـ ephemeral فقط إذا لم يتم الرد مسبقاً
-        if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({ content: '**انتهت صلاحية هذا الزر. يرجى استخدام الاختصار مرة أخرى.**', flags: 64 }).catch(() => {});
-        }
+      if (callData.claimedBy) {
+        await interaction.reply({ content: `**تم استلام هذه المشكلة من قبل <@${callData.claimedBy}>، لذلك تم إيقاف الاستدعاء.**`, flags: 64 }).catch(() => {});
         return;
       }
-      
-      // التحقق من أن الضاغط هو نفس الشخص اللي استخدم الاختصار
-      if (interaction.user.id !== callData.requesterId) {
-        if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({ content: '**هذا الزر مخصص فقط للشخص الذي استخدم الاختصار.**', flags: 64 }).catch(() => {});
-        }
+      const callCooldownLeft = getShortcutCallCooldown(callData.guildId, interaction.user.id, callData.responsibilityName);
+      if (callCooldownLeft > 0) {
+        await interaction.reply({ content: `**عليك الانتظار ${Math.ceil(callCooldownLeft / 60000)} دقائق قبل استدعاء المسؤولين أو المشرفين لهذه المسؤولية مرة أخرى.**`, flags: 64 }).catch(() => {});
         return;
       }
-      
-      // فحص الكولداون
-      const shortcutCooldownTime = getShortcutCallCooldown(callData.guildId, interaction.user.id, callData.responsibilityName);
-      const cooldownTime = checkCooldown(interaction, callData.responsibilityName);
-      if (shortcutCooldownTime > 0) {
-        if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({
-            content: `**عليك الانتظار ${Math.ceil(shortcutCooldownTime / 60000)} دقائق قبل استدعاء مسؤولي أو مشرفي نفس المسؤولية مرة أخرى.**`,
-            flags: 64
-          }).catch(() => {});
-        }
-        return;
-      }
-      if (cooldownTime > 0) {
-        if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({
-            content: `**لقد استخدمت هذا الأمر مؤخرًا. يرجى الانتظار ${Math.ceil(cooldownTime / 1000)} ثانية أخرى.**`,
-            flags: 64
-          }).catch(() => {});
-        }
-        return;
-      }
-      
-      // إظهار نموذج لإدخال السبب
       const modal = new ModalBuilder()
-        .setCustomId(`shortcut_call_modal_${interaction.customId.replace('shortcut_call_', '')}`)
+        .setCustomId(`shortcut_call_modal_${requestToken}`)
         .setTitle(`استدعاء مسؤولي: ${callData.responsibilityName}`);
-      
       const reasonInput = new TextInputBuilder()
         .setCustomId('call_reason')
         .setLabel('سبب الاستدعاء')
@@ -5828,110 +5971,336 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
         .setRequired(true)
         .setPlaceholder('اكتب سبب الاستدعاء...')
         .setMaxLength(1000);
-      
-      const actionRow = new ActionRowBuilder().addComponents(reasonInput);
-      modal.addComponents(actionRow);
-      
-      try {
-        await interaction.showModal(modal);
-      } catch (err) {
-        console.error(`[CATCH] error showing modal: ${err.message}`);
+      modal.addComponents(new ActionRowBuilder().addComponents(reasonInput));
+      await interaction.showModal(modal).catch(async () => {
         if (!interaction.replied && !interaction.deferred) {
-           await interaction.reply({ content: '❌ حدث خطأ أثناء محاولة فتح النافذة، يرجى المحاولة مرة أخرى.', flags: 64 }).catch(() => {});
+          await interaction.reply({ content: '❌ حدث خطأ أثناء محاولة فتح النافذة، يرجى المحاولة مرة أخرى.', flags: 64 }).catch(() => {});
         }
+      });
+      return;
+    }
+
+    // اختيار استدعاء المشرفين: يحافظ على رسالة التأكيد والإرسال الخاص الحالي.
+    if (interaction.isButton() && interaction.customId.startsWith('shortcut_do_supervisors_')) {
+      const { isUserBlocked } = require('./commands/block.js');
+      if (isUserBlocked(interaction.user.id)) {
+        await interaction.reply({ content: '**لا يمكنك استخدام هذه الميزة حالياً.**', flags: 64 }).catch(() => {});
+        return;
+      }
+      const requestToken = interaction.customId.slice('shortcut_do_supervisors_'.length);
+      const callData = client.shortcutRequests?.get(requestToken);
+      if (!callData || interaction.user.id !== callData.requesterId) {
+        await interaction.reply({ content: '**انتهت صلاحية هذا الخيار أو ليس مخصصًا لك.**', flags: 64 }).catch(() => {});
+        return;
+      }
+      if (callData.claimedBy) {
+        await interaction.reply({ content: `**تم استلام هذه المشكلة من قبل <@${callData.claimedBy}>، لذلك تم إيقاف الاستدعاء.**`, flags: 64 }).catch(() => {});
+        return;
+      }
+      const supervisorCooldownLeft = getShortcutCallCooldown(callData.guildId, interaction.user.id, callData.responsibilityName);
+      if (supervisorCooldownLeft > 0) {
+        await interaction.reply({ content: `**عليك الانتظار ${Math.ceil(supervisorCooldownLeft / 60000)} دقائق قبل استدعاء المسؤولين أو المشرفين لهذه المسؤولية مرة أخرى.**`, flags: 64 }).catch(() => {});
+        return;
+      }
+      const { getSupervisors } = require('./utils/responsibilitySupervisors.js');
+      const supervisorData = getSupervisors(callData.guildId, callData.responsibilityName);
+      const supervisorMentions = [
+        ...supervisorData.userIds.map(id => `<@${id}>`),
+        ...supervisorData.roleIds.map(id => `<@&${id}>`)
+      ];
+      if (!supervisorMentions.length) {
+        await interaction.reply({ content: `**لا يوجد مشرفين معينين لمسؤولية : ${callData.responsibilityName}**`, flags: 64 }).catch(() => {});
+        return;
+      }
+      const confirmationEmbed = colorManager.createEmbed()
+        .setTitle('Call Responsibility Supervisors')
+        .setDescription(`**هل أنت متأكد من طلب مشرفين المسؤولية : ${callData.responsibilityName} ؟**`)
+        .addFields({ name: 'Supervisors', value: supervisorMentions.join(' , ').slice(0, 1024), inline: false })
+        .setThumbnail(interaction.guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL())
+        .setTimestamp();
+      const confirmId = `shortcut_supervisor_confirm_${interaction.id}`;
+      const cancelId = `shortcut_supervisor_cancel_${interaction.id}`;
+      const confirmationRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(confirmId).setLabel('Confirm').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(cancelId).setLabel('Cancel').setStyle(ButtonStyle.Danger)
+      );
+      const confirmationMessage = await interaction.reply({ embeds: [confirmationEmbed], components: [confirmationRow], flags: 64, fetchReply: true });
+      let supervisorActionLockKey = null;
+      let supervisorActionLockAcquired = false;
+      let releaseNotificationSlot = null;
+      let releaseCallCooldownLock = null;
+      try {
+        const confirmation = await confirmationMessage.awaitMessageComponent({
+          filter: i => i.user.id === interaction.user.id && [confirmId, cancelId].includes(i.customId),
+          time: 60000
+        });
+        if (confirmation.customId === cancelId) {
+          await confirmation.update({ content: '**تم إلغاء طلب استدعاء المشرفين.**', embeds: [], components: [] });
+          return;
+        }
+        supervisorActionLockKey = `${callData.guildId}:${callData.channelId}:${callData.messageId}`;
+        if (shortcutActionLocks.has(supervisorActionLockKey)) {
+          await confirmation.update({ content: '**يجري استلام أو معالجة هذه المشكلة الآن؛ لم يتم استدعاء المشرفين.**', embeds: [], components: [] });
+          return;
+        }
+        shortcutActionLocks.add(supervisorActionLockKey);
+        supervisorActionLockAcquired = true;
+        if (callData.claimedBy) {
+          await confirmation.update({ content: `**تم استلام المشكلة بواسطة <@${callData.claimedBy}>؛ لم يتم استدعاء المشرفين.**`, embeds: [], components: [] });
+          return;
+        }
+        releaseCallCooldownLock = tryAcquireShortcutCallLock(callData.guildId, interaction.user.id, callData.responsibilityName);
+        if (!releaseCallCooldownLock) {
+          await confirmation.update({ content: '**لديك استدعاء آخر قيد المعالجة لهذه المسؤولية؛ لم يتم إرسال استدعاء مكرر.**', embeds: [], components: [] });
+          return;
+        }
+        const confirmedCooldownLeft = getShortcutCallCooldown(callData.guildId, interaction.user.id, callData.responsibilityName);
+        if (confirmedCooldownLeft > 0) {
+          await confirmation.update({ content: `**تم استدعاء المسؤولين أو المشرفين لهذه المسؤولية للتو؛ انتظر ${Math.ceil(confirmedCooldownLeft / 60000)} دقائق.**`, embeds: [], components: [] });
+          return;
+        }
+        releaseNotificationSlot = tryAcquireShortcutNotificationSlot();
+        if (!releaseNotificationSlot) {
+          await confirmation.update({ content: '**طلبات الاستدعاء كثيرة الآن؛ انتظر قليلًا ثم حاول مرة أخرى.**', embeds: [], components: [] });
+          return;
+        }
+        await confirmation.deferUpdate();
+        startShortcutCallCooldown(callData.guildId, interaction.user.id, callData.responsibilityName);
+        if (!await shortcutStateStore.flushShortcutStore()) throw new Error('تعذر حفظ كولداون استدعاء المشرفين');
+        const recipientIds = new Set();
+        let recipientEnumerationCapped = supervisorData.userIds.length > MAX_SHORTCUT_CALL_RECIPIENTS * 5;
+        for (const userId of supervisorData.userIds.slice(0, MAX_SHORTCUT_CALL_RECIPIENTS * 5 + 1)) {
+          if (recipientIds.size > MAX_SHORTCUT_CALL_RECIPIENTS) { recipientEnumerationCapped = true; break; }
+          recipientIds.add(String(userId));
+        }
+        if (!recipientEnumerationCapped) {
+          for (const roleId of supervisorData.roleIds) {
+            if (recipientIds.size > MAX_SHORTCUT_CALL_RECIPIENTS) { recipientEnumerationCapped = true; break; }
+            const role = interaction.guild.roles.cache.get(roleId)
+              || await interaction.guild.roles.fetch(roleId).catch(() => null);
+            if (!role?.members) continue;
+            for (const member of role.members.values()) {
+              if (recipientIds.size > MAX_SHORTCUT_CALL_RECIPIENTS) { recipientEnumerationCapped = true; break; }
+              recipientIds.add(String(member.id));
+            }
+            if (recipientEnumerationCapped) break;
+          }
+        }
+        const messageLink = `https://discord.com/channels/${callData.guildId}/${callData.channelId}/${callData.messageId}`;
+        const dmEmbed = colorManager.createEmbed()
+          .setTitle('Responsibility Supervisor Call')
+          .setDescription(`**تم استدعاؤك كمشرف على مسؤولية : ${callData.responsibilityName}**\n\n**المستدعي :** <@${interaction.user.id}>\n**الرابط :** [اذهب للرسالة](${messageLink})`)
+          .setThumbnail(interaction.guild.iconURL({ dynamic: true }) || client.user.displayAvatarURL())
+          .setTimestamp();
+        const recipientList = [...recipientIds];
+        const limitedRecipientList = recipientList.slice(0, MAX_SHORTCUT_CALL_RECIPIENTS);
+        const recipientsCapped = recipientEnumerationCapped || recipientList.length > MAX_SHORTCUT_CALL_RECIPIENTS;
+        let sentCount = 0;
+        for (const userId of limitedRecipientList) {
+          const user = client.users.cache.get(userId) || await client.users.fetch(userId).catch(() => null);
+          if (user && await user.send({ embeds: [dmEmbed] }).then(() => true).catch(() => false)) sentCount++;
+        }
+        const cappedNotice = recipientsCapped
+          ? `\n**للحماية من الضغط، اقتصر الإرسال على أول ${MAX_SHORTCUT_CALL_RECIPIENTS} مشرفًا.**`
+          : '';
+        await confirmation.editReply({ content: `**تم استدعاء مشرفي مسؤولية ${callData.responsibilityName} بنجاح.**\n**تم الإرسال إلى :** ${sentCount}${cappedNotice}`, embeds: [], components: [] });
+      } catch (error) {
+        await interaction.editReply({ content: '**انتهت مهلة التأكيد ولم يتم استدعاء المشرفين.**', embeds: [], components: [] }).catch(() => {});
+      } finally {
+        releaseNotificationSlot?.();
+        releaseCallCooldownLock?.();
+        if (supervisorActionLockAcquired) shortcutActionLocks.delete(supervisorActionLockKey);
       }
       return;
     }
-    
-      // === معالج نموذج الاستدعاء من اختصارات المنشن ===
+
+    // نموذج سبب استدعاء المسؤولين.
     if (interaction.isModalSubmit() && interaction.customId.startsWith('shortcut_call_modal_')) {
-      console.log(`[SHORTCUT_CALL_MODAL] نموذج استدعاء: ${interaction.customId}`);
-      
-      // منع التفاعلات المكررة
       if (interaction.replied || interaction.deferred) return;
-
       const { isUserBlocked } = require('./commands/block.js');
-      if (isUserBlocked(interaction.user.id)) return;
-      
-      const buttonCustomId = 'shortcut_call_' + interaction.customId.replace('shortcut_call_modal_', '');
-      const callData = client.shortcutCallData?.get(buttonCustomId);
-      
-      if (!callData) {
-        await interaction.reply({ content: '**انتهت صلاحية هذا النموذج. يرجى استخدام الاختصار مرة أخرى.**', flags: 64 }).catch(() => {});
+      if (isUserBlocked(interaction.user.id)) {
+        await interaction.reply({ content: '**لا يمكنك استخدام هذه الميزة حالياً.**', flags: 64 }).catch(() => {});
         return;
       }
-
-      const modalCooldownTime = getShortcutCallCooldown(callData.guildId, interaction.user.id, callData.responsibilityName);
-      if (modalCooldownTime > 0) {
-        await interaction.reply({
-          content: `**عليك الانتظار ${Math.ceil(modalCooldownTime / 60000)} دقائق قبل استدعاء مسؤولي أو مشرفي نفس المسؤولية مرة أخرى.**`,
-          flags: 64
-        }).catch(() => {});
+      const requestToken = interaction.customId.slice('shortcut_call_modal_'.length);
+      const callData = client.shortcutRequests?.get(requestToken);
+      if (!callData || interaction.user.id !== callData.requesterId) {
+        await interaction.reply({ content: '**انتهت صلاحية هذا النموذج أو ليس مخصصًا لك. يرجى استخدام الاختصار مرة أخرى.**', flags: 64 }).catch(() => {});
         return;
       }
-      
+      if (callData.claimedBy) {
+        await interaction.reply({ content: `**تم استلام هذه المشكلة من قبل <@${callData.claimedBy}>، لذلك لم يتم إرسال الاستدعاء.**`, flags: 64 }).catch(() => {});
+        return;
+      }
+      const modalCooldownLeft = getShortcutCallCooldown(callData.guildId, interaction.user.id, callData.responsibilityName);
+      if (modalCooldownLeft > 0) {
+        await interaction.reply({ content: `**عليك الانتظار ${Math.ceil(modalCooldownLeft / 60000)} دقائق قبل استدعاء المسؤولين أو المشرفين لهذه المسؤولية مرة أخرى.**`, flags: 64 }).catch(() => {});
+        return;
+      }
       const reason = interaction.fields.getTextInputValue('call_reason').trim() || 'غير محدد';
-      const { responsibilityName, responsibles, channelId, messageId, guildId } = callData;
-      
-      // تأجيل الرد فوراً لتجنب انتهاء الوقت
-      await interaction.deferReply({ ephemeral: true }).catch(() => {});
-      
-      // بدء الكولداون
-      const { startCooldown } = require('./commands/cooldown.js');
-      startCooldown(interaction.user.id, responsibilityName);
-      startShortcutCallCooldown(guildId, interaction.user.id, responsibilityName);
-      
-      const messageLink = `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
-      const currentTime = new Date().toLocaleString('ar-EG', { timeZone: 'Asia/Riyadh' });
-
-      // إنشاء الزر للذهاب للرسالة
-      const linkButton = new ButtonBuilder()
-        .setLabel('اذهب للرساله')
-        .setStyle(ButtonStyle.Link)
-        .setURL(messageLink);
-      const row = new ActionRowBuilder().addComponents(linkButton);
-
-      // إرسال الرسالة لخاص المسؤولين
-      let successCount = 0;
-      for (const userId of responsibles) {
-        try {
-          const user = await client.users.fetch(userId);
-          await user.send({
-            content: `**🔔 استدعاك إداري **\n\n` +
-                     `**● المسؤولية :** ${responsibilityName}\n` +
-                     `**● الإداري المستدعي :** <@${interaction.user.id}>\n` +
-                     `**● الوقت :** ${currentTime}\n` +
-                     `**● السبب :** ${reason}`,
-            components: [row]
-          });
-          successCount++;
-        } catch (err) {
-          console.error(`فشل إرسال رسالة خاصة للمسؤول ${userId}:`, err.message);
-        }
+      const responsibleActionLockKey = `${callData.guildId}:${callData.channelId}:${callData.messageId}`;
+      if (shortcutActionLocks.has(responsibleActionLockKey)) {
+        await interaction.reply({ content: '**يجري استلام أو معالجة هذه المشكلة الآن؛ لم يتم إرسال الاستدعاء.**', flags: 64 }).catch(() => {});
+        return;
       }
-      
-      // تحديث رسالة المنشنات الأصلية لإزالة الأزرار
+      shortcutActionLocks.add(responsibleActionLockKey);
+      let releaseNotificationSlot = null;
+      let releaseCallCooldownLock = null;
       try {
-        const originalChannel = await client.channels.fetch(channelId);
-        const originalMessage = await originalChannel.messages.fetch(messageId);
-        await originalMessage.edit({ components: [] });
-      } catch (err) {}
+        releaseCallCooldownLock = tryAcquireShortcutCallLock(callData.guildId, interaction.user.id, callData.responsibilityName);
+        if (!releaseCallCooldownLock) {
+          await interaction.reply({ content: '**لديك استدعاء آخر قيد المعالجة لهذه المسؤولية؛ لم يتم إرسال استدعاء مكرر.**', flags: 64 }).catch(() => {});
+          return;
+        }
+        const recheckedCooldown = getShortcutCallCooldown(callData.guildId, interaction.user.id, callData.responsibilityName);
+        if (recheckedCooldown > 0) {
+          await interaction.reply({ content: `**عليك الانتظار ${Math.ceil(recheckedCooldown / 60000)} دقائق قبل استدعاء المسؤولين أو المشرفين لهذه المسؤولية مرة أخرى.**`, flags: 64 }).catch(() => {});
+          return;
+        }
+        releaseNotificationSlot = tryAcquireShortcutNotificationSlot();
+        if (!releaseNotificationSlot) {
+          await interaction.reply({ content: '**طلبات الاستدعاء كثيرة الآن؛ انتظر قليلًا ثم حاول مرة أخرى.**', flags: 64 }).catch(() => {});
+          return;
+        }
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        startShortcutCallCooldown(callData.guildId, interaction.user.id, callData.responsibilityName);
+        if (!await shortcutStateStore.flushShortcutStore()) throw new Error('تعذر حفظ كولداون استدعاء المسؤولين');
+        const messageLink = `https://discord.com/channels/${callData.guildId}/${callData.channelId}/${callData.messageId}`;
+        const currentTime = new Date().toLocaleString('ar-EG', { timeZone: 'Asia/Riyadh' });
+        const linkButton = new ButtonBuilder().setLabel('اذهب للرساله').setStyle(ButtonStyle.Link).setURL(messageLink);
+        const row = new ActionRowBuilder().addComponents(linkButton);
+        const rawRecipientIds = Array.isArray(callData.responsibles) ? callData.responsibles : [];
+        const recipientCandidates = new Set(rawRecipientIds.slice(0, MAX_SHORTCUT_CALL_RECIPIENTS * 5 + 1).map(String));
+        const recipientIds = [...recipientCandidates].slice(0, MAX_SHORTCUT_CALL_RECIPIENTS);
+        const recipientsCapped = recipientCandidates.size > MAX_SHORTCUT_CALL_RECIPIENTS || rawRecipientIds.length > MAX_SHORTCUT_CALL_RECIPIENTS * 5;
+        let successCount = 0;
+        for (const userId of recipientIds) {
+          try {
+            const user = client.users.cache.get(userId) || await client.users.fetch(userId);
+            await user.send({
+              content: `**🔔 استدعاك إداري **\n\n**● المسؤولية :** ${callData.responsibilityName}\n**● الإداري المستدعي :** <@${interaction.user.id}>\n**● الوقت :** ${currentTime}\n**● السبب :** ${reason}`,
+              components: [row]
+            });
+            successCount++;
+          } catch (error) {
+            console.error(`فشل إرسال رسالة خاصة للمسؤول ${userId}:`, error.message);
+          }
+        }
+        logEvent(client, interaction.guild, {
+          type: 'TASK_LOGS',
+          title: 'استدعاء مسؤولين (خاص)',
+          description: `تم استدعاء مسؤولي "${callData.responsibilityName}" عبر الخاص`,
+          user: interaction.user,
+          fields: [
+            { name: 'المسؤولية', value: callData.responsibilityName, inline: true },
+            { name: 'السبب', value: reason, inline: false },
+            { name: 'عدد المسؤولين الناجح', value: `${successCount}/${recipientIds.length}${recipientsCapped ? ` (سقف الأمان ${MAX_SHORTCUT_CALL_RECIPIENTS})` : ''}`, inline: true }
+          ]
+        });
+        const cappedNotice = recipientsCapped
+          ? `\nتم تطبيق سقف الحماية: أُرسل إلى أول ${MAX_SHORTCUT_CALL_RECIPIENTS} مسؤولين فقط.`
+          : '';
+        await interaction.editReply({ content: `**✅ تم استدعاء مسؤولي "${callData.responsibilityName}" عبر الخاص!**${cappedNotice}` }).catch(() => {});
+        return;
 
-      // تسجيل الحدث
-      logEvent(client, interaction.guild, {
-        type: 'TASK_LOGS',
-        title: 'استدعاء مسؤولين (خاص)',
-        description: `تم استدعاء مسؤولي "${responsibilityName}" عبر الخاص`,
-        user: interaction.user,
-        fields: [
-          { name: 'المسؤولية', value: responsibilityName, inline: true },
-          { name: 'السبب', value: reason, inline: false },
-          { name: 'عدد المسؤولين الناجح', value: `${successCount}/${responsibles.length}`, inline: true }
-        ]
-      });
-      
-      await interaction.editReply({ content: `**✅ تم استدعاء مسؤولي "${responsibilityName}" عبر الخاص!**` }).catch(() => {});
-      client.shortcutCallData.delete(buttonCustomId);
+      } finally {
+        releaseNotificationSlot?.();
+        releaseCallCooldownLock?.();
+        shortcutActionLocks.delete(responsibleActionLockKey);
+      }
+    }
+
+    // === زر Take: تحقق صلاحية حي، قفل للتزامن، نقطة واحدة idempotent حسب الرسالة ===
+    if (interaction.isButton() && interaction.customId.startsWith('shortcut_take_')) {
+      const { isUserBlocked } = require('./commands/block.js');
+      if (isUserBlocked(interaction.user.id)) {
+        await interaction.reply({ content: '**لا يمكنك استخدام هذه الميزة حالياً.**', flags: 64 }).catch(() => {});
+        return;
+      }
+      const requestToken = interaction.customId.slice('shortcut_take_'.length);
+      const callData = client.shortcutRequests?.get(requestToken);
+      if (!callData || interaction.message?.id !== callData.messageId || interaction.channelId !== callData.channelId || interaction.guildId !== callData.guildId) {
+        await interaction.reply({ content: '**انتهت صلاحية زر Take أو بياناته غير مطابقة.**', flags: 64 }).catch(() => {});
+        return;
+      }
+      const claimLockKey = `${callData.guildId}:${callData.channelId}:${callData.messageId}`;
+      if (shortcutActionLocks.has(claimLockKey)) {
+        await interaction.reply({ content: '**يجري استلام هذه المشكلة الآن؛ انتظر لحظة ثم حدّث الرسالة.**', flags: 64 }).catch(() => {});
+        return;
+      }
+      shortcutActionLocks.add(claimLockKey);
+      try {
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        if (callData.claimedBy) {
+          await interaction.editReply({ content: `**هذه المشكلة مستلمة بالفعل من <@${callData.claimedBy}>.**` }).catch(() => {});
+          return;
+        }
+        let currentResponsibilities = global.responsibilities || {};
+        if (dbManager.isInitialized) {
+          currentResponsibilities = await dbManager.getResponsibilities().catch(() => currentResponsibilities);
+        }
+        const assignedIds = (currentResponsibilities?.[callData.responsibilityName]?.responsibles || []).map(String);
+        if (!assignedIds.includes(String(interaction.user.id))) {
+          await interaction.editReply({ content: `**زر Take مخصص للمسؤولين المعيّنين لمسؤولية ${callData.responsibilityName} فقط.**` }).catch(() => {});
+          return;
+        }
+        const claimId = `${callData.guildId}:${callData.channelId}:${callData.messageId}`;
+        const ticketState = require('./commands/ticket.js');
+        const pointResult = await ticketState.awardShortcutTakePoint({
+          claimId,
+          responsibilityName: callData.responsibilityName,
+          userId: interaction.user.id
+        });
+        if (!pointResult?.claim?.userId) {
+          throw new Error('لم يتم إنشاء سجل استلام أو نقطة للمسؤولية');
+        }
+        const actualClaimerId = String(pointResult.claim.userId);
+        const member = interaction.guild.members.cache.get(actualClaimerId)
+          || await fetchGuildMemberWithLimit(interaction.guild, actualClaimerId);
+        const displayNameFallback = actualClaimerId === interaction.user.id
+          ? (interaction.user.globalName || interaction.user.username || actualClaimerId)
+          : actualClaimerId;
+        const displayName = String(member?.displayName || displayNameFallback).slice(0, 55);
+        callData.claimedBy = actualClaimerId;
+        callData.claimedAt = Number(pointResult.claim.at || Date.now());
+        callData.claimedByName = displayName;
+        shortcutStore.requests[requestToken] = callData;
+        if (!await shortcutStateStore.flushShortcutStore()) throw new Error('تعذر حفظ حالة الاستلام على القرص');
+        const updatedRows = interaction.message.components.map(row => new ActionRowBuilder().addComponents(
+          row.components.map(component => {
+            const button = ButtonBuilder.from(component);
+            if (component.customId === `shortcut_call_${requestToken}`) return button.setDisabled(true);
+            if (component.customId === `shortcut_take_${requestToken}`) return button.setLabel(`Claimed By : ${displayName}`).setDisabled(true);
+            return button;
+          })
+        ));
+        await interaction.message.edit({ components: updatedRows }).catch(error => console.error('تعذر تحديث أزرار الاستلام:', error.message));
+        const claimEmbed = colorManager.createEmbed()
+          .setTitle('تم استلام المشكلة')
+          .setDescription(`**<@${actualClaimerId}> : استلم المشكلة الخاصة بك.**`)
+          .addFields(
+            { name: 'المسؤولية', value: callData.responsibilityName, inline: true },
+            { name: 'المستلم', value: `<@${actualClaimerId}>`, inline: true }
+          )
+          .setTimestamp(new Date(callData.claimedAt));
+        await interaction.message.reply({
+          embeds: [claimEmbed],
+          allowedMentions: { users: [actualClaimerId] }
+        }).catch(error => console.error('تعذر إرسال رد استلام المشكلة:', error.message));
+        if (topCommand?.invalidateTopCache) topCommand.invalidateTopCache();
+        await interaction.editReply({
+          content: pointResult.awarded
+            ? `**تم استلام المشكلة وتسجيل نقطة واحدة لك في مسؤولية ${callData.responsibilityName}.**`
+            : actualClaimerId === interaction.user.id
+              ? '**أنت مستلم هذه المشكلة بالفعل؛ لم تُضف نقطة ثانية.**'
+              : `**استلم هذه المشكلة بالفعل <@${actualClaimerId}>.**`
+        }).catch(() => {});
+      } catch (error) {
+        console.error('خطأ في معالجة زر Take لاختصار المسؤولية:', error);
+        await interaction.editReply({ content: '**تعذر إتمام الاستلام الآن؛ لم نؤكد تسجيله. حاول مرة أخرى بعد قليل.**' }).catch(() => {});
+      } finally {
+        shortcutActionLocks.delete(claimLockKey);
+      }
       return;
     }
 

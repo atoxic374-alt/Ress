@@ -668,23 +668,52 @@ function savePoints(points) {
 }
 
 function addPointsForResponsibility({ responsibilityName, userId, amount = 1, actorId = 'system', source = 'responsibility' } = {}) {
-  const targetId = String(userId || '').trim();
-  const respName = String(responsibilityName || '').trim();
-  const delta = Number(amount);
-  if (!targetId || !respName || !Number.isFinite(delta) || delta <= 0) return 0;
-  const points = loadPoints();
-  if (!points[respName] || typeof points[respName] !== 'object') points[respName] = {};
-  const existing = points[respName][targetId];
-  const bucket = typeof existing === 'object' && existing ? existing : {};
-  if (typeof existing === 'number') bucket[`legacy_${Date.now()}`] = existing;
-  const entryId = `${Date.now()}_${targetId}_${source}`;
-  bucket[entryId] = delta;
-  points[respName][targetId] = bucket;
-  appendPointAuditEntry(points, { id: entryId, targetId, actorId, delta, respName, source, at: entryId });
-  savePoints(points);
-  return delta;
+  // Legacy task-claim awards are disabled: Take is the sole responsibility-points source.
+  return 0;
 }
 
+async function awardShortcutTakePoint({ claimId, responsibilityName, userId } = {}) {
+  const safeClaimId = String(claimId || '').trim();
+  const targetId = String(userId || '').trim();
+  const respName = String(responsibilityName || '').trim();
+  if (!safeClaimId || !targetId || !respName) return { awarded: false, claim: null };
+  await primeStateCache(STATE_KEY_POINTS, pointsPath);
+  return queueStateWrite(STATE_SNAPSHOT_QUEUE_KEY, async () => {
+    const points = storeCache[STATE_KEY_POINTS] && typeof storeCache[STATE_KEY_POINTS] === 'object'
+      ? storeCache[STATE_KEY_POINTS]
+      : {};
+    if (!points.__shortcutClaims || typeof points.__shortcutClaims !== 'object' || Array.isArray(points.__shortcutClaims)) {
+      points.__shortcutClaims = {};
+    }
+    const existingClaim = points.__shortcutClaims[safeClaimId];
+    if (existingClaim) return { awarded: false, claim: existingClaim };
+
+    if (!points[respName] || typeof points[respName] !== 'object' || Array.isArray(points[respName])) points[respName] = {};
+    const existingBucket = points[respName][targetId];
+    const bucket = existingBucket && typeof existingBucket === 'object' && !Array.isArray(existingBucket) ? existingBucket : {};
+    if (typeof existingBucket === 'number') bucket[`legacy_${Date.now()}`] = existingBucket;
+    const at = Date.now();
+    const entryId = `${at}_shortcut_take_${safeClaimId}`;
+    bucket[entryId] = 1;
+    points[respName][targetId] = bucket;
+
+    const claim = { userId: targetId, responsibilityName: respName, at, entryId };
+    points.__shortcutClaims[safeClaimId] = claim;
+    appendPointAuditEntry(points, {
+      id: entryId,
+      targetId,
+      actorId: targetId,
+      delta: 1,
+      respName,
+      source: 'shortcut_take',
+      at: entryId
+    });
+    storeCache[STATE_KEY_POINTS] = points;
+    const snapshot = JSON.parse(JSON.stringify(points));
+    await persistStateSnapshot(STATE_KEY_POINTS, pointsPath, snapshot);
+    return { awarded: true, claim };
+  });
+}
 function ensurePointsAudit(points) {
   if (!Array.isArray(points.__audit)) points.__audit = [];
   if (points.__audit.length > MAX_POINTS_AUDIT_ENTRIES) {
@@ -4172,24 +4201,7 @@ async function closeTicketCoreUnsafe({
   ticket.closedBy = closedByUserId || null;
   delete ticket.autoCloseWarningSentAt;
 
-  if (!autoClose && closedByUserId) {
-    const closerMember = await resolveGuildMember(channel.guild, closedByUserId);
-    const closerActor = closerMember
-      ? { user: { id: closedByUserId }, member: closerMember, guild: channel.guild }
-      : null;
-    if (closerMember && canManageTicket(closerActor, ticket, config)) {
-      const points = loadPoints();
-      const appended = recordManagerClosePoint(points, {
-        guildId,
-        panelId,
-        channelId,
-        actorId: closedByUserId,
-        targetId: ticket.memberId || '',
-        at: ticket.closedAt
-      });
-      if (appended) savePoints(points);
-    }
-  }
+  // Automatic ticket-close points are disabled; responsibility points come only from Take.
 
   setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
 
@@ -4812,6 +4824,15 @@ async function handlePointsAdjustActionInteraction(interaction, sessionId, mode)
 }
 
 async function handlePointsAdjustAmountInteraction(interaction, sessionId, mode, amount) {
+  if (mode === 'add') {
+    const response = { content: '**تم إيقاف إضافة النقاط اليدوية؛ تُحتسب نقاط المسؤوليات حصرياً عبر زر Take.**' };
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply(response).catch((error) => logSilentError('suppressed', error));
+    } else {
+      await interaction.reply({ ...response, flags: 64 }).catch((error) => logSilentError('suppressed', error));
+    }
+    return;
+  }
   // Acknowledge before loading state, writing points, or fetching the target
   // user; otherwise Discord can report a failure after the write succeeds.
   if (!interaction.deferred && !interaction.replied) {
@@ -4833,7 +4854,7 @@ async function handlePointsAdjustAmountInteraction(interaction, sessionId, mode,
     await interaction.editReply(buildTicketMessagePayload('Error', '**خيار غير صالح.**', { ephemeral: true })).catch((error) => logSilentError('suppressed', error));
     return;
   }
-  const delta = mode === 'remove' ? -Math.abs(amount) : Math.abs(amount);
+  const delta = -Math.abs(amount);
   const actualDelta = session.targetIsResponsible
     ? applyManagerPointsDelta({ targetId: session.targetId, delta })
     : applyManualPointsDelta({ targetId: session.targetId, actorId: session.actorId, delta });
@@ -7584,6 +7605,10 @@ function registerHandlers(client) {
           const delta = id.startsWith('ticket_down2_') ? -2
             : id.startsWith('ticket_down_') ? -1
               : id.startsWith('ticket_up1_') ? 1 : 2;
+          if (delta > 0) {
+            await interaction.editReply(buildTicketMessagePayload('النقاط من Take فقط', '**إضافة النقاط من أزرار التقييم متوقفة؛ تُحتسب نقاط المسؤوليات حصرياً عبر زر Take.**', { ephemeral: true }));
+            return;
+          }
           const reasonName = config.reasons?.[ticket.reasonKey]?.name;
           const respName = ticket.transferredTo || reasonName || 'ticket';
           const targetId = ticket.pointsReceiverId || ticket.claimedBy;
@@ -7641,14 +7666,6 @@ function registerHandlers(client) {
             delta: actualDelta,
             respName,
             source: 'ticket_button',
-            at: now
-          });
-          recordManagerPoint(points, {
-            guildId,
-            panelId: resolvedPanelId,
-            channelId,
-            actorId: interaction.user.id,
-            targetId: ticket.memberId || '',
             at: now
           });
           ticket.pointAward = {
@@ -8202,5 +8219,6 @@ module.exports = {
   // legacy JSON file directly, otherwise SQLite/cache can resurrect points.
   loadPoints,
   savePoints,
-  addPointsForResponsibility
+  addPointsForResponsibility,
+  awardShortcutTakePoint
 };

@@ -68,7 +68,7 @@ function saveReportsConfig(guildId, guildConfig) {
 function createMainEmbed(client, guildId) {
     const config = loadReportsConfig(guildId);
     const status = config.enabled ? '**🟢 مفعل**' : '**🔴 معطل**';
-    const pointsStatus = config.pointsOnReport ? 'بعد موافقة التقرير' : 'عند استلام المهمة';
+    const pointsStatus = 'تُحتسب حصرياً عند الضغط على Take';
     let channelStatus = 'لم يحدد';
     if (config.reportChannel) { 
         channelStatus = config.reportChannel === '0' ? 'خاص الأونرات' : `<#${config.reportChannel}>`; 
@@ -690,23 +690,7 @@ async function handleInteraction(interaction, context) {
 
                     // If no approval required
                     if (!isApprovalRequired) {
-                        // Award points if pointsOnReport is true
-                        if (config.pointsOnReport) {
-                            const { claimerId, responsibilityName, timestamp } = reportData;
-                            if (!points[responsibilityName]) points[responsibilityName] = {};
-                            if (!points[responsibilityName][claimerId]) points[responsibilityName][claimerId] = {};
-                            if (typeof points[responsibilityName][claimerId] === 'number') {
-                                const oldPoints = points[responsibilityName][claimerId];
-                                points[responsibilityName][claimerId] = {
-                                    [Date.now() - (35 * 24 * 60 * 60 * 1000)]: oldPoints
-                                };
-                            }
-                            if (!points[responsibilityName][claimerId][timestamp]) {
-                                points[responsibilityName][claimerId][timestamp] = 0;
-                            }
-                            points[responsibilityName][claimerId][timestamp] += 1;
-                            scheduleSave();
-                        }
+                        // Points are awarded exclusively by the responsibility shortcut Take button.
 
                         // Always remove from pending reports when no approval is required
                         client.pendingReports.delete(reportId);
@@ -916,10 +900,9 @@ async function handleInteraction(interaction, context) {
                     break;
 
                 case 'report_toggle_points':
-                    config.pointsOnReport = !config.pointsOnReport;
+                    config.pointsOnReport = false;
                     shouldShowMain = true;
-                    shouldSave = true;
-                    responseContent = `✅ تم تغيير نظام النقاط إلى: ${config.pointsOnReport ? 'بعد موافقة التقرير' : 'عند استلام المهمة'}.`;
+                    responseContent = '✅ نقاط المسؤوليات تُحتسب حصرياً عند الضغط على زر Take.';
                     break;
 
                 case 'report_template_delete_all':
@@ -1269,8 +1252,9 @@ async function handleInteraction(interaction, context) {
                                 .setStyle(ButtonStyle.Success),
                             new ButtonBuilder()
                                 .setCustomId('report_toggle_points')
-                                .setLabel('تغيير نظام النقاط')
-                                .setStyle(ButtonStyle.Success)
+                                .setLabel('النقاط من Take فقط')
+                                .setStyle(ButtonStyle.Secondary)
+                                .setDisabled(true)
                         ),
                         new ActionRowBuilder().addComponents(
                             new ButtonBuilder()
@@ -1409,23 +1393,7 @@ async function handleInteraction(interaction, context) {
 
                 await interaction.editReply({ embeds: [originalEmbed], components: [] });
 
-                // Award points if approved and pointsOnReport is true
-                if (isApprove && config.pointsOnReport) {
-                    const { claimerId, responsibilityName, timestamp } = reportData;
-                    if (!points[responsibilityName]) points[responsibilityName] = {};
-                    if (!points[responsibilityName][claimerId]) points[responsibilityName][claimerId] = {};
-                    if (typeof points[responsibilityName][claimerId] === 'number') {
-                        const oldPoints = points[responsibilityName][claimerId];
-                        points[responsibilityName][claimerId] = {
-                            [Date.now() - (35 * 24 * 60 * 60 * 1000)]: oldPoints
-                        };
-                    }
-                    if (!points[responsibilityName][claimerId][timestamp]) {
-                        points[responsibilityName][claimerId][timestamp] = 0;
-                    }
-                    points[responsibilityName][claimerId][timestamp] += 1;
-                    scheduleSave();
-                }
+                // Points are awarded exclusively by the responsibility shortcut Take button.
 
                 // Send notification to the user
                 try {
@@ -1436,12 +1404,6 @@ async function handleInteraction(interaction, context) {
                         .setColor(isApprove ? '#00ff00' : '#ff0000')
                         .setFooter({ text: `${isApprove ? 'تمت الموافقة' : 'تم الرفض'} بواسطة ${interaction.user.tag}` })
                         .setTimestamp();
-
-                    if (isApprove && config.pointsOnReport) {
-                        notificationEmbed.addFields([
-                            { name: ' النقاط', value: '✅️', inline: false }
-                        ]);
-                    }
 
                     await user.send({ embeds: [notificationEmbed] });
                 } catch (err) {

@@ -711,6 +711,7 @@ async function executeUserReset(interaction, userId, respType, points, responsib
         if (respType === 'all_responsibilities') {
             // حذف نقاط المستخدم من جميع المسؤوليات
             for (const responsibility in points) {
+                if (responsibility.startsWith('__')) continue;
                 if (points[responsibility][userId]) {
                     if (typeof points[responsibility][userId] === 'object') {
                         deletedPoints += Object.values(points[responsibility][userId]).reduce((sum, val) => sum + val, 0);
@@ -904,6 +905,7 @@ async function handleUserResponsibilityChoice(interaction, userData, points, res
     // التحقق من المسؤوليات التي يوجد بها المستخدم
     const userResponsibilities = [];
     for (const resp in points) {
+        if (resp.startsWith('__')) continue;
         if (points[resp][userData.userId]) {
             const respPoints = typeof points[resp][userData.userId] === 'object' 
                 ? Object.values(points[resp][userData.userId]).reduce((sum, val) => sum + val, 0)
@@ -1088,10 +1090,14 @@ function processPointsModification(userData, responsibilityName, pointsInput, po
                 return { success: false, error: 'قيمة غير صحيحة للتعديل' };
             }
         }
+        if (operation !== 'حذف') {
+            return { success: false, error: 'إضافة أو تعديل نقاط المسؤوليات يدوياً متوقف؛ النقاط تُحتسب من زر Take فقط.' };
+        }
 
         if (responsibilityName === 'all_responsibilities') {
             // تطبيق العملية على جميع المسؤوليات
             for (const resp in points) {
+                if (resp.startsWith('__')) continue;
                 if (points[resp][userData.userId]) {
                     if (operation === 'تعديل مطلق') {
                         points[resp][userData.userId] = { [now]: value };
@@ -2005,9 +2011,7 @@ async function handleResponsibilitiesReset(interaction, points, responsibilities
                 for (const resp in responsibilities) {
                     delete responsibilities[resp];
                 }
-                for (const responsibility in points) {
-                    points[responsibility] = {};
-                }
+                resetPointScores(points);
 
                 // حفظ البيانات
                 const pointsSave = writeJSONFile(pointsPath, points);
@@ -2144,9 +2148,21 @@ function createMainComponents() {
 }
 
 // دوال الحسابات
+function resetPointScores(points) {
+    for (const key of Object.keys(points || {})) {
+        if (key === '__shortcutClaims') continue;
+        if (key.startsWith('__')) {
+            points[key] = Array.isArray(points[key]) ? [] : {};
+        } else {
+            points[key] = {};
+        }
+    }
+}
+
 function calculateTotalPoints(points) {
     let total = 0;
     for (const responsibility in points) {
+        if (responsibility.startsWith('__')) continue;
         for (const userId in points[responsibility]) {
             if (typeof points[responsibility][userId] === 'object') {
                 total += Object.values(points[responsibility][userId]).reduce((sum, val) => sum + val, 0);
@@ -2161,6 +2177,7 @@ function calculateTotalPoints(points) {
 function calculateTotalUsers(points) {
     const uniqueUsers = new Set();
     for (const responsibility in points) {
+        if (responsibility.startsWith('__')) continue;
         for (const userId in points[responsibility]) {
             uniqueUsers.add(userId);
         }
@@ -2195,6 +2212,8 @@ function calculateAffectedPoints(points, resetType) {
     const timeLimit = timeRanges[resetType];
 
     for (const responsibility in points) {
+
+        if (responsibility.startsWith('__')) continue;
         for (const userId in points[responsibility]) {
             if (resetType === 'all_points') {
                 if (typeof points[responsibility][userId] === 'object') {
@@ -2228,6 +2247,7 @@ function performTimeBasedReset(resetType, points) {
 
     if (resetType === 'all_points') {
         for (const responsibility in points) {
+            if (responsibility.startsWith('__')) continue;
             for (const userId in points[responsibility]) {
                 if (typeof points[responsibility][userId] === 'object') {
                     deletedPoints += Object.values(points[responsibility][userId]).reduce((sum, val) => sum + val, 0);
@@ -2238,11 +2258,14 @@ function performTimeBasedReset(resetType, points) {
             }
             points[responsibility] = {};
         }
+        resetPointScores(points);
     } else {
         const timeLimit = timeRanges[resetType];
         const cutoffTime = now - timeLimit;
 
         for (const responsibility in points) {
+
+            if (responsibility.startsWith('__')) continue;
             for (const userId in points[responsibility]) {
                 let userAffected = false;
 
@@ -2282,6 +2305,8 @@ function getAllUsersWithPoints(points, responsibilities) {
     const userMap = new Map();
 
     for (const responsibility in points) {
+
+        if (responsibility.startsWith('__')) continue;
         for (const userId in points[responsibility]) {
             if (!userMap.has(userId)) {
                 userMap.set(userId, {
@@ -2382,9 +2407,7 @@ async function handleDirectReset(message, args, points, responsibilities, saveDa
 
             case 'points':
                 const pointsCount = calculateTotalPoints(points);
-                for (const responsibility in points) {
-                    points[responsibility] = {};
-                }
+                resetPointScores(points);
                 writeJSONFile(pointsPath, points);
 
                 // مسح كاش الترتيب بعد التصفير
@@ -2413,9 +2436,7 @@ async function handleDirectReset(message, args, points, responsibilities, saveDa
                 for (const resp in responsibilities) {
                     delete responsibilities[resp];
                 }
-                for (const responsibility in points) {
-                    points[responsibility] = {};
-                }
+                resetPointScores(points);
 
                 writeJSONFile(pointsPath, points);
                 writeJSONFile(responsibilitiesPath, responsibilities);

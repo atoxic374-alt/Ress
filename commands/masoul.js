@@ -17,7 +17,6 @@ const { checkCooldown, startCooldown } = require('./cooldown.js');
 const { isUserBlocked } = require('./block.js');
 const fs = require('fs');
 const path = require('path');
-const ticketState = require('./ticket.js');
 
 // ===== إعدادات عامة =====
 const DEBUG = false;
@@ -338,15 +337,7 @@ async function handleClaimButton(interaction, context) {
             client.pendingReports.set(reportId, pendingReportData);
             scheduleSave();
 
-            // منح النقطة فوراً إذا كان النظام لا يتطلب تقرير للنقاط
-            if (!currentReportsConfig.pointsOnReport) {
-                ticketState.addPointsForResponsibility({
-                  responsibilityName,
-                  userId: interaction.user.id,
-                  actorId: interaction.user.id,
-                  source: 'masoul_claim'
-                });
-            }
+            // نقاط المسؤوليات تُحتسب الآن حصرياً عبر زر Take في اختصارات المسؤوليات.
 
             const reportEmbed = colorManager.createEmbed()
                 .setTitle(' ✅️ Claims')
@@ -371,14 +362,7 @@ async function handleClaimButton(interaction, context) {
 
             await interaction.editReply({ embeds: [reportEmbed], components: [row] });
     } else {
-        // --- ORIGINAL LOGIC for tasks NOT requiring a report ---
-        // Award points immediately
-        ticketState.addPointsForResponsibility({
-          responsibilityName,
-          userId: interaction.user.id,
-          actorId: interaction.user.id,
-          source: 'masoul_claim'
-        });
+        // نقاط المسؤوليات تُحتسب الآن حصرياً عبر زر Take في اختصارات المسؤوليات.
 
         // زر رابط الرسالة (إن أمكن)
         const finalChannelId = originalChannelId || interaction.channelId;
