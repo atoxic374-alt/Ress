@@ -185,12 +185,12 @@ async function execute(message, args, { points, responsibilities, client }) {
     const buttonRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId('top_prev')
-            .setLabel('⬅️ back')
+            .setEmoji('<:emoji_13:1429263136136888501>')
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(page === 0),
         new ButtonBuilder()
             .setCustomId('top_next')
-            .setLabel('next ➡️')
+            .setEmoji('<:emoji_14:1429263186539974708>')
             .setStyle(ButtonStyle.Secondary)
             .setDisabled(page >= maxPages - 1 || maxPages === 0)
     );
@@ -231,12 +231,12 @@ async function execute(message, args, { points, responsibilities, client }) {
             const newButtonRow = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
                     .setCustomId('top_prev')
-                    .setLabel('⬅️ Back')
+                    .setEmoji('<:emoji_13:1429263136136888501>')
                     .setStyle(ButtonStyle.Secondary)
                     .setDisabled(page === 0),
                 new ButtonBuilder()
                     .setCustomId('top_next')
-                    .setLabel('Next ➡️')
+                    .setEmoji('<:emoji_14:1429263186539974708>')
                     .setStyle(ButtonStyle.Secondary)
                     .setDisabled(page >= maxPages - 1 || maxPages === 0)
             );
