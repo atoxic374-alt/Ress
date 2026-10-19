@@ -2711,6 +2711,14 @@ function hasResponsibleTicketAccess(member, config, guild, ticket = null) {
     const memberUserId = String(member?.id || member?.user?.id || '');
     if (memberUserId && ticket.responsibilityClaimedBy === memberUserId) return true;
     if (hasStrictClaimAccess(member, config, ticket.reasonKey)) return true;
+    const generalRoleIds = new Set(getGeneralResponsibleRoleIds(config, guild));
+    let memberRoleIds = [];
+    if (member?.roles?.cache) memberRoleIds = [...member.roles.cache.keys()];
+    else if (Array.isArray(member?.roles)) memberRoleIds = member.roles;
+    else if (Array.isArray(member?.roles?.value)) memberRoleIds = member.roles.value;
+    else if (Array.isArray(member?.roles?.ids)) memberRoleIds = member.roles.ids;
+    if (memberRoleIds.map(String).some((id) => generalRoleIds.has(id))) return true;
+    return false;
   }
   const allowedRoleIds = getActiveResponsibleRoleIds(config, guild, ticket);
   let memberRoleIds = [];
@@ -7179,12 +7187,13 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
 
   const rolesPermissionTasks = allKnownRoles.map((roleId) => {
     const shouldSee = visibleResponsibleRoles.has(roleId);
+    const canWrite = generalResponsibleRoles.includes(roleId);
     return () => applyRequiredOverwrite(roleId, {
       ViewChannel: shouldSee,
-      SendMessages: shouldSee,
-      SendMessagesInThreads: shouldSee,
-      CreatePublicThreads: shouldSee,
-      CreatePrivateThreads: shouldSee,
+      SendMessages: canWrite,
+      SendMessagesInThreads: canWrite,
+      CreatePublicThreads: canWrite,
+      CreatePrivateThreads: canWrite,
       ReadMessageHistory: shouldSee
     });
   });
@@ -7199,12 +7208,13 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     const memberRoleIds = member?.roles?.cache ? [...member.roles.cache.keys()].map(String) : [];
     const shouldSee = existingResponsibleUsers.includes(userId)
       || memberRoleIds.some((roleId) => visibleResponsibleRoles.has(roleId));
+    const canWrite = memberRoleIds.some((roleId) => generalResponsibleRoles.includes(roleId));
     return () => applyRequiredOverwrite(userId, {
       ViewChannel: shouldSee,
-      SendMessages: shouldSee,
-      SendMessagesInThreads: shouldSee,
-      CreatePublicThreads: shouldSee,
-      CreatePrivateThreads: shouldSee,
+      SendMessages: canWrite,
+      SendMessagesInThreads: canWrite,
+      CreatePublicThreads: canWrite,
+      CreatePrivateThreads: canWrite,
       ReadMessageHistory: shouldSee
     });
   });
@@ -7262,12 +7272,11 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   }
 
   const takeButtonId = `ticket_resp_take_${guildId}_${resolvedPanelId}_${actionChannelId}`;
-  const disabledTakeButton = new ButtonBuilder()
+  const activeTakeButton = new ButtonBuilder()
     .setCustomId(takeButtonId)
     .setLabel('Take')
     .setEmoji('<:emoji_3:1484364952780144710>')
-    .setStyle(ButtonStyle.Success)
-    .setDisabled(true);
+    .setStyle(ButtonStyle.Success);
 
   // Start slower permission/UI work without delaying the first transfer notice.
   const permissionsPromise = runTransferParallelPipeline({
@@ -7279,7 +7288,7 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     responsibilityName: respName,
     roleIds: targetRoles,
     userIds: existingResponsibleUsers,
-    takeButton: disabledTakeButton
+    takeButton: activeTakeButton
   })).catch((error) => {
     logSilentError('transfer.container.send', error);
     return null;
@@ -7307,7 +7316,7 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
     await interaction.editReply(buildTicketMessagePayload(
       'Error',
-      '**تم إرسال Container، لكن تعذر تجهيز صلاحيات القراءة فقط. بقي زر Take معطلًا حتى مراجعة صلاحيات القناة.**',
+      '**تم إرسال Container، لكن تعذر تجهيز صلاحيات القناة. يرجى مراجعة صلاحيات التكت.**',
       { ephemeral: true, user: interaction.user }
     )).catch((error) => logSilentError('suppressed', error));
     return;
@@ -7315,11 +7324,6 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
 
   ticket.transferPermissionsReady = true;
   setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
-  const activeTakeButton = new ButtonBuilder()
-    .setCustomId(takeButtonId)
-    .setLabel('Take')
-    .setEmoji('<:emoji_3:1484364952780144710>')
-    .setStyle(ButtonStyle.Success);
   const activated = await transferMessage.edit(buildResponsibilityTransferPayload({
     responsibilityName: respName,
     roleIds: targetRoles,
