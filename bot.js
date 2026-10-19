@@ -3300,7 +3300,10 @@ client.on('messageCreate', async message => {
           const originalMessage = originalChannel?.messages?.fetch
             ? await originalChannel.messages.fetch(activeRequest.messageId).catch(() => null)
             : null;
-          const duplicateNotice = `<@${message.author.id}> توجد مشكلة مفتوحة بالفعل لهذه المسؤولية.`;
+          const channelMention = activeRequest.channelId !== message.channel.id
+            ? ` <#${message.channel.id}>`
+            : '';
+          const duplicateNotice = `**- يوجد مشكلة بالفعل مفتوحه** <@${message.author.id}>${channelMention}`;
           if (originalMessage?.reply) {
             await originalMessage.reply({
               content: duplicateNotice,
