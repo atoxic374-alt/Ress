@@ -6,9 +6,11 @@ const {
 } = require('discord.js');
 
 function colorToNumber(color, fallback = 0x5865f2) {
-    const value = String(color || '').replace(/^#/, '').replace(/^0x/i, '');
+    if (Number.isInteger(color) && color >= 0 && color <= 0xffffff) return color;
+    const value = String(color || '').trim().replace(/^#/, '').replace(/^0x/i, '');
+    if (!/^[0-9a-f]{1,6}$/i.test(value)) return fallback;
     const parsed = Number.parseInt(value, 16);
-    return Number.isFinite(parsed) ? parsed : fallback;
+    return Number.isFinite(parsed) && parsed <= 0xffffff ? parsed : fallback;
 }
 
 function createStructuredContainer({ title, description = '', footer = '', accentColor }) {

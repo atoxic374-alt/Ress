@@ -27,7 +27,7 @@ const path = require('path');
 // تسجيل خط Cairo بجميع أوزانه عند بدء التشغيل
 require('./utils/cairoFont').ensureCairoFontsRegistered();
 const { logEvent } = require('./utils/logs_system.js');
-const { createStructuredContainer, componentsV2Payload } = require('./utils/structuredContainer.js');
+const { createStructuredContainer, componentsV2Payload, colorToNumber } = require('./utils/structuredContainer.js');
 const { normalizeDiscordId, normalizeMentionableIds, userMention } = require('./utils/mentions.js');
 const { startReminderSystem } = require('./commands/notifications.js');
 // تعريف downManager في المستوى العلوي للوصول عبر جميع معالجات الأحداث
@@ -6283,8 +6283,10 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
         const requesterId = normalizeDiscordId(callData.requesterId);
         const requesterMention = requesterId ? userMention(requesterId) : 'صاحب الاختصار';
         const claimerMention = userMention(actualClaimerId) || 'المستلم';
+        const claimAccentColor = colorToNumber(colorManager.getColor?.() || '#0099ff', 0x0099ff);
         const claimContainer = createStructuredContainer({
           title: 'Claimed',
+          accentColor: claimAccentColor,
           description: [
             `تم استلام مشكلتك : ${requesterMention}`,
             '',
