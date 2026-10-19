@@ -2751,8 +2751,7 @@ function getOnlineResponsibleMentions(guild, roleIds = [], userIds = []) {
 
 function canManageTicket(interaction, ticket, config) {
   if (ticket?.transferredTo) {
-    return ticket.responsibilityClaimedBy === interaction.user.id
-      || hasStrictClaimAccess(interaction.member, config, ticket.reasonKey);
+    return hasResponsibleTicketAccess(interaction.member, config, interaction.guild, ticket);
   }
   if (interaction.user.id === ticket.claimedBy) return true;
   return hasResponsibleTicketAccess(interaction.member, config, interaction.guild, ticket);
