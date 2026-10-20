@@ -43,6 +43,7 @@ function ids(value) { return [...new Set((Array.isArray(value) ? value : []).map
 function normalizeSettings(row) {
   const parsed = safeJson(row?.settings_json, {});
   const source = parsed && !Array.isArray(parsed) ? parsed : {};
+  const valueOf = (key, ...aliases) => [key, ...aliases].map(name => source[name]).find(value => value !== undefined);
   const idOrNull = value => isSnowflake(value) ? String(value) : null;
   const maxMembers = Number(source.maxMembers);
   const settingsVersion = Number(source.settingsVersion);
@@ -51,18 +52,18 @@ function normalizeSettings(row) {
     ...source,
     guildId: String(row?.guild_id || source.guildId || ''),
     enabled: source.enabled === true || source.enabled === 1,
-    chatMode: Object.values(GROUP_CHAT_MODES).includes(source.chatMode) ? source.chatMode : null,
-    textCategoryId: idOrNull(source.textCategoryId),
-    voiceCategoryId: idOrNull(source.voiceCategoryId),
-    musicChannelId: idOrNull(source.musicChannelId),
-    logChannelId: idOrNull(source.logChannelId),
-    mainRoleId: idOrNull(source.mainRoleId),
-    leaderRoleId: idOrNull(source.leaderRoleId),
-    managerRoleId: idOrNull(source.managerRoleId),
-    systemUsers: ids(source.systemUsers),
-    systemRoles: ids(source.systemRoles),
-    extraPermissions: source.extraPermissions === true || source.extraPermissions === 1,
-    countAllChannels: source.countAllChannels === true || source.countAllChannels === 1,
+    chatMode: Object.values(GROUP_CHAT_MODES).includes(valueOf('chatMode', 'chat_mode')) ? valueOf('chatMode', 'chat_mode') : null,
+    textCategoryId: idOrNull(valueOf('textCategoryId', 'text_category_id')),
+    voiceCategoryId: idOrNull(valueOf('voiceCategoryId', 'voice_category_id')),
+    musicChannelId: idOrNull(valueOf('musicChannelId', 'music_channel_id')),
+    logChannelId: idOrNull(valueOf('logChannelId', 'log_channel_id')),
+    mainRoleId: idOrNull(valueOf('mainRoleId', 'main_role_id')),
+    leaderRoleId: idOrNull(valueOf('leaderRoleId', 'leader_role_id')),
+    managerRoleId: idOrNull(valueOf('managerRoleId', 'manager_role_id')),
+    systemUsers: ids(valueOf('systemUsers', 'system_users')),
+    systemRoles: ids(valueOf('systemRoles', 'system_roles')),
+    extraPermissions: valueOf('extraPermissions', 'extra_permissions') === true || valueOf('extraPermissions', 'extra_permissions') === 1,
+    countAllChannels: valueOf('countAllChannels', 'count_all_channels') === true || valueOf('countAllChannels', 'count_all_channels') === 1,
     maxMembers: Number.isInteger(maxMembers) && maxMembers >= 1 && maxMembers <= 1000 ? maxMembers : GROUP_DEFAULTS.maxMembers,
     settingsVersion: Number.isInteger(settingsVersion) && settingsVersion >= 1 ? settingsVersion : GROUP_DEFAULTS.settingsVersion
   };
