@@ -49,7 +49,7 @@ function setupPayloads(guild, settings) {
     ['Chat Mode', 'ثريدات أو رومات مستقلة', 'groups_setup:chatmode'],
     ['Text Category', 'تحديد كاتوقري النص أو الثريدات', 'groups_setup:textcat'],
     ['Voice Category', 'تحديد كاتوقري الفويس', 'groups_setup:voicecat'],
-    ['Main Role', 'الرول الأب الذي تنشأ تحته رولات القروبات تلقائيًا', 'groups_setup:mainrole'],
+    ['Main Role', 'الرول الذي تنشأ تحته رولات القروبات تلقائيًا', 'groups_setup:mainrole'],
     ['Music Source', 'تحديد روم مصدر الميوزك عند إنشاء القروب', 'groups_setup:music'],
     ['Log Channel', 'إرسال لوقات القروبات هنا', 'groups_setup:log'],
     ['Leader Role', 'الرول الذي يأخذه مالك القروب', 'groups_setup:leaderrole'],
