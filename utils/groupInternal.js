@@ -1,0 +1,105 @@
+const gm = require('./groupManager');
+const { renderMembers, renderInfo } = require('./groupRenderer');
+
+const COMMANDS = new Set(['تحكم', 'control', 'تعديل', 'edit', 'عقوبه', 'عقوبة', 'punish', 'صلاحية', 'permission', 'مسح', 'clear', 'اعضاء', 'أعضاء', 'members', 'اضافة', 'إضافة', 'add', 'ازالة', 'إزالة', 'remove', 'منع', 'block', 'سماح', 'allow', 'قروبي', 'my-group', 'مسؤول', 'manager']);
+
+function ids(message) {
+  return [...new Set([...message.mentions.users.keys(), ...(String(message.content).match(/\b\d{16,20}\b/g) || [])])];
+}
+async function syncMember(group, guild, userId, add) {
+  const member = await guild.members.fetch(String(userId)).catch(() => null);
+  if (!member) throw new Error('MEMBER_NOT_FOUND');
+  const role = group.role_id && guild.roles.cache.get(group.role_id);
+  if (role) await (add ? member.roles.add(role, 'Managed group membership') : member.roles.remove(role, 'Managed group membership'));
+  const thread = group.thread_id && guild.channels.cache.get(group.thread_id);
+  if (thread?.members) await (add ? thread.members.add(member.id) : thread.members.remove(member.id)).catch(() => {});
+  return member;
+}
+function reply(message, content) { return message.reply(content).catch(() => null); }
+async function handleInternalMessage(message, { prefix = ':' } = {}) {
+  if (!message?.guild || message.author?.bot || !String(message.content || '').startsWith(prefix)) return false;
+  const raw = String(message.content).slice(prefix.length).trim();
+  const words = raw.split(/\s+/);
+  let command = String(words.shift() || '').toLowerCase();
+  if (command === 'تعديل' && String(words[0] || '') === 'القروب') { command = 'تعديل'; words.shift(); }
+  if (!COMMANDS.has(command)) return false;
+  const group = await gm.getGroupForChannel(message.guild.id, message.channel.id);
+  if (!group) { await reply(message, 'This channel is not linked to a group.'); return true; }
+  const settings = await gm.getSettings(message.guild.id);
+  const privileged = gm.canManageGroup(message.client, settings, group, message.member);
+  const system = gm.canManageSystem(message.client, settings, message.member);
+  const targetId = ids(message)[0];
+  try {
+    if (command === 'قروبي' || command === 'my-group') {
+      if (!group.memberIds.includes(String(message.author.id)) && !system) return Boolean(await reply(message, 'You are not a group member.'));
+      const owner = await message.guild.members.fetch(group.owner_id).catch(() => null);
+      const managers = await Promise.all(group.managerIds.map(id => message.guild.members.fetch(id).catch(() => null)));
+      await message.reply({ files: [await renderInfo({ guild: message.guild, group, owner, managers: managers.filter(Boolean), accentColor: group.color })] }).catch(() => {});
+      return true;
+    }
+    if (command === 'اعضاء' || command === 'أعضاء' || command === 'members') {
+      const rows = await gm.listMemberPoints(message.guild.id, group.id, 10);
+      const members = await Promise.all(rows.map(async row => ({ ...row, member: await message.guild.members.fetch(row.user_id).catch(() => null) })));
+      await message.reply({ files: [await renderMembers({ guild: message.guild, group, members, accentColor: group.color })] }).catch(() => {});
+      return true;
+    }
+    if (!privileged && !system) { await reply(message, 'You do not have permission.'); return true; }
+    if (command === 'اضافة' || command === 'إضافة' || command === 'add') {
+      if (!targetId) throw new Error('MENTION_REQUIRED');
+      await gm.addMember(message.guild.id, group.id, targetId, message.author.id);
+      await syncMember(group, message.guild, targetId, true);
+      await reply(message, 'Member added.'); return true;
+    }
+    if (command === 'ازالة' || command === 'إزالة' || command === 'remove') {
+      if (!targetId) throw new Error('MENTION_REQUIRED');
+      await gm.removeMember(message.guild.id, group.id, targetId, message.author.id);
+      await syncMember(group, message.guild, targetId, false);
+      await reply(message, 'Member removed.'); return true;
+    }
+    if (command === 'منع' || command === 'block') {
+      if (!targetId) throw new Error('MENTION_REQUIRED');
+      await gm.setBlocked(message.guild.id, group.id, targetId, true, message.author.id);
+      await gm.removeMember(message.guild.id, group.id, targetId, message.author.id).catch(() => {});
+      await syncMember(group, message.guild, targetId, false).catch(() => {});
+      await reply(message, 'Member blocked.'); return true;
+    }
+    if (command === 'سماح' || command === 'allow') {
+      if (!targetId) throw new Error('MENTION_REQUIRED');
+      await gm.setBlocked(message.guild.id, group.id, targetId, false, message.author.id);
+      await reply(message, 'Member allowed.'); return true;
+    }
+    if (command === 'مسؤول' || command === 'manager') {
+      if (!targetId) throw new Error('MENTION_REQUIRED');
+      if (String(group.owner_id) !== String(message.author.id) && !system) throw new Error('OWNER_ONLY');
+      const managers = new Set(group.managerIds);
+      if (/\b(remove|ازالة|إزالة)\b/i.test(raw)) managers.delete(String(targetId));
+      else { if (!group.memberIds.includes(String(targetId))) throw new Error('MANAGER_MUST_BE_MEMBER'); managers.add(String(targetId)); }
+      await gm.setManagers(message.guild.id, group.id, [...managers], message.author.id);
+      const managerRole = settings.managerRoleId && message.guild.roles.cache.get(settings.managerRoleId);
+      if (managerRole) { const target = await message.guild.members.fetch(targetId).catch(() => null); if (target) await (managers.has(String(targetId)) ? target.roles.add(managerRole, 'Group manager role') : target.roles.remove(managerRole, 'Group manager role')).catch(() => {}); }
+      await reply(message, 'Managers updated.'); return true;
+    }
+    if (command === 'مسح' || command === 'clear') {
+      if (!settings.extraPermissions) throw new Error('EXTRA_DISABLED');
+      const fetched = await message.channel.messages.fetch({ limit: 100 });
+      await message.channel.bulkDelete(fetched, true);
+      const done = await reply(message, 'Messages cleared.');
+      if (done) setTimeout(() => done.delete().catch(() => {}), 3000);
+      return true;
+    }
+    if (command === 'عقوبه' || command === 'عقوبة' || command === 'punish') {
+      if (!targetId) throw new Error('MENTION_REQUIRED');
+      const target = await message.guild.members.fetch(targetId);
+      await target.timeout(10 * 60 * 1000, 'Group punishment');
+      await reply(message, '10m timeout applied.'); return true;
+    }
+    if (command === 'صلاحية' || command === 'permission') { await reply(message, 'Use the group role to control access.'); return true; }
+    if (command === 'تحكم' || command === 'control' || command === 'تعديل' || command === 'edit') { await reply(message, 'Use Group Control to manage this group.'); return true; }
+  } catch (error) {
+    const messages = { MENTION_REQUIRED: 'Mention a member first.', OWNER_ONLY: 'Owner only.', MANAGER_MUST_BE_MEMBER: 'The manager must be a group member.', EXTRA_DISABLED: 'Extra permissions are disabled.', MEMBER_NOT_FOUND: 'Member not found.' };
+    await reply(message, messages[error.message] || 'The group action failed.');
+    return true;
+  }
+  return true;
+}
+module.exports = { handleInternalMessage };

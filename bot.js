@@ -2924,6 +2924,16 @@ client.on('messageCreate', async message => {
     console.error('❌ خطأ في نظام word:', error);
 
   }
+  // أوامر القروب الداخلية تمر هنا قبل parser الأوامر العامة لتجنب التعارض.
+  try {
+    const groupsCommand = client.commands.get('groups');
+    if (groupsCommand?.handleInternalMessage) {
+      const consumed = await groupsCommand.handleInternalMessage(message, { prefix: getCachedPrefix() || ':' });
+      if (consumed) return;
+    }
+  } catch (error) {
+    console.error('Group internal dispatcher error:', error);
+  }
   // معالجة الأوامر (البريفكس)
   const prefix = getCachedPrefix();
   if (prefix && message.content.startsWith(prefix)) {
