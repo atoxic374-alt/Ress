@@ -163,12 +163,16 @@ function canManageGroup(client, settings, group, member) { if (!member || !group
 function channelBelongs(group, channelId) { return [group.text_channel_id, group.thread_id, group.voice_channel_id].filter(Boolean).includes(String(channelId)); }
 function validateConfig(guild, settings) {
   const missing = [];
+  const me = guild.members?.me;
+  const requiredPermissions = ['ManageChannels', 'ManageRoles', 'ManageMessages', 'ManageThreads', 'MoveMembers', 'ManageNicknames'];
+  if (me?.permissions) for (const permission of requiredPermissions) if (!me.permissions.has(permission)) missing.push(`permission:${permission}`);
   if (!settings.chatMode) missing.push('chatMode');
   const textCategory = settings.textCategoryId && guild.channels.cache.get(settings.textCategoryId);
   const voiceCategory = settings.voiceCategoryId && guild.channels.cache.get(settings.voiceCategoryId);
   if (!textCategory || textCategory.type !== ChannelType.GuildCategory) missing.push('textCategoryId');
   if (!voiceCategory || voiceCategory.type !== ChannelType.GuildCategory) missing.push('voiceCategoryId');
   if (settings.musicChannelId) { const music = guild.channels.cache.get(settings.musicChannelId); if (!music?.isVoiceBased?.()) missing.push('musicChannelId'); }
+  for (const roleId of [settings.leaderRoleId, settings.managerRoleId].filter(Boolean)) { const role = guild.roles.cache.get(roleId); if (!role) missing.push(`role:${roleId}`); else if (me?.roles?.highest && role.position >= me.roles.highest.position) missing.push(`roleHierarchy:${roleId}`); }
   return missing;
 }
 async function setSystemUser(guildId, targetId, enabled, actorId) {
