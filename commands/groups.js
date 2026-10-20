@@ -59,7 +59,9 @@ function setupPayloads(guild, settings) {
     ['قواعد النقاط', 'تخصيص قواعد نقاط القروبات', 'groups_setup:rules']
   ];
   const make = (title, items, includeSummary) => {
-    const c = baseContainer(guild, title, includeSummary ? summary : 'تكملة إعدادات القروبات : اختر الإعداد المطلوب.');
+    const c = includeSummary
+      ? baseContainer(guild, title, summary)
+      : new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || '#5865F2'));
     for (const [label, desc, id] of items) c.addSectionComponents(new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${desc}`)).setButtonAccessory(button(id, 'فتح')));
     return componentsV2Payload(c);
   };
