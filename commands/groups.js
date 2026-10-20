@@ -43,19 +43,19 @@ function setupPayload(guild, settings) {
   const managerCount = Number(settings.systemUsers?.length || 0) + Number(settings.systemRoles?.length || 0);
   const chatMode = settings.chatMode === 'threads' ? 'ثريدات' : settings.chatMode === 'channels' ? 'رومات مستقلة' : 'غير محدد';
   const c = baseContainer(guild, 'إعدادات القروبات',
-    `الحالة : ${status}\n` +
-    `مسؤولو النظام : ${managerCount} عضو/رول\n` +
-    `نمط الشات : ${chatMode}\n` +
-    `كاتوقري النص : ${channelMention(settings.textCategoryId)}\n` +
-    `كاتوقري الفويس : ${channelMention(settings.voiceCategoryId)}\n` +
+    `Status : ${status}\n` +
+    `System Managers : ${managerCount} عضو/رول\n` +
+    `Chat Mode : ${chatMode}\n` +
+    `Text Category : ${channelMention(settings.textCategoryId)}\n` +
+    `Voice Category : ${channelMention(settings.voiceCategoryId)}\n` +
     `Main Role : ${roleMention(settings.mainRoleId)}\n` +
-    `رول المالك : ${roleMention(settings.leaderRoleId)}\n` +
-    `رول المسؤول : ${roleMention(settings.managerRoleId)}\n` +
-    `مصدر الميوزك : ${channelMention(settings.musicChannelId)}\n` +
-    `روم اللوق : ${channelMention(settings.logChannelId)}\n` +
-    `نطاق النقاط : ${settings.countAllChannels ? 'كل الرومات' : 'رومات القروبات فقط'}\n` +
-    `الصلاحيات الإضافية : ${settings.extraPermissions ? 'مفعلة' : 'متوقفة'}\n` +
-    `قواعد النقاط : اضغط على زر قواعد النقاط للتفاصيل`);
+    `Leader Role : ${roleMention(settings.leaderRoleId)}\n` +
+    `Manager Role : ${roleMention(settings.managerRoleId)}\n` +
+    `Music Source : ${channelMention(settings.musicChannelId)}\n` +
+    `Log Channel : ${channelMention(settings.logChannelId)}\n` +
+    `Points Scope : ${settings.countAllChannels ? 'كل الرومات' : 'رومات القروبات فقط'}\n` +
+    `Extra Permissions : ${settings.extraPermissions ? 'مفعلة' : 'متوقفة'}\n` +
+    `Point Rules : اضغط على زر قواعد النقاط للتفاصيل`);
   const sections = [
     ['تفعيل النظام', 'تشغيل أو إيقاف نظام القروبات', 'groups_setup:toggle'],
     ['مسؤولو النظام', 'إضافة أو إزالة مسؤولي النظام', 'groups_setup:managers'],
