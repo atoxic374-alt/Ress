@@ -3282,6 +3282,10 @@ client.on('messageCreate', async message => {
       await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, client, colorManager });
       return;
     }
+    if (['groups', 'group', 'قروب', 'قروبات', 'setup', 'إعدادات'].includes(commandName)) {
+      await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
+      return;
+    }
     if (commandName === 'settings' && ['bonus', 'بونس'].includes(String(args[0] || '').toLowerCase())) {
       await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, client, colorManager });
       return;
