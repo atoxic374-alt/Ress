@@ -36,13 +36,50 @@ function rulesPayload(guild, rules = []) {
   return componentsV2Payload(c);
 }
 
+function setupIssueLabel(issue) {
+  const labels = {
+    chatMode: 'اختر نمط الشات.',
+    textCategoryId: 'حدد كاتاقوري النص/الثريدات.',
+    voiceCategoryId: 'حدد كاتاقوري الصوت.',
+    logChannelId: 'روم السجلات غير صالح أو لم يعد موجودًا.',
+    topChannelId: 'روم لوحة الترتيب غير صالح أو لم يعد موجودًا.',
+    adminControlChannelId: 'روم لوحة الإدارة غير صالح أو لم يعد موجودًا.',
+    memberControlChannelId: 'روم لوحة الأعضاء غير صالح أو لم يعد موجودًا.',
+    musicChannelId: 'روم مصدر الموسيقى غير صالح أو لم يعد موجودًا.',
+    mainRolePosition: 'اختر رتبة رئيسية أعلى من @everyone.',
+    'permission:BOT_MEMBER': 'تعذر قراءة صلاحيات البوت في السيرفر.',
+    'permission:ManageChannels': 'امنح البوت صلاحية Manage Channels.',
+    'permission:ManageRoles': 'امنح البوت صلاحية Manage Roles.',
+    'permission:ManageMessages': 'امنح البوت صلاحية Manage Messages لتفعيل تنظيف الرسائل.',
+    'permission:ModerateMembers': 'امنح البوت صلاحية Moderate Members لتفعيل العقوبات.',
+    'permission:MoveMembers': 'امنح البوت صلاحية Move Members لفصل الأعضاء من الصوت.'
+  };
+  if (labels[issue]) return labels[issue];
+  if (issue.startsWith('permission:')) return `امنح البوت الصلاحية ${issue.slice('permission:'.length)}.`;
+  if (issue.startsWith('categoryPermission:')) {
+    const [, key, permission] = issue.split(':');
+    const category = key === 'textCategoryId' ? 'كاتاقوري النص' : 'كاتاقوري الصوت';
+    return `تأكد من أن البوت يملك ${permission} في ${category}.`;
+  }
+  if (issue.startsWith('channelPermission:')) {
+    const [, key, permission] = issue.split(':');
+    const channel = ({ musicChannelId: 'روم مصدر الموسيقى', logChannelId: 'روم السجلات', topChannelId: 'روم الترتيب', adminControlChannelId: 'روم تحكم الإدارة', memberControlChannelId: 'روم تحكم الأعضاء' })[key] || 'الروم المحدد';
+    return `تأكد من أن البوت يملك ${permission} في ${channel}.`;
+  }
+  if (issue.startsWith('roleHierarchy:')) return `ارفع رتبة البوت فوق الرتبة <@&${issue.slice('roleHierarchy:'.length)}>.`;
+  if (issue.startsWith('role:')) return `الرتبة <@&${issue.slice('role:'.length)}> غير موجودة.`;
+  return `راجع الإعداد: ${issue}.`;
+}
+
 function setupPayloads(guild, settings) {
   const status = settings.enabled ? 'مفعل' : 'متوقف';
   const roleMention = id => id ? `<@&${id}>` : 'غير محدد';
   const channelMention = id => id ? `<#${id}>` : 'غير محدد';
   const managerCount = Number(settings.systemUsers?.length || 0) + Number(settings.systemRoles?.length || 0);
   const chatMode = settings.chatMode === 'threads' ? 'ثريدات' : settings.chatMode === 'channels' ? 'رومات مستقلة' : 'غير محدد';
-  const summary = `Status : ${status}\nSystem Managers : ${managerCount} عضو/رول\nChat Mode : ${chatMode}\nText Category : ${channelMention(settings.textCategoryId)}\nVoice Category : ${channelMention(settings.voiceCategoryId)}\nTop Channel : ${channelMention(settings.topChannelId)}\nAdmin Control Channel : ${channelMention(settings.adminControlChannelId)}\nMember Control Channel : ${channelMention(settings.memberControlChannelId)}\nMain Role : ${roleMention(settings.mainRoleId)}\nLeader Role : ${roleMention(settings.leaderRoleId)}\nManager Role : ${roleMention(settings.managerRoleId)}\nMusic Source : ${channelMention(settings.musicChannelId)}\nLog Channel : ${channelMention(settings.logChannelId)}\nPoints Scope : ${settings.countAllChannels ? 'كل الرومات' : 'رومات القروبات فقط'}\nExtra Permissions : ${settings.extraPermissions ? 'مفعلة' : 'متوقفة'}\nPoint Rules : اضغط على زر قواعد النقاط للتفاصيل`;
+  const issues = gm.validateConfig(guild, settings);
+  const readiness = issues.length ? `الإعداد غير مكتمل (${issues.length}):\n${issues.slice(0, 6).map(setupIssueLabel).join('\n')}${issues.length > 6 ? '\n... استخدم زر تدقيق الإعداد لعرض الباقي.' : ''}` : 'الإعداد جاهز لإنشاء القروبات.';
+  const summary = `Status : ${status}\nReadiness : ${readiness}\nSystem Managers : ${managerCount} عضو/رول\nChat Mode : ${chatMode}\nText Category : ${channelMention(settings.textCategoryId)}\nVoice Category : ${channelMention(settings.voiceCategoryId)}\nTop Channel : ${channelMention(settings.topChannelId)}\nAdmin Control Channel : ${channelMention(settings.adminControlChannelId)}\nMember Control Channel : ${channelMention(settings.memberControlChannelId)}\nMain Role : ${roleMention(settings.mainRoleId)}\nLeader Role : ${roleMention(settings.leaderRoleId)}\nManager Role : ${roleMention(settings.managerRoleId)}\nMusic Source : ${channelMention(settings.musicChannelId)}\nLog Channel : ${channelMention(settings.logChannelId)}\nPoints Scope : ${settings.countAllChannels ? 'كل الرومات' : 'رومات القروبات فقط'}\nExtra Permissions : ${settings.extraPermissions ? 'مفعلة' : 'متوقفة'}\nPoint Rules : اضغط على زر قواعد النقاط للتفاصيل`;
   const sections = [
     ['System Toggle', 'تشغيل أو إيقاف نظام القروبات', 'groups_setup:toggle'],
     ['System Managers', 'إضافة أو إزالة مسؤولي النظام', 'groups_setup:managers'],
@@ -66,12 +103,21 @@ function setupPayloads(guild, settings) {
       ? baseContainer(guild, title, summary)
       : new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || '#5865F2'));
     for (const [label, desc, id] of items) c.addSectionComponents(new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${desc}`)).setButtonAccessory(button(id, 'Open')));
+    if (includeSummary) c.addActionRowComponents(new ActionRowBuilder().addComponents(button('groups_setup:audit', 'تدقيق الإعداد', ButtonStyle.Primary), button('groups_setup:clear', 'مسح قيمة', ButtonStyle.Secondary)));
     return componentsV2Payload(c);
   };
   return [make('Group Settings', sections.slice(0, 8), true), make('', sections.slice(8), false)];
 }
 
 const setupPanels = new Map();
+const setupPanelLocks = new Map();
+async function hydrateSetupReferences(guild, settings) {
+  if (!guild.members?.me) await guild.members?.fetchMe?.().catch(() => null);
+  const channelIds = ['textCategoryId', 'voiceCategoryId', 'musicChannelId', 'logChannelId', 'topChannelId', 'adminControlChannelId', 'memberControlChannelId'];
+  const roleIds = ['mainRoleId', 'leaderRoleId', 'managerRoleId'];
+  await Promise.all(channelIds.map(key => settings[key] && !guild.channels.cache.has(settings[key]) ? guild.channels.fetch(settings[key]).catch(() => null) : null));
+  await Promise.all(roleIds.map(key => settings[key] && !guild.roles.cache.has(settings[key]) ? guild.roles.fetch(settings[key]).catch(() => null) : null));
+}
 function rememberSetupPanel(guildId, channelId, first, second) {
   const entry = { guildId: String(guildId), channelId: String(channelId), first, second, touchedAt: Date.now() };
   setupPanels.set(`${entry.guildId}:${entry.channelId}`, entry);
@@ -80,13 +126,26 @@ function rememberSetupPanel(guildId, channelId, first, second) {
 }
 function findSetupPanel(message, guildId, channelId) {
   for (const entry of setupPanels.values()) if (entry.first?.id === message?.id || entry.second?.id === message?.id) return entry;
-  return setupPanels.get(`${String(guildId)}:${String(channelId)}`)
-    || [...setupPanels.values()].filter(entry => entry.guildId === String(guildId)).sort((a, b) => b.touchedAt - a.touchedAt)[0]
-    || null;
+  return setupPanels.get(`${String(guildId)}:${String(channelId)}`) || null;
+}
+async function recoverSetupPanel(channel, guild) {
+  const messages = await channel?.messages?.fetch?.({ limit: 100 }).catch(() => null);
+  if (!messages) return null;
+  const botId = guild.client?.user?.id;
+  const panels = [...messages.values()].filter(message =>
+    (!botId || message.author?.id === botId) && JSON.stringify(message.components || []).includes('groups_setup:')
+  ).sort((a, b) => Number(a.createdTimestamp || 0) - Number(b.createdTimestamp || 0));
+  const firstPanels = panels.filter(message => JSON.stringify(message.components || []).includes('groups_setup:toggle'));
+  const secondPanels = panels.filter(message => JSON.stringify(message.components || []).includes('groups_setup:mainrole'));
+  const first = firstPanels[firstPanels.length - 1] || null;
+  const second = secondPanels[secondPanels.length - 1] || null;
+  return first || second ? rememberSetupPanel(guild.id, channel.id, first, second) : null;
 }
 async function refreshSetupPanel(interaction, settings) {
   settingsCache?.delete(String(interaction.guild.id));
-  const entry = findSetupPanel(interaction.message, interaction.guild.id, interaction.channelId);
+  await hydrateSetupReferences(interaction.guild, settings);
+  const entry = findSetupPanel(interaction.message, interaction.guild.id, interaction.channelId)
+    || await recoverSetupPanel(interaction.channel, interaction.guild);
   if (!entry) return;
   const payloads = setupPayloads(interaction.guild, settings);
   await entry.first?.edit(payloads[0]).catch(() => {});
@@ -94,11 +153,21 @@ async function refreshSetupPanel(interaction, settings) {
   entry.touchedAt = Date.now();
 }
 async function sendSetupPanel(channel, guild, settings) {
-  const payloads = setupPayloads(guild, settings);
-  const first = await channel.send(payloads[0]);
-  const second = await channel.send(payloads[1]);
-  rememberSetupPanel(guild.id, channel.id, first, second);
-  return first;
+  const key = `${guild.id}:${channel.id}`;
+  if (setupPanelLocks.has(key)) return setupPanelLocks.get(key);
+  const work = (async () => {
+    await hydrateSetupReferences(guild, settings);
+    const payloads = setupPayloads(guild, settings);
+    const entry = setupPanels.get(key) || await recoverSetupPanel(channel, guild);
+    let first = entry?.first ? await entry.first.edit(payloads[0]).catch(() => null) : null;
+    let second = entry?.second ? await entry.second.edit(payloads[1]).catch(() => null) : null;
+    if (!first) first = await channel.send(payloads[0]);
+    if (!second) second = await channel.send(payloads[1]);
+    rememberSetupPanel(guild.id, channel.id, first || entry?.first, second || entry?.second);
+    return first || entry?.first;
+  })();
+  setupPanelLocks.set(key, work);
+  try { return await work; } finally { setupPanelLocks.delete(key); }
 }
 function controlPayload(guild) { const c=baseContainer(guild,'التحكم بالقروب','استخدم الأزرار لإدارة القروبات.'); const items=[['إنشاء قروب','إنشاء قروب جديد','groups_admin:create',ButtonStyle.Success],['استيراد قروب','ربط عناصر Discord موجودة','groups_admin:import',ButtonStyle.Secondary],['حذف قروب','حذف قروب مُدار','groups_admin:delete',ButtonStyle.Danger],['معلومات القروب','عرض تفاصيل القروب','groups_admin:info',ButtonStyle.Secondary],['تعديل قروب','تعديل إعدادات القروب','groups_admin:edit',ButtonStyle.Primary],['تصفير نقاط قروب','تصفير قروب واحد','groups_admin:reset',ButtonStyle.Secondary],['تصفير كل النقاط','تصفير نقاط كل القروبات','groups_admin:resetall',ButtonStyle.Danger]]; for(const [label,desc,id,style] of items)c.addSectionComponents(new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${desc}`)).setButtonAccessory(button(id,'فتح',style))); return componentsV2Payload(c); }
 function selectPayload(guild, title, description, customId, options) { const c=baseContainer(guild,title,description); const menu=new StringSelectMenuBuilder().setCustomId(customId).setPlaceholder('اختر خيارًا').setMinValues(1).setMaxValues(1).addOptions(options); c.addActionRowComponents(new ActionRowBuilder().addComponents(menu)); return componentsV2Payload(c); }
@@ -135,7 +204,12 @@ async function buildTopGroupsPayload(guild, { viewerId = null, channelId = null 
   await Promise.all(targetGroups.map(async group => {
     memberRowsByGroup[String(group.id)] = await gm.listMemberPoints(guild.id, group.id, 1000).catch(() => []);
   }));
-  const attachment = await renderTopGroups({ guild, groups, memberRowsByGroup, selectedGroup, viewerId, accentColor: selectedGroup?.color || '#5865F2' });
+  const groupAvatars = {};
+  await Promise.all(sorted.slice(0, 3).map(async group => {
+    const owner = guild.members.cache.get(String(group.owner_id)) || await guild.members.fetch(String(group.owner_id)).catch(() => null);
+    groupAvatars[String(group.id)] = owner?.displayAvatarURL?.({ extension: 'png', size: 128 }) || null;
+  }));
+  const attachment = await renderTopGroups({ guild, groups, memberRowsByGroup, groupAvatars, selectedGroup, viewerId, accentColor: selectedGroup?.color || '#5865F2' });
   const description = selectedGroup ? `Selected group: **${safe(selectedGroup.name)}**\nUse My Rank to see your rank and total points in this group.` : 'Use My Group to select the group you belong to.';
   const container = baseContainer(guild, 'Top Groups', description, selectedGroup?.color || '#5865F2');
   container.addActionRowComponents(topGroupsButtons());
@@ -189,8 +263,212 @@ async function sendGroupPanel(channel, guild, groupId) {
   }
 }
 async function createFromModal(interaction) { const settings=await checkSystem(interaction); if(!settings)return; await interaction.deferReply({flags:MessageFlags.Ephemeral}); const name=safe(interaction.fields.getTextInputValue('group_name'),80); const ownerId=interaction.fields.getTextInputValue('group_owner').match(/\d{16,20}/)?.[0]||interaction.user.id; if(!name)return reply(interaction,{content:'اسم القروب مطلوب.'}); try { const group=await gm.createGroup(interaction.guild,{name,ownerId,color:'#5865F2'},interaction.user.id); await gm.logGroupEvent(interaction.guild,'create',{groupId:group.id,name:group.name,ownerId:group.owner_id},interaction.user.id); const voiceChannel=interaction.guild.channels.cache.get(group.voice_channel_id)||await interaction.guild.channels.fetch(group.voice_channel_id).catch(()=>null); const musicResult=voiceChannel?await tempVoice.ensureMusicBotInVoice(interaction.guild,voiceChannel,{musicChannelId:settings.musicChannelId,reason:'Move music bot to newly created group'}):null; await gm.logGroupEvent(interaction.guild,'music',{groupId:group.id,ok:Boolean(musicResult?.ok),code:musicResult?.code||null},interaction.user.id); const defaultChannel=interaction.guild.channels.cache.get(group.thread_id||group.text_channel_id); const configuredChannel=settings.memberControlChannelId&&interaction.guild.channels.cache.get(settings.memberControlChannelId); const channel=configuredChannel||defaultChannel; if(channel) { if(group.thread_id&&channel.id===group.thread_id) await channel.members.add(ownerId).catch(()=>{}); await sendGroupPanel(channel,interaction.guild,group.id); } await reply(interaction,{content:`تم إنشاء القروب : **${safe(group.name)}**\nالميوزك : ${musicResultMessage(musicResult)}`}); } catch(error){ await reply(interaction,{content:error.message.startsWith('GROUP_SETUP_REQUIRED')?'أكمل إعدادات القروبات أولًا.':`تعذر إنشاء القروب : ${error.message}`}); } }
-async function handleSetup(interaction, action) { const settings=await checkSystem(interaction); if(!settings)return true; if(action==='toggle'){const updated=await gm.saveSettings(interaction.guild.id,{enabled:!settings.enabled},interaction.user.id);await refreshSetupPanel(interaction,updated);return reply(interaction,setupConfirmation(interaction,'System Toggle',`تم ${!settings.enabled ? 'تفعيل' : 'إيقاف'} نظام القروبات.`));} if(action==='chatmode')return reply(interaction,selectPayload(interaction.guild,'نمط الشات','اختر طريقة إنشاء مساحات شات القروبات.','groups_setup_select:chatmode',[{label:'ثريدات',value:'threads',description:'روم أب واحد مع ثريدات خاصة'},{label:'رومات',value:'channels',description:'روم نصي مستقل لكل قروب'}])); if(action==='extra'){const updated=await gm.saveSettings(interaction.guild.id,{extraPermissions:!settings.extraPermissions},interaction.user.id);await refreshSetupPanel(interaction,updated);return reply(interaction,setupConfirmation(interaction,'Extra Permissions',`تم ${!settings.extraPermissions ? 'تفعيل' : 'تعطيل'} الصلاحيات الإضافية.`));} if(action==='scope')return reply(interaction,selectPayload(interaction.guild,'نطاق النقاط','اختر أين يتم احتساب تفاعل القروبات.','groups_setup_select:scope',[{label:'رومات القروبات فقط',value:'group',description:'رومات نص وفويس القروبات فقط'},{label:'كل الرومات',value:'all',description:'كل رومات السيرفر المقروءة'}])); if(action==='log'||action==='topchannel'||action==='adminchannel'||action==='memberchannel'){const menu=new ChannelSelectMenuBuilder().setCustomId(`groups_setup_channel:${action}`).setPlaceholder('اختر رومًا نصيًا').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText);const c=baseContainer(interaction.guild,'Channel Settings','اختر رومًا نصيًا واحدًا.');c.addActionRowComponents(new ActionRowBuilder().addComponents(menu));return reply(interaction,componentsV2Payload(c));} if(action==='mainrole'||action==='leaderrole'||action==='managerrole'){const menu=new RoleSelectMenuBuilder().setCustomId(`groups_setup_role:${action}`).setPlaceholder('اختر رولًا').setMinValues(1).setMaxValues(1);const c=baseContainer(interaction.guild,'إعداد الرول','اختر رولًا واحدًا.');c.addActionRowComponents(new ActionRowBuilder().addComponents(menu));return reply(interaction,componentsV2Payload(c));} if(action==='textcat'||action==='voicecat'||action==='music'){const type=action==='textcat'||action==='voicecat'?ChannelType.GuildCategory:ChannelType.GuildVoice;const menu=new ChannelSelectMenuBuilder().setCustomId(`groups_setup_channel:${action}`).setPlaceholder('اختر رومًا').setMinValues(1).setMaxValues(1).setChannelTypes(type);const c=baseContainer(interaction.guild,'إعداد الروم','اختر رومًا واحدًا.');c.addActionRowComponents(new ActionRowBuilder().addComponents(menu));return reply(interaction,componentsV2Payload(c));} if(action==='rules')return reply(interaction,rulesPayload(interaction.guild,await gm.getRules(interaction.guild.id))); if(action==='managers'){const c=baseContainer(interaction.guild,'مسؤولو النظام','أضف أو أزل عضوًا أو رولًا');c.addActionRowComponents(new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('groups_setup_manager:add:user').setPlaceholder('إضافة عضو').setMinValues(1).setMaxValues(5)));c.addActionRowComponents(new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId('groups_setup_manager:add:role').setPlaceholder('إضافة رول').setMinValues(1).setMaxValues(5)));const current=[...settings.systemUsers.map(id=>({label:`User ${id}`,value:`user:${id}`,description:'إزالة مسؤول عضو'})),...settings.systemRoles.map(id=>({label:`Role ${id}`,value:`role:${id}`,description:'إزالة مسؤول رول'}))].slice(0,25);if(current.length)c.addActionRowComponents(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('groups_setup_manager:remove').setPlaceholder('إزالة مسؤول').setMinValues(1).setMaxValues(Math.min(25,current.length)).addOptions(current)));return reply(interaction,componentsV2Payload(c));} return reply(interaction,setupConfirmation(interaction,'Group Settings','تم تنفيذ إعداد القروبات.')); }
-async function handleAdmin(interaction, action) { const settings=await checkSystem(interaction);if(!settings)return true; if(action==='create'){const modal=new ModalBuilder().setCustomId('groups_modal:create').setTitle('إنشاء قروب');modal.addLabelComponents(new LabelBuilder().setLabel('اسم القروب').setTextInputComponent(new TextInputBuilder().setCustomId('group_name').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(80)));modal.addLabelComponents(new LabelBuilder().setLabel('معرف المالك أو منشنه').setTextInputComponent(new TextInputBuilder().setCustomId('group_owner').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(interaction.user.id)));return interaction.showModal(modal);} if(action==='delete'||action==='info'||action==='edit'||action==='reset'){const groups=await gm.listGroups(interaction.guild.id); if(!groups.length)return reply(interaction,{content:'لا توجد قروبات نشطة.'});const opts=groups.slice(0,25).map(g=>({label:safe(g.name,90),value:String(g.id),description:`${Number(g.points||0).toLocaleString()} points`}));return reply(interaction,selectPayload(interaction.guild,action==='delete'?'حذف قروب':action==='reset'?'تصفير النقاط':'اختر قروبًا','اختر قروبًا واحدًا.',`groups_admin_select:${action}`,opts));}if(action==='resetall'){const c=baseContainer(interaction.guild,'تصفير كل النقاط','سيتم تصفير نقاط كل القروبات النشطة.');c.addActionRowComponents(new ActionRowBuilder().addComponents(button('groups_admin_confirm:resetall','تأكيد',ButtonStyle.Danger),button('groups_admin_cancel','إلغاء')));return reply(interaction,componentsV2Payload(c));}return true; }
+const CLEARABLE_SETUP_FIELDS = [
+  ['chatMode', 'نمط الشات', value => value === 'threads' ? 'ثريدات' : 'رومات مستقلة'],
+  ['textCategoryId', 'كاتاقوري النص/الثريدات', value => `<#${value}>`],
+  ['voiceCategoryId', 'كاتاقوري الصوت', value => `<#${value}>`],
+  ['topChannelId', 'روم الترتيب', value => `<#${value}>`],
+  ['adminControlChannelId', 'روم تحكم الإدارة', value => `<#${value}>`],
+  ['memberControlChannelId', 'روم تحكم الأعضاء', value => `<#${value}>`],
+  ['mainRoleId', 'الرول الرئيسي', value => `<@&${value}>`],
+  ['leaderRoleId', 'رول المالك', value => `<@&${value}>`],
+  ['managerRoleId', 'رول المسؤول', value => `<@&${value}>`],
+  ['musicChannelId', 'روم مصدر الموسيقى', value => `<#${value}>`],
+  ['logChannelId', 'روم السجلات', value => `<#${value}>`]
+];
+function managerSetupPayload(guild, settings) {
+  const entries = [
+    ...settings.systemUsers.map(id => `<@${id}>`),
+    ...settings.systemRoles.map(id => `<@&${id}>`)
+  ];
+  const visible = entries.slice(0, 20);
+  const current = visible.length ? visible.join('، ') + (entries.length > visible.length ? `، و${entries.length - visible.length} آخرين` : '') : 'لا يوجد مسؤولو نظام مضافون.';
+  const c = baseContainer(guild, 'مسؤولو النظام', `المسؤولون الحاليون (${entries.length}):\n${current}\nيمكنك إضافة حتى 5 أعضاء أو رتب في كل مرة، أو إزالة عدة معرفات دفعة واحدة.`);
+  c.addActionRowComponents(new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('groups_setup_manager:add:user').setPlaceholder('إضافة أعضاء').setMinValues(1).setMaxValues(5)));
+  c.addActionRowComponents(new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId('groups_setup_manager:add:role').setPlaceholder('إضافة رتب').setMinValues(1).setMaxValues(5)));
+  c.addActionRowComponents(new ActionRowBuilder().addComponents(button('groups_setup_manager:remove', 'إزالة مسؤولي نظام', ButtonStyle.Danger)));
+  return componentsV2Payload(c);
+}
+function setupManagerRemovalModal() {
+  const modal = new ModalBuilder().setCustomId('groups_setup_manager:remove').setTitle('إزالة مسؤولي النظام');
+  modal.addLabelComponents(new LabelBuilder().setLabel('منشن أو معرفات الأعضاء والرتب').setTextInputComponent(new TextInputBuilder().setCustomId('ids').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1000).setPlaceholder('مثال: @عضو 123456789012345678')));
+  return modal;
+}
+async function handleSetup(interaction, action) {
+  if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const settings = await checkSystem(interaction);
+  if (!settings) return true;
+  if (action === 'toggle') {
+    if (!settings.enabled) {
+      await hydrateSetupReferences(interaction.guild, settings);
+      const missing = gm.validateConfig(interaction.guild, settings);
+      if (missing.length) return reply(interaction, { content: `لا يمكن تفعيل نظام القروبات قبل إصلاح الإعدادات التالية:\n${missing.map(setupIssueLabel).join('\n')}` });
+    }
+    const updated = await gm.saveSettings(interaction.guild.id, { enabled: !settings.enabled }, interaction.user.id);
+    await refreshSetupPanel(interaction, updated);
+    return reply(interaction, setupConfirmation(interaction, 'System Toggle', `تم ${!settings.enabled ? 'تفعيل' : 'إيقاف'} نظام القروبات.`));
+  }
+  if (action === 'audit') {
+    await hydrateSetupReferences(interaction.guild, settings);
+    const missing = gm.validateConfig(interaction.guild, settings);
+    const content = missing.length
+      ? `نتيجة التدقيق: يوجد ${missing.length} نقصًا يمنع إنشاء القروبات أو قد يعطلها:\n${missing.map(setupIssueLabel).join('\n')}`
+      : `نتيجة التدقيق: الإعدادات الأساسية مكتملة. النظام ${settings.enabled ? 'مفعل' : 'جاهز لكنه متوقف'}.`;
+    return reply(interaction, { content });
+  }
+  if (action === 'clear') {
+    const options = CLEARABLE_SETUP_FIELDS.filter(([key]) => settings[key] != null && settings[key] !== '').map(([key, label, format]) => ({ label: safe(label, 100), value: key, description: safe(`الحالي: ${format(settings[key])}`, 100) }));
+    if (!options.length) return reply(interaction, { content: 'لا توجد قيم محفوظة لمسحها.' });
+    return reply(interaction, selectPayload(interaction.guild, 'مسح إعداد', 'اختر قيمة واحدة لمسحها. مسح إعداد مطلوب يمنع إنشاء القروبات حتى تعيد ضبطه.', 'groups_setup_clear_select', options));
+  }
+  if (action === 'chatmode') return reply(interaction, selectPayload(interaction.guild, 'نمط الشات', 'اختر طريقة إنشاء مساحات شات القروبات.', 'groups_setup_select:chatmode', [
+    { label: 'ثريدات', value: 'threads', description: 'روم أب واحد مع ثريدات خاصة' },
+    { label: 'رومات', value: 'channels', description: 'روم نصي مستقل لكل قروب' }
+  ]));
+  if (action === 'extra') {
+    if (!settings.extraPermissions) {
+      await hydrateSetupReferences(interaction.guild, settings);
+      const extraPermissions = ['ManageMessages', 'ModerateMembers', 'MoveMembers'];
+      const missing = gm.validateConfig(interaction.guild, { ...settings, extraPermissions: true })
+        .filter(issue => issue.startsWith('permission:') && extraPermissions.includes(issue.slice('permission:'.length)));
+      if (missing.length) return reply(interaction, { content: `لا يمكن تفعيل الأدوات الإضافية قبل منح البوت:\n${missing.map(setupIssueLabel).join('\n')}` });
+    }
+    const updated = await gm.saveSettings(interaction.guild.id, { extraPermissions: !settings.extraPermissions }, interaction.user.id);
+    await refreshSetupPanel(interaction, updated);
+    return reply(interaction, setupConfirmation(interaction, 'Extra Permissions', `تم ${!settings.extraPermissions ? 'تفعيل' : 'تعطيل'} الصلاحيات الإضافية.`));
+  }
+  if (action === 'scope') return reply(interaction, selectPayload(interaction.guild, 'نطاق النقاط', 'اختر أين يتم احتساب تفاعل القروبات.', 'groups_setup_select:scope', [
+    { label: 'رومات القروبات فقط', value: 'group', description: 'رومات نص وفويس القروبات فقط' },
+    { label: 'كل الرومات', value: 'all', description: 'كل رومات السيرفر المقروءة' }
+  ]));
+  if (['log', 'topchannel', 'adminchannel', 'memberchannel'].includes(action)) {
+    const menu = new ChannelSelectMenuBuilder().setCustomId(`groups_setup_channel:${action}`).setPlaceholder('اختر رومًا نصيًا').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText);
+    const c = baseContainer(interaction.guild, 'Channel Settings', 'اختر رومًا نصيًا واحدًا.');
+    c.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
+    return reply(interaction, componentsV2Payload(c));
+  }
+  if (['mainrole', 'leaderrole', 'managerrole'].includes(action)) {
+    const menu = new RoleSelectMenuBuilder().setCustomId(`groups_setup_role:${action}`).setPlaceholder('اختر رولًا').setMinValues(1).setMaxValues(1);
+    const c = baseContainer(interaction.guild, 'إعداد الرول', 'اختر رولًا واحدًا.');
+    c.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
+    return reply(interaction, componentsV2Payload(c));
+  }
+  if (['textcat', 'voicecat', 'music'].includes(action)) {
+    const type = action === 'textcat' || action === 'voicecat' ? ChannelType.GuildCategory : ChannelType.GuildVoice;
+    const menu = new ChannelSelectMenuBuilder().setCustomId(`groups_setup_channel:${action}`).setPlaceholder('اختر رومًا').setMinValues(1).setMaxValues(1).setChannelTypes(type);
+    const c = baseContainer(interaction.guild, 'إعداد الروم', 'اختر رومًا واحدًا.');
+    c.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
+    return reply(interaction, componentsV2Payload(c));
+  }
+  if (action === 'rules') return reply(interaction, rulesPayload(interaction.guild, await gm.getRules(interaction.guild.id)));
+  if (action === 'managers') return reply(interaction, managerSetupPayload(interaction.guild, settings));
+  return reply(interaction, setupConfirmation(interaction, 'Group Settings', 'تم تنفيذ إعداد القروبات.'));
+}
+async function handleSetupManager(interaction, action, parts = []) {
+  if (action === 'remove' && interaction.isButton?.()) {
+    const settings = await checkSystem(interaction);
+    if (!settings) return true;
+    return interaction.showModal(setupManagerRemovalModal());
+  }
+  if (!interaction.deferred && !interaction.replied) {
+    if (interaction.isModalSubmit?.()) await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    else await interaction.deferUpdate();
+  }
+  const settings = await checkSystem(interaction);
+  if (!settings) return true;
+  if (action === 'remove') {
+    let removeIds = [];
+    if (interaction.isModalSubmit?.()) {
+      removeIds = [...new Set((interaction.fields.getTextInputValue('ids').match(/\d{16,20}/g) || []).map(String))];
+    } else {
+      removeIds = (interaction.values || []).flatMap(value => String(value).split(':').slice(-1)).filter(id => /^\d{16,20}$/.test(id));
+    }
+    if (!removeIds.length) return reply(interaction, { content: 'لم أجد معرفات صحيحة لإزالتها.' });
+    const remove = new Set(removeIds);
+    const systemUsers = settings.systemUsers.filter(id => !remove.has(String(id)));
+    const systemRoles = settings.systemRoles.filter(id => !remove.has(String(id)));
+    const removed = settings.systemUsers.length - systemUsers.length + settings.systemRoles.length - systemRoles.length;
+    const updated = await gm.saveSettings(interaction.guild.id, { systemUsers, systemRoles }, interaction.user.id);
+    await refreshSetupPanel(interaction, updated);
+    return reply(interaction, setupConfirmation(interaction, 'System Managers', removed ? `تمت إزالة ${removed} مسؤول.` : 'لم تتطابق المعرفات مع مسؤولين محفوظين.'));
+  }
+  const ids = interaction.values || [];
+  if (!ids.length) return reply(interaction, { content: 'اختر عضوًا أو رتبة أولًا.' });
+  if (action === 'add' && parts[0] === 'user') {
+    const members = await Promise.all(ids.map(id => interaction.guild.members.fetch(String(id)).catch(() => null)));
+    if (members.some(member => !member || member.user?.bot)) return reply(interaction, { content: 'لا يمكن إضافة بوت أو عضو غير موجود كمسؤول نظام.' });
+    const updated = await gm.saveSettings(interaction.guild.id, { systemUsers: [...new Set([...settings.systemUsers, ...ids.map(String)])] }, interaction.user.id);
+    await refreshSetupPanel(interaction, updated);
+    return reply(interaction, setupConfirmation(interaction, 'System Managers', `تم حفظ ${ids.length} عضو.`));
+  }
+  if (action === 'add' && parts[0] === 'role') {
+    if (ids.some(id => String(id) === String(interaction.guild.id) || !interaction.guild.roles.cache.has(String(id)))) return reply(interaction, { content: 'لا يمكن إضافة @everyone أو رتبة غير موجودة كمسؤول نظام.' });
+    const updated = await gm.saveSettings(interaction.guild.id, { systemRoles: [...new Set([...settings.systemRoles, ...ids.map(String)])] }, interaction.user.id);
+    await refreshSetupPanel(interaction, updated);
+    return reply(interaction, setupConfirmation(interaction, 'System Managers', `تم حفظ ${ids.length} رتبة.`));
+  }
+  return reply(interaction, { content: 'طلب مسؤولي النظام غير صالح.' });
+}
+async function handleSetupSelection(interaction, prefix, action) {
+  if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
+  const settings = await checkSystem(interaction);
+  if (!settings) return true;
+  if (prefix === 'groups_setup_clear_select') {
+    const key = String(interaction.values?.[0] || '');
+    const field = CLEARABLE_SETUP_FIELDS.find(([name]) => name === key);
+    if (!field) return reply(interaction, { content: 'حقل الإعداد غير صالح.' });
+    const required = ['chatMode', 'textCategoryId', 'voiceCategoryId'].includes(key);
+    const patch = { [key]: null };
+    if (required && settings.enabled) patch.enabled = false;
+    const updated = await gm.saveSettings(interaction.guild.id, patch, interaction.user.id);
+    await refreshSetupPanel(interaction, updated);
+    return reply(interaction, setupConfirmation(interaction, 'مسح إعداد', `تم مسح ${field[1]}${required && settings.enabled ? '، وتم إيقاف النظام حتى تكتمل إعادة الإعداد' : ''}.`));
+  }
+  if (prefix === 'groups_setup_select') {
+    const value = String(interaction.values?.[0] || '');
+    let patch;
+    let text;
+    if (action === 'chatmode' && ['threads', 'channels'].includes(value)) {
+      patch = { chatMode: value };
+      text = `تم حفظ نمط الشات: ${value === 'threads' ? 'ثريدات' : 'رومات مستقلة'}.`;
+    } else if (action === 'scope' && ['group', 'all'].includes(value)) {
+      patch = { countAllChannels: value === 'all' };
+      text = `تم حفظ نطاق النقاط: ${value === 'all' ? 'كل الرومات' : 'رومات القروبات فقط'}.`;
+    } else return reply(interaction, { content: 'الخيار المحدد غير صالح.' });
+    const updated = await gm.saveSettings(interaction.guild.id, patch, interaction.user.id);
+    await refreshSetupPanel(interaction, updated);
+    return reply(interaction, setupConfirmation(interaction, 'Group Settings', text));
+  }
+  if (prefix === 'groups_setup_role') {
+    if (!['mainrole', 'leaderrole', 'managerrole'].includes(action)) return reply(interaction, { content: 'نوع الرتبة غير صالح.' });
+    const roleId = String(interaction.values?.[0] || '');
+    const role = interaction.guild.roles.cache.get(roleId) || await interaction.guild.roles.fetch(roleId).catch(() => null);
+    if (!role || role.id === interaction.guild.id) return reply(interaction, { content: 'اختر رتبة موجودة، ولا يمكن استخدام @everyone.' });
+    const keys = { mainrole: 'mainRoleId', leaderrole: 'leaderRoleId', managerrole: 'managerRoleId' };
+    const labels = { mainrole: 'Main Role', leaderrole: 'Leader Role', managerrole: 'Manager Role' };
+    const updated = await gm.saveSettings(interaction.guild.id, { [keys[action]]: roleId }, interaction.user.id);
+    await refreshSetupPanel(interaction, updated);
+    return reply(interaction, setupConfirmation(interaction, labels[action], `تم حفظ ${labels[action]}: <@&${roleId}>.`));
+  }
+  if (prefix === 'groups_setup_channel') {
+    const channelId = String(interaction.values?.[0] || '');
+    const channel = interaction.guild.channels.cache.get(channelId) || await interaction.guild.channels.fetch(channelId).catch(() => null);
+    if (!channel) return reply(interaction, { content: 'الروم المحدد غير موجود في السيرفر.' });
+    const categoryActions = ['textcat', 'voicecat'];
+    const textActions = ['log', 'topchannel', 'adminchannel', 'memberchannel'];
+    if (categoryActions.includes(action) && channel.type !== ChannelType.GuildCategory) return reply(interaction, { content: 'اختر كاتاقوري للقنوات.' });
+    if (action === 'music' && channel.type !== ChannelType.GuildVoice) return reply(interaction, { content: 'اختر رومًا صوتيًا عاديًا لمصدر الموسيقى.' });
+    if (textActions.includes(action) && channel.type !== ChannelType.GuildText) return reply(interaction, { content: 'اختر رومًا نصيًا عاديًا.' });
+    const keys = { textcat: 'textCategoryId', voicecat: 'voiceCategoryId', music: 'musicChannelId', topchannel: 'topChannelId', adminchannel: 'adminControlChannelId', memberchannel: 'memberControlChannelId', log: 'logChannelId' };
+    if (!keys[action]) return reply(interaction, { content: 'نوع الروم غير صالح.' });
+    const labels = { textcat: 'كاتاقوري النص', voicecat: 'كاتاقوري الصوت', music: 'مصدر الموسيقى', topchannel: 'روم الترتيب', adminchannel: 'روم تحكم الإدارة', memberchannel: 'روم تحكم الأعضاء', log: 'روم السجلات' };
+    const updated = await gm.saveSettings(interaction.guild.id, { [keys[action]]: channelId }, interaction.user.id);
+    await refreshSetupPanel(interaction, updated);
+    return reply(interaction, setupConfirmation(interaction, labels[action], `تم حفظ ${labels[action]}: <#${channelId}>.`));
+  }
+  return false;
+}
+async function handleAdmin(interaction, action) { const settings=await checkSystem(interaction);if(!settings)return true; if(action==='create'){const modal=new ModalBuilder().setCustomId('groups_modal:create').setTitle('إنشاء قروب');modal.addLabelComponents(new LabelBuilder().setLabel('اسم القروب').setTextInputComponent(new TextInputBuilder().setCustomId('group_name').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(80)));modal.addLabelComponents(new LabelBuilder().setLabel('معرف المالك أو منشنه').setTextInputComponent(new TextInputBuilder().setCustomId('group_owner').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(interaction.user.id)));return interaction.showModal(modal);} if(action==='delete'||action==='info'||action==='edit'||action==='reset'){const groups=(await gm.listGroups(interaction.guild.id,action==='delete')).filter(g=>g.status==='active'||(action==='delete'&&g.status==='orphaned')); if(!groups.length)return reply(interaction,{content:'لا توجد قروبات متاحة.'});const opts=groups.slice(0,25).map(g=>({label:safe(g.name,90),value:String(g.id),description:`${Number(g.points||0).toLocaleString()} points${g.status==='orphaned'?' • يحتاج تنظيف':''}`}));return reply(interaction,selectPayload(interaction.guild,action==='delete'?'حذف قروب':action==='reset'?'تصفير النقاط':'اختر قروبًا','اختر قروبًا واحدًا.',`groups_admin_select:${action}`,opts));}if(action==='resetall'){const c=baseContainer(interaction.guild,'تصفير كل النقاط','سيتم تصفير نقاط كل القروبات النشطة.');c.addActionRowComponents(new ActionRowBuilder().addComponents(button('groups_admin_confirm:resetall','تأكيد',ButtonStyle.Danger),button('groups_admin_cancel','إلغاء')));return reply(interaction,componentsV2Payload(c));}return true; }
 async function handleMember(interaction, action, groupId) { const settings=await gm.getSettings(interaction.guild.id); let group=groupId>0?await gm.getGroup(interaction.guild.id,groupId):null; if(!group){const groups=await gm.listGroups(interaction.guild.id);group=selectMemberGroup(groups,interaction.user.id,interaction.channelId);} if(!group||(!gm.canManageGroup(interaction.client,settings,group,interaction.member)&&!group.memberIds.includes(String(interaction.user.id))))return deny(interaction);if(action==='info'){const owner=await interaction.guild.members.fetch(group.owner_id).catch(()=>null);const managers=await Promise.all(group.managerIds.map(id=>interaction.guild.members.fetch(id).catch(()=>null)));const attachment=await renderInfo({guild:interaction.guild,group,owner,managers:managers.filter(Boolean),accentColor:group.color});return reply(interaction,{files:[attachment]});}return true;}
 async function handleRulesInteraction(interaction, action, parts = []) {
   const settings = await checkSystem(interaction);
@@ -216,7 +494,48 @@ async function handleRulesInteraction(interaction, action, parts = []) {
   return reply(interaction, rulesPayload(interaction.guild, rules));
 }
 
-async function handleInteraction(interaction) { const extended=await handleGroupExtensions(interaction); if(extended!==false)return extended; const [prefix,action,...parts]=String(interaction.customId||'').split(':'); if(prefix==='groups_rules_modal'){const metric=parts[0];const settings=await checkSystem(interaction);if(!settings)return true;const definition=RULE_METRICS.find(([key])=>key===metric);if(!definition)return reply(interaction,{content:'قاعدة النقاط غير معروفة.'});try{const rules=await gm.getRules(interaction.guild.id);const current=rules.find(rule=>String(rule.metric)===metric);const threshold=Number(interaction.fields.getTextInputValue('threshold'));const points=Number(interaction.fields.getTextInputValue('points'));await gm.setRule(interaction.guild.id,metric,threshold,points,Number(current?.enabled)===1,interaction.user.id);await gm.logGroupEvent(interaction.guild,'rule_update',{metric,threshold,points,enabled:Number(current?.enabled)===1},interaction.user.id);await refreshSetupPanel(interaction,settings);return reply(interaction,rulesPayload(interaction.guild,await gm.getRules(interaction.guild.id)));}catch(error){return reply(interaction,{content:`تعذر حفظ القاعدة : ${error.message}`});}} if(prefix==='groups_modal'){ if(action==='create') return createFromModal(interaction); if(action==='edit'){if(!await checkSystem(interaction))return true;const groupId=Number(parts[0]);const field=choose(parts[1],['name','description','color','emoji']);const group=await gm.getGroup(interaction.guild.id,groupId);if(!group||group.status!=='active')return reply(interaction,{content:'القروب غير موجود.'});await interaction.deferReply({flags:MessageFlags.Ephemeral});const value=safe(interaction.fields.getTextInputValue('value'),field==='description'?500:field==='name'?80:100).trim();if(field==='name')await renameGroupResources(interaction,group,'name',value);else{if(field==='color'&&!/^#[0-9a-f]{6}$/i.test(value))return reply(interaction,{content:'استخدم لونًا بصيغة ست خانات، مثل #5865F2.'});await gm.updateGroup(interaction.guild.id,groupId,{[field]:value,updated_at:Date.now()},interaction.user.id);}invalidateGroupCaches(interaction.guild.id);await gm.logGroupEvent?.(interaction.guild,'update',{groupId,field,value},interaction.user.id);return reply(interaction,{content:'تم تحديث القروب.'});} return false; } if(prefix==='groups_setup')return handleSetup(interaction,action); if(prefix==='groups_rules')return handleRulesInteraction(interaction,action,parts); if(prefix==='groups_admin')return handleAdmin(interaction,action); if(prefix==='groups_member')return handleMember(interaction,action,Number(parts[0])); if(prefix==='groups_setup_select'){const value=interaction.values?.[0];const settings=await checkSystem(interaction);if(!settings)return true;if(action==='chatmode'){const updated=await gm.saveSettings(interaction.guild.id,{chatMode:value},interaction.user.id);await refreshSetupPanel(interaction,updated);return reply(interaction,setupConfirmation(interaction,'Chat Mode',`تم حفظ نمط الشات : ${value==='threads'?'ثريدات':'رومات مستقلة'}.`));}if(action==='scope'){const updated=await gm.saveSettings(interaction.guild.id,{countAllChannels:value==='all'},interaction.user.id);await refreshSetupPanel(interaction,updated);return reply(interaction,setupConfirmation(interaction,'Points Scope',`تم حفظ نطاق النقاط : ${value==='all'?'كل الرومات':'رومات القروبات فقط'}.`));}return reply(interaction,setupConfirmation(interaction,'Group Settings','تم حفظ الإعداد.'));} if(prefix==='groups_setup_role'){const settings=await checkSystem(interaction);if(!settings)return true;const roleId=interaction.values[0];const patch=action==='mainrole'?{mainRoleId:roleId}:action==='leaderrole'?{leaderRoleId:roleId}:{managerRoleId:roleId};const updated=await gm.saveSettings(interaction.guild.id,patch,interaction.user.id);const label=action==='mainrole'?'Main Role':action==='leaderrole'?'Leader Role':'Manager Role';await refreshSetupPanel(interaction,updated);return reply(interaction,setupConfirmation(interaction,label,`تم حفظ ${label} : <@&${roleId}>.`));} if(prefix==='groups_setup_channel'){const settings=await checkSystem(interaction);if(!settings)return true;const channelId=interaction.values[0];const patch=action==='textcat'?{textCategoryId:channelId}:action==='voicecat'?{voiceCategoryId:channelId}:action==='music'?{musicChannelId:channelId}:action==='topchannel'?{topChannelId:channelId}:action==='adminchannel'?{adminControlChannelId:channelId}:action==='memberchannel'?{memberControlChannelId:channelId}:{logChannelId:channelId};const updated=await gm.saveSettings(interaction.guild.id,patch,interaction.user.id);const label=action==='textcat'?'Text Category':action==='voicecat'?'Voice Category':action==='music'?'Music Source':action==='topchannel'?'Top Channel':action==='adminchannel'?'Admin Control Channel':action==='memberchannel'?'Member Control Channel':'Log Channel';await refreshSetupPanel(interaction,updated);return reply(interaction,setupConfirmation(interaction,label,`تم حفظ ${label} : <#${channelId}>.`));} if(prefix==='groups_setup_manager'){const settings=await checkSystem(interaction);if(!settings)return true;const ids=interaction.values||[];if(action==='remove'){const users=new Set(settings.systemUsers),roles=new Set(settings.systemRoles);for(const value of ids){const [kind,id]=String(value).split(':');(kind==='user'?users:roles).delete(id);}const updated=await gm.saveSettings(interaction.guild.id,{systemUsers:[...users],systemRoles:[...roles]},interaction.user.id);await refreshSetupPanel(interaction,updated);return reply(interaction,setupConfirmation(interaction,'System Managers',`تمت إزالة ${ids.length} مسؤول من مسؤولي النظام.`));}if(action==='add'&&parts[0]==='user'){const updated=await gm.saveSettings(interaction.guild.id,{systemUsers:[...new Set([...settings.systemUsers,...ids])]},interaction.user.id);await refreshSetupPanel(interaction,updated);return reply(interaction,setupConfirmation(interaction,'System Managers',`تمت إضافة ${ids.length} مسؤول عضو.`));}if(action==='add'&&parts[0]==='role'){const updated=await gm.saveSettings(interaction.guild.id,{systemRoles:[...new Set([...settings.systemRoles,...ids])]},interaction.user.id);await refreshSetupPanel(interaction,updated);return reply(interaction,setupConfirmation(interaction,'System Managers',`تمت إضافة ${ids.length} مسؤول رول.`));}return reply(interaction,setupConfirmation(interaction,'System Managers','تم حفظ مسؤولي النظام.'));} if(prefix==='groups_admin_select'){const settings=await checkSystem(interaction);if(!settings)return true;const groupId=Number(interaction.values[0]);if(action==='reset'){await gm.resetPoints(interaction.guild.id,groupId,interaction.user.id);return reply(interaction,{content:'Group points reset.'});}if(action==='delete'){const group=await gm.getGroup(interaction.guild.id,groupId);const c=baseContainer(interaction.guild,'تأكيد الحذف',`القروب : **${safe(group?.name)}**\nسيتم حذف قنوات ورول القروب.`);c.addActionRowComponents(new ActionRowBuilder().addComponents(button(`groups_admin_confirm:delete:${groupId}`,'تأكيد',ButtonStyle.Danger),button('groups_admin_cancel','إلغاء')));return reply(interaction,componentsV2Payload(c));}if(action==='info'){const g=await gm.getGroup(interaction.guild.id,groupId);if(!g)return reply(interaction,{content:'القروب غير موجود.'});const owner=await interaction.guild.members.fetch(g.owner_id).catch(()=>null);const managers=await Promise.all(g.managerIds.map(id=>interaction.guild.members.fetch(id).catch(()=>null)));const attachment=await renderInfo({guild:interaction.guild,group:g,owner,managers:managers.filter(Boolean),accentColor:g.color});return reply(interaction,{files:[attachment]});}if(action==='edit'){return reply(interaction,selectPayload(interaction.guild,'Edit Group','اختر الحقل المطلوب.',`groups_edit_field:${groupId}`,[{label:'الاسم',value:'name'},{label:'الوصف',value:'description'},{label:'اللون',value:'color'},{label:'الإيموجي',value:'emoji'},{label:'المالك',value:'owner'}]));}} if(prefix==='groups_edit_field'){const groupId=Number(action);const field=choose(interaction.values?.[0],['name','description','color','emoji','owner']);if(!await checkSystem(interaction))return true;if(field==='owner'){const menu=new UserSelectMenuBuilder().setCustomId(`groups_edit_owner:${groupId}`).setPlaceholder('Choose new owner').setMinValues(1).setMaxValues(1);const c=baseContainer(interaction.guild,'نقل الملكية','اختر عضوًا حاليًا من القروب.');c.addActionRowComponents(new ActionRowBuilder().addComponents(menu));return reply(interaction,componentsV2Payload(c));}const modal=new ModalBuilder().setCustomId(`groups_modal:edit:${groupId}:${field}`).setTitle(`تعديل ${field}`);modal.addLabelComponents(new LabelBuilder().setLabel(field).setTextInputComponent(new TextInputBuilder().setCustomId('value').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(field==='description'?500:100)));return interaction.showModal(modal);} if(prefix==='groups_edit_owner'){const settings=await checkSystem(interaction);if(!settings)return true;const group=await gm.getGroup(interaction.guild.id,Number(action));const ownerId=interaction.values?.[0];if(!group||!group.memberIds.includes(String(ownerId)))return reply(interaction,{content:'يجب أن يكون المالك الجديد عضوًا في القروب.'});await gm.updateGroup(interaction.guild.id,group.id,{owner_id:ownerId,updated_at:Date.now()},interaction.user.id);const role=settings.leaderRoleId&&interaction.guild.roles.cache.get(settings.leaderRoleId);if(role){const oldOwner=await interaction.guild.members.fetch(group.owner_id).catch(()=>null);const newOwner=await interaction.guild.members.fetch(ownerId).catch(()=>null);if(oldOwner)await oldOwner.roles.remove(role,'نقل ملكية القروب').catch(()=>{});if(newOwner)await newOwner.roles.add(role,'نقل ملكية القروب').catch(()=>{});}await gm.logGroupEvent(interaction.guild,'owner',{groupId:group.id,from:group.owner_id,to:ownerId},interaction.user.id);return reply(interaction,{content:'تم نقل الملكية.'});} if(prefix==='groups_admin_confirm'){const settings=await checkSystem(interaction);if(!settings)return true;if(action==='resetall'){await gm.resetPoints(interaction.guild.id,null,interaction.user.id);return reply(interaction,{content:'تم تصفير نقاط كل القروبات.'});}if(action==='delete'){const deletedGroup=await gm.getGroup(interaction.guild.id,Number(parts[0]));await gm.deleteGroup(interaction.guild,Number(parts[0]),interaction.user.id);await gm.logGroupEvent(interaction.guild,'delete',{groupId:Number(parts[0]),name:deletedGroup?.name||null},interaction.user.id);return reply(interaction,{content:'تم حذف القروب.'});}} if(prefix==='groups_admin_cancel')return reply(interaction,{content:'تم الإلغاء.'}); return false; }
+async function transferGroupOwner(interaction, groupId, ownerId) {
+  return groupOperation(`group:${interaction.guild.id}:${groupId}`, async () => {
+    const settings = await currentSystem(interaction);
+    const group = await gm.getGroup(interaction.guild.id, Number(groupId));
+    const targetId = String(ownerId || '');
+    if (!group || group.status !== 'active' || !group.memberIds.includes(targetId)) throw new Error('OWNER_MUST_BE_MEMBER');
+    if (String(group.owner_id) === targetId) return 'العضو هو مالك القروب الحالي بالفعل.';
+    const groups = await gm.listGroups(interaction.guild.id);
+    if (groups.some(item => item.id !== group.id && (String(item.owner_id) === targetId || item.memberIds.includes(targetId) || item.managerIds.includes(targetId)))) throw new Error('USER_ALREADY_IN_GROUP');
+    const newOwner = await interaction.guild.members.fetch(targetId).catch(() => null);
+    if (!newOwner || newOwner.user.bot) throw new Error('MEMBER_NOT_FOUND');
+    const oldOwnerId = String(group.owner_id);
+    const nextManagers = group.managerIds.filter(id => id !== targetId);
+    const nextMembers = [...new Set([...group.memberIds, targetId])];
+    const nextBlocked = group.blockedIds.filter(id => id !== targetId);
+    await gm.updateGroup(interaction.guild.id, group.id, {
+      owner_id: targetId,
+      manager_ids_json: JSON.stringify(nextManagers),
+      member_ids_json: JSON.stringify(nextMembers),
+      blocked_ids_json: JSON.stringify(nextBlocked),
+      updated_at: Date.now()
+    }, interaction.user.id);
+    invalidateGroupCaches(interaction.guild.id);
+    const warnings = [];
+    const leader = settings.leaderRoleId && (interaction.guild.roles.cache.get(settings.leaderRoleId) || await interaction.guild.roles.fetch(settings.leaderRoleId).catch(() => null));
+    if (settings.leaderRoleId && !leader) warnings.push('تعذر العثور على رتبة المالك');
+    if (leader) {
+      if (!newOwner.roles.cache.has(leader.id)) await newOwner.roles.add(leader, 'نقل ملكية القروب').catch(() => warnings.push('تعذر إضافة رتبة المالك للمالك الجديد'));
+      const oldOwner = await interaction.guild.members.fetch(oldOwnerId).catch(() => null);
+      const otherGroups = await gm.listGroups(interaction.guild.id);
+      if (oldOwner && !otherGroups.some(item => String(item.owner_id) === oldOwnerId)) await oldOwner.roles.remove(leader, 'نقل ملكية القروب').catch(() => warnings.push('تعذر إزالة رتبة المالك من المالك السابق'));
+    }
+    if (settings.managerRoleId && group.managerIds.includes(targetId)) {
+      const managerRole = interaction.guild.roles.cache.get(settings.managerRoleId) || await interaction.guild.roles.fetch(settings.managerRoleId).catch(() => null);
+      const stillManager = (await gm.listGroups(interaction.guild.id)).some(item => item.managerIds.includes(targetId));
+      if (managerRole && !stillManager) await newOwner.roles.remove(managerRole, 'Owner promoted from group manager').catch(() => warnings.push('تعذر إزالة رتبة مسؤول القروب من المالك الجديد'));
+    }
+    await gm.logGroupEvent(interaction.guild, 'owner', { groupId: group.id, from: oldOwnerId, to: targetId, warnings }, interaction.user.id);
+    return warnings.length ? `تم نقل الملكية، لكن يلزم مراجعة الرتب: ${warnings.join('؛ ')}.` : 'تم نقل الملكية.';
+  });
+}
+async function handleInteraction(interaction) { const extended=await handleGroupExtensions(interaction); if(extended!==false)return extended; const [prefix,action,...parts]=String(interaction.customId||'').split(':'); if(prefix==='groups_top'&&['rank','group','refresh'].includes(action))return handleTopGroupsInteraction(interaction); if(prefix==='groups_rules_modal'){const metric=parts[0];const settings=await checkSystem(interaction);if(!settings)return true;const definition=RULE_METRICS.find(([key])=>key===metric);if(!definition)return reply(interaction,{content:'قاعدة النقاط غير معروفة.'});try{const rules=await gm.getRules(interaction.guild.id);const current=rules.find(rule=>String(rule.metric)===metric);const threshold=Number(interaction.fields.getTextInputValue('threshold'));const points=Number(interaction.fields.getTextInputValue('points'));await gm.setRule(interaction.guild.id,metric,threshold,points,Number(current?.enabled)===1,interaction.user.id);await gm.logGroupEvent(interaction.guild,'rule_update',{metric,threshold,points,enabled:Number(current?.enabled)===1},interaction.user.id);await refreshSetupPanel(interaction,settings);return reply(interaction,rulesPayload(interaction.guild,await gm.getRules(interaction.guild.id)));}catch(error){return reply(interaction,{content:`تعذر حفظ القاعدة : ${error.message}`});}} if(prefix==='groups_modal'){ if(action==='create') return createFromModal(interaction); if(action==='edit'){if(!await checkSystem(interaction))return true;const groupId=Number(parts[0]);const field=choose(parts[1],['name','description','color','emoji']);const group=await gm.getGroup(interaction.guild.id,groupId);if(!group||group.status!=='active')return reply(interaction,{content:'القروب غير موجود.'});await interaction.deferReply({flags:MessageFlags.Ephemeral});const value=safe(interaction.fields.getTextInputValue('value'),field==='description'?500:field==='name'?80:100).trim();if(field==='name')await renameGroupResources(interaction,group,'name',value);else{if(field==='color'&&!/^#[0-9a-f]{6}$/i.test(value))return reply(interaction,{content:'استخدم لونًا بصيغة ست خانات، مثل #5865F2.'});await gm.updateGroup(interaction.guild.id,groupId,{[field]:value,updated_at:Date.now()},interaction.user.id);}invalidateGroupCaches(interaction.guild.id);await gm.logGroupEvent?.(interaction.guild,'update',{groupId,field,value},interaction.user.id);return reply(interaction,{content:'تم تحديث القروب.'});} return false; } if(prefix==='groups_setup')return handleSetup(interaction,action); if(prefix==='groups_rules')return handleRulesInteraction(interaction,action,parts); if(prefix==='groups_admin')return handleAdmin(interaction,action); if(prefix==='groups_member')return handleMember(interaction,action,Number(parts[0])); if(prefix==='groups_setup_clear_select'){return handleSetupSelection(interaction,prefix,action);} if(prefix==='groups_setup_select'){return handleSetupSelection(interaction,prefix,action);} if(prefix==='groups_setup_role'){return handleSetupSelection(interaction,prefix,action);} if(prefix==='groups_setup_channel'){return handleSetupSelection(interaction,prefix,action);} if(prefix==='groups_setup_manager')return handleSetupManager(interaction,action,parts); if(prefix==='groups_admin_select'){const settings=await checkSystem(interaction);if(!settings)return true;const groupId=Number(interaction.values[0]);if(action==='reset'){await gm.resetPoints(interaction.guild.id,groupId,interaction.user.id);return reply(interaction,{content:'Group points reset.'});}if(action==='delete'){const group=await gm.getGroup(interaction.guild.id,groupId);const c=baseContainer(interaction.guild,'تأكيد الحذف',`القروب : **${safe(group?.name)}**\nسيتم حذف قنوات ورول القروب.`);c.addActionRowComponents(new ActionRowBuilder().addComponents(button(`groups_admin_confirm:delete:${groupId}`,'تأكيد',ButtonStyle.Danger),button('groups_admin_cancel','إلغاء')));return reply(interaction,componentsV2Payload(c));}if(action==='info'){const g=await gm.getGroup(interaction.guild.id,groupId);if(!g)return reply(interaction,{content:'القروب غير موجود.'});const owner=await interaction.guild.members.fetch(g.owner_id).catch(()=>null);const managers=await Promise.all(g.managerIds.map(id=>interaction.guild.members.fetch(id).catch(()=>null)));const attachment=await renderInfo({guild:interaction.guild,group:g,owner,managers:managers.filter(Boolean),accentColor:g.color});return reply(interaction,{files:[attachment]});}if(action==='edit'){return reply(interaction,selectPayload(interaction.guild,'Edit Group','اختر الحقل المطلوب.',`groups_edit_field:${groupId}`,[{label:'الاسم',value:'name'},{label:'الوصف',value:'description'},{label:'اللون',value:'color'},{label:'الإيموجي',value:'emoji'},{label:'المالك',value:'owner'}]));}} if(prefix==='groups_edit_field'){const groupId=Number(action);const field=choose(interaction.values?.[0],['name','description','color','emoji','owner']);if(!await checkSystem(interaction))return true;if(field==='owner'){const menu=new UserSelectMenuBuilder().setCustomId(`groups_edit_owner:${groupId}`).setPlaceholder('Choose new owner').setMinValues(1).setMaxValues(1);const c=baseContainer(interaction.guild,'نقل الملكية','اختر عضوًا حاليًا من القروب.');c.addActionRowComponents(new ActionRowBuilder().addComponents(menu));return reply(interaction,componentsV2Payload(c));}const modal=new ModalBuilder().setCustomId(`groups_modal:edit:${groupId}:${field}`).setTitle(`تعديل ${field}`);modal.addLabelComponents(new LabelBuilder().setLabel(field).setTextInputComponent(new TextInputBuilder().setCustomId('value').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(field==='description'?500:100)));return interaction.showModal(modal);} if(prefix==='groups_edit_owner'){if(!await checkSystem(interaction))return true;try{return reply(interaction,{content:await transferGroupOwner(interaction,Number(action),interaction.values?.[0])});}catch(error){const message=error.message==='OWNER_MUST_BE_MEMBER'?'يجب أن يكون المالك الجديد عضوًا نشطًا في القروب.':error.message==='USER_ALREADY_IN_GROUP'?'المالك المختار مرتبط بقروب نشط آخر.':'تعذر نقل الملكية.';return reply(interaction,{content:message});}} if(prefix==='groups_admin_confirm'){const settings=await checkSystem(interaction);if(!settings)return true;if(action==='resetall'){await gm.resetPoints(interaction.guild.id,null,interaction.user.id);return reply(interaction,{content:'تم تصفير نقاط كل القروبات.'});}if(action==='delete'){const deletedGroup=await gm.getGroup(interaction.guild.id,Number(parts[0]));try{await gm.deleteGroup(interaction.guild,Number(parts[0]),interaction.user.id);}catch(error){return reply(interaction,{content:error.message==='GROUP_DELETE_PARTIAL'?'تعذر حذف بعض عناصر القروب؛ تم حفظ حالته للتنظيف. أعد محاولة الحذف من لوحة الإدارة.':'تعذر حذف القروب.'});}await gm.logGroupEvent(interaction.guild,'delete',{groupId:Number(parts[0]),name:deletedGroup?.name||null},interaction.user.id);return reply(interaction,{content:'تم حذف القروب.'});}} if(prefix==='groups_admin_cancel')return reply(interaction,{content:'تم الإلغاء.'}); return false; }
 async function execute(message,args,{client}={}) {
   if(!message.guild)return;
   const settings=await gm.getSettings(message.guild.id); const member=message.member; const sub=String(args[0]||'').toLowerCase();
@@ -231,17 +550,163 @@ async function execute(message,args,{client}={}) {
 const activityCache=new Map(); const settingsCache=new Map(); const voiceStarts=new Map(); const lastMessageAt=new Map();
 async function cachedGroups(guildId){const hit=activityCache.get(String(guildId));if(hit&&Date.now()-hit.at<30000)return hit.groups;const groups=await gm.listGroups(guildId);activityCache.set(String(guildId),{at:Date.now(),groups});return groups;}
 async function cachedSettings(guildId){const hit=settingsCache.get(String(guildId));if(hit&&Date.now()-hit.at<30000)return hit.settings;const settings=await gm.getSettings(guildId);settingsCache.set(String(guildId),{at:Date.now(),settings});return settings;}
-function registerInteractionHandler(client){
-  if(registered)return; registered=true;
-  router.register('groups_',handleInteraction,{name:'groups',priority:95,types:['button','modal','stringSelect','userSelect','roleSelect','channelSelect']});
-  const cleanupTimer=setInterval(async()=>{for(const guild of client.guilds.cache.values()){const groups=await gm.listGroups(guild.id).catch(()=>[]);for(const group of groups){const channel=guild.channels.cache.get(group.text_channel_id||group.thread_id);if(!channel?.messages?.fetch)continue;const messages=await channel.messages.fetch({limit:100}).catch(()=>null);if(!messages)continue;const removable=messages.filter(msg=>!msg.components?.length&&msg.author?.id!==client.user?.id);if(removable.size)await channel.bulkDelete(removable,true).catch(()=>{});}}},180000);cleanupTimer.unref?.();
-  client.on('messageCreate',async message=>{if(!message.guild||message.author.bot)return;const settings=await cachedSettings(message.guild.id).catch(()=>null);if(!settings?.enabled)return;const groups=await cachedGroups(message.guild.id);const group=groups.find(g=>g.memberIds.includes(String(message.author.id))||String(g.owner_id)===String(message.author.id));if(!group)return;const key=`${message.guild.id}:${message.author.id}`;const now=Date.now();if(now-Number(lastMessageAt.get(key)||0)<60000)return;lastMessageAt.set(key,now);if(lastMessageAt.size>10000)for(const [k,t] of lastMessageAt)if(now-t>600000)lastMessageAt.delete(k);await gm.recordActivity(message.guild.id,message.author.id,'messages',1,message.channelId).catch(()=>{});});
-  client.on('messageReactionAdd',async(reaction,user)=>{if(user?.bot||!reaction?.message?.guild)return;const settings=await cachedSettings(reaction.message.guild.id).catch(()=>null);if(!settings?.enabled)return;const groups=await cachedGroups(reaction.message.guild.id);const group=groups.find(g=>g.memberIds.includes(String(user.id))||String(g.owner_id)===String(user.id));if(group)await gm.recordActivity(reaction.message.guild.id,user.id,'reactions',1,reaction.message.channelId).catch(()=>{});});
-  client.on('voiceStateUpdate',async(oldState,newState)=>{const guildId=newState.guild?.id||oldState.guild?.id;if(!guildId)return;const groups=await cachedGroups(guildId);const oldGroup=groups.find(g=>g.voice_channel_id&&g.voice_channel_id===oldState.channelId&& (g.memberIds.includes(String(oldState.id))||String(g.owner_id)===String(oldState.id)));const newGroup=groups.find(g=>g.voice_channel_id&&g.voice_channel_id===newState.channelId&& (g.memberIds.includes(String(newState.id))||String(g.owner_id)===String(newState.id)));const key=`${guildId}:${newState.id}`;if(oldGroup&&(!newGroup||oldGroup.id!==newGroup.id)){const started=voiceStarts.get(key);if(started){await gm.recordActivity(guildId,newState.id,'voice_ms',Date.now()-started,oldState.channelId).catch(()=>{});voiceStarts.delete(key);}}if(newGroup&&!oldGroup)voiceStarts.set(key,Date.now());});
-  client.on('channelDelete',async channel=>{if(!channel.guild)return;const groups=await gm.listGroups(channel.guild.id,true);for(const g of groups){const patch={};if(g.text_channel_id===channel.id)patch.text_channel_id=null;if(g.thread_id===channel.id)patch.thread_id=null;if(g.voice_channel_id===channel.id)patch.voice_channel_id=null;if(Object.keys(patch).length){await gm.updateGroup(channel.guild.id,g.id,{...patch,updated_at:Date.now()},null).catch(()=>{});await gm.audit(channel.guild.id,null,g.id,'linked_channel_deleted',{channelId:channel.id}).catch(()=>{});await gm.logGroupEvent(channel.guild,'update',{groupId:g.id,reason:'linked_channel_deleted',channelId:channel.id},null);}}activityCache.delete(String(channel.guild.id));});
-  client.on('roleDelete',async role=>{if(!role.guild)return;const groups=await gm.listGroups(role.guild.id,true);for(const g of groups)if(g.role_id===role.id){await gm.updateGroup(role.guild.id,g.id,{role_id:null,updated_at:Date.now()},null).catch(()=>{});await gm.audit(role.guild.id,null,g.id,'linked_role_deleted',{roleId:role.id}).catch(()=>{});await gm.logGroupEvent(role.guild,'update',{groupId:g.id,reason:'linked_role_deleted',roleId:role.id},null);}});
-  client.on('guildMemberRemove',async member=>{const groups=await gm.listGroups(member.guild.id);for(const g of groups){if(!g.memberIds.includes(String(member.id))&&String(g.owner_id)!==String(member.id)&&!g.managerIds.includes(String(member.id)))continue;if(String(g.owner_id)===String(member.id)){const successor=g.managerIds.map(id=>member.guild.members.cache.get(id)).find(Boolean)||null;if(successor){await gm.updateGroup(member.guild.id,g.id,{owner_id:successor.id,updated_at:Date.now()},null);const leader=member.guild.roles.cache.get((await gm.getSettings(member.guild.id)).leaderRoleId);if(leader)await successor.roles.add(leader,'نقل ملكية القروب').catch(()=>{});await gm.audit(member.guild.id,successor.id,g.id,'owner_transferred',{from:member.id,to:successor.id});await gm.logGroupEvent(member.guild,'owner',{groupId:g.id,from:member.id,to:successor.id},successor.id);}else{await gm.updateGroup(member.guild.id,g.id,{status:'orphaned',updated_at:Date.now()},null);await gm.audit(member.guild.id,null,g.id,'owner_left',{userId:member.id,status:'orphaned'});await gm.logGroupEvent(member.guild,'owner',{groupId:g.id,from:member.id,status:'orphaned'},null);}continue;}await gm.removeMember(member.guild.id,g.id,member.id,'member_left').catch(()=>{});await gm.logGroupEvent(member.guild,'member_remove',{groupId:g.id,userId:member.id,reason:'member_left'},null);const owner=await member.guild.members.fetch(g.owner_id).catch(()=>null);for(const managerId of g.managerIds){const manager=await member.guild.members.fetch(managerId).catch(()=>null);for(const recipient of [owner,manager])if(recipient)recipient.send(`Group update\nMember: <@${member.id}>\nGroup: **${safe(g.name)}**\nAction: member left`).catch(()=>{});}}});
-  client.on('guildMemberUpdate',async(oldMember,newMember)=>{if(oldMember.roles.cache.equals(newMember.roles.cache))return;const groups=await gm.listGroups(newMember.guild.id);for(const g of groups){if(!g.role_id)continue;const had=oldMember.roles.cache.has(g.role_id);const has=newMember.roles.cache.has(g.role_id);const bypass=global.groupRoleGrantBypass?.has(`${newMember.guild.id}:${newMember.id}:${g.role_id}`);const isLinked=g.memberIds.includes(String(newMember.id))||String(g.owner_id)===String(newMember.id)||g.managerIds.includes(String(newMember.id));if(has&&!had&&!isLinked&&!bypass){await newMember.roles.remove(g.role_id,'Unapproved group role assignment').catch(()=>{});await gm.audit(newMember.guild.id,null,g.id,'role_guard_removed',{userId:newMember.id,roleId:g.role_id});await gm.logGroupEvent(newMember.guild,'update',{groupId:g.id,reason:'role_guard_removed',userId:newMember.id,roleId:g.role_id},null);}if(!has&&had&&isLinked&&String(g.owner_id)!==String(newMember.id)){await gm.removeMember(newMember.guild.id,g.id,newMember.id,'role_removed').catch(()=>{});await gm.logGroupEvent(newMember.guild,'member_remove',{groupId:g.id,userId:newMember.id,reason:'role_removed'},null);const owner=await newMember.guild.members.fetch(g.owner_id).catch(()=>null);for(const managerId of g.managerIds){const manager=await newMember.guild.members.fetch(managerId).catch(()=>null);for(const recipient of [owner,manager])if(recipient)recipient.send(`Group update\nMember: <@${newMember.id}>\nGroup: **${safe(g.name)}**\nAction: role removed`).catch(()=>{});}}}});
+function registerInteractionHandler(client) {
+  if (registered) return;
+  registered = true;
+  router.register('groups_', handleInteraction, { name: 'groups', priority: 95, types: ['button', 'modal', 'stringSelect', 'userSelect', 'roleSelect', 'channelSelect'] });
+
+  // Never bulk-delete ordinary messages here. A previous heuristic removed every
+  // non-bot message without components, which destroyed normal group conversations.
+  client.on('messageCreate', async message => {
+    if (!message.guild || message.author.bot) return;
+    const settings = await cachedSettings(message.guild.id).catch(() => null);
+    if (!settings?.enabled) return;
+    const groups = await cachedGroups(message.guild.id);
+    const userId = String(message.author.id);
+    const eligible = groups.some(group =>
+      (group.memberIds.includes(userId) || String(group.owner_id) === userId || group.managerIds.includes(userId))
+      && (settings.countAllChannels || gm.channelBelongs(group, message.channelId))
+    );
+    if (!eligible) return;
+    const key = `${message.guild.id}:${userId}:${message.channelId}`;
+    const now = Date.now();
+    if (now - Number(lastMessageAt.get(key) || 0) < 60000) return;
+    lastMessageAt.set(key, now);
+    if (lastMessageAt.size > 10000) for (const [entry, time] of lastMessageAt) if (now - time > 600000) lastMessageAt.delete(entry);
+    await gm.recordActivity(message.guild.id, userId, 'messages', 1, message.channelId).catch(() => {});
+  });
+
+  client.on('messageReactionAdd', async (reaction, user) => {
+    const guild = reaction?.message?.guild;
+    if (user?.bot || !guild) return;
+    const settings = await cachedSettings(guild.id).catch(() => null);
+    if (!settings?.enabled) return;
+    const groups = await cachedGroups(guild.id);
+    if (groups.some(group =>
+      (group.memberIds.includes(String(user.id)) || String(group.owner_id) === String(user.id) || group.managerIds.includes(String(user.id)))
+      && (settings.countAllChannels || gm.channelBelongs(group, reaction.message.channelId))
+    )) {
+      const emojiKey = reaction.emoji?.id || reaction.emoji?.name || 'unknown';
+      const eventId = `${reaction.message.id}:${emojiKey}`;
+      await gm.recordActivity(guild.id, user.id, 'reactions', 1, reaction.message.channelId, eventId).catch(() => {});
+    }
+  });
+
+  client.on('voiceStateUpdate', async (oldState, newState) => {
+    const guildId = newState.guild?.id || oldState.guild?.id;
+    if (!guildId) return;
+    const groups = await cachedGroups(guildId);
+    const memberId = String(newState.id || oldState.id);
+    const eligible = group => group && (group.memberIds.includes(memberId) || String(group.owner_id) === memberId || group.managerIds.includes(memberId));
+    const oldGroup = groups.find(group => group.voice_channel_id && group.voice_channel_id === oldState.channelId && eligible(group));
+    const newGroup = groups.find(group => group.voice_channel_id && group.voice_channel_id === newState.channelId && eligible(group));
+    const key = `${guildId}:${memberId}`;
+    if (oldGroup && (!newGroup || oldGroup.id !== newGroup.id)) {
+      const started = voiceStarts.get(key);
+      if (started) await gm.recordActivity(guildId, memberId, 'voice_ms', Date.now() - started, oldState.channelId).catch(() => {});
+      voiceStarts.delete(key);
+    }
+    if (newGroup && (!oldGroup || oldGroup.id !== newGroup.id)) voiceStarts.set(key, Date.now());
+    if (!oldGroup && !newGroup) voiceStarts.delete(key);
+  });
+
+  client.on('channelDelete', async channel => {
+    if (!channel.guild) return;
+    const groups = (await gm.listGroups(channel.guild.id, true)).filter(group => group.status !== 'deleted');
+    for (const group of groups) {
+      const patch = {};
+      if (group.text_channel_id === channel.id) patch.text_channel_id = null;
+      if (group.thread_id === channel.id) patch.thread_id = null;
+      if (group.voice_channel_id === channel.id) patch.voice_channel_id = null;
+      if (Object.keys(patch).length) {
+        patch.status = 'orphaned';
+        patch.updated_at = Date.now();
+        await gm.updateGroup(channel.guild.id, group.id, patch, null).catch(() => {});
+        await gm.audit(channel.guild.id, null, group.id, 'linked_channel_deleted', { channelId: channel.id, status: 'orphaned' }).catch(() => {});
+        await gm.logGroupEvent(channel.guild, 'update', { groupId: group.id, reason: 'linked_channel_deleted', channelId: channel.id, status: 'orphaned' }, null);
+      }
+    }
+    activityCache.delete(String(channel.guild.id));
+  });
+
+  client.on('roleDelete', async role => {
+    if (!role.guild) return;
+    const groups = (await gm.listGroups(role.guild.id, true)).filter(group => group.status !== 'deleted');
+    for (const group of groups) if (group.role_id === role.id) {
+      await gm.updateGroup(role.guild.id, group.id, { role_id: null, status: 'orphaned', updated_at: Date.now() }, null).catch(() => {});
+      await gm.audit(role.guild.id, null, group.id, 'linked_role_deleted', { roleId: role.id, status: 'orphaned' }).catch(() => {});
+      await gm.logGroupEvent(role.guild, 'update', { groupId: group.id, reason: 'linked_role_deleted', roleId: role.id, status: 'orphaned' }, null);
+    }
+    activityCache.delete(String(role.guild.id));
+  });
+
+  client.on('guildMemberRemove', async member => {
+    voiceStarts.delete(`${member.guild.id}:${member.id}`);
+    const groups = await gm.listGroups(member.guild.id);
+    for (const group of groups) {
+      const userId = String(member.id);
+      if (!group.memberIds.includes(userId) && String(group.owner_id) !== userId && !group.managerIds.includes(userId)) continue;
+      if (String(group.owner_id) === userId) {
+        const candidates = await Promise.all(group.managerIds.filter(id => id !== userId).map(id => member.guild.members.fetch(id).catch(() => null)));
+        const successor = candidates.find(Boolean) || null;
+        const nextMembers = group.memberIds.filter(id => id !== userId);
+        const nextManagers = successor ? group.managerIds.filter(id => id !== userId && id !== successor.id) : group.managerIds.filter(id => id !== userId);
+        if (successor) {
+          await gm.updateGroup(member.guild.id, group.id, { owner_id: successor.id, manager_ids_json: JSON.stringify(nextManagers), member_ids_json: JSON.stringify([...new Set([...nextMembers, successor.id])]), updated_at: Date.now() }, null);
+          const settings = await gm.getSettings(member.guild.id);
+          const leader = settings.leaderRoleId && (member.guild.roles.cache.get(settings.leaderRoleId) || await member.guild.roles.fetch(settings.leaderRoleId).catch(() => null));
+          if (leader) await successor.roles.add(leader, 'نقل ملكية القروب').catch(() => {});
+          await gm.audit(member.guild.id, successor.id, group.id, 'owner_transferred', { from: userId, to: successor.id });
+          await gm.logGroupEvent(member.guild, 'owner', { groupId: group.id, from: userId, to: successor.id }, successor.id);
+        } else {
+          await gm.updateGroup(member.guild.id, group.id, { status: 'orphaned', manager_ids_json: JSON.stringify(nextManagers), member_ids_json: JSON.stringify(nextMembers), updated_at: Date.now() }, null);
+          await gm.audit(member.guild.id, null, group.id, 'owner_left', { userId, status: 'orphaned' });
+          await gm.logGroupEvent(member.guild, 'owner', { groupId: group.id, from: userId, status: 'orphaned' }, null);
+        }
+        activityCache.delete(String(member.guild.id));
+        continue;
+      }
+      await gm.removeMember(member.guild.id, group.id, userId, 'member_left').catch(() => {});
+      await gm.logGroupEvent(member.guild, 'member_remove', { groupId: group.id, userId, reason: 'member_left' }, null);
+      const owner = await member.guild.members.fetch(group.owner_id).catch(() => null);
+      for (const managerId of group.managerIds) {
+        const manager = await member.guild.members.fetch(managerId).catch(() => null);
+        for (const recipient of [owner, manager]) if (recipient) recipient.send(`Group update\nMember: <@${userId}>\nGroup: **${safe(group.name)}**\nAction: member left`).catch(() => {});
+      }
+    }
+    activityCache.delete(String(member.guild.id));
+  });
+
+  client.on('guildMemberUpdate', async (oldMember, newMember) => {
+    if (oldMember.roles.cache.equals(newMember.roles.cache)) return;
+    const groups = await gm.listGroups(newMember.guild.id);
+    for (const group of groups) {
+      if (!group.role_id) continue;
+      const had = oldMember.roles.cache.has(group.role_id);
+      const has = newMember.roles.cache.has(group.role_id);
+      const bypass = global.groupRoleGrantBypass?.has(`${newMember.guild.id}:${newMember.id}:${group.role_id}`);
+      const isLinked = group.memberIds.includes(String(newMember.id)) || String(group.owner_id) === String(newMember.id) || group.managerIds.includes(String(newMember.id));
+      if (has && !had && !isLinked && !bypass) {
+        await newMember.roles.remove(group.role_id, 'Unapproved group role assignment').catch(() => {});
+        await gm.audit(newMember.guild.id, null, group.id, 'role_guard_removed', { userId: newMember.id, roleId: group.role_id });
+        await gm.logGroupEvent(newMember.guild, 'update', { groupId: group.id, reason: 'role_guard_removed', userId: newMember.id, roleId: group.role_id }, null);
+      }
+      if (!has && had && isLinked && String(group.owner_id) !== String(newMember.id)) {
+        const voiceKey = `${newMember.guild.id}:${newMember.id}`;
+        const voiceStarted = voiceStarts.get(voiceKey);
+        if (voiceStarted) await gm.recordActivity(newMember.guild.id, newMember.id, 'voice_ms', Date.now() - voiceStarted, group.voice_channel_id).catch(() => {});
+        voiceStarts.delete(voiceKey);
+        await gm.removeMember(newMember.guild.id, group.id, newMember.id, 'role_removed').catch(() => {});
+        await gm.logGroupEvent(newMember.guild, 'member_remove', { groupId: group.id, userId: newMember.id, reason: 'role_removed' }, null);
+        const owner = await newMember.guild.members.fetch(group.owner_id).catch(() => null);
+        for (const managerId of group.managerIds) {
+          const manager = await newMember.guild.members.fetch(managerId).catch(() => null);
+          for (const recipient of [owner, manager]) if (recipient) recipient.send(`Group update\nMember: <@${newMember.id}>\nGroup: **${safe(group.name)}**\nAction: role removed`).catch(() => {});
+        }
+      }
+    }
+    activityCache.delete(String(newMember.guild.id));
+  });
 }
 async function dispatchInternalMessage(message, options = {}) {
   const prefix=options.prefix||':';
@@ -302,6 +767,8 @@ function groupError(error) {
     ASSET_LINKED: 'أحد العناصر أو الأعضاء المختارين مرتبط بقروب آخر؛ لم يتم الاستيراد.',
     INVALID_ROLE: 'اختر رتبة قروب عادية قابلة للإدارة، غير everyone أو رتبة نظام أو رتبة ذات صلاحيات إدارية.',
     INVALID_THREAD: 'الثريد غير موجود أو لا ينتمي إلى القناة المختارة.',
+    OWNER_NOT_IN_THREAD: 'مالك القروب غير عضو في الثريد الخاص؛ أضفه إليه قبل الاستيراد.',
+    THREAD_MEMBERS_MISMATCH: 'كل حاملي رتبة القروب يجب أن يكونوا أعضاء في الثريد الخاص قبل ربطه.',
     NAME_REQUIRED: 'الاسم مطلوب (حتى 80 حرفاً).', NAME_EXISTS: 'يوجد قروب آخر بهذا الاسم.',
     INVALID_LIMIT: 'الحد الصوتي عدد صحيح من 0 إلى 99 (0 = بلا حد).',
     NOT_IN_GROUP_VOICE: 'العضو ليس في روم هذا القروب؛ لن يتم فصله من أي روم آخر.',
@@ -657,6 +1124,14 @@ async function validateImport(guild, flow, settings, includeMembers = false) {
     if (!members.includes(owner.id)) throw new Error('MEMBER_NOT_FOUND');
     if (members.length > settings.maxMembers) throw new Error('GROUP_FULL');
     if (groups.some(g => members.some(id => [g.owner_id, ...g.memberIds, ...g.managerIds].includes(id)))) throw new Error('ASSET_LINKED');
+    if (thread) {
+      for (let offset = 0; offset < members.length; offset += 5) {
+        const batch = members.slice(offset, offset + 5);
+        const memberships = await Promise.all(batch.map(id => thread.members.fetch(id).catch(() => null)));
+        if (memberships.some((membership, index) => !membership && batch[index] === owner.id)) throw new Error('OWNER_NOT_IN_THREAD');
+        if (memberships.some(membership => !membership)) throw new Error('THREAD_MEMBERS_MISMATCH');
+      }
+    }
     await groupChannels(guild, { id: null, text_channel_id: text.id, thread_id: thread?.id || null, voice_channel_id: voice.id }, 'both');
   }
   return { role, owner, text, thread, voice, members };

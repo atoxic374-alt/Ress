@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { DatabaseManager } = require('./utils/database');
+const { ChannelType } = require('discord.js');
 
 // Keep this integration test isolated from the production SQLite file.
 const databaseModule = require('./utils/database');
@@ -56,6 +57,30 @@ async function insertGroup({
   return Number(result.id);
 }
 
+function testSetupValidation() {
+  const basePermissions = new Set(['ManageChannels', 'ManageRoles']);
+  const textPermissions = new Set(['ViewChannel', 'ManageChannels', 'ManageThreads', 'SendMessages', 'SendMessagesInThreads']);
+  const voicePermissions = new Set(['ViewChannel', 'ManageChannels']);
+  const category = permissions => ({ type: ChannelType.GuildCategory, permissionsFor: () => ({ has: permission => permissions.has(permission) }) });
+  const guild = {
+    members: { me: { permissions: { has: permission => basePermissions.has(permission) }, roles: { highest: { position: 20 } } } },
+    channels: { cache: new Map([['text-category', category(textPermissions)], ['voice-category', category(voicePermissions)]]) },
+    roles: { cache: new Map() }
+  };
+  const missing = gm.validateConfig(guild, {
+    ...gm.GROUP_DEFAULTS,
+    chatMode: 'threads',
+    textCategoryId: 'text-category',
+    voiceCategoryId: 'voice-category',
+    extraPermissions: true,
+    logChannelId: 'missing-log-channel'
+  });
+  assert.ok(missing.includes('categoryPermission:textCategoryId:CreatePrivateThreads'), 'setup detects missing private-thread permission');
+  assert.ok(missing.includes('permission:ManageMessages'), 'setup detects permissions required by extra moderation tools');
+  assert.ok(missing.includes('logChannelId'), 'setup validates configured log channels');
+  assert.equal(missing.includes('permission:BOT_MEMBER'), false);
+}
+
 function makeParserGuild() {
   const roleCache = { some: () => false };
   const ownerMember = {
@@ -98,13 +123,13 @@ function parserMessage(guild, content) {
 
 async function testMembershipLimitsAndBlockedUsers() {
   const guildId = 'membership-guild';
-  const groupId = await insertGroup({ guildId, name: 'Membership', textChannelId: 'membership-channel' });
-  await gm.saveSettings(guildId, { maxMembers: 2 }, OWNER);
+  const groupId = await insertGroup({ guildId, name: 'Membership', memberIds: [OWNER], textChannelId: 'membership-channel' });
+  await gm.saveSettings(guildId, { maxMembers: 3 }, OWNER);
 
-  assert.deepEqual(await gm.addMember(guildId, groupId, USER_A, OWNER), [USER_A]);
+  assert.deepEqual(await gm.addMember(guildId, groupId, USER_A, OWNER), [OWNER, USER_A]);
   // Adding an existing member is idempotent rather than duplicating the ID.
-  assert.deepEqual(await gm.addMember(guildId, groupId, USER_A, OWNER), [USER_A]);
-  assert.deepEqual(await gm.addMember(guildId, groupId, USER_B, OWNER), [USER_A, USER_B]);
+  assert.deepEqual(await gm.addMember(guildId, groupId, USER_A, OWNER), [OWNER, USER_A]);
+  assert.deepEqual(await gm.addMember(guildId, groupId, USER_B, OWNER), [OWNER, USER_A, USER_B]);
   await assert.rejects(
     gm.addMember(guildId, groupId, USER_C, OWNER),
     error => error.message === 'GROUP_FULL',
@@ -113,6 +138,7 @@ async function testMembershipLimitsAndBlockedUsers() {
 
   const blockedGroupId = await insertGroup({ guildId: 'blocked-guild', name: 'Blocked' });
   assert.deepEqual(await gm.setBlocked('blocked-guild', blockedGroupId, USER_A, true, OWNER), [USER_A]);
+  await assert.rejects(gm.setBlocked('blocked-guild', blockedGroupId, OWNER, true, OWNER), error => error.message === 'OWNER_PROTECTED');
   assert.deepEqual(await gm.setBlocked('blocked-guild', blockedGroupId, USER_A, true, OWNER), [USER_A]);
   await assert.rejects(
     gm.addMember('blocked-guild', blockedGroupId, USER_A, OWNER),
@@ -121,6 +147,12 @@ async function testMembershipLimitsAndBlockedUsers() {
   );
   assert.deepEqual(await gm.setBlocked('blocked-guild', blockedGroupId, USER_A, false, OWNER), []);
   assert.deepEqual(await gm.addMember('blocked-guild', blockedGroupId, USER_A, OWNER), [USER_A]);
+  await gm.addMember('blocked-guild', blockedGroupId, USER_B, OWNER);
+  await gm.setManagers('blocked-guild', blockedGroupId, [USER_B], OWNER);
+  await gm.setBlocked('blocked-guild', blockedGroupId, USER_B, true, OWNER);
+  const blockedManagerGroup = await gm.getGroup('blocked-guild', blockedGroupId);
+  assert.equal(blockedManagerGroup.memberIds.includes(USER_B), false);
+  assert.equal(blockedManagerGroup.managerIds.includes(USER_B), false, 'blocking a manager also removes manager status');
 }
 
 async function testPointsAndReset() {
@@ -150,6 +182,12 @@ async function testPointsAndReset() {
   assert.equal(Number(memberPoints[0].points), 6);
   assert.equal(Number(memberPoints[0].messages), 20);
 
+  await gm.removeMember(guildId, groupId, USER_A, OWNER);
+  assert.deepEqual(await gm.listMemberPoints(guildId, groupId), [], 'former members are not shown in the current member leaderboard');
+  await gm.addMember(guildId, groupId, USER_A, OWNER);
+  memberPoints = await gm.listMemberPoints(guildId, groupId);
+  assert.equal(Number(memberPoints[0].points), 6, 'rejoining restores the retained historical point total');
+
   // Reset one group and verify both aggregate and per-member points are cleared.
   await gm.resetPoints(guildId, groupId, OWNER);
   group = await gm.getGroup(guildId, groupId);
@@ -159,7 +197,7 @@ async function testPointsAndReset() {
   assert.equal(Number(memberPoints[0].messages), 0);
 
   // Exercise the all-active-groups reset branch as well.
-  const secondGroupId = await insertGroup({ guildId, name: 'Points Two', points: 8 });
+  const secondGroupId = await insertGroup({ guildId, name: 'Points Two', memberIds: [USER_B], points: 8 });
   await testDb.run(
     'INSERT INTO group_member_points(guild_id, group_id, user_id, points, messages, updated_at) VALUES(?,?,?,?,?,?)',
     [guildId, secondGroupId, USER_B, 8, 12, Date.now()]
@@ -169,6 +207,25 @@ async function testPointsAndReset() {
   const resetRows = await gm.listMemberPoints(guildId, secondGroupId);
   assert.equal(Number(resetRows[0].points), 0);
   assert.equal(Number(resetRows[0].messages), 0);
+
+  const retryGuildId = 'event-retry-guild';
+  await insertGroup({ guildId: retryGuildId, name: 'Event retry', memberIds: [USER_C], textChannelId: 'retry-channel' });
+  await gm.saveSettings(retryGuildId, { enabled: true }, OWNER);
+  await gm.setRule(retryGuildId, 'messages', 1, 1, true, OWNER);
+  assert.equal(await gm.recordActivity(retryGuildId, USER_C, 'messages', 1, { channelId: 'unrelated-channel', eventId: 'retry-event' }), 0);
+  assert.equal(await gm.recordActivity(retryGuildId, USER_C, 'messages', 1, { channelId: 'retry-channel', eventId: 'retry-event' }), 1,
+    'an event rejected for channel scope is not marked as consumed');
+  assert.equal(await gm.recordActivity(retryGuildId, USER_C, 'messages', 1, { channelId: 'retry-channel', eventId: 'retry-event' }), 0,
+    'an accepted event is still deduplicated');
+
+  const manyMembers = Array.from({ length: 30 }, (_, index) => String(100000000000000100n + BigInt(index)));
+  const largeGroupId = await insertGroup({ guildId: retryGuildId, name: 'Large leaderboard', memberIds: manyMembers });
+  for (let index = 0; index < manyMembers.length; index += 1) {
+    await testDb.run('INSERT INTO group_member_points(guild_id, group_id, user_id, points, updated_at) VALUES(?,?,?,?,?)',
+      [retryGuildId, largeGroupId, manyMembers[index], manyMembers.length - index, Date.now()]);
+  }
+  assert.equal((await gm.listMemberPoints(retryGuildId, largeGroupId, 1000)).length, 30,
+    'the all-members leaderboard can return ranks beyond the first 25');
 }
 
 async function testInternalCommandParser() {
@@ -213,14 +270,49 @@ async function testInternalCommandParser() {
   const arabicAdd = parserMessage(guild, `:إضافة ${USER_A}`);
   assert.equal(await handleInternalMessage(arabicAdd.message), true);
   assert.deepEqual((await gm.getGroup(guildId, groupId)).memberIds, [OWNER, USER_A]);
+
+  const anotherGroupId = await insertGroup({ guildId, name: 'Other group', ownerId: USER_B, memberIds: [USER_B] });
+  await assert.rejects(gm.addMember(guildId, groupId, USER_B, OWNER), error => error.message === 'USER_ALREADY_IN_GROUP');
+  assert.equal((await gm.getGroup(guildId, anotherGroupId)).owner_id, USER_B);
+
+  const addManager = parserMessage(guild, `:مسؤول ${USER_A}`);
+  await handleInternalMessage(addManager.message);
+  assert.deepEqual((await gm.getGroup(guildId, groupId)).managerIds, [USER_A]);
+  const removeManagerArabic = parserMessage(guild, `:مسؤول إزالة ${USER_A}`);
+  await handleInternalMessage(removeManagerArabic.message);
+  assert.deepEqual((await gm.getGroup(guildId, groupId)).managerIds, [], 'Arabic manager removal must remove rather than add');
+
+  const punishWhileDisabled = parserMessage(guild, `:عقوبة ${USER_A}`);
+  await handleInternalMessage(punishWhileDisabled.message);
+  assert.equal(punishWhileDisabled.replies[0], 'الصلاحيات الإضافية متوقفة.');
+
+  await insertGroup({ guildId, name: 'Ambiguous channel', ownerId: USER_C, memberIds: [USER_C], textChannelId: 'parser-channel' });
+  assert.equal(await gm.getGroupForChannel(guildId, 'parser-channel'), null, 'shared channel links are rejected rather than routing to the first group');
+}
+
+async function testPartialDeleteCanBeRetried() {
+  const guildId = 'delete-retry-guild';
+  const groupId = await insertGroup({ guildId, name: 'Delete retry', textChannelId: 'deleted-channel-id' });
+  const guild = {
+    id: guildId,
+    channels: { cache: new Map(), fetch: async () => { const error = new Error('temporary fetch failure'); error.code = 500; throw error; } },
+    roles: { cache: new Map() }
+  };
+  await assert.rejects(gm.deleteGroup(guild, groupId, OWNER), error => error.message === 'GROUP_DELETE_PARTIAL');
+  assert.equal((await gm.getGroup(guildId, groupId)).status, 'orphaned', 'partial delete keeps a retryable record');
+  guild.channels.fetch = async () => { const error = new Error('unknown channel'); error.code = 10003; throw error; };
+  assert.equal(await gm.deleteGroup(guild, groupId, OWNER), true);
+  assert.equal((await gm.getGroup(guildId, groupId)).status, 'deleted', 'retry treats a confirmed missing resource as already cleaned');
 }
 
 async function main() {
   await testDb.initialize();
   try {
+    testSetupValidation();
     await testMembershipLimitsAndBlockedUsers();
     await testPointsAndReset();
     await testInternalCommandParser();
+    await testPartialDeleteCanBeRetried();
     console.log('groupManager/groupInternal smoke-integration tests passed');
   } finally {
     await testDb.closeAsync();

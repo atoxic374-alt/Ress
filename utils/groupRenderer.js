@@ -36,7 +36,12 @@ function avatarUrl(member) {
 function iconUrl(guild) { return safeUrl(guild?.iconURL, guild); }
 async function image(url) {
   if (!url) return null;
-  if (!avatarCache.has(url)) avatarCache.set(url, Promise.resolve(loadImage(url)).catch(() => null));
+  if (!avatarCache.has(url)) {
+    const pending = Promise.resolve(loadImage(url)).catch(() => null);
+    avatarCache.set(url, pending);
+    while (avatarCache.size > 500) avatarCache.delete(avatarCache.keys().next().value);
+    pending.then(result => { if (!result && avatarCache.get(url) === pending) avatarCache.delete(url); });
+  }
   return avatarCache.get(url);
 }
 function avatarInitial(value) { return Array.from(String(value || '?').trim())[0] || '?'; }
@@ -91,7 +96,7 @@ async function renderInfo({ guild, group, owner, managers, accentColor = '#5865F
   for (const [label, value] of fields) { roundRect(ctx, 90, y, 1220, 62, 14, 'rgba(255,255,255,.045)'); ctx.fillStyle = accent; ctx.font = 'bold 19px Cairo, sans-serif'; ctx.textAlign = 'right'; ctx.fillText(label, 1250, y + 32); ctx.fillStyle = '#F4F6FA'; ctx.font = '20px Cairo, sans-serif'; ctx.textAlign = 'left'; text(ctx, value, 125, y + 32, 1040); y += 78; }
   return new AttachmentBuilder(canvas.toBuffer('image/png'), { name: `group-info-${group?.id || 'view'}.png` });
 }
-async function renderTopGroups({ guild, groups = [], memberRowsByGroup = {}, selectedGroup = null, viewerId = null, accentColor = '#5865F2' } = {}) {
+async function renderTopGroups({ guild, groups = [], memberRowsByGroup = {}, groupAvatars = {}, selectedGroup = null, viewerId = null, accentColor = '#5865F2' } = {}) {
   const W = 1600, H = 1000, accent = hex(accentColor), canvas = createCanvas(W, H), ctx = canvas.getContext('2d');
   ctx.direction = 'rtl';
   const bg = ctx.createLinearGradient(0, 0, W, H); bg.addColorStop(0, '#0B1019'); bg.addColorStop(.55, '#182132'); bg.addColorStop(1, '#090D14'); ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
@@ -103,7 +108,7 @@ async function renderTopGroups({ guild, groups = [], memberRowsByGroup = {}, sel
   const top3 = sorted.slice(0, 3), top10 = sorted.slice(0, 10);
   const podium = [{ x: 430, rank: 2, h: 240 }, { x: 760, rank: 1, h: 335 }, { x: 1090, rank: 3, h: 205 }], medals = ['#F2C94C', '#D7E1EA', '#CD8A5A'];
   roundRect(ctx, 62, 180, 1190, 440, 24, 'rgba(255,255,255,.035)', 'rgba(255,255,255,.08)');
-  const podiumImages = await Promise.all(podium.map(p => image(iconUrl(guild))));
+  const podiumImages = await Promise.all(podium.map(p => image(groupAvatars[String(top3[p.rank - 1]?.id)] || iconUrl(guild))));
   for (let index = 0; index < podium.length; index += 1) { const p = podium[index], row = top3[p.rank - 1], y = 570 - p.h, col = medals[p.rank - 1]; roundRect(ctx, p.x - 122, y, 244, p.h, 20, `${col}20`, `${col}95`); ctx.fillStyle = col; ctx.font = 'bold 48px Cairo, sans-serif'; ctx.textAlign = 'center'; ctx.fillText(String(p.rank), p.x, y + 58); avatar(ctx, podiumImages[index], p.x, y - 76, p.rank === 1 ? 58 : 49, col, row?.name || 'G'); if (row) { ctx.fillStyle = '#FFF'; ctx.font = 'bold 23px Cairo, sans-serif'; text(ctx, row.name || 'Group', p.x, y + 116, 210); ctx.fillStyle = col; ctx.font = 'bold 21px Cairo, sans-serif'; ctx.fillText(`${number(row.points).toLocaleString()} نقطة`, p.x, y + 156); ctx.fillStyle = '#AAB4C5'; ctx.font = '16px Cairo, sans-serif'; ctx.fillText(`${number(row.memberCount)} أعضاء`, p.x, y + 187); } }
   ctx.textAlign = 'right'; ctx.fillStyle = accent; ctx.font = 'bold 24px Cairo, sans-serif'; ctx.fillText('أفضل 10', 1500, 194); roundRect(ctx, 1270, 220, 250, 400, 18, 'rgba(255,255,255,.035)');
   for (let i = 0; i < 10; i += 1) { const row = top10[i], y = 254 + i * 35; ctx.fillStyle = i < 3 ? medals[i] : '#C2CAD7'; ctx.font = 'bold 18px Cairo, sans-serif'; text(ctx, `${String(i + 1).padStart(2, '0')}  ${row?.name || '—'}`, 1490, y, 175); ctx.textAlign = 'left'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 16px Cairo, sans-serif'; ctx.fillText(row ? number(row.points).toLocaleString() : '—', 1290, y); ctx.textAlign = 'right'; }

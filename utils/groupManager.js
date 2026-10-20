@@ -33,6 +33,7 @@ const GROUP_METRICS = new Set(['messages', 'voice_ms', 'reactions']);
 const MAX_ACTIVITY_AMOUNT = 1000000000000;
 const locks = new Map();
 let schemaPromise = null;
+let lastActivityEventPruneAt = 0;
 
 function safeJson(value, fallback) {
   if (value && typeof value === 'object') return value;
@@ -165,7 +166,12 @@ async function saveSettings(guildId, patch, actorId = null) {
 async function listGroups(guildId, includeArchived = false) { await schema(); const rows = await dbManager.all(`SELECT * FROM managed_groups WHERE guild_id = ? ${includeArchived ? '' : "AND status = 'active'"} ORDER BY points DESC, created_at ASC, id ASC`, [String(guildId)]); return rows.map(hydrate); }
 function hydrate(row) { if (!row) return null; return { ...row, managerIds: ids(safeJson(row.manager_ids_json, [])), memberIds: ids(safeJson(row.member_ids_json, [])), blockedIds: ids(safeJson(row.blocked_ids_json, [])), points: Number(row.points) || 0 }; }
 async function getGroup(guildId, groupId) { await schema(); return hydrate(await dbManager.get('SELECT * FROM managed_groups WHERE guild_id = ? AND id = ?', [String(guildId), Number(groupId)])); }
-async function getGroupForChannel(guildId, channelId) { await schema(); const rows = await dbManager.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status = 'active' AND (text_channel_id = ? OR thread_id = ? OR voice_channel_id = ?)", [String(guildId), String(channelId), String(channelId), String(channelId)]); return hydrate(rows[0]); }
+async function getGroupForChannel(guildId, channelId) {
+  await schema();
+  const rows = await dbManager.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status = 'active' AND (text_channel_id = ? OR thread_id = ? OR voice_channel_id = ?)", [String(guildId), String(channelId), String(channelId), String(channelId)]);
+  // Ambiguous channel links must never route a destructive command to an arbitrary group.
+  return rows.length === 1 ? hydrate(rows[0]) : null;
+}
 async function audit(guildId, actorId, groupId, action, details = {}) { await schema(); return dbManager.run('INSERT INTO group_audit_log(guild_id, group_id, actor_id, action, details_json, created_at) VALUES(?,?,?,?,?,?)', [String(guildId), groupId == null ? null : Number(groupId), actorId ? String(actorId) : null, String(action), JSON.stringify(details), Date.now()]); }
 /**
  * Best-effort delivery of a structured audit event. Logging must never make a
@@ -206,16 +212,44 @@ function channelBelongs(group, channelId) { return [group.text_channel_id, group
 function validateConfig(guild, settings) {
   const missing = [];
   const me = guild.members?.me;
-  const requiredPermissions = ['ManageChannels', 'ManageRoles', 'ManageMessages', 'ManageThreads', 'MoveMembers', 'ManageNicknames'];
-  if (me?.permissions) for (const permission of requiredPermissions) if (!me.permissions.has(permission)) missing.push(`permission:${permission}`);
+  const requiredPermissions = ['ManageChannels', 'ManageRoles'];
+  if (settings.extraPermissions) requiredPermissions.push('ManageMessages', 'ModerateMembers', 'MoveMembers');
+  if (!me?.permissions) missing.push('permission:BOT_MEMBER');
+  else for (const permission of requiredPermissions) if (!me.permissions.has(permission)) missing.push(`permission:${permission}`);
   if (!settings.chatMode) missing.push('chatMode');
   const textCategory = settings.textCategoryId && guild.channels.cache.get(settings.textCategoryId);
   const voiceCategory = settings.voiceCategoryId && guild.channels.cache.get(settings.voiceCategoryId);
   if (!textCategory || textCategory.type !== ChannelType.GuildCategory) missing.push('textCategoryId');
   if (!voiceCategory || voiceCategory.type !== ChannelType.GuildCategory) missing.push('voiceCategoryId');
-  if (settings.musicChannelId) { const music = guild.channels.cache.get(settings.musicChannelId); if (!music?.isVoiceBased?.()) missing.push('musicChannelId'); }
-  for (const key of ['topChannelId', 'adminControlChannelId', 'memberControlChannelId']) {
-    if (settings[key]) { const channel = guild.channels.cache.get(settings[key]); if (!channel?.isTextBased?.() || channel.type === ChannelType.GuildCategory) missing.push(key); }
+  const checkCategoryPermissions = (category, key, extra = []) => {
+    if (!category || !me) return;
+    const permissions = category.permissionsFor?.(me);
+    for (const permission of ['ViewChannel', 'ManageChannels', ...extra]) {
+      if (!permissions?.has(permission)) missing.push(`categoryPermission:${key}:${permission}`);
+    }
+  };
+  checkCategoryPermissions(textCategory, 'textCategoryId', settings.chatMode === GROUP_CHAT_MODES.THREADS
+    ? ['CreatePrivateThreads', 'ManageThreads', 'SendMessages', 'SendMessagesInThreads']
+    : ['SendMessages', 'ReadMessageHistory']);
+  checkCategoryPermissions(voiceCategory, 'voiceCategoryId', settings.musicChannelId ? ['Connect', 'MoveMembers'] : []);
+  if (settings.musicChannelId) {
+    const music = guild.channels.cache.get(settings.musicChannelId);
+    if (!music?.isVoiceBased?.()) missing.push('musicChannelId');
+    else if (me) {
+      const permissions = music.permissionsFor?.(me);
+      for (const permission of ['ViewChannel', 'Connect', 'MoveMembers']) if (!permissions?.has(permission)) missing.push(`channelPermission:musicChannelId:${permission}`);
+    }
+  }
+  for (const key of ['logChannelId', 'topChannelId', 'adminControlChannelId', 'memberControlChannelId']) {
+    if (settings[key]) {
+      const channel = guild.channels.cache.get(settings[key]);
+      if (!channel?.isTextBased?.() || channel.type === ChannelType.GuildCategory) missing.push(key);
+      else if (me) {
+        const permissions = channel.permissionsFor?.(me);
+        const required = key === 'topChannelId' ? ['ViewChannel', 'SendMessages', 'AttachFiles'] : ['ViewChannel', 'SendMessages'];
+        for (const permission of required) if (!permissions?.has(permission)) missing.push(`channelPermission:${key}:${permission}`);
+      }
+    }
   }
   for (const roleId of [settings.mainRoleId, settings.leaderRoleId, settings.managerRoleId].filter(Boolean)) { const role = guild.roles.cache.get(roleId); if (!role) missing.push(`role:${roleId}`); else if (me?.roles?.highest && role.position >= me.roles.highest.position) missing.push(`roleHierarchy:${roleId}`); }
   if (settings.mainRoleId) {
@@ -241,10 +275,58 @@ async function setSystemRole(guildId, targetId, enabled, actorId) {
   });
 }
 async function updateGroup(guildId, groupId, patch, actorId) { await schema(); const allowed = ['name','description','owner_id','color','emoji','role_id','text_channel_id','thread_id','voice_channel_id','manager_ids_json','member_ids_json','blocked_ids_json','points','status','updated_at','archived_at']; const keys = Object.keys(patch).filter(key => allowed.includes(key)); if (!keys.length) return getGroup(guildId, groupId); const values = keys.map(key => patch[key]); values.push(String(guildId), Number(groupId)); await dbManager.run(`UPDATE managed_groups SET ${keys.map(key => `${key} = ?`).join(', ')} WHERE guild_id = ? AND id = ?`, values); await audit(guildId, actorId, groupId, 'group_update', { keys }); return getGroup(guildId, groupId); }
-async function addMember(guildId, groupId, userId, actorId) { return withLock(`member:${guildId}:${groupId}`, async () => { const group = await getGroup(guildId, groupId); if (!group) throw new Error('GROUP_NOT_FOUND'); if (group.blockedIds.includes(String(userId))) throw new Error('USER_BLOCKED'); if (group.memberIds.length >= Number((await getSettings(guildId)).maxMembers || 10) && !group.memberIds.includes(String(userId))) throw new Error('GROUP_FULL'); const members = new Set(group.memberIds); members.add(String(userId)); await updateGroup(guildId, groupId, { member_ids_json: JSON.stringify([...members]), updated_at: Date.now() }, actorId); return [...members]; }); }
-async function removeMember(guildId, groupId, userId, actorId) { return withLock(`member:${guildId}:${groupId}`, async () => { const group = await getGroup(guildId, groupId); if (!group) throw new Error('GROUP_NOT_FOUND'); if (String(group.owner_id) === String(userId)) throw new Error('OWNER_PROTECTED'); const members = group.memberIds.filter(id => id !== String(userId)); const managers = group.managerIds.filter(id => id !== String(userId)); await updateGroup(guildId, groupId, { member_ids_json: JSON.stringify(members), manager_ids_json: JSON.stringify(managers), updated_at: Date.now() }, actorId); return members; }); }
-async function setManagers(guildId, groupId, managerIds, actorId) { return withLock(`member:${guildId}:${groupId}`, async () => { const group = await getGroup(guildId, groupId); if (!group) throw new Error('GROUP_NOT_FOUND'); const allowed = ids(managerIds).filter(id => group.memberIds.includes(id) && id !== String(group.owner_id)); await updateGroup(guildId, groupId, { manager_ids_json: JSON.stringify(allowed), updated_at: Date.now() }, actorId); return allowed; }); }
-async function setBlocked(guildId, groupId, userId, blocked, actorId) { return withLock(`member:${guildId}:${groupId}`, async () => { const group = await getGroup(guildId, groupId); if (!group) throw new Error('GROUP_NOT_FOUND'); const set = new Set(group.blockedIds); blocked ? set.add(String(userId)) : set.delete(String(userId)); await updateGroup(guildId, groupId, { blocked_ids_json: JSON.stringify([...set]), updated_at: Date.now() }, actorId); return [...set]; }); }
+async function addMember(guildId, groupId, userId, actorId) { return withLock(`members:${guildId}`, async () => {
+  const safeUserId = String(userId);
+  if (!isSnowflake(safeUserId)) throw new Error('INVALID_USER_ID');
+  const group = await getGroup(guildId, groupId);
+  if (!group || group.status !== 'active') throw new Error('GROUP_NOT_FOUND');
+  if (group.blockedIds.includes(safeUserId)) throw new Error('USER_BLOCKED');
+  const alreadyMember = group.memberIds.includes(safeUserId) || String(group.owner_id) === safeUserId;
+  if (!alreadyMember) {
+    const otherGroups = await dbManager.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status = 'active' AND id <> ?", [String(guildId), Number(groupId)]);
+    if (otherGroups.map(hydrate).some(other => String(other.owner_id) === safeUserId || other.memberIds.includes(safeUserId) || other.managerIds.includes(safeUserId))) throw new Error('USER_ALREADY_IN_GROUP');
+    if (group.memberIds.length >= Number((await getSettings(guildId)).maxMembers || 10)) throw new Error('GROUP_FULL');
+  }
+  const members = new Set(group.memberIds); members.add(safeUserId);
+  await updateGroup(guildId, groupId, { member_ids_json: JSON.stringify([...members]), updated_at: Date.now() }, actorId);
+  return [...members];
+}); }
+async function removeMember(guildId, groupId, userId, actorId) { return withLock(`members:${guildId}`, async () => {
+  const safeUserId = String(userId);
+  const group = await getGroup(guildId, groupId);
+  if (!group) throw new Error('GROUP_NOT_FOUND');
+  if (String(group.owner_id) === safeUserId) throw new Error('OWNER_PROTECTED');
+  const members = group.memberIds.filter(id => id !== safeUserId);
+  const managers = group.managerIds.filter(id => id !== safeUserId);
+  await dbManager.transaction(async tx => {
+    await tx.run('UPDATE managed_groups SET member_ids_json = ?, manager_ids_json = ?, updated_at = ? WHERE guild_id = ? AND id = ?', [JSON.stringify(members), JSON.stringify(managers), Date.now(), String(guildId), Number(groupId)]);
+  }, 'group-member-remove');
+  await audit(guildId, actorId, groupId, 'group_update', { removedMemberId: safeUserId });
+  return members;
+}); }
+async function setManagers(guildId, groupId, managerIds, actorId) { return withLock(`members:${guildId}`, async () => {
+  const group = await getGroup(guildId, groupId);
+  if (!group) throw new Error('GROUP_NOT_FOUND');
+  const allowed = ids(managerIds).filter(id => group.memberIds.includes(id) && id !== String(group.owner_id));
+  await updateGroup(guildId, groupId, { manager_ids_json: JSON.stringify(allowed), updated_at: Date.now() }, actorId);
+  return allowed;
+}); }
+async function setBlocked(guildId, groupId, userId, blocked, actorId) { return withLock(`members:${guildId}`, async () => {
+  const safeUserId = String(userId);
+  if (!isSnowflake(safeUserId)) throw new Error('INVALID_USER_ID');
+  const group = await getGroup(guildId, groupId);
+  if (!group) throw new Error('GROUP_NOT_FOUND');
+  if (blocked && String(group.owner_id) === safeUserId) throw new Error('OWNER_PROTECTED');
+  const blockedIds = new Set(group.blockedIds);
+  blocked ? blockedIds.add(safeUserId) : blockedIds.delete(safeUserId);
+  const members = blocked ? group.memberIds.filter(id => id !== safeUserId) : group.memberIds;
+  const managers = blocked ? group.managerIds.filter(id => id !== safeUserId) : group.managerIds;
+  await dbManager.transaction(async tx => {
+    await tx.run('UPDATE managed_groups SET blocked_ids_json = ?, member_ids_json = ?, manager_ids_json = ?, updated_at = ? WHERE guild_id = ? AND id = ?', [JSON.stringify([...blockedIds]), JSON.stringify(members), JSON.stringify(managers), Date.now(), String(guildId), Number(groupId)]);
+  }, 'group-member-block');
+  await audit(guildId, actorId, groupId, blocked ? 'member_block' : 'member_unblock', { userId: safeUserId });
+  return [...blockedIds];
+}); }
 async function resetPoints(guildId, groupId, actorId = null) {
   await schema();
   if (groupId != null && (!Number.isInteger(Number(groupId)) || Number(groupId) <= 0)) throw new Error('INVALID_GROUP_ID');
@@ -290,13 +372,15 @@ async function recordActivity(guildId, userId, metric, amount, channelId = null,
   const numericAmount = Number(amount);
   const increment = Number.isFinite(numericAmount) ? Math.min(MAX_ACTIVITY_AMOUNT, Math.max(0, Math.floor(numericAmount))) : 0;
   if (!increment) return 0;
-  const normalizedEventId = args.eventId == null || args.eventId === '' ? null : String(args.eventId);
+  const rawEventId = args.eventId == null || args.eventId === '' ? null : String(args.eventId);
+  if (rawEventId && rawEventId.length > 200) throw new Error('INVALID_EVENT_ID');
+  const normalizedEventId = rawEventId ? `${safeMetric}:${String(userId)}:${rawEventId}` : null;
   if (normalizedEventId && normalizedEventId.length > 255) throw new Error('INVALID_EVENT_ID');
+  if (normalizedEventId && Date.now() - lastActivityEventPruneAt > 24 * 60 * 60 * 1000) {
+    lastActivityEventPruneAt = Date.now();
+    await dbManager.run('DELETE FROM group_activity_events WHERE created_at < ?', [Date.now() - 90 * 24 * 60 * 60 * 1000]).catch(() => {});
+  }
   return withLock(`points:${String(guildId)}`, async () => dbManager.transaction(async tx => {
-    if (normalizedEventId) {
-      const inserted = await tx.run('INSERT OR IGNORE INTO group_activity_events(guild_id, event_id, created_at) VALUES(?,?,?)', [String(guildId), normalizedEventId, Date.now()]);
-      if (!inserted.changes) return 0;
-    }
     const settingsRow = await tx.get('SELECT * FROM group_system_settings WHERE guild_id = ?', [String(guildId)]);
     const settings = normalizeSettings(settingsRow || { guild_id: guildId, settings_json: JSON.stringify({}) });
     if (!settings.enabled) return 0;
@@ -305,11 +389,17 @@ async function recordActivity(guildId, userId, metric, amount, channelId = null,
     if (!rule || Number(rule.enabled) !== 1 || !Number.isInteger(threshold) || threshold < 1 || !Number.isInteger(rulePoints) || rulePoints < 1) return 0;
     const rows = await tx.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status = 'active'", [String(guildId)]);
     const column = safeMetric === 'voice_ms' ? 'voice_ms' : safeMetric === 'reactions' ? 'reactions' : 'messages';
+    const eligibleGroups = rows.map(hydrate).filter(group =>
+      (group.memberIds.includes(String(userId)) || String(group.owner_id) === String(userId))
+      && (settings.countAllChannels || !args.channelId || channelBelongs(group, args.channelId))
+    );
+    if (!eligibleGroups.length) return 0;
+    if (normalizedEventId) {
+      const inserted = await tx.run('INSERT OR IGNORE INTO group_activity_events(guild_id, event_id, created_at) VALUES(?,?,?)', [String(guildId), normalizedEventId, Date.now()]);
+      if (!inserted.changes) return 0;
+    }
     let awarded = 0;
-    for (const row of rows) {
-      const group = hydrate(row);
-      if (!group.memberIds.includes(String(userId)) && String(group.owner_id) !== String(userId)) continue;
-      if (!settings.countAllChannels && args.channelId && !channelBelongs(group, args.channelId)) continue;
+    for (const group of eligibleGroups) {
       const previous = await tx.get('SELECT * FROM group_member_points WHERE guild_id = ? AND group_id = ? AND user_id = ?', [String(guildId), Number(group.id), String(userId)]);
       const oldAmount = Number(previous?.[column]) || 0;
       const nextAmount = Math.min(MAX_ACTIVITY_AMOUNT, oldAmount + increment);
@@ -326,14 +416,30 @@ async function recordActivity(guildId, userId, metric, amount, channelId = null,
     return awarded;
   }, 'group-record-activity'));
 }
-async function listMemberPoints(guildId, groupId, limit = 10) { await schema(); const rows = await dbManager.all('SELECT * FROM group_member_points WHERE guild_id = ? AND group_id = ? ORDER BY points DESC, updated_at ASC LIMIT ?', [String(guildId), Number(groupId), Math.max(1, Math.min(25, Number(limit) || 10))]); return rows; }
+async function listMemberPoints(guildId, groupId, limit = 10) {
+  await schema();
+  const safeLimit = Math.max(1, Math.min(1000, Number(limit) || 10));
+  const group = await getGroup(guildId, groupId);
+  if (!group || group.status !== 'active') return [];
+  const currentMembers = new Set([String(group.owner_id), ...group.memberIds, ...group.managerIds]);
+  const memberIds = [...currentMembers];
+  if (!memberIds.length) return [];
+  const placeholders = memberIds.map(() => '?').join(', ');
+  return dbManager.all(`SELECT * FROM group_member_points WHERE guild_id = ? AND group_id = ? AND user_id IN (${placeholders}) ORDER BY points DESC, updated_at ASC LIMIT ?`, [String(guildId), Number(groupId), ...memberIds, safeLimit]);
+}
 async function createGroup(guild, { name, description = '', ownerId, color = '#5865F2', emoji = null }, actorId) {
+  const groupName = String(name || '').trim();
+  if (!groupName || groupName.length > 100 || /[\u0000-\u001f]/.test(groupName)) throw new Error('NAME_REQUIRED');
   const settings = await getSettings(guild.id); const missing = validateConfig(guild, settings); if (!settings.enabled) throw new Error('GROUP_SYSTEM_DISABLED'); if (missing.length) throw new Error(`GROUP_SETUP_REQUIRED:${missing.join(',')}`); const owner = await guild.members.fetch(String(ownerId));
+  if (owner.user?.bot) throw new Error('BOT_NOT_ALLOWED');
+  return withLock(`members:${guild.id}`, async () => {
   return withLock(`create:${guild.id}:${owner.id}`, async () => {
-    const existing = await dbManager.get("SELECT id FROM managed_groups WHERE guild_id = ? AND owner_id = ? AND status = 'active'", [guild.id, owner.id]); if (existing) throw new Error('OWNER_ALREADY_HAS_GROUP');
-    const now = Date.now(); let role = null; let text = null; let thread = null; let voice = null; const created = [];
+    const existingRows = await dbManager.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status = 'active'", [guild.id]);
+    const existing = existingRows.map(hydrate).find(group => String(group.owner_id) === String(owner.id) || group.memberIds.includes(String(owner.id)) || group.managerIds.includes(String(owner.id)));
+    if (existing) throw new Error(String(existing.owner_id) === String(owner.id) ? 'OWNER_ALREADY_HAS_GROUP' : 'USER_ALREADY_IN_GROUP');
+    const now = Date.now(); let role = null; let text = null; let thread = null; let voice = null; let leaderRole = null; let leaderRoleAdded = false; let createdGroupId = null; const created = [];
     try {
-      role = await guild.roles.create({ name: `Group・${String(name).trim().slice(0, 90)}`, color: color || '#5865F2', reason: 'Create managed group' }); created.push(['role', role]);
+      role = await guild.roles.create({ name: `Group・${groupName.slice(0, 90)}`, color: color || '#5865F2', reason: 'Create managed group' }); created.push(['role', role]);
       if (settings.mainRoleId) {
         const mainRole = guild.roles.cache.get(settings.mainRoleId) || await guild.roles.fetch(settings.mainRoleId).catch(() => null);
         if (!mainRole || mainRole.id === guild.id || mainRole.position < 2) throw new Error('MAIN_ROLE_INVALID');
@@ -344,17 +450,62 @@ async function createGroup(guild, { name, description = '', ownerId, color = '#5
       global.groupRoleGrantBypass.add(ownerRoleKey);
       setTimeout(() => global.groupRoleGrantBypass.delete(ownerRoleKey), 15000);
       await owner.roles.add(role, 'Managed group owner');
-      if (settings.leaderRoleId) { const leader = guild.roles.cache.get(settings.leaderRoleId); if (leader) await owner.roles.add(leader, 'Managed group leader role'); }
-      if (settings.chatMode === GROUP_CHAT_MODES.THREADS) { text = await guild.channels.create({ name: 'groups-chat', type: ChannelType.GuildText, parent: settings.textCategoryId, reason: 'Create managed groups thread parent' }); created.push(['channel', text]); thread = await text.threads.create({ name: String(name).slice(0, 100), type: ChannelType.PrivateThread, invitable: false, reason: 'Create managed group thread' }); created.push(['thread', thread]); }
-      else { text = await guild.channels.create({ name: `📝・${String(name).slice(0, 90)}`, type: ChannelType.GuildText, parent: settings.textCategoryId, reason: 'Create managed group text channel' }); created.push(['channel', text]); }
-      voice = await guild.channels.create({ name: `🔊・${String(name).slice(0, 90)}`, type: ChannelType.GuildVoice, parent: settings.voiceCategoryId, reason: 'Create managed group voice channel' }); created.push(['voice', voice]);
+      if (settings.leaderRoleId) {
+        leaderRole = guild.roles.cache.get(settings.leaderRoleId) || await guild.roles.fetch(settings.leaderRoleId).catch(() => null);
+        if (!leaderRole) throw new Error('LEADER_ROLE_INVALID');
+        if (!owner.roles.cache.has(leaderRole.id)) { await owner.roles.add(leaderRole, 'Managed group leader role'); leaderRoleAdded = true; }
+      }
+      if (settings.chatMode === GROUP_CHAT_MODES.THREADS) { text = await guild.channels.create({ name: 'groups-chat', type: ChannelType.GuildText, parent: settings.textCategoryId, reason: 'Create managed groups thread parent' }); created.push(['channel', text]); thread = await text.threads.create({ name: groupName.slice(0, 100), type: ChannelType.PrivateThread, invitable: false, reason: 'Create managed group thread' }); created.push(['thread', thread]); await thread.members.add(owner.id); }
+      else { text = await guild.channels.create({ name: `📝・${groupName.slice(0, 90)}`, type: ChannelType.GuildText, parent: settings.textCategoryId, reason: 'Create managed group text channel' }); created.push(['channel', text]); }
+      voice = await guild.channels.create({ name: `🔊・${groupName.slice(0, 90)}`, type: ChannelType.GuildVoice, parent: settings.voiceCategoryId, reason: 'Create managed group voice channel' }); created.push(['voice', voice]);
       const overwrites = [{ id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] }, { id: role.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.Speak] }];
       await text.permissionOverwrites.set(overwrites, 'Secure managed group text space').catch(error => { throw Object.assign(new Error('GROUP_TEXT_PERMISSIONS_FAILED'), { cause: error }); });
       await voice.permissionOverwrites.set(overwrites, 'Secure managed group voice space').catch(error => { throw Object.assign(new Error('GROUP_VOICE_PERMISSIONS_FAILED'), { cause: error }); });
-      const row = await dbManager.run(`INSERT INTO managed_groups(guild_id,name,description,owner_id,manager_ids_json,member_ids_json,blocked_ids_json,role_id,text_channel_id,thread_id,voice_channel_id,color,emoji,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [guild.id, String(name).trim().slice(0, 100), String(description).slice(0, 1000), owner.id, '[]', JSON.stringify([owner.id]), '[]', role.id, text.id, thread?.id || null, voice.id, color || '#5865F2', emoji, now, now]);
-      const group = await getGroup(guild.id, row.id ?? row.lastID); await audit(guild.id, actorId || owner.id, group.id, 'group_create', { roleId: role.id, textId: text.id, threadId: thread?.id, voiceId: voice.id }); return group;
-    } catch (error) { for (const [, resource] of created.reverse()) await resource?.delete?.('Rollback incomplete group creation').catch(() => {}); throw error; }
+      const row = await dbManager.run(`INSERT INTO managed_groups(guild_id,name,description,owner_id,manager_ids_json,member_ids_json,blocked_ids_json,role_id,text_channel_id,thread_id,voice_channel_id,color,emoji,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [guild.id, groupName, String(description).slice(0, 1000), owner.id, '[]', JSON.stringify([owner.id]), '[]', role.id, text.id, thread?.id || null, voice.id, color || '#5865F2', emoji, now, now]);
+      createdGroupId = row.id ?? row.lastID;
+      const group = await getGroup(guild.id, createdGroupId);
+      await audit(guild.id, actorId || owner.id, group.id, 'group_create', { roleId: role.id, textId: text.id, threadId: thread?.id, voiceId: voice.id }).catch(() => {});
+      return group;
+    } catch (error) {
+      if (createdGroupId) await dbManager.run("UPDATE managed_groups SET status = 'deleted', archived_at = ?, updated_at = ? WHERE guild_id = ? AND id = ?", [Date.now(), Date.now(), guild.id, Number(createdGroupId)]).catch(() => {});
+      if (leaderRoleAdded && leaderRole) await owner.roles.remove(leaderRole, 'Rollback incomplete group creation').catch(() => {});
+      for (const [, resource] of created.reverse()) await resource?.delete?.('Rollback incomplete group creation').catch(() => {});
+      throw error;
+    }
+  });
   });
 }
-async function deleteGroup(guild, groupId, actorId) { return withLock(`delete:${guild.id}:${groupId}`, async () => { const group = await getGroup(guild.id, groupId); if (!group) throw new Error('GROUP_NOT_FOUND'); const idsToDelete = [group.thread_id, group.text_channel_id, group.voice_channel_id]; for (const id of idsToDelete) { if (!id) continue; const channel = guild.channels.cache.get(id) || await guild.channels.fetch(id).catch(() => null); if (channel) await channel.delete('Delete managed group').catch(() => {}); } const role = group.role_id && (guild.roles.cache.get(group.role_id) || await guild.roles.fetch(group.role_id).catch(() => null)); if (role) await role.delete('Delete managed group').catch(() => {}); await dbManager.run("UPDATE managed_groups SET status='deleted', archived_at=?, updated_at=? WHERE guild_id=? AND id=?", [Date.now(), Date.now(), guild.id, Number(groupId)]); await audit(guild.id, actorId, groupId, 'group_delete'); return true; }); }
+async function deleteGroup(guild, groupId, actorId) {
+  return withLock(`delete:${guild.id}:${groupId}`, async () => {
+    const group = await getGroup(guild.id, groupId);
+    if (!group) throw new Error('GROUP_NOT_FOUND');
+    if (group.status === 'deleted') return true;
+    const failed = [];
+    for (const id of [group.thread_id, group.text_channel_id, group.voice_channel_id].filter(Boolean)) {
+      const channel = guild.channels.cache.get(id) || await guild.channels.fetch(id).catch(error => {
+        if (error?.code !== 10003 && error?.status !== 404) failed.push({ type: 'channel_fetch', id });
+        return null;
+      });
+      if (channel) await channel.delete('Delete managed group').catch(() => failed.push({ type: 'channel', id }));
+    }
+    const role = group.role_id && (guild.roles.cache.get(group.role_id) || await guild.roles.fetch(group.role_id).catch(error => {
+      if (error?.code !== 10011 && error?.status !== 404) failed.push({ type: 'role_fetch', id: group.role_id });
+      return null;
+    }));
+    if (role) await role.delete('Delete managed group').catch(() => failed.push({ type: 'role', id: group.role_id }));
+    const now = Date.now();
+    if (failed.length) {
+      await dbManager.transaction(async tx => {
+        await tx.run("UPDATE managed_groups SET status = 'orphaned', updated_at = ? WHERE guild_id = ? AND id = ?", [now, String(guild.id), Number(groupId)]);
+        await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [String(guild.id), Number(groupId), actorId ? String(actorId) : null, 'group_delete_incomplete', JSON.stringify({ failed }), now]);
+      }, 'group-delete-incomplete');
+      throw new Error('GROUP_DELETE_PARTIAL');
+    }
+    await dbManager.transaction(async tx => {
+      await tx.run("UPDATE managed_groups SET status = 'deleted', archived_at = ?, updated_at = ? WHERE guild_id = ? AND id = ?", [now, now, String(guild.id), Number(groupId)]);
+      await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [String(guild.id), Number(groupId), actorId ? String(actorId) : null, 'group_delete', '{}', now]);
+    }, 'group-delete');
+    return true;
+  });
+}
 module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, logGroupEvent, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, setRule, getRules, recordActivity, listMemberPoints, createGroup, deleteGroup };
