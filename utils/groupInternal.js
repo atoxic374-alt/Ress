@@ -16,7 +16,7 @@ async function syncMember(group, guild, userId, add) {
   return member;
 }
 function reply(message, content) { return message.reply(content).catch(() => null); }
-async function handleInternalMessage(message, { prefix = ':' } = {}) {
+async function handleInternalMessage(message, { prefix = ':', sendPanel = null } = {}) {
   if (!message?.guild || message.author?.bot || !String(message.content || '').startsWith(prefix)) return false;
   const raw = String(message.content).slice(prefix.length).trim();
   const words = raw.split(/\s+/);
@@ -94,7 +94,8 @@ async function handleInternalMessage(message, { prefix = ':' } = {}) {
       await reply(message, '10m timeout applied.'); return true;
     }
     if (command === 'صلاحية' || command === 'permission') { await reply(message, 'Use the group role to control access.'); return true; }
-    if (command === 'تحكم' || command === 'control' || command === 'تعديل' || command === 'edit') { await reply(message, 'Use Group Control to manage this group.'); return true; }
+    if (command === 'تحكم' || command === 'control') { if (typeof sendPanel === 'function') await sendPanel(message.channel, message.guild, group.id); else await reply(message, 'Group Control is unavailable.'); return true; }
+    if (command === 'تعديل' || command === 'edit') { await reply(message, 'Use Group Control to edit this group.'); return true; }
   } catch (error) {
     const messages = { MENTION_REQUIRED: 'Mention a member first.', OWNER_ONLY: 'Owner only.', MANAGER_MUST_BE_MEMBER: 'The manager must be a group member.', EXTRA_DISABLED: 'Extra permissions are disabled.', MEMBER_NOT_FOUND: 'Member not found.' };
     await reply(message, messages[error.message] || 'The group action failed.');
