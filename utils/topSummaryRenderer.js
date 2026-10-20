@@ -24,11 +24,13 @@ function buildTopSummaryImage({
     title = 'Rank',
     subtitle = 'Monthly • Voice and Chat Leaderboard',
     sections = [],
-    yourRank = 'Your Rank :  Unranked'
+    yourRank = 'Your Rank :  Unranked',
+    textScale = 1.12
 }) {
     const accent = normalizeColor(accentColor);
-    const rowHeight = 48;
-    const sectionHeight = 42;
+    const scale = Math.max(1, Number(textScale) || 1);
+    const rowHeight = Math.round(48 * scale);
+    const sectionHeight = Math.round(42 * scale);
     const contentHeight = Math.max(250, sections.reduce((sum, section) => sum + sectionHeight + (section.rows?.length || 0) * rowHeight, 0));
     const width = 1200;
     const panelHeight = contentHeight + 45;
@@ -59,8 +61,8 @@ function buildTopSummaryImage({
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    drawText(ctx, title, 110, 90, { font: 'bold 34px Cairo' });
-    drawText(ctx, subtitle, 110, 130, { font: '22px Cairo', color: '#AEB4C2' });
+    drawText(ctx, title, 110, 90, { font: `bold ${Math.round(34 * scale)}px Cairo` });
+    drawText(ctx, subtitle, 110, 130, { font: `${Math.round(22 * scale)}px Cairo`, color: '#AEB4C2' });
 
     const panelY = 165;
     ctx.fillStyle = '#292D36';
@@ -69,11 +71,11 @@ function buildTopSummaryImage({
 
     let y = panelY + 45;
     for (const section of sections) {
-        drawText(ctx, section.title, 140, y, { font: 'bold 24px Cairo', color: accent });
+        drawText(ctx, section.title, 140, y, { font: `bold ${Math.round(24 * scale)}px Cairo`, color: accent });
         y += sectionHeight;
         for (const row of section.rows || []) {
-            drawText(ctx, row.label, 150, y, { font: '21px Cairo', color: '#D3D7E0' });
-            drawText(ctx, row.value, 1045, y, { font: 'bold 21px Cairo', align: 'right' });
+            drawText(ctx, row.label, 150, y, { font: `${Math.round(21 * scale)}px Cairo`, color: '#D3D7E0' });
+            drawText(ctx, row.value, 1045, y, { font: `bold ${Math.round(21 * scale)}px Cairo`, align: 'right' });
             y += rowHeight;
         }
     }
@@ -81,7 +83,7 @@ function buildTopSummaryImage({
     ctx.fillStyle = '#252933';
     roundedRect(ctx, 110, height - 145, width - 220, 48, 12);
     ctx.fill();
-    drawText(ctx, yourRank, width / 2, height - 121, { font: 'bold 18px Cairo', color: '#DCE2ED', align: 'center' });
+    drawText(ctx, yourRank, width / 2, height - 121, { font: `bold ${Math.round(18 * scale)}px Cairo`, color: '#DCE2ED', align: 'center' });
 
     return new AttachmentBuilder(canvas.toBuffer('image/png'), { name: 'top-summary.png' });
 }

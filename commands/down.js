@@ -1,10 +1,11 @@
-const { ButtonBuilder, ActionRowBuilder, ButtonStyle, StringSelectMenuBuilder, UserSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, RoleSelectMenuBuilder, ChannelSelectMenuBuilder, ChannelType, MessageFlags } = require('discord.js');
+const { ButtonBuilder, ActionRowBuilder, ButtonStyle, StringSelectMenuBuilder, UserSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, RoleSelectMenuBuilder, ChannelSelectMenuBuilder, ChannelType, MessageFlags, ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, SectionBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const ms = require('ms');
 const colorManager = require('../utils/colorManager');
 const downManager = require('../utils/downManager');
+const { componentsV2Payload, colorToNumber } = require('../utils/structuredContainer');
 
 const name = 'down';
 const pendingDownModals = new Map();
@@ -106,6 +107,52 @@ function getDownSeparatorStatus(settings = {}) {
     return settings.separatorImage ? 'مفعّل (صورة مخصصة)' : 'مفعّل (الخط الافتراضي)';
 }
 
+function buildDownMenuContainer(client) {
+    const container = new ContainerBuilder()
+        .setAccentColor(colorToNumber(colorManager.getColor?.() || '#5865F2'));
+    container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent('## Down Management System')
+    );
+    container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent('استخدم القائمة أدناه لإدارة الداون والرولات الإدارية')
+    );
+    container.addSeparatorComponents(new SeparatorBuilder());
+
+    const actions = [
+        ['remove_role', 'Down', '<:emoji_70:1442588577795149947>', 'سحب رول إداري مؤقتاً أو نهائياً'],
+        ['user_records', 'Record', '<:emoji_68:1442588491585294358>', 'عرض تاريخ الداون لعضو معين'],
+        ['modify_duration', 'Change', '<:emoji_82:1442589171519586345>', 'تعديل مدة داون حالي'],
+        ['active_downs', 'Active', '<:emoji_79:1442589038279266384>', 'عرض جميع الداونات الجارية ووقت انتهائها'],
+        ['user_downs', 'Finish', '<:emoji_77:1442588896008339579>', 'إنهاء أو مراجعة داونات عضو معين']
+    ];
+    for (const [value, label, emoji, description] of actions) {
+        const button = new ButtonBuilder()
+            .setCustomId(`down_action_${value}`)
+            .setLabel(label)
+            .setEmoji(emoji)
+            .setStyle(ButtonStyle.Secondary);
+        container.addSectionComponents(
+            new SectionBuilder()
+                .addTextDisplayComponents(new TextDisplayBuilder().setContent(description))
+                .setButtonAccessory(button)
+        );
+    }
+
+    container.addSeparatorComponents(new SeparatorBuilder());
+    container.addSectionComponents(
+        new SectionBuilder()
+            .addTextDisplayComponents(new TextDisplayBuilder().setContent('إدارة إعدادات نظام الداون'))
+            .setButtonAccessory(
+                new ButtonBuilder()
+                    .setCustomId('down_settings_button')
+                    .setLabel('Settings')
+                    .setEmoji('<:emoji_70:1442588619368960213>')
+                    .setStyle(ButtonStyle.Secondary)
+            )
+    );
+    return container;
+}
+
 // Create permanent menu for the menu channel
 async function createPermanentMenu(client, channelId) {
     try {
@@ -113,66 +160,8 @@ async function createPermanentMenu(client, channelId) {
         if (!channel) return false;
 
         const settings = downManager.getSettings();
-        const menuEmbed = colorManager.createEmbed()
-            .setTitle('Down Management System')
-            .setDescription('استخدم القائمة أدناه لإدارة الداون والرولات الإدارية')
-            .addFields([
-                { name: 'Down', value: 'سحب رول إداري من عضو لمدة محددة أو نهائياً', inline: false },
-                { name: 'Record', value: 'عرض تاريخ الداون لعضو معين', inline: false },
-                { name: 'داوناتي', value: 'استخدم الأمر `داوناتي` لعرض سجلك مع الصفحات، ويمكن للمالك استخدام منشن لعرض سجل عضو آخر', inline: false },
-                { name: 'داونات', value: 'للمعتمدين: يعرض جميع سجلات الداون، سجل واحد في كل صفحة', inline: false },
-                { name: 'Change', value: 'تعديل مدة داون حالي', inline: false },
-                { name: 'Active', value: 'عرض جميع الداونات الجارية', inline: false },
-                { name: 'Finish', value: 'إنهاء أو مراجعة داونات عضو معين', inline: false }
-            ])
-            .setThumbnail(client?.user?.displayAvatarURL() || 'https://cdn.discordapp.com/attachments/1373799493111386243/1400677612304470086/images__5_-removebg-preview.png?ex=688d822e&is=688c30ae&hm=1ea7a63bb89b38bcd76c0f5668984d7fc919214096a3d3ee92f5d948497fcb51&')
-            .setFooter({ text: 'Down System' })
-            .setTimestamp();
-
-        const menuSelect = new StringSelectMenuBuilder()
-            .setCustomId('down_main_menu')
-            .setPlaceholder('اختر الإجراء المطلوب...')
-            .addOptions([
-                {
-                    label: 'Down',
-emoji: '<:emoji_70:1442588577795149947>',
-                    value: 'remove_role',
-                    description: 'سحب رول إداري من عضو لمدة محددة أو نهائياً'
-                },
-                {
-                    label: 'Record',
-emoji: '<:emoji_68:1442588491585294358>',
-                    value: 'user_records',
-                    description: 'عرض تاريخ الداون لعضو معين'
-                },
-                {
-                    label: 'Change',
-emoji: '<:emoji_82:1442589171519586345>',
-                    value: 'modify_duration',
-                    description: 'تعديل مدة داون حالي'
-                },
-                {
-                    label: 'Active',
-emoji: '<:emoji_79:1442589038279266384>',
-                    value: 'active_downs',
-                    description: 'عرض جميع الداونات الجارية ووقت انتهائها'
-                },
-                {
-                    label: 'Finish',
-emoji: '<:emoji_77:1442588896008339579>',
-                    value: 'user_downs',
-                    description: 'إنهاء أو مراجعة داونات عضو معين'
-                }
-            ]);
-
-        const settingsButton = new ButtonBuilder()
-            .setCustomId('down_settings_button')
-            .setLabel('Settings')
-.setEmoji('<:emoji_70:1442588619368960213>')
-            .setStyle(ButtonStyle.Secondary);
-
-        const menuRow = new ActionRowBuilder().addComponents(menuSelect);
-        const buttonRow = new ActionRowBuilder().addComponents(settingsButton);
+        const menuContainer = buildDownMenuContainer(client);
+        const menuPayload = componentsV2Payload(menuContainer);
 
         // Always create new menu message when called from resend
         let message = null;
@@ -181,10 +170,7 @@ emoji: '<:emoji_77:1442588896008339579>',
         if (settings.menuMessageId) {
             try {
                 const existingMessage = await channel.messages.fetch(settings.menuMessageId);
-                message = await existingMessage.edit({
-                    embeds: [menuEmbed],
-                    components: [menuRow, buttonRow]
-                });
+                message = await existingMessage.edit({ ...menuPayload, attachments: [] });
                 console.log('تم تحديث المنيو الموجود');
                 return true;
             } catch (error) {
@@ -196,10 +182,7 @@ emoji: '<:emoji_77:1442588896008339579>',
 
         // Create new menu message
         try {
-            message = await channel.send({
-                embeds: [menuEmbed],
-                components: [menuRow, buttonRow]
-            });
+            message = await channel.send(menuPayload);
 
             // Store the message ID for future updates
             settings.menuMessageId = message.id;
@@ -435,7 +418,7 @@ async function handleInteraction(interaction, context) {
         }
 
         // Handle main menu interactions
-        if (customId === 'down_main_menu') {
+        if (customId === 'down_main_menu' || customId.startsWith('down_action_')) {
             const hasPermission = await downManager.hasPermission(interaction, BOT_OWNERS);
             if (!hasPermission) {
                 const response = { content: ' **لا تسوي خوي!**', flags: MessageFlags.Ephemeral };
@@ -873,7 +856,7 @@ async function createSystemStats() {
 }
 
 async function handleMainMenu(interaction, context) {
-    const selectedValue = interaction.values[0];
+    const selectedValue = interaction.values?.[0] || interaction.customId.replace(/^down_action_/, '');
     const { client } = context;
 
     const respond = async (data) => {

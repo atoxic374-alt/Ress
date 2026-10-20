@@ -33,7 +33,7 @@ function drawText(ctx, text, x, y, { font, color = '#ffffff', align = 'right' } 
 }
 
 function drawSection(ctx, { title, rows, y, accent, width }) {
-    const rowHeight = 58;
+    const rowHeight = 64;
     const sectionHeight = 78 + Math.max(rows.length, 1) * rowHeight + 24;
     ctx.fillStyle = 'rgba(255,255,255,0.045)';
     roundedRect(ctx, 55, y, width - 110, sectionHeight, 22);
@@ -43,7 +43,7 @@ function drawSection(ctx, { title, rows, y, accent, width }) {
     ctx.stroke();
 
     drawText(ctx, title, width - 90, y + 52, {
-        font: 'bold 34px Cairo',
+        font: 'bold 37px Cairo',
         color: '#ffffff'
     });
     ctx.fillStyle = accent;
@@ -52,7 +52,7 @@ function drawSection(ctx, { title, rows, y, accent, width }) {
 
     if (!rows.length) {
         drawText(ctx, title === 'المسؤوليات' ? 'لا توجد مسؤوليات حالياً' : 'لا يوجد إشراف حالياً', width - 90, y + 120, {
-            font: '24px Cairo',
+            font: '26px Cairo',
             color: 'rgba(255,255,255,0.65)'
         });
         return y + sectionHeight;
@@ -66,11 +66,11 @@ function drawSection(ctx, { title, rows, y, accent, width }) {
             ctx.fill();
         }
         drawText(ctx, row.name, width - 110, rowY - 7, {
-            font: 'bold 23px Cairo'
+            font: 'bold 25px Cairo'
         });
         if (row.responsibilityPoints !== undefined) {
             drawText(ctx, `نقاطك بالمسؤولية : ${row.responsibilityPoints}`, 110, rowY - 7, {
-                font: '20px Cairo',
+                font: '22px Cairo',
                 color: 'rgba(255,255,255,0.68)',
                 align: 'left'
             });
@@ -96,7 +96,7 @@ function buildResponsibilitiesSummaryImage({
     const width = 1200;
     const accent = normalizeColor(accentColor);
     const headerHeight = 280;
-    const sectionRowHeight = 58;
+    const sectionRowHeight = 64;
     const sectionHeight = rows => 78 + Math.max(rows.length, 1) * sectionRowHeight + 24;
     const height = headerHeight + sectionHeight(responsibilities) + sectionHeight(supervisors) + 70;
     const canvas = createCanvas(width, height);
@@ -113,11 +113,11 @@ function buildResponsibilitiesSummaryImage({
     ctx.fill();
 
     drawText(ctx, 'My Responsibilities', width / 2, 82, {
-        font: 'bold 48px Cairo',
+        font: 'bold 53px Cairo',
         align: 'center'
     });
     drawText(ctx, String(memberName || 'Member').slice(0, 42), width / 2, 128, {
-        font: 'bold 27px Cairo',
+        font: 'bold 30px Cairo',
         color: 'rgba(255,255,255,0.68)'
         , align: 'center'
     });
@@ -130,9 +130,9 @@ function buildResponsibilitiesSummaryImage({
         ctx.fillStyle = 'rgba(255,255,255,0.055)';
         roundedRect(ctx, card.x, 178, 480, 78, 18);
         ctx.fill();
-        drawText(ctx, card.title, card.x + 440, 228, { font: 'bold 26px Cairo' });
+        drawText(ctx, card.title, card.x + 440, 228, { font: 'bold 29px Cairo' });
         drawText(ctx, String(card.count), card.x + 54, 230, {
-            font: 'bold 38px Cairo',
+            font: 'bold 42px Cairo',
             color: accent,
             align: 'left'
         });
@@ -144,7 +144,7 @@ function buildResponsibilitiesSummaryImage({
     y = drawSection(ctx, { title: 'الإشراف', rows: supervisors, y, accent, width });
 
     drawText(ctx, `${String(guildName || 'Server').slice(0, 54)} • Responsibilities Summary`, 70, height - 25, {
-        font: '20px Cairo',
+        font: '22px Cairo',
         color: 'rgba(255,255,255,0.52)',
         align: 'left'
     });

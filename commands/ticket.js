@@ -27,6 +27,8 @@ const { getDatabase, dbManager } = require('../utils/database');
 const { getDataDir, ensureDirSync } = require('../utils/storagePaths');
 const { getResponsibilitiesSnapshot } = require('../utils/responsibilitiesStore');
 const { ensureCairoFontsRegistered } = require('../utils/cairoFont');
+const { buildTopSummaryImage } = require('../utils/topSummaryRenderer');
+const { getGuildBannerHexFast } = require('../utils/guildBannerColor');
 
 const name = 'ticket';
 const aliases = ['تكت', 'tclose', 'اغلاق', 'اقفال', 'myticket', 'نقاطي', 'tadd', 'اضافه', 'اضافة', 'إضافة', 'tremove', 'ازاله', 'ازالة', 'إزالة', 'tchange', 'تغيير', 'تحويل', 'ttop', 'نقاط', 'tname', 'اسم', 'تسميه', 'تسمية', 'remind', 'تنبيه', 'استدعاء', 'points', 'tm', 'treset', 'tmreset', 'tblock'];
@@ -5050,6 +5052,9 @@ async function handlePointsAdjustAmountInteraction(interaction, sessionId, mode,
 }
 
 async function handleTopPointsMessage(message, page = 1) {
+  // انتظر تهيئة النقاط مرة واحدة عند التشغيل قبل بناء الصورة، ثم استخدم
+  // الكاش الحي الذي يتحدث مباشرة بعد كل إضافة أو خصم.
+  await primeStateCache(STATE_KEY_POINTS, pointsPath);
   const points = loadPoints();
   const entries = getTopPointUsers(points, 1000);
   const safePage = Math.max(1, Number(page || 1));
@@ -5058,22 +5063,36 @@ async function handleTopPointsMessage(message, page = 1) {
   const currentPage = Math.min(safePage, totalPages);
   const start = (currentPage - 1) * pageSize;
   const pageEntries = entries.slice(start, start + pageSize);
-  const description = pageEntries.length
-    ? pageEntries.map((entry, index) => {
-      const rank = start + index + 1;
-      const topAwarder = getTopPointAwarder(points, entry.userId);
-      return `**#${rank} - <@${entry.userId}> : ${entry.total}p**`;
-    }).join('\n\n')
-    : '**لا توجد نقاط مسجلة حالياً.**';
-  const embed = makeTicketEmbed('Top Ticket', description, { user: message.author })
-    .setThumbnail(message.guild?.iconURL?.({ forceStatic: false, size: 128 }) || null)
-    .setFooter({ text: `Page ${currentPage}/${totalPages} • Your Points : ${getUserTotalPoints(points, message.author.id)}` });
+  const displayNames = pageEntries.map((entry) => {
+    const member = message.guild?.members?.cache?.get(entry.userId);
+    const user = message.client?.users?.cache?.get(entry.userId);
+    return member?.displayName || user?.globalName || user?.username || entry.userId;
+  });
+  const rows = pageEntries.length
+    ? pageEntries.map((entry, index) => ({
+      label: `#${start + index + 1}  ${String(displayNames[index] || entry.userId).slice(0, 32)}`,
+      value: `${entry.total}t`
+    }))
+    : [{ label: 'Results', value: 'No data' }];
+  const bannerColor = getGuildBannerHexFast(message.guild, colorManager.getColor?.() || '#5865F2');
+  const topImage = buildTopSummaryImage({
+    accentColor: bannerColor,
+    title: 'Top Ticket Points',
+    subtitle: `All Time • Page ${currentPage} of ${totalPages}`,
+    sections: [{ title: 'Ticket Points', rows }],
+    yourRank: (() => {
+      const rank = entries.findIndex((entry) => String(entry.userId) === String(message.author.id));
+      const pointsValue = getUserTotalPoints(points, message.author.id);
+      return `المركز : ${rank >= 0 ? `#${rank + 1}` : 'غير مصنف'} • النقاط : ${pointsValue}t`;
+    })(),
+    textScale: 1.15
+  });
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`ticket_top_prev_${message.author.id}_${currentPage}`).setLabel('السابق').setStyle(ButtonStyle.Secondary).setDisabled(currentPage <= 1),
-    new ButtonBuilder().setCustomId(`ticket_top_next_${message.author.id}_${currentPage}`).setLabel('التالي').setStyle(ButtonStyle.Primary).setDisabled(currentPage >= totalPages)
+    new ButtonBuilder().setCustomId(`ticket_top_prev_${message.author.id}_${currentPage}`).setEmoji('<:emoji_13:1429263136136888501>').setStyle(ButtonStyle.Secondary).setDisabled(currentPage <= 1),
+    new ButtonBuilder().setCustomId(`ticket_top_next_${message.author.id}_${currentPage}`).setEmoji('<:emoji_14:1429263186539974708>').setStyle(ButtonStyle.Primary).setDisabled(currentPage >= totalPages)
   );
-  const sent = await message.reply({ embeds: [embed], components: [row] }).catch(() => null);
+  const sent = await message.reply({ content: '', files: [topImage], components: [row] }).catch(() => null);
   if (!sent) return;
   const collector = sent.createMessageComponentCollector({ time: 5 * 60 * 1000 });
   collector.on('collect', async (interaction) => {
@@ -5093,31 +5112,50 @@ async function handleTopPointsMessage(message, page = 1) {
 }
 
 async function handleTopManagersMessage(message, page = 1) {
+  await primeStateCache(STATE_KEY_POINTS, pointsPath);
   const points = loadPoints();
   const rawEntries = getTopManagers(points, 1000);
-  const entries = [];
-  for (const entry of rawEntries) {
+  const resolvedEntries = await Promise.all(rawEntries.map(async (entry) => {
     const member = await resolveGuildMember(message.guild, entry.userId, 1200);
-    if (!member || !canUseGeneralPointsCommand(member, message.guild.id, message.guild)) continue;
-    entries.push(entry);
-  }
+    if (!member || !canUseGeneralPointsCommand(member, message.guild.id, message.guild)) return null;
+    return { ...entry, member };
+  }));
+  const entries = resolvedEntries.filter(Boolean);
   const safePage = Math.max(1, Number(page || 1));
   const pageSize = 10;
   const totalPages = Math.max(1, Math.ceil(entries.length / pageSize));
   const currentPage = Math.min(safePage, totalPages);
   const start = (currentPage - 1) * pageSize;
   const pageEntries = entries.slice(start, start + pageSize);
-  const description = pageEntries.length
-    ? pageEntries.map((entry, index) => `#${start + index + 1} - <@${entry.userId}> : ${entry.total}m`).join('\n\n')
-    : '**لا توجد نقاط مسؤولين مسجلة حالياً.**';
-  const embed = makeTicketEmbed('Top manager', description, { user: message.author })
-    .setThumbnail(message.guild?.iconURL?.({ forceStatic: false, size: 128 }) || null)
-    .setFooter({ text: `Page ${currentPage}/${totalPages} • نقاطك كمسؤول : ${getManagerPointCount(points, message.author.id)}` });
+  const displayNames = pageEntries.map((entry) => {
+    const member = entry.member || message.guild?.members?.cache?.get(entry.userId);
+    const user = message.client?.users?.cache?.get(entry.userId);
+    return member?.displayName || user?.globalName || user?.username || entry.userId;
+  });
+  const rows = pageEntries.length
+    ? pageEntries.map((entry, index) => ({
+      label: `#${start + index + 1}  ${String(displayNames[index] || entry.userId).slice(0, 32)}`,
+      value: `${entry.total}t`
+    }))
+    : [{ label: 'Results', value: 'No data' }];
+  const bannerColor = getGuildBannerHexFast(message.guild, colorManager.getColor?.() || '#5865F2');
+  const topImage = buildTopSummaryImage({
+    accentColor: bannerColor,
+    title: 'Top Manager Points',
+    subtitle: `All Time • Page ${currentPage} of ${totalPages}`,
+    sections: [{ title: 'Manager Points', rows }],
+    yourRank: (() => {
+      const rank = entries.findIndex((entry) => String(entry.userId) === String(message.author.id));
+      const pointsValue = getManagerPointCount(points, message.author.id);
+      return `المركز : ${rank >= 0 ? `#${rank + 1}` : 'غير مصنف'} • النقاط : ${pointsValue}t`;
+    })(),
+    textScale: 1.15
+  });
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`ticket_tm_prev_${message.author.id}_${currentPage}`).setLabel('السابق').setStyle(ButtonStyle.Secondary).setDisabled(currentPage <= 1),
-    new ButtonBuilder().setCustomId(`ticket_tm_next_${message.author.id}_${currentPage}`).setLabel('التالي').setStyle(ButtonStyle.Primary).setDisabled(currentPage >= totalPages)
+    new ButtonBuilder().setCustomId(`ticket_tm_prev_${message.author.id}_${currentPage}`).setEmoji('<:emoji_13:1429263136136888501>').setStyle(ButtonStyle.Secondary).setDisabled(currentPage <= 1),
+    new ButtonBuilder().setCustomId(`ticket_tm_next_${message.author.id}_${currentPage}`).setEmoji('<:emoji_14:1429263186539974708>').setStyle(ButtonStyle.Primary).setDisabled(currentPage >= totalPages)
   );
-  const sent = await message.reply({ embeds: [embed], components: [row] }).catch(() => null);
+  const sent = await message.reply({ content: '', files: [topImage], components: [row] }).catch(() => null);
   if (!sent) return;
   const collector = sent.createMessageComponentCollector({ time: 5 * 60 * 1000 });
   collector.on('collect', async (interaction) => {
