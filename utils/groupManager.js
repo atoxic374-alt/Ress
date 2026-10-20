@@ -1,4 +1,4 @@
-const { ChannelType, PermissionsBitField } = require('discord.js');
+const { ChannelType, PermissionsBitField, ContainerBuilder, TextDisplayBuilder, MessageFlags } = require('discord.js');
 const { dbManager } = require('./database');
 
 const GROUP_CHAT_MODES = Object.freeze({ THREADS: 'threads', CHANNELS: 'channels' });
@@ -156,6 +156,31 @@ function hydrate(row) { if (!row) return null; return { ...row, managerIds: ids(
 async function getGroup(guildId, groupId) { await schema(); return hydrate(await dbManager.get('SELECT * FROM managed_groups WHERE guild_id = ? AND id = ?', [String(guildId), Number(groupId)])); }
 async function getGroupForChannel(guildId, channelId) { await schema(); const rows = await dbManager.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status = 'active' AND (text_channel_id = ? OR thread_id = ? OR voice_channel_id = ?)", [String(guildId), String(channelId), String(channelId), String(channelId)]); return hydrate(rows[0]); }
 async function audit(guildId, actorId, groupId, action, details = {}) { await schema(); return dbManager.run('INSERT INTO group_audit_log(guild_id, group_id, actor_id, action, details_json, created_at) VALUES(?,?,?,?,?,?)', [String(guildId), groupId == null ? null : Number(groupId), actorId ? String(actorId) : null, String(action), JSON.stringify(details), Date.now()]); }
+/**
+ * Best-effort delivery of a structured audit event. Logging must never make a
+ * group operation fail: missing settings, deleted channels, permission errors,
+ * and Discord API failures are intentionally swallowed and returned as null.
+ */
+async function logGroupEvent(guild, event, details = {}, actorId = null) {
+  try {
+    if (!guild?.id) return null;
+    const settings = await getSettings(guild.id);
+    if (!settings.logChannelId) return null;
+    let channel = guild.channels?.cache?.get(settings.logChannelId) || null;
+    if (!channel && typeof guild.channels?.fetch === 'function') channel = await guild.channels.fetch(settings.logChannelId).catch(() => null);
+    if (!channel || typeof channel.send !== 'function') return null;
+    const safeDetails = details && typeof details === 'object' ? details : { value: String(details) };
+    const detailText = JSON.stringify(safeDetails).slice(0, 3500);
+    const actorText = actorId ? `\nActor: <@${String(actorId).replace(/[^0-9]/g, '')}>` : '';
+    const container = new ContainerBuilder()
+      .setAccentColor(0x5865f2)
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## Group event: ${String(event || 'unknown').slice(0, 80)}`))
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`Guild: ${guild.name ? String(guild.name).slice(0, 100) : guild.id}${actorText}\n\`\`\`json\n${detailText}\n\`\`\``));
+    return await channel.send({ components: [container], flags: MessageFlags.IsComponentsV2 });
+  } catch {
+    return null;
+  }
+}
 function isOwner(client, member) { return Boolean(member && (member.id === member.guild?.ownerId || client?.isBotOwner?.(member.id) || global.isBotOwner?.(member.id) || (global.BOT_OWNERS || []).map(String).includes(String(member.id)))); }
 function isSystemManager(settings, member) { if (!member) return false; return settings.systemUsers.includes(String(member.id)) || member.roles?.cache?.some(role => settings.systemRoles.includes(String(role.id))); }
 function canManageSystem(client, settings, member) { return isOwner(client, member) || isSystemManager(settings, member); }
@@ -298,9 +323,9 @@ async function createGroup(guild, { name, description = '', ownerId, color = '#5
       await text.permissionOverwrites.set(overwrites, 'Secure managed group text space').catch(error => { throw Object.assign(new Error('GROUP_TEXT_PERMISSIONS_FAILED'), { cause: error }); });
       await voice.permissionOverwrites.set(overwrites, 'Secure managed group voice space').catch(error => { throw Object.assign(new Error('GROUP_VOICE_PERMISSIONS_FAILED'), { cause: error }); });
       const row = await dbManager.run(`INSERT INTO managed_groups(guild_id,name,description,owner_id,manager_ids_json,member_ids_json,blocked_ids_json,role_id,text_channel_id,thread_id,voice_channel_id,color,emoji,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [guild.id, String(name).trim().slice(0, 100), String(description).slice(0, 1000), owner.id, '[]', JSON.stringify([owner.id]), '[]', role.id, text.id, thread?.id || null, voice.id, color || '#5865F2', emoji, now, now]);
-      const group = await getGroup(guild.id, row.lastID); await audit(guild.id, actorId || owner.id, group.id, 'group_create', { roleId: role.id, textId: text.id, threadId: thread?.id, voiceId: voice.id }); return group;
+      const group = await getGroup(guild.id, row.id ?? row.lastID); await audit(guild.id, actorId || owner.id, group.id, 'group_create', { roleId: role.id, textId: text.id, threadId: thread?.id, voiceId: voice.id }); return group;
     } catch (error) { for (const [, resource] of created.reverse()) await resource?.delete?.('Rollback incomplete group creation').catch(() => {}); throw error; }
   });
 }
 async function deleteGroup(guild, groupId, actorId) { return withLock(`delete:${guild.id}:${groupId}`, async () => { const group = await getGroup(guild.id, groupId); if (!group) throw new Error('GROUP_NOT_FOUND'); const idsToDelete = [group.thread_id, group.text_channel_id, group.voice_channel_id]; for (const id of idsToDelete) { if (!id) continue; const channel = guild.channels.cache.get(id) || await guild.channels.fetch(id).catch(() => null); if (channel) await channel.delete('Delete managed group').catch(() => {}); } const role = group.role_id && (guild.roles.cache.get(group.role_id) || await guild.roles.fetch(group.role_id).catch(() => null)); if (role) await role.delete('Delete managed group').catch(() => {}); await dbManager.run("UPDATE managed_groups SET status='deleted', archived_at=?, updated_at=? WHERE guild_id=? AND id=?", [Date.now(), Date.now(), guild.id, Number(groupId)]); await audit(guild.id, actorId, groupId, 'group_delete'); return true; }); }
-module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, setRule, getRules, recordActivity, listMemberPoints, createGroup, deleteGroup };
+module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, logGroupEvent, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, setRule, getRules, recordActivity, listMemberPoints, createGroup, deleteGroup };

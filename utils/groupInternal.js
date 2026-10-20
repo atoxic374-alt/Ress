@@ -48,24 +48,28 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       if (!targetId) throw new Error('MENTION_REQUIRED');
       await gm.addMember(message.guild.id, group.id, targetId, message.author.id);
       await syncMember(group, message.guild, targetId, true);
+      await gm.logGroupEvent(message.guild, 'member_add', { groupId: group.id, userId: targetId }, message.author.id);
       await reply(message, 'Member added.'); return true;
     }
     if (command === 'ازالة' || command === 'إزالة' || command === 'remove') {
       if (!targetId) throw new Error('MENTION_REQUIRED');
       await gm.removeMember(message.guild.id, group.id, targetId, message.author.id);
       await syncMember(group, message.guild, targetId, false);
+      await gm.logGroupEvent(message.guild, 'member_remove', { groupId: group.id, userId: targetId }, message.author.id);
       await reply(message, 'Member removed.'); return true;
     }
     if (command === 'منع' || command === 'block') {
       if (!targetId) throw new Error('MENTION_REQUIRED');
       await gm.setBlocked(message.guild.id, group.id, targetId, true, message.author.id);
       await gm.removeMember(message.guild.id, group.id, targetId, message.author.id).catch(() => {});
+      await gm.logGroupEvent(message.guild, 'block', { groupId: group.id, userId: targetId }, message.author.id);
       await syncMember(group, message.guild, targetId, false).catch(() => {});
       await reply(message, 'Member blocked.'); return true;
     }
     if (command === 'سماح' || command === 'allow') {
       if (!targetId) throw new Error('MENTION_REQUIRED');
       await gm.setBlocked(message.guild.id, group.id, targetId, false, message.author.id);
+      await gm.logGroupEvent(message.guild, 'unblock', { groupId: group.id, userId: targetId }, message.author.id);
       await reply(message, 'Member allowed.'); return true;
     }
     if (command === 'مسؤول' || command === 'manager') {
@@ -75,6 +79,7 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       if (/\b(remove|ازالة|إزالة)\b/i.test(raw)) managers.delete(String(targetId));
       else { if (!group.memberIds.includes(String(targetId))) throw new Error('MANAGER_MUST_BE_MEMBER'); managers.add(String(targetId)); }
       await gm.setManagers(message.guild.id, group.id, [...managers], message.author.id);
+      await gm.logGroupEvent(message.guild, 'manager_update', { groupId: group.id, managerIds: [...managers] }, message.author.id);
       const managerRole = settings.managerRoleId && message.guild.roles.cache.get(settings.managerRoleId);
       if (managerRole) { const target = await message.guild.members.fetch(targetId).catch(() => null); if (target) await (managers.has(String(targetId)) ? target.roles.add(managerRole, 'Group manager role') : target.roles.remove(managerRole, 'Group manager role')).catch(() => {}); }
       await reply(message, 'Managers updated.'); return true;
