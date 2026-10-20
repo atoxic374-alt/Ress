@@ -56,23 +56,24 @@ function setupPayload(guild, settings) {
     `Points Scope : ${settings.countAllChannels ? 'كل الرومات' : 'رومات القروبات فقط'}\n` +
     `Extra Permissions : ${settings.extraPermissions ? 'مفعلة' : 'متوقفة'}\n` +
     `Point Rules : اضغط على زر قواعد النقاط للتفاصيل`);
-  const sections = [
-    ['تفعيل النظام', 'تشغيل أو إيقاف نظام القروبات', 'groups_setup:toggle'],
-    ['مسؤولو النظام', 'إضافة أو إزالة مسؤولي النظام', 'groups_setup:managers'],
-    ['نمط الشات', 'ثريدات أو رومات مستقلة', 'groups_setup:chatmode'],
-    ['كاتوقري النص', 'تحديد كاتوقري النص أو الثريدات', 'groups_setup:textcat'],
-    ['كاتوقري الفويس', 'تحديد كاتوقري الفويس', 'groups_setup:voicecat'],
-    ['Main Role', 'الرول الأب الذي تنشأ تحته رولات القروبات تلقائيًا', 'groups_setup:mainrole'],
-    ['مصدر الميوزك', 'تحديد روم مصدر الميوزك عند إنشاء القروب', 'groups_setup:music'],
-    ['روم اللوق', 'إرسال لوقات القروبات هنا', 'groups_setup:log'],
-    ['رول المالك', 'الرول الذي يأخذه مالك القروب', 'groups_setup:leaderrole'],
-    ['رول المسؤول', 'الرول الذي يأخذه مسؤول القروب', 'groups_setup:managerrole'],
-    ['نطاق النقاط', 'كل الرومات أو رومات القروبات', 'groups_setup:scope'],
-    ['الصلاحيات الإضافية', 'تفعيل المسح وأدوات الإدارة', 'groups_setup:extra'],
-    ['قواعد النقاط', 'تخصيص قواعد نقاط القروبات', 'groups_setup:rules']
+  const controls = [
+    ['تشغيل النظام', 'groups_setup:toggle', ButtonStyle.Success],
+    ['المسؤولون', 'groups_setup:managers'],
+    ['نمط الشات', 'groups_setup:chatmode'],
+    ['كاتوقري النص', 'groups_setup:textcat'],
+    ['كاتوقري الفويس', 'groups_setup:voicecat'],
+    ['Main Role', 'groups_setup:mainrole'],
+    ['مصدر الميوزك', 'groups_setup:music'],
+    ['روم اللوق', 'groups_setup:log'],
+    ['رول المالك', 'groups_setup:leaderrole'],
+    ['رول المسؤول', 'groups_setup:managerrole'],
+    ['نطاق النقاط', 'groups_setup:scope'],
+    ['الصلاحيات الإضافية', 'groups_setup:extra'],
+    ['قواعد النقاط', 'groups_setup:rules']
   ];
-  for (const [label, desc, id] of sections) {
-    c.addSectionComponents(new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${desc}`)).setButtonAccessory(button(id, 'فتح')));
+  c.addTextDisplayComponents(new TextDisplayBuilder().setContent('اختر الإعداد المطلوب من الأزرار التالية :'));
+  for (let index = 0; index < controls.length; index += 5) {
+    c.addActionRowComponents(new ActionRowBuilder().addComponents(controls.slice(index, index + 5).map(([label, id, style]) => button(id, label, style || ButtonStyle.Secondary))));
   }
   return componentsV2Payload(c);
 }
