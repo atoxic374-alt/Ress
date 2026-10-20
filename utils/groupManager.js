@@ -1,5 +1,7 @@
-const { ChannelType, PermissionsBitField, ContainerBuilder, TextDisplayBuilder, MessageFlags } = require('discord.js');
+const { ChannelType, PermissionsBitField, ContainerBuilder, TextDisplayBuilder, SectionBuilder, ThumbnailBuilder, MessageFlags } = require('discord.js');
 const { dbManager } = require('./database');
+const colorManager = require('./colorManager');
+const { colorToNumber } = require('./structuredContainer');
 
 const GROUP_CHAT_MODES = Object.freeze({ THREADS: 'threads', CHANNELS: 'channels' });
 const GROUP_DEFAULTS = Object.freeze({
@@ -170,12 +172,18 @@ async function logGroupEvent(guild, event, details = {}, actorId = null) {
     if (!channel && typeof guild.channels?.fetch === 'function') channel = await guild.channels.fetch(settings.logChannelId).catch(() => null);
     if (!channel || typeof channel.send !== 'function') return null;
     const safeDetails = details && typeof details === 'object' ? details : { value: String(details) };
+    const eventNames = { create: 'إنشاء قروب', update: 'تعديل القروب', delete: 'حذف قروب', member_add: 'إضافة عضو', member_remove: 'إزالة عضو', manager_update: 'تعديل المسؤولين', owner: 'تغيير المالك', block: 'منع عضو', unblock: 'السماح لعضو', rule_update: 'تعديل قاعدة نقاط', music: 'نقل بوت الميوزك', group_import: 'استيراد قروب' };
+    const eventLabel = eventNames[String(event)] || String(event || 'حدث غير معروف');
     const detailText = JSON.stringify(safeDetails).slice(0, 3500);
-    const actorText = actorId ? `\nActor: <@${String(actorId).replace(/[^0-9]/g, '')}>` : '';
-    const container = new ContainerBuilder()
-      .setAccentColor(0x5865f2)
-      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## Group event: ${String(event || 'unknown').slice(0, 80)}`))
-      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`Guild: ${guild.name ? String(guild.name).slice(0, 100) : guild.id}${actorText}\n\`\`\`json\n${detailText}\n\`\`\``));
+    const actorText = actorId ? `\nالمنفذ : <@${String(actorId).replace(/[^0-9]/g, '')}>` : '';
+    const container = new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || '#5865F2'));
+    const eventText = [
+      new TextDisplayBuilder().setContent(`## حدث القروب : ${eventLabel.slice(0, 80)}`),
+      new TextDisplayBuilder().setContent(`السيرفر : ${guild.name ? String(guild.name).slice(0, 100) : guild.id}${actorText}\n\`\`\`json\n${detailText}\n\`\`\``)
+    ];
+    const icon = guild.iconURL?.({ extension: 'png', size: 128 });
+    if (icon) container.addSectionComponents(new SectionBuilder().addTextDisplayComponents(eventText).setThumbnailAccessory(new ThumbnailBuilder().setURL(icon)));
+    else container.addTextDisplayComponents(eventText);
     return await channel.send({ components: [container], flags: MessageFlags.IsComponentsV2 });
   } catch {
     return null;

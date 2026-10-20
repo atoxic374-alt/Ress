@@ -24,14 +24,14 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
   if (command === 'تعديل' && String(words[0] || '') === 'القروب') { command = 'تعديل'; words.shift(); }
   if (!COMMANDS.has(command)) return false;
   const group = await gm.getGroupForChannel(message.guild.id, message.channel.id);
-  if (!group) { await reply(message, 'This channel is not linked to a group.'); return true; }
+  if (!group) { await reply(message, 'هذا الشات غير مرتبط بقروب.'); return true; }
   const settings = await gm.getSettings(message.guild.id);
   const privileged = gm.canManageGroup(message.client, settings, group, message.member);
   const system = gm.canManageSystem(message.client, settings, message.member);
   const targetId = ids(message)[0];
   try {
     if (command === 'قروبي' || command === 'my-group') {
-      if (!group.memberIds.includes(String(message.author.id)) && !system) return Boolean(await reply(message, 'You are not a group member.'));
+      if (!group.memberIds.includes(String(message.author.id)) && !system) return Boolean(await reply(message, 'أنت لست عضوًا في القروب.'));
       const owner = await message.guild.members.fetch(group.owner_id).catch(() => null);
       const managers = await Promise.all(group.managerIds.map(id => message.guild.members.fetch(id).catch(() => null)));
       await message.reply({ files: [await renderInfo({ guild: message.guild, group, owner, managers: managers.filter(Boolean), accentColor: group.color })] }).catch(() => {});
@@ -43,20 +43,20 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       await message.reply({ files: [await renderMembers({ guild: message.guild, group, members, accentColor: group.color })] }).catch(() => {});
       return true;
     }
-    if (!privileged && !system) { await reply(message, 'You do not have permission.'); return true; }
+    if (!privileged && !system) { await reply(message, 'لا تملك الصلاحية.'); return true; }
     if (command === 'اضافة' || command === 'إضافة' || command === 'add') {
       if (!targetId) throw new Error('MENTION_REQUIRED');
       await gm.addMember(message.guild.id, group.id, targetId, message.author.id);
       await syncMember(group, message.guild, targetId, true);
       await gm.logGroupEvent(message.guild, 'member_add', { groupId: group.id, userId: targetId }, message.author.id);
-      await reply(message, 'Member added.'); return true;
+      await reply(message, 'تمت إضافة العضو.'); return true;
     }
     if (command === 'ازالة' || command === 'إزالة' || command === 'remove') {
       if (!targetId) throw new Error('MENTION_REQUIRED');
       await gm.removeMember(message.guild.id, group.id, targetId, message.author.id);
       await syncMember(group, message.guild, targetId, false);
       await gm.logGroupEvent(message.guild, 'member_remove', { groupId: group.id, userId: targetId }, message.author.id);
-      await reply(message, 'Member removed.'); return true;
+      await reply(message, 'تمت إزالة العضو.'); return true;
     }
     if (command === 'منع' || command === 'block') {
       if (!targetId) throw new Error('MENTION_REQUIRED');
@@ -64,13 +64,13 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       await gm.removeMember(message.guild.id, group.id, targetId, message.author.id).catch(() => {});
       await gm.logGroupEvent(message.guild, 'block', { groupId: group.id, userId: targetId }, message.author.id);
       await syncMember(group, message.guild, targetId, false).catch(() => {});
-      await reply(message, 'Member blocked.'); return true;
+      await reply(message, 'تم منع العضو.'); return true;
     }
     if (command === 'سماح' || command === 'allow') {
       if (!targetId) throw new Error('MENTION_REQUIRED');
       await gm.setBlocked(message.guild.id, group.id, targetId, false, message.author.id);
       await gm.logGroupEvent(message.guild, 'unblock', { groupId: group.id, userId: targetId }, message.author.id);
-      await reply(message, 'Member allowed.'); return true;
+      await reply(message, 'تم السماح للعضو.'); return true;
     }
     if (command === 'مسؤول' || command === 'manager') {
       if (!targetId) throw new Error('MENTION_REQUIRED');
@@ -82,13 +82,13 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       await gm.logGroupEvent(message.guild, 'manager_update', { groupId: group.id, managerIds: [...managers] }, message.author.id);
       const managerRole = settings.managerRoleId && message.guild.roles.cache.get(settings.managerRoleId);
       if (managerRole) { const target = await message.guild.members.fetch(targetId).catch(() => null); if (target) await (managers.has(String(targetId)) ? target.roles.add(managerRole, 'Group manager role') : target.roles.remove(managerRole, 'Group manager role')).catch(() => {}); }
-      await reply(message, 'Managers updated.'); return true;
+      await reply(message, 'تم تحديث مسؤولي القروب.'); return true;
     }
     if (command === 'مسح' || command === 'clear') {
       if (!settings.extraPermissions) throw new Error('EXTRA_DISABLED');
       const fetched = await message.channel.messages.fetch({ limit: 100 });
       await message.channel.bulkDelete(fetched, true);
-      const done = await reply(message, 'Messages cleared.');
+      const done = await reply(message, 'تم مسح الرسائل.');
       if (done) setTimeout(() => done.delete().catch(() => {}), 3000);
       return true;
     }
@@ -96,14 +96,14 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       if (!targetId) throw new Error('MENTION_REQUIRED');
       const target = await message.guild.members.fetch(targetId);
       await target.timeout(10 * 60 * 1000, 'Group punishment');
-      await reply(message, '10m timeout applied.'); return true;
+      await reply(message, 'تم تطبيق عقوبة 10 دقائق.'); return true;
     }
-    if (command === 'صلاحية' || command === 'permission') { await reply(message, 'Use the group role to control access.'); return true; }
-    if (command === 'تحكم' || command === 'control') { if (typeof sendPanel === 'function') await sendPanel(message.channel, message.guild, group.id); else await reply(message, 'Group Control is unavailable.'); return true; }
-    if (command === 'تعديل' || command === 'edit') { await reply(message, 'Use Group Control to edit this group.'); return true; }
+    if (command === 'صلاحية' || command === 'permission') { await reply(message, 'استخدم رول القروب للتحكم بالوصول.'); return true; }
+    if (command === 'تحكم' || command === 'control') { if (typeof sendPanel === 'function') await sendPanel(message.channel, message.guild, group.id); else await reply(message, 'لوحة التحكم غير متاحة.'); return true; }
+    if (command === 'تعديل' || command === 'edit') { await reply(message, 'استخدم لوحة التحكم لتعديل القروب.'); return true; }
   } catch (error) {
-    const messages = { MENTION_REQUIRED: 'Mention a member first.', OWNER_ONLY: 'Owner only.', MANAGER_MUST_BE_MEMBER: 'The manager must be a group member.', EXTRA_DISABLED: 'Extra permissions are disabled.', MEMBER_NOT_FOUND: 'Member not found.' };
-    await reply(message, messages[error.message] || 'The group action failed.');
+    const messages = { MENTION_REQUIRED: 'اذكر عضوًا أولًا.', OWNER_ONLY: 'هذه العملية للمالك فقط.', MANAGER_MUST_BE_MEMBER: 'يجب أن يكون المسؤول عضوًا في القروب.', EXTRA_DISABLED: 'الصلاحيات الإضافية متوقفة.', MEMBER_NOT_FOUND: 'العضو غير موجود.' };
+    await reply(message, messages[error.message] || 'فشلت عملية القروب.');
     return true;
   }
   return true;

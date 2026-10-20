@@ -189,7 +189,7 @@ async function testInternalCommandParser() {
 
   const englishAdd = parserMessage(guild, `:add ${USER_A}`);
   assert.equal(await handleInternalMessage(englishAdd.message), true);
-  assert.deepEqual(englishAdd.replies, ['Member added.']);
+  assert.deepEqual(englishAdd.replies, ['تمت إضافة العضو.']);
   assert.deepEqual((await gm.getGroup(guildId, groupId)).memberIds, [OWNER, USER_A]);
 
   // The same parser command is safe to repeat and does not duplicate membership.
