@@ -195,22 +195,22 @@ function replaceCachedState(key, nextValue = {}) {
 function primeStateCache(key, filePath) {
   if (stateInitPromises.has(key)) return stateInitPromises.get(key);
   const pending = ensureTicketStateTables().then(async (db) => {
-    // Attempt to load from SQLite first for speed and consistency
+    // Read both stores before deciding. An empty SQLite row can be left by an
+    // early startup write while the real legacy JSON still contains data.
     const row = db ? await db.get("SELECT value FROM ticket_state WHERE state_key = ?", [key]).catch(() => null) : null;
     const parsedDbValue = parseStoredJson(row?.value, null);
-    if (parsedDbValue && typeof parsedDbValue === "object") {
-      replaceCachedState(key, parsedDbValue);
-      return storeCache[key];
-    }
-
-    // If not found in SQLite, try to load from the legacy JSON file (migration step)
     const fileValue = await fs.promises.readFile(filePath, "utf8")
       .then((raw) => parseStoredJson(raw, {}))
       .catch(() => ({}));
-    replaceCachedState(key, fileValue);
-    // If data was found in the JSON file, queue a write to persist it to SQLite
-    // This effectively migrates the data and ensures future loads are from SQLite.
-    if (Object.keys(fileValue).length) {
+
+    const dbHasData = parsedDbValue && typeof parsedDbValue === 'object' && Object.keys(parsedDbValue).length > 0;
+    const fileHasData = fileValue && typeof fileValue === 'object' && Object.keys(fileValue).length > 0;
+    const selectedValue = dbHasData ? parsedDbValue : fileValue;
+    replaceCachedState(key, selectedValue);
+
+    // Migrate/recover JSON when SQLite is missing or contains only an empty
+    // snapshot. Never let an empty early snapshot erase valid points.
+    if (fileHasData && !dbHasData) {
       await queueStateWrite(STATE_SNAPSHOT_QUEUE_KEY, () => persistStateSnapshot(key, filePath, fileValue));
     }
     return storeCache[key];
@@ -270,10 +270,14 @@ async function persistStateSnapshot(key, filePath, value) {
  */
 function saveCachedState(key, filePath, value) {
   storeCache[key] = value; // Update in-memory cache immediately
-  // The state object is mutable. Capture a snapshot now, otherwise a later
-  // command can mutate an older queued write before it reaches disk/SQLite.
-  const snapshot = JSON.parse(JSON.stringify(value ?? {}));
-  queueStateWrite(STATE_SNAPSHOT_QUEUE_KEY, () => persistStateSnapshot(key, filePath, snapshot)).catch((error) => {
+  queueStateWrite(STATE_SNAPSHOT_QUEUE_KEY, async () => {
+    // Do not persist a synchronous pre-hydration `{}` over the durable state.
+    await primeStateCache(key, filePath);
+    // The state object is mutable; capture the snapshot only after hydration.
+    const currentValue = value === storeCache[key] ? storeCache[key] : value;
+    const snapshot = JSON.parse(JSON.stringify(currentValue ?? {}));
+    return persistStateSnapshot(key, filePath, snapshot);
+  }).catch((error) => {
     logSilentError(`ticket.state.save.${key}`, error);
   });
 }
@@ -668,6 +672,10 @@ function savePoints(points) {
 }
 
 async function savePointsDurably(points) {
+  // A synchronous loadPoints() may return the live empty cache while the
+  // startup hydration is still reading SQLite. Wait for hydration before any
+  // durable write so a ticket action cannot overwrite existing points with {}.
+  await primeStateCache(STATE_KEY_POINTS, pointsPath);
   storeCache[STATE_KEY_POINTS] = points;
   const snapshot = JSON.parse(JSON.stringify(points ?? {}));
   await queueStateWrite(STATE_SNAPSHOT_QUEUE_KEY, () => persistStateSnapshot(STATE_KEY_POINTS, pointsPath, snapshot));
@@ -1928,12 +1936,33 @@ function getReceivedTicketsCounter(guildData, userId) {
     ? guildData.receivedTicketAudit.filter((entry) => String(entry?.userId || '') === normalizedUserId).length
     : 0;
 
-  // fallback legacy: احتساب التذاكر الحالية المستلمة حتى لا ينخفض المؤشر بعد التحديث.
+  // Fallback legacy: احتساب التذاكر الحالية المستلمة، مع احترام نقطة
+  // التصفير حتى لا تعيد التكتات القديمة رفع العداد مباشرة بعد reset.
+  const resetAt = Number(guildData?.stats?.receivedTicketsResetAt || 0);
   let live = 0;
   for (const panel of Object.values(guildData?.panels || {})) {
-    live += Object.values(panel?.tickets || {}).filter((ticket) => ticket?.claimedBy === normalizedUserId).length;
+    live += Object.values(panel?.tickets || {}).filter((ticket) => (
+      ticket?.claimedBy === normalizedUserId
+      && (!resetAt || Number(ticket?.claimedAt || 0) > resetAt)
+    )).length;
   }
   return Math.max(0, Math.max(stored, audited, live));
+}
+
+function resetReceivedTicketStats(guildId) {
+  const safeGuildId = String(guildId || '').trim();
+  if (!safeGuildId) return false;
+  const store = loadStore();
+  const existing = store[safeGuildId];
+  if (!existing || typeof existing !== 'object') return false;
+  const stats = existing.stats && typeof existing.stats === 'object' ? existing.stats : {};
+  store[safeGuildId] = {
+    ...existing,
+    stats: { ...stats, receivedTickets: {}, receivedTicketsResetAt: Date.now() },
+    receivedTicketAudit: []
+  };
+  saveStore(store);
+  return true;
 }
 
 function getPanelData(guildId, panelId = 'default') {
@@ -2704,14 +2733,28 @@ function hasResponsibleTicketAccess(member, config, guild, ticket = null) {
   if (resolveTicketBlockForMember(guild?.id, member)) return false;
   if (ticket?.transferredTo) {
     const memberUserId = String(member?.id || member?.user?.id || '');
-    if (memberUserId && ticket.responsibilityClaimedBy === memberUserId) return true;
-    if (hasStrictClaimAccess(member, config, ticket.reasonKey)) return true;
-    const generalRoleIds = new Set(getGeneralResponsibleRoleIds(config, guild));
+    const transferredUserIds = Array.isArray(ticket.transferredUserIds)
+      ? ticket.transferredUserIds.map((id) => String(id || '').trim())
+      : [];
+    const transferredRoleIds = Array.isArray(ticket.transferredRoleIds)
+      ? ticket.transferredRoleIds.map((id) => String(id || '').trim())
+      : [];
     let memberRoleIds = [];
     if (member?.roles?.cache) memberRoleIds = [...member.roles.cache.keys()];
     else if (Array.isArray(member?.roles)) memberRoleIds = member.roles;
     else if (Array.isArray(member?.roles?.value)) memberRoleIds = member.roles.value;
     else if (Array.isArray(member?.roles?.ids)) memberRoleIds = member.roles.ids;
+    memberRoleIds = memberRoleIds.map((id) => String(id));
+
+    // The selected responsibility is stored on the ticket during transfer.
+    // Use it for command/button authorization without changing channel write
+    // permissions; Take remains responsible for claiming and scoring.
+    if ((memberUserId && transferredUserIds.includes(memberUserId))
+      || memberRoleIds.some((id) => transferredRoleIds.includes(id))) return true;
+
+    if (memberUserId && ticket.responsibilityClaimedBy === memberUserId) return true;
+    if (hasStrictClaimAccess(member, config, ticket.reasonKey)) return true;
+    const generalRoleIds = new Set(getGeneralResponsibleRoleIds(config, guild));
     if (memberRoleIds.map(String).some((id) => generalRoleIds.has(id))) return true;
     return false;
   }
@@ -3218,6 +3261,7 @@ async function createTicketChannel({
     memberId,
     reasonKey,
     claimedBy: claimedByOnCreate || null,
+    claimedAt: claimedByOnCreate ? Date.now() : null,
     pointsReceiverId: claimedByOnCreate || null,
     status: 'open',
     extraMembers: [],
@@ -3517,6 +3561,7 @@ async function handleClaimInTicket(interaction, guildId, panelId, channelId) {
   }
 
   ticket.claimedBy = interaction.user.id;
+  ticket.claimedAt = Date.now();
   ticket.pointsReceiverId = interaction.user.id;
   incrementReceivedTicketsCounter(guildId, interaction.user.id);
   recordReceivedTicket(guildId, interaction.user.id, actionChannelId);
@@ -4330,10 +4375,12 @@ async function closeTicketCoreUnsafe({
   setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
 
   channel.ticketMeta = ticket;
-  const transcriptFile = await buildTicketTranscript(channel).catch(() => null);
-  const logTranscriptFile = config.keepClosedTickets ? null : transcriptFile;
-  await Promise.allSettled([
-    syncTicketLogMessage({
+  // Transcript generation and log upload are intentionally detached from the
+  // close transaction. Large tickets must close/respond immediately instead
+  // of waiting for message pagination, HTML generation, and an upload.
+  void (async () => {
+    const transcriptFile = await buildTicketTranscript(channel).catch(() => null);
+    await syncTicketLogMessage({
       guild: channel.guild,
       config,
       ticket,
@@ -4344,9 +4391,9 @@ async function closeTicketCoreUnsafe({
         actorId: interaction?.user?.id || null
       },
       actor: interaction?.user || null,
-      transcriptFile: logTranscriptFile
-    })
-  ]);
+      transcriptFile: config.keepClosedTickets ? null : transcriptFile
+    }).catch((error) => logSilentError('close.log.background', error));
+  })().catch((error) => logSilentError('close.transcript.background', error));
   if (!config.keepClosedTickets) {
     delete tickets[channelId];
     setGuildData(guildId, config, tickets, pendingRequests, panelId || 'default');
@@ -4433,20 +4480,25 @@ async function closeTicketCoreUnsafe({
     }).catch((error) => logSilentError('close.permissions.visible-user', error)));
   });
 
-  // Execute all channel-related modifications in parallel
-  await Promise.allSettled(parallelTasks);
+  // Execute all channel-related modifications in the background. None of
+  // these should delay the close acknowledgement or the final message.
+  void Promise.allSettled(parallelTasks).catch((error) => logSilentError('close.permissions.background', error));
 
-  // 5. Disable interaction message components if editable
-  if (interaction?.message?.editable && interaction.message?.components?.length) {
-    const disabledRows = interaction.message.components.map((row) => {
-      const disabledComponents = row.components.map((component) => ButtonBuilder.from(component).setDisabled(true));
-      return new ActionRowBuilder().addComponents(disabledComponents);
-    });
-    await interaction.message.edit({ components: disabledRows }).catch((error) => logSilentError('suppressed', error));
-  }
+  // 5. Disable interaction message components in parallel with the final
+  // closed message rather than waiting for permission overwrites.
+  const componentUpdateTask = interaction?.message?.editable && interaction.message?.components?.length
+    ? (async () => {
+      const disabledRows = interaction.message.components.map((row) => {
+        const disabledComponents = row.components.map((component) => ButtonBuilder.from(component).setDisabled(true));
+        return new ActionRowBuilder().addComponents(disabledComponents);
+      });
+      await interaction.message.edit({ components: disabledRows });
+    })().catch((error) => logSilentError('close.components.edit', error))
+    : null;
 
   // 6. Send final closed ticket message and update guild data
   const finalTasks = [];
+  if (componentUpdateTask) finalTasks.push(componentUpdateTask);
   finalTasks.push(channel.send({
     embeds: [makeTicketEmbed(
       'Closed Ticket',
@@ -4589,15 +4641,15 @@ async function handleRenameAliasMessage(message, newNameRaw) {
   const newName = sanitizeName(newNameRaw);
   if (!newName) return false;
   return withTicketTextMutationLock(`text-rename:${ctx.channelId}`, async () => {
-    await message.channel.setName(newName).catch((error) => logSilentError('suppressed', error));
-    await syncTicketLogMessage({
+    void message.channel.setName(newName).catch((error) => logSilentError('ticket.rename.background', error));
+    void syncTicketLogMessage({
       guild: message.guild,
       config: ctx.config,
       ticket: ctx.ticket,
       channelId: ctx.channelId,
       actionText: `تم تغيير اسم التكت عن طريق : <@${message.author.id}> -> ${newName}`,
       actor: message.author
-    });
+    }).catch((error) => logSilentError('ticket.rename.log.background', error));
     return true;
   });
 }
@@ -4621,38 +4673,39 @@ async function handleAddRemoveAliasMessage(message, userInput, mode = 'add') {
     }
     const targetMember = await resolveGuildMember(message.guild, userId);
     if (!targetMember) return false;
-    await message.channel.permissionOverwrites.edit(userId, {
+    const permissionTask = message.channel.permissionOverwrites.edit(userId, {
       ViewChannel: true,
       SendMessages: true,
       ReadMessageHistory: true
-    }).catch((error) => logSilentError('suppressed', error));
+    }).catch((error) => logSilentError('ticket.add.permission.background', error));
     if (!ctx.ticket.extraMembers.includes(userId)) ctx.ticket.extraMembers.push(userId);
-    await syncTicketLogMessage({
+    setGuildData(ctx.guildId, ctx.config, ctx.tickets, ctx.pendingRequests, ctx.panelId);
+    void Promise.allSettled([permissionTask, syncTicketLogMessage({
       guild: message.guild,
       config: ctx.config,
       ticket: ctx.ticket,
       channelId: ctx.channelId,
       actionText: `تمت إضافة شخص عن طريق : <@${message.author.id}> -> <@${userId}>`,
       actor: message.author
-    });
-    setGuildData(ctx.guildId, ctx.config, ctx.tickets, ctx.pendingRequests, ctx.panelId);
+    })]).catch((error) => logSilentError('ticket.add.background', error));
     return true;
   }
 
   if (ctx.ticket.memberId === userId) {
     return false;
   }
-  await message.channel.permissionOverwrites.edit(userId, { ViewChannel: false }).catch((error) => logSilentError('suppressed', error));
+  const permissionTask = message.channel.permissionOverwrites.edit(userId, { ViewChannel: false })
+    .catch((error) => logSilentError('ticket.remove.permission.background', error));
   ctx.ticket.extraMembers = (ctx.ticket.extraMembers || []).filter((id) => id !== userId);
-  await syncTicketLogMessage({
+  setGuildData(ctx.guildId, ctx.config, ctx.tickets, ctx.pendingRequests, ctx.panelId);
+  void Promise.allSettled([permissionTask, syncTicketLogMessage({
     guild: message.guild,
     config: ctx.config,
     ticket: ctx.ticket,
     channelId: ctx.channelId,
     actionText: `تمت إزالة شخص عن طريق : <@${message.author.id}> -> <@${userId}>`,
     actor: message.author
-  });
-  setGuildData(ctx.guildId, ctx.config, ctx.tickets, ctx.pendingRequests, ctx.panelId);
+  })]).catch((error) => logSilentError('ticket.remove.background', error));
   return true;
   } finally {
     ticketTextMutationLocks.delete(mutationKey);
@@ -4677,20 +4730,19 @@ async function handlePingAliasMessage(message) {
   if (now - last < cooldownMs) {
     return false;
   }
-  const user = await message.client.users.fetch(ctx.ticket.memberId).catch(() => null);
   const link = `https://discord.com/channels/${message.guild.id}/${message.channel.id}`;
-  if (user) {
-    await user.send(buildTicketMessagePayload('استدعاء من الإدارة ', `**تم الرد عليك بالتكت يرجى الرجوع ورؤية التكت الآن **\n**الرابط :** ${link}`)).catch((error) => logSilentError('suppressed', error));
-  }
+  const notifyTask = message.client.users.fetch(ctx.ticket.memberId)
+    .then((user) => user?.send(buildTicketMessagePayload('استدعاء من الإدارة ', `**تم الرد عليك بالتكت يرجى الرجوع ورؤية التكت الآن **\n**الرابط :** ${link}`)))
+    .catch((error) => logSilentError('ticket.ping.dm.background', error));
   setPingCooldownValue(cooldownKey, now);
-  await syncTicketLogMessage({
+  void Promise.allSettled([notifyTask, syncTicketLogMessage({
     guild: message.guild,
     config: ctx.config,
     ticket: ctx.ticket,
     channelId: ctx.channelId,
     actionText: `تم استدعاء العضو عن طريق : <@${message.author.id}>`,
     actor: message.author
-  });
+  })]).catch((error) => logSilentError('ticket.ping.background', error));
   setGuildData(ctx.guildId, ctx.config, ctx.tickets, ctx.pendingRequests, ctx.panelId);
   return true;
   } finally {
@@ -5118,7 +5170,21 @@ async function handleResetPointsMessage(message, { ownerOnly = false } = {}) {
       nextPoints.general = {};
       nextPoints.__audit = (Array.isArray(nextPoints.__audit) ? nextPoints.__audit : [])
         .filter(entry => !['ticket_system', 'ticket_button', 'manual_command'].includes(String(entry?.source || '')));
+      // تقييمات التكت مرتبطة بالتكت نفسه؛ إبقاء هذه المطالبات بعد التصفير
+      // يمنع تسجيل تقييم جديد لنفس التكت.
+      nextPoints.__ticketPointClaims = {};
+      const ticketStore = loadStore();
+      const guildEntry = ticketStore[String(message.guild?.id || '')];
+      for (const panel of Object.values(guildEntry?.panels || {})) {
+        for (const ticket of Object.values(panel?.tickets || {})) {
+          if (ticket && typeof ticket === 'object') delete ticket.pointAward;
+        }
+      }
+      if (guildEntry) saveStore(ticketStore);
     }
+    // كلا الأمرين يعيدان دورة إحصائيات التكت من الصفر، بما فيها عدد
+    // الاستلامات وسجلها، مع إبقاء التكتات المفتوحة والقنوات كما هي.
+    resetReceivedTicketStats(message.guild?.id);
     await savePointsDurably(nextPoints);
     collector.stop();
     await interaction.update({
@@ -7117,9 +7183,6 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   const previousTransferredUserIds = Array.isArray(ticket.transferredUserIds)
     ? ticket.transferredUserIds.map((id) => String(id || '').trim()).filter((id) => /^\d{16,20}$/.test(id))
     : [];
-  const previousTransferredRoleIds = Array.isArray(ticket.transferredRoleIds)
-    ? ticket.transferredRoleIds.map((id) => String(id || '').trim()).filter((id) => /^\d{16,20}$/.test(id))
-    : [];
   const responsibleUsers = (selected.responsibles || [])
     .map((id) => String(id || '').trim())
     .filter((id) => /^\d{16,20}$/.test(id));
@@ -7135,7 +7198,7 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   ticket.responsibilityClaimedAt = null;
   ticket.responsibilityTakeClaimId = crypto.randomUUID();
   ticket.transferTakeMessageId = null;
-  ticket.transferPermissionsReady = false;
+  ticket.transferPermissionsReady = true;
   ticket.transferDmNotifications = [];
   delete ticket.transferDmNotificationsFinalizedAt;
 
@@ -7145,16 +7208,26 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   const generalResponsibleRoles = (config.responsibleRoleIds || [])
     .map((id) => String(id || '').trim())
     .filter((id) => /^\d{16,20}$/.test(id) && interaction.guild.roles.cache.has(id));
-  const adminRoles = getAdminRoles(config, ticket?.reasonKey);
-  const allKnownRoles = [...new Set([
-    ...generalResponsibleRoles,
-    ...targetRoles,
-    ...previousTransferredRoleIds.filter((id) => interaction.guild.roles.cache.has(id)),
-    ...adminRoles
-  ])];
+  // Admin overwrites are already applied when the ticket is created. Do not
+  // include them in the transfer mutation: an old/missing admin role must not
+  // make an otherwise valid responsibility transfer fail.
+  // Prefer one responsibility-role overwrite. Updating every role and every
+  // assigned member made transfers slow and one stale member could fail the
+  // whole operation. If the responsibility has no role, use its users as a
+  // parallel fallback instead.
+  const useResponsibilityRole = targetRoles.length > 0;
+  const permissionRoleIds = useResponsibilityRole
+    ? [...new Set(targetRoles)]
+    : [];
   const visibleResponsibleRoles = new Set([...generalResponsibleRoles, ...targetRoles]);
   const applyRequiredOverwrite = async (targetId, permissions) => {
-    const overwrite = await editOverwriteFast(interaction.channel, targetId, permissions);
+    // Permission updates are best-effort and run in parallel. Do not impose a
+    // timeout: Discord will finish the request naturally in the background.
+    const overwrite = await interaction.channel.permissionOverwrites.edit(targetId, permissions)
+      .catch((error) => {
+        logSilentError(`transfer.permission.edit.${targetId}`, error);
+        return null;
+      });
     if (!overwrite) throw new Error(`Could not update ticket overwrite for ${targetId}`);
     return overwrite;
   };
@@ -7178,7 +7251,7 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     if (ticketLogSyncJobs.get(actionChannelId) === transferLogJob) ticketLogSyncJobs.delete(actionChannelId);
   });
 
-  const rolesPermissionTasks = allKnownRoles.map((roleId) => {
+  const rolesPermissionTasks = permissionRoleIds.map((roleId) => {
     const shouldSee = visibleResponsibleRoles.has(roleId);
     const canWrite = generalResponsibleRoles.includes(roleId);
     return () => applyRequiredOverwrite(roleId, {
@@ -7190,9 +7263,12 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
       ReadMessageHistory: shouldSee
     });
   });
+  // A responsibility role handles the new access. Only clean old direct user
+  // overwrites in that case; if there is no role, update the selected users in
+  // the same parallel batch.
   const affectedUserIds = [...new Set([
     ...previousTransferredUserIds,
-    ...existingResponsibleUsers,
+    ...(!useResponsibilityRole ? existingResponsibleUsers : []),
     ...(previousClaimer ? [String(previousClaimer)] : []),
     ...(previousResponsibilityClaimer ? [String(previousResponsibilityClaimer)] : [])
   ])];
@@ -7271,32 +7347,22 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
     .setEmoji('<:emoji_3:1484364952780144710>')
     .setStyle(ButtonStyle.Success);
 
-  // Start slower permission/UI work without delaying the first transfer notice.
+  // Start permissions and UI work in parallel. Neither is allowed to delay the
+  // Container, the counter/save, the renamed channel, or the acknowledgement.
   const permissionsPromise = runTransferParallelPipeline({
     permissions: [...rolesPermissionTasks, ...usersPermissionTasks]
   }, 'transfer.permissions');
   void runTransferParallelPipeline({ ui: transferUiTasks }, 'transfer.ui');
 
-  const pipelineResults = await permissionsPromise;
-  const permissionStage = pipelineResults[0];
-  const permissionResults = permissionStage?.status === 'fulfilled' && Array.isArray(permissionStage.value)
-    ? permissionStage.value
-    : [];
-  const permissionsReady = permissionResults.length === rolesPermissionTasks.length + usersPermissionTasks.length
-    && permissionResults.every((result) => result.status === 'fulfilled');
-  if (!permissionsReady) {
-    ticket.transferPermissionsReady = false;
-    setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
-    await interaction.editReply(buildTicketMessagePayload(
-      'Error',
-      '**تم إرسال Container، لكن تعذر تجهيز صلاحيات القناة. يرجى مراجعة صلاحيات التكت.**',
-      { ephemeral: true, user: interaction.user }
-    )).catch((error) => logSilentError('suppressed', error));
-    return;
-  }
+  void permissionsPromise.then((pipelineResults) => {
+    const permissionStage = pipelineResults[0];
+    const permissionResults = permissionStage?.status === 'fulfilled' && Array.isArray(permissionStage.value)
+      ? permissionStage.value
+      : [];
+    const failed = permissionResults.filter((result) => result.status !== 'fulfilled').length;
+    if (failed) logSilentError('transfer.permissions', `failed=${failed}; transfer already continued`);
+  }).catch((error) => logSilentError('transfer.permissions.background', error));
 
-  ticket.transferPermissionsReady = true;
-  setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
   const transferMessage = await interaction.channel.send(buildResponsibilityTransferPayload({
     responsibilityName: respName,
     roleIds: targetRoles,
@@ -7309,8 +7375,11 @@ async function handleTransferResponsibility(interaction, guildId, panelId, chann
   if (!transferMessage) {
     ticket.transferPermissionsReady = false;
     setGuildData(guildId, config, tickets, pendingRequests, resolvedPanelId);
-    await interaction.editReply(buildTicketMessagePayload('Error', '**تعذر إرسال Container الاستلام.**', { ephemeral: true, user: interaction.user }))
-      .catch((error) => logSilentError('suppressed', error));
+    await interaction.editReply(buildTicketMessagePayload(
+      'Error',
+      '**تعذر إرسال Container التكت. يرجى مراجعة صلاحية إرسال الرسائل في روم التكت.**',
+      { ephemeral: true, user: interaction.user }
+    )).catch((error) => logSilentError('suppressed', error));
     return;
   }
   ticket.transferTakeMessageId = transferMessage.id;

