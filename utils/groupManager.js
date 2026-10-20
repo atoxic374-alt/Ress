@@ -11,6 +11,7 @@ const GROUP_DEFAULTS = Object.freeze({
   voiceCategoryId: null,
   musicChannelId: null,
   logChannelId: null,
+  mainRoleId: null,
   leaderRoleId: null,
   managerRoleId: null,
   systemUsers: [],
@@ -22,7 +23,7 @@ const GROUP_DEFAULTS = Object.freeze({
 });
 const GROUP_SETTING_KEYS = new Set([
   'enabled', 'chatMode', 'textCategoryId', 'voiceCategoryId', 'musicChannelId',
-  'logChannelId', 'leaderRoleId', 'managerRoleId', 'systemUsers', 'systemRoles',
+  'logChannelId', 'mainRoleId', 'leaderRoleId', 'managerRoleId', 'systemUsers', 'systemRoles',
   'extraPermissions', 'countAllChannels', 'maxMembers'
 ]);
 const GROUP_METRICS = new Set(['messages', 'voice_ms', 'reactions']);
@@ -55,6 +56,7 @@ function normalizeSettings(row) {
     voiceCategoryId: idOrNull(source.voiceCategoryId),
     musicChannelId: idOrNull(source.musicChannelId),
     logChannelId: idOrNull(source.logChannelId),
+    mainRoleId: idOrNull(source.mainRoleId),
     leaderRoleId: idOrNull(source.leaderRoleId),
     managerRoleId: idOrNull(source.managerRoleId),
     systemUsers: ids(source.systemUsers),
@@ -85,7 +87,7 @@ function validateSettingsPatch(patch = {}) {
     if (patch.chatMode !== null && !Object.values(GROUP_CHAT_MODES).includes(patch.chatMode)) throw new Error('INVALID_SETTING:chatMode');
     next.chatMode = patch.chatMode;
   }
-  for (const key of ['textCategoryId', 'voiceCategoryId', 'musicChannelId', 'logChannelId', 'leaderRoleId', 'managerRoleId']) {
+  for (const key of ['textCategoryId', 'voiceCategoryId', 'musicChannelId', 'logChannelId', 'mainRoleId', 'leaderRoleId', 'managerRoleId']) {
     if (key in patch) next[key] = settingId(patch[key], key);
   }
   for (const key of ['systemUsers', 'systemRoles']) {
@@ -205,7 +207,11 @@ function validateConfig(guild, settings) {
   if (!textCategory || textCategory.type !== ChannelType.GuildCategory) missing.push('textCategoryId');
   if (!voiceCategory || voiceCategory.type !== ChannelType.GuildCategory) missing.push('voiceCategoryId');
   if (settings.musicChannelId) { const music = guild.channels.cache.get(settings.musicChannelId); if (!music?.isVoiceBased?.()) missing.push('musicChannelId'); }
-  for (const roleId of [settings.leaderRoleId, settings.managerRoleId].filter(Boolean)) { const role = guild.roles.cache.get(roleId); if (!role) missing.push(`role:${roleId}`); else if (me?.roles?.highest && role.position >= me.roles.highest.position) missing.push(`roleHierarchy:${roleId}`); }
+  for (const roleId of [settings.mainRoleId, settings.leaderRoleId, settings.managerRoleId].filter(Boolean)) { const role = guild.roles.cache.get(roleId); if (!role) missing.push(`role:${roleId}`); else if (me?.roles?.highest && role.position >= me.roles.highest.position) missing.push(`roleHierarchy:${roleId}`); }
+  if (settings.mainRoleId) {
+    const mainRole = guild.roles.cache.get(settings.mainRoleId);
+    if (mainRole && (mainRole.id === guild.id || mainRole.position < 2)) missing.push('mainRolePosition');
+  }
   return missing;
 }
 async function setSystemUser(guildId, targetId, enabled, actorId) {
@@ -318,6 +324,11 @@ async function createGroup(guild, { name, description = '', ownerId, color = '#5
     const now = Date.now(); let role = null; let text = null; let thread = null; let voice = null; const created = [];
     try {
       role = await guild.roles.create({ name: `Group・${String(name).trim().slice(0, 90)}`, color: color || '#5865F2', reason: 'Create managed group' }); created.push(['role', role]);
+      if (settings.mainRoleId) {
+        const mainRole = guild.roles.cache.get(settings.mainRoleId) || await guild.roles.fetch(settings.mainRoleId).catch(() => null);
+        if (!mainRole || mainRole.id === guild.id || mainRole.position < 2) throw new Error('MAIN_ROLE_INVALID');
+        await role.setPosition(Math.max(1, mainRole.position - 1), 'Place managed group role under Main Role');
+      }
       if (!global.groupRoleGrantBypass) global.groupRoleGrantBypass = new Set();
       const ownerRoleKey = `${guild.id}:${owner.id}:${role.id}`;
       global.groupRoleGrantBypass.add(ownerRoleKey);
