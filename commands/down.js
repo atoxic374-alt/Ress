@@ -1,4 +1,4 @@
-const { ButtonBuilder, ActionRowBuilder, ButtonStyle, StringSelectMenuBuilder, UserSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, RoleSelectMenuBuilder, ChannelSelectMenuBuilder, ChannelType, MessageFlags, ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, SectionBuilder } = require('discord.js');
+const { ButtonBuilder, ActionRowBuilder, ButtonStyle, StringSelectMenuBuilder, UserSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, RoleSelectMenuBuilder, ChannelSelectMenuBuilder, ChannelType, MessageFlags, ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, SectionBuilder, ThumbnailBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -107,15 +107,14 @@ function getDownSeparatorStatus(settings = {}) {
     return settings.separatorImage ? 'مفعّل (صورة مخصصة)' : 'مفعّل (الخط الافتراضي)';
 }
 
-function buildDownMenuContainer(client) {
+function buildDownMenuContainer(guild) {
     const container = new ContainerBuilder()
         .setAccentColor(colorToNumber(colorManager.getColor?.() || '#5865F2'));
-    container.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent('## Down Management System')
-    );
-    container.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent('استخدم القائمة أدناه لإدارة الداون والرولات الإدارية')
-    );
+    const serverIconUrl = guild?.iconURL?.({ extension: 'png', size: 128 });
+    const header = new SectionBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent('## Down Management System'));
+    if (serverIconUrl) header.setThumbnailAccessory(new ThumbnailBuilder().setURL(serverIconUrl));
+    container.addSectionComponents(header);
     container.addSeparatorComponents(new SeparatorBuilder());
 
     const actions = [
@@ -160,7 +159,7 @@ async function createPermanentMenu(client, channelId) {
         if (!channel) return false;
 
         const settings = downManager.getSettings();
-        const menuContainer = buildDownMenuContainer(client);
+        const menuContainer = buildDownMenuContainer(channel.guild);
         const menuPayload = componentsV2Payload(menuContainer);
 
         // Always create new menu message when called from resend
