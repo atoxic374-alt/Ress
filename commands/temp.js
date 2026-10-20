@@ -457,9 +457,46 @@ function invalidateControlCardCache(guildId) {
   }
 }
 
-async function syncMusicBotNicknameForRoom(guild, roomChannel, reason = 'Sync temp room music bot nickname') {
+const MUSIC_BOT_SIGNATURE = /music|song|player|luna|hydra|probot|vexera|chip|rythm|tunes|radio/i;
+
+function isMusicBotMember(member) {
+  if (!member?.user?.bot) return false;
+  const signature = [
+    member.user.username,
+    member.user.globalName,
+    member.displayName,
+    member.nickname,
+    member.user.tag
+  ].filter(Boolean).join(' ');
+  return MUSIC_BOT_SIGNATURE.test(signature);
+}
+
+function getMusicMovePermissionError(guild, sourceChannel, targetChannel) {
+  const botMember = guild?.members?.me || guild?.members?.cache?.get(guild?.client?.user?.id);
+  if (!botMember) return 'تعذر التحقق من عضو البوت داخل السيرفر.';
+  const required = [
+    PermissionsBitField.Flags.ViewChannel,
+    PermissionsBitField.Flags.Connect,
+    PermissionsBitField.Flags.MoveMembers
+  ];
+  const missingByChannel = [];
+  for (const channel of [sourceChannel, targetChannel]) {
+    const permissions = channel?.permissionsFor?.(botMember);
+    if (!permissions) {
+      missingByChannel.push(`${channel?.name || channel?.id || 'voice'}`);
+      continue;
+    }
+    const missing = permissions.missing(required);
+    if (missing.length) missingByChannel.push(`${channel.name || channel.id}: ${missing.join(', ')}`);
+  }
+  return missingByChannel.length ? `صلاحيات البوت ناقصة في روم الميوزك أو الروم الهدف: ${missingByChannel.join(' | ')}` : null;
+}
+
+async function syncMusicBotNicknameForRoom(guild, roomChannel, reason = 'Sync temp room music bot nickname', botMember = null) {
   if (!guild || !roomChannel?.isVoiceBased?.()) return { total: 0, renamed: 0, failed: 0 };
-  const bots = [...(roomChannel.members?.values?.() || [])].filter(member => member?.user?.bot);
+  const bots = botMember
+    ? [botMember].filter(member => member?.user?.bot && member.voice?.channelId === roomChannel.id)
+    : [...(roomChannel.members?.values?.() || [])].filter(member => member?.user?.bot);
   if (!bots.length) return { total: 0, renamed: 0, failed: 0 };
 
   let renamed = 0;
@@ -473,6 +510,48 @@ async function syncMusicBotNicknameForRoom(guild, roomChannel, reason = 'Sync te
     else failed += 1;
   }
   return { total: bots.length, renamed, failed };
+}
+
+/**
+ * Moves the single unambiguous music bot from the configured source room into a
+ * target voice room. Calls for the same target are serialized and safe to
+ * repeat: an already-present music bot is reported without another move.
+ */
+async function ensureMusicBotInVoiceRoom(guild, targetChannel, options = {}) {
+  const sourceChannelId = Object.prototype.hasOwnProperty.call(options, 'musicChannelId')
+    ? options.musicChannelId
+    : (guild?.id ? getGuildConfig(guild.id).musicChannelId : null);
+  const lockKey = `music:${guild?.id || 'unknown'}:${targetChannel?.id || 'unknown'}`;
+  return runSerialized(lockKey, async () => {
+    if (!guild || !targetChannel?.isVoiceBased?.()) return { ok: false, code: 'INVALID_TARGET' };
+    if (!sourceChannelId) return { ok: false, code: 'MUSIC_CHANNEL_NOT_CONFIGURED' };
+
+    const sourceChannel = guild.channels.cache.get(sourceChannelId) || await guild.channels.fetch(sourceChannelId).catch(() => null);
+    if (!sourceChannel?.isVoiceBased?.()) return { ok: false, code: 'INVALID_MUSIC_CHANNEL' };
+
+    const targetMusicBots = [...(targetChannel.members?.values?.() || [])].filter(isMusicBotMember);
+    if (targetMusicBots.length > 1) return { ok: false, code: 'AMBIGUOUS_TARGET_BOTS', sourceChannel, targetChannel };
+    if (targetMusicBots.length === 1) {
+      const musicBot = targetMusicBots[0];
+      const nicknameSync = await syncMusicBotNicknameForRoom(guild, targetChannel, options.reason || 'Sync music bot nickname', musicBot);
+      return { ok: true, alreadyPresent: true, moved: false, musicBot, sourceChannel, targetChannel, nicknameSync };
+    }
+    if (sourceChannel.id === targetChannel.id) return { ok: false, code: 'TARGET_IS_MUSIC_CHANNEL', sourceChannel, targetChannel };
+
+    const permissionError = getMusicMovePermissionError(guild, sourceChannel, targetChannel);
+    if (permissionError) return { ok: false, code: 'MISSING_PERMISSIONS', error: permissionError, sourceChannel, targetChannel };
+
+    const sourceBots = [...(sourceChannel.members?.values?.() || [])]
+      .filter(member => member?.voice?.channelId === sourceChannel.id && isMusicBotMember(member));
+    if (!sourceBots.length) return { ok: false, code: 'MUSIC_BOT_NOT_FOUND', sourceChannel, targetChannel };
+    if (sourceBots.length > 1) return { ok: false, code: 'AMBIGUOUS_SOURCE_BOTS', sourceChannel, targetChannel };
+
+    const musicBot = sourceBots[0];
+    const moved = await musicBot.voice?.setChannel?.(targetChannel, options.reason || 'Move music bot to voice room').then(() => true).catch(() => false);
+    if (!moved) return { ok: false, code: 'MOVE_FAILED', musicBot, sourceChannel, targetChannel };
+    const nicknameSync = await syncMusicBotNicknameForRoom(guild, targetChannel, options.reason || 'Sync music bot nickname', musicBot);
+    return { ok: true, alreadyPresent: false, moved: true, musicBot, sourceChannel, targetChannel, nicknameSync };
+  });
 }
 
 async function moveRoomBotsToMusicSourceBeforeDelete(guild, roomChannel, reason = 'Return music bots to source room before temp room deletion') {
@@ -3730,62 +3809,37 @@ async function performGeneralAction(interaction, action, resolverResult = null) 
   }
 
   if (action === 'temp_room_music') {
-    const config = getGuildConfig(guild.id);
-    if (!config.musicChannelId) {
-      await editEphemeral(interaction, '❌ لم يتم تحديد روم بوتات الميوزك من إعدادات temp بعد.');
-      return true;
-    }
-    const sourceChannel = guild.channels.cache.get(config.musicChannelId) || await guild.channels.fetch(config.musicChannelId).catch(() => null);
-    if (!sourceChannel?.isVoiceBased?.()) {
-      await editEphemeral(interaction, '❌ روم بوتات الميوزك المحدد غير صالح حالياً.');
-      return true;
-    }
-    const existingBot = roomChannel.members.find(member => member.user.bot);
-    if (existingBot) {
-      await editEphemeral(interaction, `ℹ️ يوجد بالفعل بوت داخل الروم: ${existingBot.user.username}.`);
-      return true;
-    }
-    const sourceBots = [...(sourceChannel.members?.values?.() || [])]
-      .filter(member => member?.user?.bot && member.voice?.channelId === sourceChannel.id);
-    const preferredMusicBots = sourceBots.filter(member => {
-      const signature = [
-        member.user.username,
-        member.user.globalName,
-        member.displayName,
-        member.nickname,
-        member.user.tag
-      ].filter(Boolean).join(' ');
-      return /music|song|player|luna|hydra|probot|vexera|chip|rythm|tunes|radio/i.test(signature);
-    });
-    const musicBot = preferredMusicBots[0] || sourceBots[0] || null;
-    if (!musicBot) {
-      await editEphemeral(interaction, 'ℹ️ لم يتم العثور على بوت أغاني داخل روم الميوزك المحدد.');
-      return true;
-    }
-    const moved = await musicBot.voice.setChannel(roomChannel).then(() => true).catch(() => false);
-    if (!moved) {
-      await editEphemeral(interaction, `❌ تعذر سحب بوت الأغاني ${musicBot.user.username} إلى الروم حالياً.`);
+    const result = await ensureMusicBotInVoiceRoom(guild, roomChannel, { reason: 'Move music bot from configured source to temp room' });
+    if (!result.ok) {
+      const errors = {
+        MUSIC_CHANNEL_NOT_CONFIGURED: '❌ لم يتم تحديد musicChannelId في إعدادات temp بعد.',
+        INVALID_MUSIC_CHANNEL: '❌ روم musicChannelId المحدد غير صالح حالياً.',
+        MISSING_PERMISSIONS: `❌ لا يملك البوت الصلاحيات المطلوبة لنقل بوت الميوزك: ${result.error}`,
+        MUSIC_BOT_NOT_FOUND: 'ℹ️ لم يتم العثور على بوت أغاني معروف داخل musicChannelId المحدد.',
+        AMBIGUOUS_SOURCE_BOTS: '❌ يوجد أكثر من بوت أغاني معروف في روم المصدر؛ لن يتم اختيار بوت عشوائياً.',
+        AMBIGUOUS_TARGET_BOTS: '❌ يوجد أكثر من بوت أغاني داخل الروم؛ لن يتم تغيير أي بوت.',
+        TARGET_IS_MUSIC_CHANNEL: 'ℹ️ الروم الهدف هو musicChannelId نفسه.',
+        MOVE_FAILED: '❌ تعذر سحب بوت الأغاني إلى الروم حالياً.'
+      };
+      await editEphemeral(interaction, errors[result.code] || '❌ تعذر تنفيذ Music بأمان حالياً.');
       return true;
     }
 
-    const nicknameSync = await syncMusicBotNicknameForRoom(guild, roomChannel, 'Sync music bot nickname with temp room name');
-    const nicknameSyncOk = nicknameSync.failed === 0;
-
-    if (!nicknameSyncOk && typeof roomChannel.send === 'function') {
-      await roomChannel.send(`❌ فشل تغيير اسم بوت الميوزك **${musicBot.user.username}** ليطابق اسم الروم **${roomChannel.name}**.`).catch(() => {});
-    }
-
-    await editEphemeral(interaction, `✅ تم سحب بوت الأغاني ${musicBot.user.username} إلى الروم.${nicknameSyncOk ? ' وتمت مزامنة الاسم بنجاح.' : ' لكن فشل تغيير الاسم إلى اسم الروم.'}`);
+    const musicBot = result.musicBot;
+    const nicknameSyncOk = result.nicknameSync?.failed === 0;
+    await editEphemeral(interaction, result.alreadyPresent
+      ? `ℹ️ بوت الأغاني ${musicBot.user.username} موجود بالفعل في الروم.${nicknameSyncOk ? ' وتمت مزامنة الاسم.' : ''}`
+      : `✅ تم سحب بوت الأغاني ${musicBot.user.username} إلى الروم.${nicknameSyncOk ? ' وتمت مزامنة الاسم بنجاح.' : ' لكن فشل تغيير الاسم إلى اسم الروم.'}`);
     await logTempRoomState(guild, {
       title: '🎵 **سحب بوت أغاني**',
-      description: '**تم تنفيذ محاولة سحب بوت أغاني إلى الروم المؤقت.**',
+      description: result.alreadyPresent ? '**بوت الأغاني موجود بالفعل في الروم المؤقت.**' : '**تم تنفيذ محاولة سحب بوت أغاني إلى الروم المؤقت.**',
       actorId: interaction.user.id,
       ownerId,
       roomId: roomChannel.id,
       roomName: roomChannel.name,
       roomRecord,
       extra: `**البوت:** **${musicBot.user.username}**
-**روم المصدر:** <#${sourceChannel.id}>
+**روم المصدر:** <#${result.sourceChannel.id}>
 **مزامنة الاسم:** ${nicknameSyncOk ? '**نجحت**' : '**فشلت**'}`
     });
     return true;
@@ -5075,5 +5129,6 @@ module.exports = {
   aliases,
   execute,
   registerInteractionHandler,
-  handleVoiceStateUpdate
+  handleVoiceStateUpdate,
+  ensureMusicBotInVoiceRoom
 };

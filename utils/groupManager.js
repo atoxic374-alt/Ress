@@ -18,19 +18,87 @@ const GROUP_DEFAULTS = Object.freeze({
   maxMembers: 10,
   settingsVersion: 1
 });
+const GROUP_SETTING_KEYS = new Set([
+  'enabled', 'chatMode', 'textCategoryId', 'voiceCategoryId', 'musicChannelId',
+  'logChannelId', 'leaderRoleId', 'managerRoleId', 'systemUsers', 'systemRoles',
+  'extraPermissions', 'countAllChannels', 'maxMembers'
+]);
+const GROUP_METRICS = new Set(['messages', 'voice_ms', 'reactions']);
+const MAX_ACTIVITY_AMOUNT = 1000000000000;
 const locks = new Map();
 let schemaPromise = null;
 
 function safeJson(value, fallback) {
+  if (value && typeof value === 'object') return value;
   try {
     const parsed = JSON.parse(value || '');
     return parsed && typeof parsed === 'object' ? parsed : fallback;
   } catch { return fallback; }
 }
-function ids(value) { return [...new Set((Array.isArray(value) ? value : []).map(String).filter(v => /^\d{16,20}$/.test(v)))]; }
+function isSnowflake(value) { return /^\d{16,20}$/.test(String(value ?? '')); }
+function ids(value) { return [...new Set((Array.isArray(value) ? value : []).map(String).filter(isSnowflake))]; }
 function normalizeSettings(row) {
   const parsed = safeJson(row?.settings_json, {});
-  return { ...GROUP_DEFAULTS, ...parsed, guildId: String(row?.guild_id || parsed.guildId || '') , systemUsers: ids(parsed.systemUsers), systemRoles: ids(parsed.systemRoles) };
+  const source = parsed && !Array.isArray(parsed) ? parsed : {};
+  const idOrNull = value => isSnowflake(value) ? String(value) : null;
+  const maxMembers = Number(source.maxMembers);
+  const settingsVersion = Number(source.settingsVersion);
+  return {
+    ...GROUP_DEFAULTS,
+    ...source,
+    guildId: String(row?.guild_id || source.guildId || ''),
+    enabled: source.enabled === true || source.enabled === 1,
+    chatMode: Object.values(GROUP_CHAT_MODES).includes(source.chatMode) ? source.chatMode : null,
+    textCategoryId: idOrNull(source.textCategoryId),
+    voiceCategoryId: idOrNull(source.voiceCategoryId),
+    musicChannelId: idOrNull(source.musicChannelId),
+    logChannelId: idOrNull(source.logChannelId),
+    leaderRoleId: idOrNull(source.leaderRoleId),
+    managerRoleId: idOrNull(source.managerRoleId),
+    systemUsers: ids(source.systemUsers),
+    systemRoles: ids(source.systemRoles),
+    extraPermissions: source.extraPermissions === true || source.extraPermissions === 1,
+    countAllChannels: source.countAllChannels === true || source.countAllChannels === 1,
+    maxMembers: Number.isInteger(maxMembers) && maxMembers >= 1 && maxMembers <= 1000 ? maxMembers : GROUP_DEFAULTS.maxMembers,
+    settingsVersion: Number.isInteger(settingsVersion) && settingsVersion >= 1 ? settingsVersion : GROUP_DEFAULTS.settingsVersion
+  };
+}
+function booleanSetting(value, key) {
+  if (typeof value === 'boolean') return value;
+  if (value === 0 || value === 1 || value === '0' || value === '1') return Boolean(Number(value));
+  throw new Error(`INVALID_SETTING:${key}`);
+}
+function settingId(value, key) {
+  if (value == null || value === '') return null;
+  if (!isSnowflake(value)) throw new Error(`INVALID_SETTING:${key}`);
+  return String(value);
+}
+function validateSettingsPatch(patch = {}) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('INVALID_SETTINGS');
+  const unknown = Object.keys(patch).filter(key => !GROUP_SETTING_KEYS.has(key));
+  if (unknown.length) throw new Error(`INVALID_SETTING_KEY:${unknown[0]}`);
+  const next = {};
+  if ('enabled' in patch) next.enabled = booleanSetting(patch.enabled, 'enabled');
+  if ('chatMode' in patch) {
+    if (patch.chatMode !== null && !Object.values(GROUP_CHAT_MODES).includes(patch.chatMode)) throw new Error('INVALID_SETTING:chatMode');
+    next.chatMode = patch.chatMode;
+  }
+  for (const key of ['textCategoryId', 'voiceCategoryId', 'musicChannelId', 'logChannelId', 'leaderRoleId', 'managerRoleId']) {
+    if (key in patch) next[key] = settingId(patch[key], key);
+  }
+  for (const key of ['systemUsers', 'systemRoles']) {
+    if (key in patch) {
+      if (!Array.isArray(patch[key]) || patch[key].some(value => !isSnowflake(value))) throw new Error(`INVALID_SETTING:${key}`);
+      next[key] = ids(patch[key]);
+    }
+  }
+  for (const key of ['extraPermissions', 'countAllChannels']) if (key in patch) next[key] = booleanSetting(patch[key], key);
+  if ('maxMembers' in patch) {
+    const maxMembers = Number(patch.maxMembers);
+    if (!Number.isInteger(maxMembers) || maxMembers < 1 || maxMembers > 1000) throw new Error('INVALID_SETTING:maxMembers');
+    next.maxMembers = maxMembers;
+  }
+  return next;
 }
 async function schema() {
   if (schemaPromise) return schemaPromise;
@@ -49,6 +117,9 @@ async function schema() {
     await dbManager.run(`CREATE TABLE IF NOT EXISTS group_audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, group_id INTEGER, actor_id TEXT, action TEXT NOT NULL, details_json TEXT DEFAULT '{}', created_at INTEGER NOT NULL)`);
     await dbManager.run(`CREATE TABLE IF NOT EXISTS group_points_rules (guild_id TEXT NOT NULL, metric TEXT NOT NULL, threshold INTEGER NOT NULL, points INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL, PRIMARY KEY(guild_id, metric))`);
     await dbManager.run(`CREATE TABLE IF NOT EXISTS group_member_points (guild_id TEXT NOT NULL, group_id INTEGER NOT NULL, user_id TEXT NOT NULL, points INTEGER NOT NULL DEFAULT 0, messages INTEGER NOT NULL DEFAULT 0, voice_ms INTEGER NOT NULL DEFAULT 0, reactions INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, PRIMARY KEY(guild_id, group_id, user_id))`);
+    // Optional event ids make retries safe without changing the existing activity API.
+    await dbManager.run(`CREATE TABLE IF NOT EXISTS group_activity_events (guild_id TEXT NOT NULL, event_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(guild_id, event_id))`);
+    await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_group_activity_events_created ON group_activity_events(guild_id, created_at)`);
     return true;
   })().catch(error => { schemaPromise = null; throw error; });
   return schemaPromise;
@@ -62,13 +133,23 @@ async function withLock(key, operation) {
   try { return await operation(); } finally { release(); if (locks.get(key) === current) locks.delete(key); }
 }
 async function getSettings(guildId) { await schema(); const row = await dbManager.get('SELECT * FROM group_system_settings WHERE guild_id = ?', [String(guildId)]); return normalizeSettings(row || { guild_id: guildId, settings_json: JSON.stringify({}) }); }
+async function saveSettingsLocked(guildId, patch, actorId = null) {
+  const result = await dbManager.transaction(async tx => {
+    const row = await tx.get('SELECT * FROM group_system_settings WHERE guild_id = ?', [String(guildId)]);
+    const current = normalizeSettings(row || { guild_id: guildId, settings_json: JSON.stringify({}) });
+    const validated = validateSettingsPatch(patch);
+    const next = { ...current, ...validated, guildId: undefined, updatedAt: undefined, settingsVersion: current.settingsVersion + 1 };
+    delete next.guildId;
+    delete next.updatedAt;
+    await tx.run(`INSERT INTO group_system_settings(guild_id, settings_json, updated_at) VALUES(?,?,?) ON CONFLICT(guild_id) DO UPDATE SET settings_json=excluded.settings_json, updated_at=excluded.updated_at`, [String(guildId), JSON.stringify(next), Date.now()]);
+    return { ...GROUP_DEFAULTS, ...next, guildId: String(guildId) };
+  }, 'group-settings');
+  await audit(guildId, actorId, null, 'settings_update', { keys: Object.keys(patch || {}), settingsVersion: result.settingsVersion });
+  return result;
+}
 async function saveSettings(guildId, patch, actorId = null) {
   await schema();
-  const current = await getSettings(guildId); const next = { ...current, ...patch, guildId: undefined, systemUsers: ids(patch.systemUsers ?? current.systemUsers), systemRoles: ids(patch.systemRoles ?? current.systemRoles), updatedAt: undefined };
-  delete next.guildId; delete next.updatedAt;
-  await dbManager.run(`INSERT INTO group_system_settings(guild_id, settings_json, updated_at) VALUES(?,?,?) ON CONFLICT(guild_id) DO UPDATE SET settings_json=excluded.settings_json, updated_at=excluded.updated_at`, [String(guildId), JSON.stringify(next), Date.now()]);
-  await audit(guildId, actorId, null, 'settings_update', { keys: Object.keys(patch) });
-  return { ...GROUP_DEFAULTS, ...next, guildId: String(guildId) };
+  return withLock(`settings:${String(guildId)}`, () => saveSettingsLocked(guildId, patch, actorId));
 }
 async function listGroups(guildId, includeArchived = false) { await schema(); const rows = await dbManager.all(`SELECT * FROM managed_groups WHERE guild_id = ? ${includeArchived ? '' : "AND status = 'active'"} ORDER BY points DESC, created_at ASC, id ASC`, [String(guildId)]); return rows.map(hydrate); }
 function hydrate(row) { if (!row) return null; return { ...row, managerIds: ids(safeJson(row.manager_ids_json, [])), memberIds: ids(safeJson(row.member_ids_json, [])), blockedIds: ids(safeJson(row.blocked_ids_json, [])), points: Number(row.points) || 0 }; }
@@ -90,42 +171,107 @@ function validateConfig(guild, settings) {
   if (settings.musicChannelId) { const music = guild.channels.cache.get(settings.musicChannelId); if (!music?.isVoiceBased?.()) missing.push('musicChannelId'); }
   return missing;
 }
-async function setSystemUser(guildId, targetId, enabled, actorId) { const settings = await getSettings(guildId); const list = new Set(settings.systemUsers); enabled ? list.add(String(targetId)) : list.delete(String(targetId)); return saveSettings(guildId, { systemUsers: [...list] }, actorId); }
-async function setSystemRole(guildId, targetId, enabled, actorId) { const settings = await getSettings(guildId); const list = new Set(settings.systemRoles); enabled ? list.add(String(targetId)) : list.delete(String(targetId)); return saveSettings(guildId, { systemRoles: [...list] }, actorId); }
+async function setSystemUser(guildId, targetId, enabled, actorId) {
+  if (!isSnowflake(targetId)) throw new Error('INVALID_USER_ID');
+  return withLock(`settings:${String(guildId)}`, async () => {
+    const settings = await getSettings(guildId); const list = new Set(settings.systemUsers);
+    enabled ? list.add(String(targetId)) : list.delete(String(targetId));
+    return saveSettingsLocked(guildId, { systemUsers: [...list] }, actorId);
+  });
+}
+async function setSystemRole(guildId, targetId, enabled, actorId) {
+  if (!isSnowflake(targetId)) throw new Error('INVALID_ROLE_ID');
+  return withLock(`settings:${String(guildId)}`, async () => {
+    const settings = await getSettings(guildId); const list = new Set(settings.systemRoles);
+    enabled ? list.add(String(targetId)) : list.delete(String(targetId));
+    return saveSettingsLocked(guildId, { systemRoles: [...list] }, actorId);
+  });
+}
 async function updateGroup(guildId, groupId, patch, actorId) { await schema(); const allowed = ['name','description','owner_id','color','emoji','role_id','text_channel_id','thread_id','voice_channel_id','manager_ids_json','member_ids_json','blocked_ids_json','points','status','updated_at','archived_at']; const keys = Object.keys(patch).filter(key => allowed.includes(key)); if (!keys.length) return getGroup(guildId, groupId); const values = keys.map(key => patch[key]); values.push(String(guildId), Number(groupId)); await dbManager.run(`UPDATE managed_groups SET ${keys.map(key => `${key} = ?`).join(', ')} WHERE guild_id = ? AND id = ?`, values); await audit(guildId, actorId, groupId, 'group_update', { keys }); return getGroup(guildId, groupId); }
 async function addMember(guildId, groupId, userId, actorId) { return withLock(`member:${guildId}:${groupId}`, async () => { const group = await getGroup(guildId, groupId); if (!group) throw new Error('GROUP_NOT_FOUND'); if (group.blockedIds.includes(String(userId))) throw new Error('USER_BLOCKED'); if (group.memberIds.length >= Number((await getSettings(guildId)).maxMembers || 10) && !group.memberIds.includes(String(userId))) throw new Error('GROUP_FULL'); const members = new Set(group.memberIds); members.add(String(userId)); await updateGroup(guildId, groupId, { member_ids_json: JSON.stringify([...members]), updated_at: Date.now() }, actorId); return [...members]; }); }
-async function removeMember(guildId, groupId, userId, actorId) { const group = await getGroup(guildId, groupId); if (!group) throw new Error('GROUP_NOT_FOUND'); if (String(group.owner_id) === String(userId)) throw new Error('OWNER_PROTECTED'); const members = group.memberIds.filter(id => id !== String(userId)); const managers = group.managerIds.filter(id => id !== String(userId)); await updateGroup(guildId, groupId, { member_ids_json: JSON.stringify(members), manager_ids_json: JSON.stringify(managers), updated_at: Date.now() }, actorId); return members; }
-async function setManagers(guildId, groupId, managerIds, actorId) { const group = await getGroup(guildId, groupId); if (!group) throw new Error('GROUP_NOT_FOUND'); const allowed = ids(managerIds).filter(id => group.memberIds.includes(id) && id !== String(group.owner_id)); await updateGroup(guildId, groupId, { manager_ids_json: JSON.stringify(allowed), updated_at: Date.now() }, actorId); return allowed; }
-async function setBlocked(guildId, groupId, userId, blocked, actorId) { const group = await getGroup(guildId, groupId); if (!group) throw new Error('GROUP_NOT_FOUND'); const set = new Set(group.blockedIds); blocked ? set.add(String(userId)) : set.delete(String(userId)); await updateGroup(guildId, groupId, { blocked_ids_json: JSON.stringify([...set]), updated_at: Date.now() }, actorId); return [...set]; }
-async function resetPoints(guildId, groupId, actorId = null) { await schema(); if (groupId == null) { await dbManager.run('UPDATE managed_groups SET points = 0, updated_at = ? WHERE guild_id = ? AND status = \'active\'', [Date.now(), String(guildId)]); await dbManager.run('UPDATE group_member_points SET points = 0, messages = 0, voice_ms = 0, reactions = 0, updated_at = ? WHERE guild_id = ?', [Date.now(), String(guildId)]); } else { await dbManager.run('UPDATE managed_groups SET points = 0, updated_at = ? WHERE guild_id = ? AND id = ?', [Date.now(), String(guildId), Number(groupId)]); await dbManager.run('UPDATE group_member_points SET points = 0, messages = 0, voice_ms = 0, reactions = 0, updated_at = ? WHERE guild_id = ? AND group_id = ?', [Date.now(), String(guildId), Number(groupId)]); } await audit(guildId, actorId, groupId, 'points_reset'); }
-async function setRule(guildId, metric, threshold, points, enabled, actorId) { await schema(); if (!['messages','voice_ms','reactions'].includes(String(metric))) throw new Error('INVALID_METRIC'); const safeThreshold = Math.max(1, Math.min(1000000000, Math.floor(Number(threshold)))); const safePoints = Math.max(1, Math.min(1000000, Math.floor(Number(points)))); await dbManager.run(`INSERT INTO group_points_rules(guild_id, metric, threshold, points, enabled, updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(guild_id, metric) DO UPDATE SET threshold=excluded.threshold, points=excluded.points, enabled=excluded.enabled, updated_at=excluded.updated_at`, [String(guildId), String(metric), safeThreshold, safePoints, enabled ? 1 : 0, Date.now()]); await audit(guildId, actorId, null, 'points_rule_update', { metric, threshold: safeThreshold, points: safePoints, enabled: Boolean(enabled) }); }
-async function getRules(guildId) { await schema(); return dbManager.all('SELECT * FROM group_points_rules WHERE guild_id = ? ORDER BY metric', [String(guildId)]); }
-async function recordActivity(guildId, userId, metric, amount, channelId = null) {
+async function removeMember(guildId, groupId, userId, actorId) { return withLock(`member:${guildId}:${groupId}`, async () => { const group = await getGroup(guildId, groupId); if (!group) throw new Error('GROUP_NOT_FOUND'); if (String(group.owner_id) === String(userId)) throw new Error('OWNER_PROTECTED'); const members = group.memberIds.filter(id => id !== String(userId)); const managers = group.managerIds.filter(id => id !== String(userId)); await updateGroup(guildId, groupId, { member_ids_json: JSON.stringify(members), manager_ids_json: JSON.stringify(managers), updated_at: Date.now() }, actorId); return members; }); }
+async function setManagers(guildId, groupId, managerIds, actorId) { return withLock(`member:${guildId}:${groupId}`, async () => { const group = await getGroup(guildId, groupId); if (!group) throw new Error('GROUP_NOT_FOUND'); const allowed = ids(managerIds).filter(id => group.memberIds.includes(id) && id !== String(group.owner_id)); await updateGroup(guildId, groupId, { manager_ids_json: JSON.stringify(allowed), updated_at: Date.now() }, actorId); return allowed; }); }
+async function setBlocked(guildId, groupId, userId, blocked, actorId) { return withLock(`member:${guildId}:${groupId}`, async () => { const group = await getGroup(guildId, groupId); if (!group) throw new Error('GROUP_NOT_FOUND'); const set = new Set(group.blockedIds); blocked ? set.add(String(userId)) : set.delete(String(userId)); await updateGroup(guildId, groupId, { blocked_ids_json: JSON.stringify([...set]), updated_at: Date.now() }, actorId); return [...set]; }); }
+async function resetPoints(guildId, groupId, actorId = null) {
   await schema();
-  const settings = await getSettings(guildId);
-  const groups = await listGroups(guildId);
-  const rules = Object.fromEntries((await getRules(guildId)).map(row => [row.metric, row]));
-  const rule = rules[metric];
-  if (!rule || !Number(rule.enabled)) return 0;
-  let awarded = 0;
-  for (const group of groups) {
-    if (!group.memberIds.includes(String(userId)) && String(group.owner_id) !== String(userId)) continue;
-    if (!settings.countAllChannels && channelId && !channelBelongs(group, channelId)) continue;
-    const column = metric === 'voice_ms' ? 'voice_ms' : metric === 'reactions' ? 'reactions' : 'messages';
-    const previous = await dbManager.get('SELECT * FROM group_member_points WHERE guild_id = ? AND group_id = ? AND user_id = ?', [String(guildId), Number(group.id), String(userId)]);
-    const oldAmount = Number(previous?.[column]) || 0;
-    const nextAmount = oldAmount + Math.max(0, Math.floor(Number(amount) || 0));
-    const beforeUnits = Math.floor(oldAmount / Number(rule.threshold));
-    const afterUnits = Math.floor(nextAmount / Number(rule.threshold));
-    const delta = Math.max(0, afterUnits - beforeUnits) * Number(rule.points);
-    await dbManager.run(`INSERT INTO group_member_points(guild_id,group_id,user_id,${column},updated_at) VALUES(?,?,?,?,?) ON CONFLICT(guild_id,group_id,user_id) DO UPDATE SET ${column}=excluded.${column},updated_at=excluded.updated_at`, [String(guildId), Number(group.id), String(userId), nextAmount, Date.now()]);
-    if (delta > 0) {
-      await dbManager.run('UPDATE group_member_points SET points = points + ?, updated_at = ? WHERE guild_id = ? AND group_id = ? AND user_id = ?', [delta, Date.now(), String(guildId), Number(group.id), String(userId)]);
-      await dbManager.run('UPDATE managed_groups SET points = points + ?, updated_at = ? WHERE guild_id = ? AND id = ?', [delta, Date.now(), String(guildId), Number(group.id)]);
-      awarded += delta;
+  if (groupId != null && (!Number.isInteger(Number(groupId)) || Number(groupId) <= 0)) throw new Error('INVALID_GROUP_ID');
+  return withLock(`points:${String(guildId)}`, async () => {
+    await dbManager.transaction(async tx => {
+      const now = Date.now();
+      if (groupId == null) {
+        await tx.run("UPDATE managed_groups SET points = 0, updated_at = ? WHERE guild_id = ? AND status = 'active'", [now, String(guildId)]);
+        await tx.run('UPDATE group_member_points SET points = 0, messages = 0, voice_ms = 0, reactions = 0, updated_at = ? WHERE guild_id = ?', [now, String(guildId)]);
+      } else {
+        await tx.run('UPDATE managed_groups SET points = 0, updated_at = ? WHERE guild_id = ? AND id = ?', [now, String(guildId), Number(groupId)]);
+        await tx.run('UPDATE group_member_points SET points = 0, messages = 0, voice_ms = 0, reactions = 0, updated_at = ? WHERE guild_id = ? AND group_id = ?', [now, String(guildId), Number(groupId)]);
+      }
+    }, 'group-points-reset');
+    await audit(guildId, actorId, groupId, 'points_reset');
+  });
+}
+async function setRule(guildId, metric, threshold, points, enabled, actorId) {
+  await schema();
+  // Keep compatibility with the historical five-argument form: (guild, metric, threshold, points, actor).
+  if (arguments.length < 6 && typeof enabled === 'string') { actorId = enabled; enabled = true; }
+  const safeMetric = String(metric);
+  if (!GROUP_METRICS.has(safeMetric)) throw new Error('INVALID_METRIC');
+  const safeThreshold = Number(threshold); const safePoints = Number(points);
+  if (!Number.isInteger(safeThreshold) || safeThreshold < 1 || safeThreshold > 1000000000) throw new Error('INVALID_THRESHOLD');
+  if (!Number.isInteger(safePoints) || safePoints < 1 || safePoints > 1000000) throw new Error('INVALID_POINTS');
+  const enabledValue = enabled === undefined ? 0 : (enabled === true || enabled === 1 || enabled === '1' ? 1 : (enabled === false || enabled === 0 || enabled === '0' ? 0 : (() => { throw new Error('INVALID_RULE_ENABLED'); })()));
+  return withLock(`rules:${String(guildId)}`, async () => {
+    await dbManager.transaction(tx => tx.run(`INSERT INTO group_points_rules(guild_id, metric, threshold, points, enabled, updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(guild_id, metric) DO UPDATE SET threshold=excluded.threshold, points=excluded.points, enabled=excluded.enabled, updated_at=excluded.updated_at`, [String(guildId), safeMetric, safeThreshold, safePoints, enabledValue, Date.now()]), 'group-points-rule');
+    await audit(guildId, actorId, null, 'points_rule_update', { metric: safeMetric, threshold: safeThreshold, points: safePoints, enabled: Boolean(enabledValue) });
+  });
+}
+async function getRules(guildId) { await schema(); return dbManager.all('SELECT * FROM group_points_rules WHERE guild_id = ? ORDER BY metric', [String(guildId)]); }
+function activityArguments(channelId, eventId) {
+  if (channelId && typeof channelId === 'object') return { channelId: channelId.channelId ?? null, eventId: channelId.eventId ?? eventId ?? null };
+  return { channelId, eventId };
+}
+async function recordActivity(guildId, userId, metric, amount, channelId = null, eventId = null) {
+  await schema();
+  const args = activityArguments(channelId, eventId);
+  const safeMetric = String(metric);
+  if (!GROUP_METRICS.has(safeMetric)) return 0;
+  const numericAmount = Number(amount);
+  const increment = Number.isFinite(numericAmount) ? Math.min(MAX_ACTIVITY_AMOUNT, Math.max(0, Math.floor(numericAmount))) : 0;
+  if (!increment) return 0;
+  const normalizedEventId = args.eventId == null || args.eventId === '' ? null : String(args.eventId);
+  if (normalizedEventId && normalizedEventId.length > 255) throw new Error('INVALID_EVENT_ID');
+  return withLock(`points:${String(guildId)}`, async () => dbManager.transaction(async tx => {
+    if (normalizedEventId) {
+      const inserted = await tx.run('INSERT OR IGNORE INTO group_activity_events(guild_id, event_id, created_at) VALUES(?,?,?)', [String(guildId), normalizedEventId, Date.now()]);
+      if (!inserted.changes) return 0;
     }
-  }
-  return awarded;
+    const settingsRow = await tx.get('SELECT * FROM group_system_settings WHERE guild_id = ?', [String(guildId)]);
+    const settings = normalizeSettings(settingsRow || { guild_id: guildId, settings_json: JSON.stringify({}) });
+    if (!settings.enabled) return 0;
+    const rule = await tx.get('SELECT * FROM group_points_rules WHERE guild_id = ? AND metric = ?', [String(guildId), safeMetric]);
+    const threshold = Number(rule?.threshold); const rulePoints = Number(rule?.points);
+    if (!rule || Number(rule.enabled) !== 1 || !Number.isInteger(threshold) || threshold < 1 || !Number.isInteger(rulePoints) || rulePoints < 1) return 0;
+    const rows = await tx.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status = 'active'", [String(guildId)]);
+    const column = safeMetric === 'voice_ms' ? 'voice_ms' : safeMetric === 'reactions' ? 'reactions' : 'messages';
+    let awarded = 0;
+    for (const row of rows) {
+      const group = hydrate(row);
+      if (!group.memberIds.includes(String(userId)) && String(group.owner_id) !== String(userId)) continue;
+      if (!settings.countAllChannels && args.channelId && !channelBelongs(group, args.channelId)) continue;
+      const previous = await tx.get('SELECT * FROM group_member_points WHERE guild_id = ? AND group_id = ? AND user_id = ?', [String(guildId), Number(group.id), String(userId)]);
+      const oldAmount = Number(previous?.[column]) || 0;
+      const nextAmount = Math.min(MAX_ACTIVITY_AMOUNT, oldAmount + increment);
+      const beforeUnits = Math.floor(oldAmount / threshold);
+      const afterUnits = Math.floor(nextAmount / threshold);
+      const delta = Math.max(0, afterUnits - beforeUnits) * rulePoints;
+      await tx.run(`INSERT INTO group_member_points(guild_id,group_id,user_id,${column},updated_at) VALUES(?,?,?,?,?) ON CONFLICT(guild_id,group_id,user_id) DO UPDATE SET ${column}=excluded.${column},updated_at=excluded.updated_at`, [String(guildId), Number(group.id), String(userId), nextAmount, Date.now()]);
+      if (delta > 0) {
+        await tx.run('UPDATE group_member_points SET points = points + ?, updated_at = ? WHERE guild_id = ? AND group_id = ? AND user_id = ?', [delta, Date.now(), String(guildId), Number(group.id), String(userId)]);
+        await tx.run("UPDATE managed_groups SET points = points + ?, updated_at = ? WHERE guild_id = ? AND id = ? AND status = 'active'", [delta, Date.now(), String(guildId), Number(group.id)]);
+        awarded += delta;
+      }
+    }
+    return awarded;
+  }, 'group-record-activity'));
 }
 async function listMemberPoints(guildId, groupId, limit = 10) { await schema(); const rows = await dbManager.all('SELECT * FROM group_member_points WHERE guild_id = ? AND group_id = ? ORDER BY points DESC, updated_at ASC LIMIT ?', [String(guildId), Number(groupId), Math.max(1, Math.min(25, Number(limit) || 10))]); return rows; }
 async function createGroup(guild, { name, description = '', ownerId, color = '#5865F2', emoji = null }, actorId) {
