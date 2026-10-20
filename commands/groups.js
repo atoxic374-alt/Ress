@@ -44,28 +44,28 @@ function setupPayloads(guild, settings) {
   const chatMode = settings.chatMode === 'threads' ? 'ثريدات' : settings.chatMode === 'channels' ? 'رومات مستقلة' : 'غير محدد';
   const summary = `Status : ${status}\nSystem Managers : ${managerCount} عضو/رول\nChat Mode : ${chatMode}\nText Category : ${channelMention(settings.textCategoryId)}\nVoice Category : ${channelMention(settings.voiceCategoryId)}\nMain Role : ${roleMention(settings.mainRoleId)}\nLeader Role : ${roleMention(settings.leaderRoleId)}\nManager Role : ${roleMention(settings.managerRoleId)}\nMusic Source : ${channelMention(settings.musicChannelId)}\nLog Channel : ${channelMention(settings.logChannelId)}\nPoints Scope : ${settings.countAllChannels ? 'كل الرومات' : 'رومات القروبات فقط'}\nExtra Permissions : ${settings.extraPermissions ? 'مفعلة' : 'متوقفة'}\nPoint Rules : اضغط على زر قواعد النقاط للتفاصيل`;
   const sections = [
-    ['تفعيل النظام', 'تشغيل أو إيقاف نظام القروبات', 'groups_setup:toggle'],
-    ['مسؤولو النظام', 'إضافة أو إزالة مسؤولي النظام', 'groups_setup:managers'],
-    ['نمط الشات', 'ثريدات أو رومات مستقلة', 'groups_setup:chatmode'],
-    ['كاتوقري النص', 'تحديد كاتوقري النص أو الثريدات', 'groups_setup:textcat'],
-    ['كاتوقري الفويس', 'تحديد كاتوقري الفويس', 'groups_setup:voicecat'],
+    ['System Toggle', 'تشغيل أو إيقاف نظام القروبات', 'groups_setup:toggle'],
+    ['System Managers', 'إضافة أو إزالة مسؤولي النظام', 'groups_setup:managers'],
+    ['Chat Mode', 'ثريدات أو رومات مستقلة', 'groups_setup:chatmode'],
+    ['Text Category', 'تحديد كاتوقري النص أو الثريدات', 'groups_setup:textcat'],
+    ['Voice Category', 'تحديد كاتوقري الفويس', 'groups_setup:voicecat'],
     ['Main Role', 'الرول الأب الذي تنشأ تحته رولات القروبات تلقائيًا', 'groups_setup:mainrole'],
-    ['مصدر الميوزك', 'تحديد روم مصدر الميوزك عند إنشاء القروب', 'groups_setup:music'],
-    ['روم اللوق', 'إرسال لوقات القروبات هنا', 'groups_setup:log'],
-    ['رول المالك', 'الرول الذي يأخذه مالك القروب', 'groups_setup:leaderrole'],
-    ['رول المسؤول', 'الرول الذي يأخذه مسؤول القروب', 'groups_setup:managerrole'],
-    ['نطاق النقاط', 'كل الرومات أو رومات القروبات', 'groups_setup:scope'],
-    ['الصلاحيات الإضافية', 'تفعيل المسح وأدوات الإدارة', 'groups_setup:extra'],
-    ['قواعد النقاط', 'تخصيص قواعد نقاط القروبات', 'groups_setup:rules']
+    ['Music Source', 'تحديد روم مصدر الميوزك عند إنشاء القروب', 'groups_setup:music'],
+    ['Log Channel', 'إرسال لوقات القروبات هنا', 'groups_setup:log'],
+    ['Leader Role', 'الرول الذي يأخذه مالك القروب', 'groups_setup:leaderrole'],
+    ['Manager Role', 'الرول الذي يأخذه مسؤول القروب', 'groups_setup:managerrole'],
+    ['Points Scope', 'كل الرومات أو رومات القروبات', 'groups_setup:scope'],
+    ['Extra Permissions', 'تفعيل المسح وأدوات الإدارة', 'groups_setup:extra'],
+    ['Point Rules', 'تخصيص قواعد نقاط القروبات', 'groups_setup:rules']
   ];
   const make = (title, items, includeSummary) => {
     const c = includeSummary
       ? baseContainer(guild, title, summary)
       : new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || '#5865F2'));
-    for (const [label, desc, id] of items) c.addSectionComponents(new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${desc}`)).setButtonAccessory(button(id, 'فتح')));
+    for (const [label, desc, id] of items) c.addSectionComponents(new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${desc}`)).setButtonAccessory(button(id, 'Open')));
     return componentsV2Payload(c);
   };
-  return [make('إعدادات القروبات', sections.slice(0, 7), true), make('إعدادات القروبات - تكملة', sections.slice(7), false)];
+  return [make('Group Settings', sections.slice(0, 7), true), make('', sections.slice(7), false)];
 }
 
 const setupPanels = new Map();
