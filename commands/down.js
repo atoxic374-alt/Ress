@@ -111,10 +111,15 @@ function buildDownMenuContainer(guild) {
     const container = new ContainerBuilder()
         .setAccentColor(colorToNumber(colorManager.getColor?.() || '#5865F2'));
     const serverIconUrl = guild?.iconURL?.({ extension: 'png', size: 128 });
-    const header = new SectionBuilder()
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent('## Down Management System'));
-    if (serverIconUrl) header.setThumbnailAccessory(new ThumbnailBuilder().setURL(serverIconUrl));
-    container.addSectionComponents(header);
+    if (serverIconUrl) {
+        container.addSectionComponents(
+            new SectionBuilder()
+                .addTextDisplayComponents(new TextDisplayBuilder().setContent('## Down Management System'))
+                .setThumbnailAccessory(new ThumbnailBuilder().setURL(serverIconUrl))
+        );
+    } else {
+        container.addTextDisplayComponents(new TextDisplayBuilder().setContent('## Down Management System'));
+    }
     container.addSeparatorComponents(new SeparatorBuilder());
 
     const actions = [
@@ -2472,4 +2477,4 @@ async function handleResetSystem(interaction, context) {
 
 
 
-module.exports = { name, execute, handleInteraction, createPermanentMenu };
+module.exports = { name, execute, handleInteraction, createPermanentMenu, buildDownMenuContainer };

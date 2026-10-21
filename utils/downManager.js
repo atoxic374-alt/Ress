@@ -1154,8 +1154,9 @@ class DownManager {
                 if (settings.menuChannel && settings.menuMessageId) {
                     const downCommand = require('../commands/down.js');
                     if (downCommand && downCommand.createPermanentMenu) {
-                        await downCommand.createPermanentMenu(client, settings.menuChannel);
-                        console.log('✅ تم تحديث منيو الداون تلقائياً');
+                        const updated = await downCommand.createPermanentMenu(client, settings.menuChannel);
+                        if (updated) console.log('✅ تم تحديث منيو الداون تلقائياً');
+                        else console.warn('⚠️ تعذر تحديث منيو الداون تلقائياً؛ ستتم إعادة المحاولة لاحقاً.');
                     }
                 }
             } catch (error) {
