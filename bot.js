@@ -2928,7 +2928,7 @@ client.on('messageCreate', async message => {
   try {
     const groupsCommand = client.commands.get('groups');
     if (groupsCommand?.handleInternalMessage) {
-      const consumed = await groupsCommand.handleInternalMessage(message, { prefix: getCachedPrefix() || ':' });
+      const consumed = await groupsCommand.handleInternalMessage(message, { prefix: getCachedPrefix() });
       if (consumed) return;
     }
   } catch (error) {

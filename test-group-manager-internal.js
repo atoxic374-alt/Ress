@@ -60,6 +60,79 @@ async function insertGroup({
   return Number(result.id);
 }
 
+
+async function testCreateGroupRoleDefaults() {
+  const guildId = '1000000000000000200';
+  const textCategoryId = '1000000000000000201';
+  const voiceCategoryId = '1000000000000000202';
+  const roleOptions = [];
+  const roleCache = new Map();
+  const owner = {
+    id: OWNER,
+    user: { id: OWNER, bot: false },
+    roles: {
+      cache: new Map(),
+      add: async role => owner.roles.cache.set(role.id, role),
+      remove: async role => owner.roles.cache.delete(role.id)
+    }
+  };
+  const permissions = { has: () => true };
+  const category = { type: ChannelType.GuildCategory, permissionsFor: () => permissions };
+  const channelsCache = new Map([[textCategoryId, category], [voiceCategoryId, category]]);
+  const guild = {
+    id: guildId,
+    ownerId: OWNER,
+    members: { me: { permissions, roles: { highest: { position: 100 } } }, fetch: async id => String(id) === OWNER ? owner : null },
+    roles: {
+      cache: roleCache,
+      everyone: { id: guildId },
+      create: async options => {
+        roleOptions.push(options);
+        const role = { id: 'new-group-role', name: options.name, position: 1, delete: async () => {} };
+        roleCache.set(role.id, role);
+        return role;
+      },
+      fetch: async id => roleCache.get(String(id)) || null
+    },
+    channels: {
+      cache: channelsCache,
+      fetch: async id => channelsCache.get(String(id)) || null,
+      create: async options => {
+        const id = options.type === ChannelType.GuildVoice ? 'created-voice-channel' : 'created-text-channel';
+        const channel = { id, name: options.name, type: options.type, permissionOverwrites: { set: async () => {} }, delete: async () => {} };
+        channelsCache.set(id, channel);
+        return channel;
+      }
+    }
+  };
+  await gm.saveSettings(guildId, {
+    enabled: true,
+    chatMode: 'channels',
+    textCategoryId,
+    voiceCategoryId
+  }, ACTOR);
+  const group = await gm.createGroup(guild, { name: 'نسور الشمال', ownerId: OWNER }, ACTOR);
+  assert.equal(roleOptions.length, 1);
+  assert.equal(roleOptions[0].name, 'نسور الشمال', 'group role name matches the group name without a prefix');
+  assert.equal(Object.prototype.hasOwnProperty.call(roleOptions[0], 'color'), false, 'Discord assigns the default role color');
+  assert.equal(group.role_id, 'new-group-role');
+  global.groupRoleGrantBypass?.clear?.();
+}
+
+async function testGroupCommandGuideAndMusicApi() {
+  const guide = groupCommand.buildGroupCommandGuide({ name: 'نسور الشمال' }, { extraPermissions: true });
+  assert.match(guide, /`تحكم`/);
+  assert.match(guide, /`مسؤول إزالة @عضو`/);
+  assert.match(guide, /`عقوبة @عضو`/);
+  assert.doesNotMatch(guide, /:/, 'member-facing group commands do not require a colon prefix');
+  const tempVoice = require('./commands/temp');
+  assert.equal(typeof tempVoice.ensureMusicBotInVoiceRoom, 'function');
+  assert.equal(typeof tempVoice.ensureMusicBotInVoice, 'undefined');
+  const setupCommand = require('./commands/setup');
+  const setupHelp = await setupCommand.execute({ reply: async content => content }, ['help']);
+  assert.doesNotMatch(setupHelp, /`:/, 'setup help does not hardcode colon command prefixes');
+}
+
 function testSetupValidation() {
   const basePermissions = new Set(['ManageChannels', 'ManageRoles']);
   const textPermissions = new Set(['ViewChannel', 'ManageChannels', 'ManageThreads', 'SendMessages', 'SendMessagesInThreads']);
@@ -111,6 +184,10 @@ async function testDashboardPublishers() {
   };
 
   await groupCommand.sendAdminControlPanel(channel, guild);
+  const adminComponents = JSON.stringify([...messages.values()][0]?.components || []);
+  assert.ok(adminComponents.includes('Group Management'), 'admin dashboard title is English');
+  assert.ok(adminComponents.includes('Delete') && adminComponents.includes('Reset All'));
+  assert.ok(adminComponents.includes('1465336647477493894') && adminComponents.includes('1465373714060415180'), 'admin action buttons reuse matching role-panel emojis');
   await groupCommand.sendAdminControlPanel(channel, guild);
   assert.equal(sends, 1, 'admin panel is updated instead of duplicated');
   assert.equal(edits, 1);
@@ -122,6 +199,71 @@ async function testDashboardPublishers() {
   assert.deepEqual({ total: second.total, published: second.published, overview: second.overview }, { total: 1, published: 1, overview: true });
   assert.equal(sends, afterFirstPublish, 'member group and overview panels are updated instead of duplicated');
   assert.equal(embedFallbacks, 0, 'admin/member dashboards serialize as valid component payloads without legacy fallback');
+
+
+  const topGuild = { ...guild, members: { cache: new Map(), fetch: async () => null }, iconURL: () => null, bannerURL: () => null };
+  const topPayload = await groupCommand.buildTopGroupsPayload(topGuild, { viewerId: OWNER, channelId: 'dashboard-channel' });
+  assert.equal(topPayload.files.length, 1, 'top groups is rendered as an attached image');
+  assert.equal(topPayload.components.length, 4, 'top navigation, group totals, all-groups totals and member bonuses use separate rows');
+  const topButtonIds = topPayload.components.flatMap(row => row.toJSON().components).map(component => component.custom_id);
+  assert.ok(topButtonIds.includes('groups_top:refresh'));
+  assert.ok(topButtonIds.includes('groups_bonus:group-add') && topButtonIds.includes('groups_bonus:group-remove'));
+  assert.ok(topButtonIds.includes('groups_bonus:all-add') && topButtonIds.includes('groups_bonus:all-remove'));
+  assert.ok(topButtonIds.includes('groups_bonus:member-add') && topButtonIds.includes('groups_bonus:member-remove'));
+  assert.equal(topPayload.flags, undefined, 'top image is not a Components V2 container');
+
+  const legacyMessage = {
+    author: { id: 'dashboard-bot' },
+    createdTimestamp: 1,
+    flags: { has: value => value === require('discord.js').MessageFlags.IsComponentsV2 },
+    components: [{ customId: 'groups_top:refresh' }],
+    delete: async () => { legacyDeleted += 1; }
+  };
+  let topSends = 0, topEdits = 0, legacyDeleted = 0;
+  const topMessages = new Map([['legacy-top', legacyMessage]]);
+  const topChannel = {
+    id: 'top-dashboard-channel',
+    messages: { fetch: async () => new Map(topMessages) },
+    send: async payload => {
+      topSends += 1;
+      const message = { author: { id: 'dashboard-bot' }, createdTimestamp: topSends + 1, components: payload.components, edit: async updated => { topEdits += 1; message.components = updated.components; return message; } };
+      topMessages.set(`top-${topSends}`, message);
+      return message;
+    }
+  };
+  await groupCommand.sendTopGroupsPanel(topChannel, topGuild);
+  assert.equal(topSends, 1, 'legacy V2 top board is replaced with a normal image message');
+  assert.equal(legacyDeleted, 1, 'old V2 board is removed only after the image message was sent');
+  await groupCommand.sendTopGroupsPanel(topChannel, topGuild);
+  assert.equal(topEdits, 1, 'a normal top-image message refreshes in place');
+
+  let oldBoardEditAttempts = 0, oldBoardDeleteCount = 0, migratedBoardSends = 0;
+  const oldV2TopMessage = {
+    author: { id: 'dashboard-bot' }, createdTimestamp: 1,
+    flags: { has: value => value === require('discord.js').MessageFlags.IsComponentsV2 },
+    components: [{ customId: 'groups_top:refresh' }],
+    edit: async () => { oldBoardEditAttempts += 1; throw new Error('cannot convert V2 message by editing'); },
+    delete: async () => { oldBoardDeleteCount += 1; }
+  };
+  const oldV2Messages = new Map([['old-v2-top', oldV2TopMessage]]);
+  const oldV2Channel = {
+    id: 'old-v2-top-channel',
+    messages: { fetch: async () => new Map(oldV2Messages) },
+    send: async payload => {
+      migratedBoardSends += 1;
+      const message = { author: { id: 'dashboard-bot' }, components: payload.components, edit: async updated => { message.components = updated.components; return message; } };
+      oldV2Messages.set('new-image-top', message);
+      return message;
+    }
+  };
+  const oldBoardRefresh = {
+    customId: 'groups_top:refresh', guild: topGuild, channel: oldV2Channel, channelId: oldV2Channel.id,
+    message: oldV2TopMessage, user: { id: OWNER }, deferUpdate: async () => {}
+  };
+  await groupCommand.handleInteraction(oldBoardRefresh);
+  assert.equal(migratedBoardSends, 1, 'refresh replaces an old V2 top board instead of trying an invalid edit');
+  assert.equal(oldBoardDeleteCount, 1);
+  assert.equal(oldBoardEditAttempts, 0);
 
   const emptyGuild = { ...guild, id: 'dashboard-empty-guild' };
   const emptyMessages = new Map();
@@ -404,10 +546,25 @@ async function testInternalCommandParser() {
     'messages without the configured prefix are ignored');
   assert.deepEqual(nonCommand.replies, []);
 
+  const bareOutsideGroup = parserMessage(guild, 'قروبي');
+  bareOutsideGroup.message.channel.id = 'unlinked-channel';
+  assert.equal(await handleInternalMessage(bareOutsideGroup.message, { prefix: null }), false,
+    'bare command words outside group channels remain ordinary chat');
+  assert.deepEqual(bareOutsideGroup.replies, []);
+
   const englishAdd = parserMessage(guild, `:add ${USER_A}`);
   assert.equal(await handleInternalMessage(englishAdd.message), true);
   assert.deepEqual(englishAdd.replies, ['تمت إضافة العضو.']);
   assert.deepEqual((await gm.getGroup(guildId, groupId)).memberIds, [OWNER, USER_A]);
+
+  const barePermission = parserMessage(guild, 'صلاحية');
+  assert.equal(await groupCommand.handleInternalMessage(barePermission.message, { prefix: null }), true);
+  assert.equal(typeof barePermission.replies[0], 'object', 'bare permission command enters the permission flow handler');
+
+  const bareAdd = parserMessage(guild, `إضافة ${USER_A}`);
+  assert.equal(await handleInternalMessage(bareAdd.message, { prefix: null }), true,
+    'group commands accept bare command names without a colon or configured prefix');
+  assert.deepEqual(bareAdd.replies, ['تمت إضافة العضو.']);
 
   // The same parser command is safe to repeat and does not duplicate membership.
   const repeatedAdd = parserMessage(guild, `:add ${USER_A}`);
@@ -450,6 +607,169 @@ async function testInternalCommandParser() {
   assert.equal(await gm.getGroupForChannel(guildId, 'parser-channel'), null, 'shared channel links are rejected rather than routing to the first group');
 }
 
+
+async function testManualGroupPointAdjustments() {
+  const guildId = 'manual-points-guild';
+  const groupId = await insertGroup({ guildId, name: 'Manual points', memberIds: [USER_A], points: 20 });
+  const groupAdd = await gm.adjustGroupPoints(guildId, groupId, 30, ACTOR);
+  assert.deepEqual([groupAdd.before, groupAdd.after, groupAdd.delta], [20, 50, 30]);
+  assert.equal((await gm.listMemberPoints(guildId, groupId, 10)).length, 0, 'group-total bonus does not silently award individual member points');
+  const groupRemove = await gm.adjustGroupPoints(guildId, groupId, -10, ACTOR);
+  assert.deepEqual([groupRemove.before, groupRemove.after], [50, 40]);
+  await assert.rejects(gm.adjustGroupPoints(guildId, groupId, -41, ACTOR), error => error.message === 'INSUFFICIENT_GROUP_POINTS');
+
+  const memberAdd = await gm.adjustMemberPoints(guildId, groupId, USER_A, 15, ACTOR);
+  assert.deepEqual([memberAdd.before, memberAdd.after, memberAdd.groupBefore, memberAdd.groupAfter], [0, 15, 40, 55]);
+  await testDb.run('UPDATE group_member_points SET messages = 7 WHERE guild_id = ? AND group_id = ? AND user_id = ?', [guildId, groupId, USER_A]);
+  const memberExtra = await gm.adjustMemberPoints(guildId, groupId, USER_A, 5, ACTOR);
+  assert.deepEqual([memberExtra.before, memberExtra.after, memberExtra.groupAfter], [15, 20, 60]);
+  const row = (await gm.listMemberPoints(guildId, groupId, 10))[0];
+  assert.equal(Number(row.messages), 7, 'manual bonuses preserve activity counters');
+  const memberRemove = await gm.adjustMemberPoints(guildId, groupId, USER_A, -10, ACTOR);
+  assert.deepEqual([memberRemove.before, memberRemove.after, memberRemove.groupAfter], [20, 10, 50]);
+  await assert.rejects(gm.adjustMemberPoints(guildId, groupId, USER_A, -11, ACTOR), error => error.message === 'INSUFFICIENT_MEMBER_POINTS');
+  await assert.rejects(gm.adjustMemberPoints(guildId, groupId, USER_B, 1, ACTOR), error => error.message === 'MEMBER_NOT_IN_GROUP');
+  const auditRows = await testDb.all("SELECT action FROM group_audit_log WHERE guild_id = ? AND action LIKE 'manual_%' ORDER BY id", [guildId]);
+  assert.equal(auditRows.length, 5, 'each successful manual group/member adjustment is audited atomically');
+
+
+  const allGuildId = 'manual-all-points-guild';
+  await insertGroup({ guildId: allGuildId, name: 'All points one', points: 20 });
+  await insertGroup({ guildId: allGuildId, name: 'All points two', ownerId: USER_B, points: 5 });
+  const allAdded = await gm.adjustAllGroupPoints(allGuildId, 10, ACTOR);
+  assert.deepEqual([allAdded.before, allAdded.after, allAdded.delta, allAdded.groups, allAdded.changedGroups], [25, 45, 20, 2, 2]);
+  const allRemoved = await gm.adjustAllGroupPoints(allGuildId, -20, ACTOR);
+  assert.deepEqual([allRemoved.before, allRemoved.after, allRemoved.delta, allRemoved.changedGroups], [45, 10, -35, 2], 'bulk removal caps each group at zero without rolling back other groups');
+  const allRemovedToZero = await gm.adjustAllGroupPoints(allGuildId, -100, ACTOR);
+  assert.deepEqual([allRemovedToZero.before, allRemovedToZero.after, allRemovedToZero.delta], [10, 0, -10]);
+  await assert.rejects(gm.adjustAllGroupPoints(allGuildId, -1, ACTOR), error => error.message === 'NO_POINTS_TO_REMOVE');
+}
+
+
+function mockGroupInteraction({ customId, guild, userId = ACTOR, channelId = null, values = null, amount = null, message = null }) {
+  const state = {};
+  const interaction = {
+    customId, guild, client: {}, user: { id: userId }, member: { id: userId, guild: { ownerId: '100000000000000099' }, roles: { cache: { some: () => false } } },
+    channelId, values, message, state,
+    fields: { getTextInputValue: () => String(amount ?? '') },
+    reply: async payload => { state.reply = payload; interaction.replied = true; return payload; },
+    showModal: async modal => { state.modal = modal.toJSON(); return modal; },
+    update: async payload => { state.update = payload; interaction.replied = true; return payload; },
+    deferReply: async () => { interaction.deferred = true; },
+    deferUpdate: async () => { state.deferredUpdate = true; },
+    editReply: async payload => { state.editReply = payload; interaction.replied = true; return payload; },
+    followUp: async payload => { state.followUp = payload; return payload; }
+  };
+  return interaction;
+}
+async function testTopBonusControls() {
+  const guildId = 'top-bonus-workflow-guild';
+  const groupId = await insertGroup({ guildId, name: 'Top bonus test', memberIds: [USER_A], points: 10 });
+  await gm.saveSettings(guildId, { systemUsers: [ACTOR] });
+  const guild = {
+    id: guildId, name: 'Test guild', ownerId: '100000000000000099', iconURL: () => null,
+    client: { user: { id: 'test-bot' } }, channels: { cache: new Map(), fetch: async () => null },
+    members: { cache: new Map(), fetch: async () => null }, roles: { cache: new Map(), fetch: async () => null }
+  };
+  const denied = mockGroupInteraction({ customId: 'groups_bonus:group-add', guild, userId: USER_B });
+  await groupCommand.handleInteraction(denied);
+  assert.ok(denied.state.reply?.content?.includes('لا تملك صلاحية'), 'bonus controls are restricted to group-system managers');
+
+  const openAdd = mockGroupInteraction({ customId: 'groups_bonus:group-add', guild, channelId: 'top-bonus-channel' });
+  await groupCommand.handleInteraction(openAdd);
+  assert.ok(JSON.stringify(openAdd.state.reply?.components?.map(component => component.toJSON())).includes('groups_bonus_select:group-add:0'));
+  const selectAdd = mockGroupInteraction({ customId: 'groups_bonus_select:group-add:0', guild, channelId: 'top-bonus-channel', values: [String(groupId)] });
+  await groupCommand.handleInteraction(selectAdd);
+  assert.equal(selectAdd.state.modal?.custom_id, `groups_bonus_modal:group-add:${groupId}`);
+  const submitAdd = mockGroupInteraction({ customId: `groups_bonus_modal:group-add:${groupId}`, guild, channelId: 'top-bonus-channel', amount: '25' });
+  await groupCommand.handleInteraction(submitAdd);
+  assert.ok(submitAdd.state.editReply?.content?.includes('إضافة'));
+  assert.equal(Number((await gm.getGroup(guildId, groupId)).points), 35, 'top group bonus button updates the group-system score');
+
+  const openRemove = mockGroupInteraction({ customId: 'groups_bonus:group-remove', guild, channelId: 'top-bonus-channel' });
+  await groupCommand.handleInteraction(openRemove);
+  const selectRemove = mockGroupInteraction({ customId: 'groups_bonus_select:group-remove:0', guild, channelId: 'top-bonus-channel', values: [String(groupId)] });
+  await groupCommand.handleInteraction(selectRemove);
+  const submitRemove = mockGroupInteraction({ customId: `groups_bonus_modal:group-remove:${groupId}`, guild, channelId: 'top-bonus-channel', amount: '5' });
+  await groupCommand.handleInteraction(submitRemove);
+  assert.ok(JSON.stringify(submitRemove.state.reply?.components?.map(component => component.toJSON())).includes(`groups_bonus_confirm:group-remove:${groupId}:5`), 'group-point removals require a confirmation');
+  const confirm = mockGroupInteraction({ customId: `groups_bonus_confirm:group-remove:${groupId}:5`, guild, channelId: 'top-bonus-channel', message: { id: 'top-bonus-confirm-once' } });
+  await groupCommand.handleInteraction(confirm);
+  assert.equal(Number((await gm.getGroup(guildId, groupId)).points), 30);
+  assert.deepEqual(confirm.state.update?.components, [], 'confirmation controls are removed before the point deduction');
+  const replay = mockGroupInteraction({ customId: `groups_bonus_confirm:group-remove:${groupId}:5`, guild, channelId: 'top-bonus-channel', message: { id: 'top-bonus-confirm-once' } });
+  await groupCommand.handleInteraction(replay);
+  assert.equal(Number((await gm.getGroup(guildId, groupId)).points), 30, 'a used confirmation cannot deduct points twice');
+
+
+  const openMemberAdd = mockGroupInteraction({ customId: 'groups_bonus:member-add', guild, channelId: 'top-bonus-channel' });
+  await groupCommand.handleInteraction(openMemberAdd);
+  const selectMemberAddGroup = mockGroupInteraction({ customId: 'groups_bonus_select:member-add:0', guild, channelId: 'top-bonus-channel', values: [String(groupId)] });
+  await groupCommand.handleInteraction(selectMemberAddGroup);
+  assert.ok(JSON.stringify(selectMemberAddGroup.state.update?.components?.map(component => component.toJSON())).includes(`groups_bonus_member_select:member-add:${groupId}`));
+  const selectMemberAddUser = mockGroupInteraction({ customId: `groups_bonus_member_select:member-add:${groupId}`, guild, channelId: 'top-bonus-channel', values: [USER_A] });
+  await groupCommand.handleInteraction(selectMemberAddUser);
+  assert.equal(selectMemberAddUser.state.modal?.custom_id, `groups_bonus_modal:member-add:${groupId}:${USER_A}`);
+  const submitMemberAdd = mockGroupInteraction({ customId: `groups_bonus_modal:member-add:${groupId}:${USER_A}`, guild, channelId: 'top-bonus-channel', amount: '12' });
+  await groupCommand.handleInteraction(submitMemberAdd);
+  assert.equal(Number((await gm.listMemberPoints(guildId, groupId, 10)).find(row => row.user_id === USER_A).points), 12);
+  assert.equal(Number((await gm.getGroup(guildId, groupId)).points), 42);
+
+  const openMemberRemove = mockGroupInteraction({ customId: 'groups_bonus:member-remove', guild, channelId: 'top-bonus-channel' });
+  await groupCommand.handleInteraction(openMemberRemove);
+  const selectMemberRemoveGroup = mockGroupInteraction({ customId: 'groups_bonus_select:member-remove:0', guild, channelId: 'top-bonus-channel', values: [String(groupId)] });
+  await groupCommand.handleInteraction(selectMemberRemoveGroup);
+  const selectMemberRemoveUser = mockGroupInteraction({ customId: `groups_bonus_member_select:member-remove:${groupId}`, guild, channelId: 'top-bonus-channel', values: [USER_A] });
+  await groupCommand.handleInteraction(selectMemberRemoveUser);
+  const submitMemberRemove = mockGroupInteraction({ customId: `groups_bonus_modal:member-remove:${groupId}:${USER_A}`, guild, channelId: 'top-bonus-channel', amount: '2' });
+  await groupCommand.handleInteraction(submitMemberRemove);
+  assert.ok(JSON.stringify(submitMemberRemove.state.reply?.components?.map(component => component.toJSON())).includes(`groups_bonus_confirm:member-remove:${groupId}:2:${USER_A}`));
+  const confirmMemberRemove = mockGroupInteraction({ customId: `groups_bonus_confirm:member-remove:${groupId}:2:${USER_A}`, guild, channelId: 'top-bonus-channel', message: { id: 'top-bonus-member-confirm-once' } });
+  await groupCommand.handleInteraction(confirmMemberRemove);
+  assert.equal(Number((await gm.listMemberPoints(guildId, groupId, 10)).find(row => row.user_id === USER_A).points), 10);
+  assert.equal(Number((await gm.getGroup(guildId, groupId)).points), 40);
+
+  const openAllAdd = mockGroupInteraction({ customId: 'groups_bonus:all-add', guild, channelId: 'top-bonus-channel' });
+  await groupCommand.handleInteraction(openAllAdd);
+  assert.equal(openAllAdd.state.modal?.custom_id, 'groups_bonus_modal:all-add:all');
+  const submitAllAdd = mockGroupInteraction({ customId: 'groups_bonus_modal:all-add:all', guild, channelId: 'top-bonus-channel', amount: '7' });
+  await groupCommand.handleInteraction(submitAllAdd);
+  assert.equal(Number((await gm.getGroup(guildId, groupId)).points), 47);
+
+  const openAllRemove = mockGroupInteraction({ customId: 'groups_bonus:all-remove', guild, channelId: 'top-bonus-channel' });
+  await groupCommand.handleInteraction(openAllRemove);
+  const submitAllRemove = mockGroupInteraction({ customId: 'groups_bonus_modal:all-remove:all', guild, channelId: 'top-bonus-channel', amount: '5' });
+  await groupCommand.handleInteraction(submitAllRemove);
+  assert.ok(JSON.stringify(submitAllRemove.state.reply?.components?.map(component => component.toJSON())).includes('groups_bonus_confirm:all-remove:5'));
+  const confirmAllRemove = mockGroupInteraction({ customId: 'groups_bonus_confirm:all-remove:5', guild, channelId: 'top-bonus-channel', message: { id: 'top-bonus-all-confirm-once' } });
+  await groupCommand.handleInteraction(confirmAllRemove);
+  assert.equal(Number((await gm.getGroup(guildId, groupId)).points), 42);
+
+  const openCancelRemove = mockGroupInteraction({ customId: 'groups_bonus:group-remove', guild, channelId: 'top-bonus-channel' });
+  await groupCommand.handleInteraction(openCancelRemove);
+  const selectCancelGroup = mockGroupInteraction({ customId: 'groups_bonus_select:group-remove:0', guild, channelId: 'top-bonus-channel', values: [String(groupId)] });
+  await groupCommand.handleInteraction(selectCancelGroup);
+  const submitCancelRemove = mockGroupInteraction({ customId: `groups_bonus_modal:group-remove:${groupId}`, guild, channelId: 'top-bonus-channel', amount: '1' });
+  await groupCommand.handleInteraction(submitCancelRemove);
+  const cancel = mockGroupInteraction({ customId: 'groups_bonus:cancel', guild, message: { id: 'top-bonus-cancel-once' } });
+  await groupCommand.handleInteraction(cancel);
+  const canceledReplay = mockGroupInteraction({ customId: `groups_bonus_confirm:group-remove:${groupId}:1`, guild, message: { id: 'top-bonus-cancel-once' } });
+  await groupCommand.handleInteraction(canceledReplay);
+  assert.equal(Number((await gm.getGroup(guildId, groupId)).points), 42, 'cancel consumes the confirmation and prevents a later stale deduction');
+
+  const rank = mockGroupInteraction({ customId: 'groups_top:rank', guild, userId: USER_A, channelId: 'top-bonus-channel' });
+  await groupCommand.handleInteraction(rank);
+  assert.equal(rank.state.editReply?.files?.length, 1, 'My Rank responds with a private ranking image');
+  const myGroup = mockGroupInteraction({ customId: 'groups_top:group', guild, userId: USER_A, channelId: 'top-bonus-channel' });
+  await groupCommand.handleInteraction(myGroup);
+  assert.equal(myGroup.state.editReply?.files?.length, 1, 'My Group responds with a private group-info image');
+  const refresh = mockGroupInteraction({ customId: 'groups_top:refresh', guild, channelId: 'top-bonus-channel' });
+  refresh.message = { edit: async payload => { refresh.state.messageEdit = payload; return payload; } };
+  await groupCommand.handleInteraction(refresh);
+  assert.equal(refresh.state.deferredUpdate, true);
+  assert.equal(refresh.state.messageEdit?.files?.length, 1, 'Refresh updates the public image message');
+}
+
 async function testPartialDeleteCanBeRetried() {
   const guildId = 'delete-retry-guild';
   const groupId = await insertGroup({ guildId, name: 'Delete retry', textChannelId: 'deleted-channel-id' });
@@ -469,12 +789,16 @@ async function main() {
   await testDb.initialize();
   try {
     testSetupValidation();
+    await testGroupCommandGuideAndMusicApi();
+    await testCreateGroupRoleDefaults();
     await testDashboardPublishers();
     await testSetupDashboardSerialization();
     await testDeleteCommandFlow();
     await testMembershipLimitsAndBlockedUsers();
     await testPointsAndReset();
     await testInternalCommandParser();
+    await testManualGroupPointAdjustments();
+    await testTopBonusControls();
     await testPartialDeleteCanBeRetried();
     console.log('groupManager/groupInternal smoke-integration tests passed');
   } finally {

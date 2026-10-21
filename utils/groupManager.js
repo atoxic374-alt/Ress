@@ -344,6 +344,77 @@ async function resetPoints(guildId, groupId, actorId = null) {
     await audit(guildId, actorId, groupId, 'points_reset');
   });
 }
+function validateManualPointsDelta(delta) {
+  const value = Number(delta);
+  if (!Number.isSafeInteger(value) || value === 0 || Math.abs(value) > MAX_ACTIVITY_AMOUNT) throw new Error('INVALID_POINTS_ADJUSTMENT');
+  return value;
+}
+async function adjustGroupPoints(guildId, groupId, delta, actorId = null) {
+  await schema();
+  const safeGroupId = Number(groupId), safeDelta = validateManualPointsDelta(delta);
+  if (!Number.isInteger(safeGroupId) || safeGroupId <= 0) throw new Error('INVALID_GROUP_ID');
+  return withLock(`points:${String(guildId)}`, () => dbManager.transaction(async tx => {
+    const row = await tx.get("SELECT * FROM managed_groups WHERE guild_id = ? AND id = ? AND status = 'active'", [String(guildId), safeGroupId]);
+    if (!row) throw new Error('GROUP_NOT_FOUND');
+    const before = Math.max(0, Number(row.points) || 0), after = before + safeDelta;
+    if (after < 0) throw new Error('INSUFFICIENT_GROUP_POINTS');
+    if (after > MAX_ACTIVITY_AMOUNT) throw new Error('POINTS_LIMIT_EXCEEDED');
+    const now = Date.now();
+    await tx.run('UPDATE managed_groups SET points = ?, updated_at = ? WHERE guild_id = ? AND id = ? AND status = \'active\'', [after, now, String(guildId), safeGroupId]);
+    await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [String(guildId), safeGroupId, actorId ? String(actorId) : null, 'manual_group_points', JSON.stringify({ delta: safeDelta, before, after }), now]);
+    return { before, after, delta: safeDelta, group: hydrate(await tx.get('SELECT * FROM managed_groups WHERE guild_id = ? AND id = ?', [String(guildId), safeGroupId])) };
+  }, 'group-manual-points'));
+}
+async function adjustAllGroupPoints(guildId, delta, actorId = null) {
+  await schema();
+  const safeDelta = validateManualPointsDelta(delta);
+  return withLock(`points:${String(guildId)}`, () => dbManager.transaction(async tx => {
+    const rows = await tx.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status = 'active' ORDER BY id ASC", [String(guildId)]);
+    if (!rows.length) throw new Error('GROUP_NOT_FOUND');
+    const before = rows.reduce((total, row) => total + Math.max(0, Number(row.points) || 0), 0);
+    let deltaTotal = 0, changedGroups = 0;
+    const now = Date.now();
+    for (const row of rows) {
+      const groupBefore = Math.max(0, Number(row.points) || 0);
+      const actualDelta = safeDelta > 0 ? safeDelta : -Math.min(Math.abs(safeDelta), groupBefore);
+      if (!actualDelta) continue;
+      const after = groupBefore + actualDelta;
+      if (after < 0) throw new Error('INSUFFICIENT_GROUP_POINTS');
+      if (after > MAX_ACTIVITY_AMOUNT) throw new Error('POINTS_LIMIT_EXCEEDED');
+      await tx.run("UPDATE managed_groups SET points = ?, updated_at = ? WHERE guild_id = ? AND id = ? AND status = 'active'", [after, now, String(guildId), Number(row.id)]);
+      await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [String(guildId), Number(row.id), actorId ? String(actorId) : null, 'manual_all_group_points', JSON.stringify({ requestedDelta: safeDelta, actualDelta, before: groupBefore, after }), now]);
+      deltaTotal += actualDelta;
+      changedGroups += 1;
+    }
+    if (safeDelta < 0 && deltaTotal === 0) throw new Error('NO_POINTS_TO_REMOVE');
+    return { before, after: before + deltaTotal, delta: deltaTotal, groups: rows.length, changedGroups };
+  }, 'group-manual-all-points'));
+}
+async function adjustMemberPoints(guildId, groupId, userId, delta, actorId = null) {
+  await schema();
+  const safeGroupId = Number(groupId), safeUserId = String(userId || ''), safeDelta = validateManualPointsDelta(delta);
+  if (!Number.isInteger(safeGroupId) || safeGroupId <= 0) throw new Error('INVALID_GROUP_ID');
+  if (!isSnowflake(safeUserId)) throw new Error('INVALID_USER_ID');
+  return withLock(`points:${String(guildId)}`, () => dbManager.transaction(async tx => {
+    const row = await tx.get("SELECT * FROM managed_groups WHERE guild_id = ? AND id = ? AND status = 'active'", [String(guildId), safeGroupId]);
+    if (!row) throw new Error('GROUP_NOT_FOUND');
+    const group = hydrate(row);
+    if (![String(group.owner_id), ...group.memberIds, ...group.managerIds].includes(safeUserId)) throw new Error('MEMBER_NOT_IN_GROUP');
+    const balanceRow = await tx.get('SELECT points FROM group_member_points WHERE guild_id = ? AND group_id = ? AND user_id = ?', [String(guildId), safeGroupId, safeUserId]);
+    const before = Math.max(0, Number(balanceRow?.points) || 0), after = before + safeDelta;
+    if (after < 0) throw new Error('INSUFFICIENT_MEMBER_POINTS');
+    if (after > MAX_ACTIVITY_AMOUNT) throw new Error('POINTS_LIMIT_EXCEEDED');
+    const groupBefore = Math.max(0, Number(group.points) || 0), groupAfter = groupBefore + safeDelta;
+    if (groupAfter < 0) throw new Error('INSUFFICIENT_GROUP_POINTS');
+    if (groupAfter > MAX_ACTIVITY_AMOUNT) throw new Error('POINTS_LIMIT_EXCEEDED');
+    const now = Date.now();
+    await tx.run(`INSERT INTO group_member_points(guild_id,group_id,user_id,points,updated_at) VALUES(?,?,?,?,?)
+      ON CONFLICT(guild_id,group_id,user_id) DO UPDATE SET points = excluded.points, updated_at = excluded.updated_at`, [String(guildId), safeGroupId, safeUserId, after, now]);
+    await tx.run("UPDATE managed_groups SET points = ?, updated_at = ? WHERE guild_id = ? AND id = ? AND status = 'active'", [groupAfter, now, String(guildId), safeGroupId]);
+    await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [String(guildId), safeGroupId, actorId ? String(actorId) : null, 'manual_member_points', JSON.stringify({ userId: safeUserId, delta: safeDelta, before, after, groupBefore, groupAfter }), now]);
+    return { userId: safeUserId, before, after, delta: safeDelta, groupBefore, groupAfter };
+  }, 'group-manual-member-points'));
+}
 async function setRule(guildId, metric, threshold, points, enabled, actorId) {
   await schema();
   // Keep compatibility with the historical five-argument form: (guild, metric, threshold, points, actor).
@@ -427,6 +498,10 @@ async function listMemberPoints(guildId, groupId, limit = 10) {
   const placeholders = memberIds.map(() => '?').join(', ');
   return dbManager.all(`SELECT * FROM group_member_points WHERE guild_id = ? AND group_id = ? AND user_id IN (${placeholders}) ORDER BY points DESC, updated_at ASC LIMIT ?`, [String(guildId), Number(groupId), ...memberIds, safeLimit]);
 }
+async function getMemberPoints(guildId, groupId, userId) {
+  await schema();
+  return dbManager.get('SELECT * FROM group_member_points WHERE guild_id = ? AND group_id = ? AND user_id = ?', [String(guildId), Number(groupId), String(userId)]);
+}
 async function createGroup(guild, { name, description = '', ownerId, color = '#5865F2', emoji = null }, actorId) {
   const groupName = String(name || '').trim();
   if (!groupName || groupName.length > 100 || /[\u0000-\u001f]/.test(groupName)) throw new Error('NAME_REQUIRED');
@@ -439,7 +514,7 @@ async function createGroup(guild, { name, description = '', ownerId, color = '#5
     if (existing) throw new Error(String(existing.owner_id) === String(owner.id) ? 'OWNER_ALREADY_HAS_GROUP' : 'USER_ALREADY_IN_GROUP');
     const now = Date.now(); let role = null; let text = null; let thread = null; let voice = null; let leaderRole = null; let leaderRoleAdded = false; let createdGroupId = null; const created = [];
     try {
-      role = await guild.roles.create({ name: `Group・${groupName.slice(0, 90)}`, color: color || '#5865F2', reason: 'Create managed group' }); created.push(['role', role]);
+      role = await guild.roles.create({ name: groupName.slice(0, 100), reason: 'Create managed group' }); created.push(['role', role]);
       if (settings.mainRoleId) {
         const mainRole = guild.roles.cache.get(settings.mainRoleId) || await guild.roles.fetch(settings.mainRoleId).catch(() => null);
         if (!mainRole || mainRole.id === guild.id || mainRole.position < 2) throw new Error('MAIN_ROLE_INVALID');
@@ -508,4 +583,4 @@ async function deleteGroup(guild, groupId, actorId) {
     return true;
   });
 }
-module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, logGroupEvent, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, setRule, getRules, recordActivity, listMemberPoints, createGroup, deleteGroup };
+module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, logGroupEvent, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, listMemberPoints, getMemberPoints, createGroup, deleteGroup };

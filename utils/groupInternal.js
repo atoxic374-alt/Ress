@@ -61,14 +61,19 @@ async function syncManagerRole(guild, settings, userId) {
   else if (!shouldHaveRole && hasRole) await member.roles.remove(role, 'Group manager role');
 }
 async function handleInternalMessage(message, { prefix = ':', sendPanel = null } = {}) {
-  if (!message?.guild || message.author?.bot || !String(message.content || '').startsWith(prefix)) return false;
-  const raw = String(message.content).slice(prefix.length).trim();
+  if (!message?.guild || message.author?.bot) return false;
+  const content = String(message.content || '').trim();
+  const hasPrefix = typeof prefix === 'string' && prefix.length > 0 && content.startsWith(prefix);
+  const raw = (hasPrefix ? content.slice(prefix.length) : content).trim();
   const words = raw.split(/\s+/);
   let command = String(words.shift() || '').toLowerCase();
   if (command === 'تعديل' && String(words[0] || '') === 'القروب') { command = 'تعديل'; words.shift(); }
   if (!COMMANDS.has(command)) return false;
   const group = await gm.getGroupForChannel(message.guild.id, message.channel.id);
-  if (!group || group.status !== 'active') { await reply(message, 'هذا الشات غير مرتبط بقروب نشط.'); return true; }
+  if (!group || group.status !== 'active') {
+    if (hasPrefix) { await reply(message, 'هذا الشات غير مرتبط بقروب نشط.'); return true; }
+    return false;
+  }
   const settings = await gm.getSettings(message.guild.id);
   const privileged = gm.canManageGroup(message.client, settings, group, message.member);
   const system = gm.canManageSystem(message.client, settings, message.member);
@@ -78,13 +83,13 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       if (!groupHasUser(group, message.author.id) && !system) return Boolean(await reply(message, 'أنت لست عضوًا في القروب.'));
       const owner = await message.guild.members.fetch(group.owner_id).catch(() => null);
       const managers = await Promise.all(group.managerIds.map(id => message.guild.members.fetch(id).catch(() => null)));
-      await message.reply({ files: [await renderInfo({ guild: message.guild, group, owner, managers: managers.filter(Boolean), accentColor: group.color })] }).catch(() => {});
+      await message.reply({ files: [await renderInfo({ guild: message.guild, group, owner, managers: managers.filter(Boolean), accentColor: null })] }).catch(() => {});
       return true;
     }
     if (command === 'اعضاء' || command === 'أعضاء' || command === 'members') {
       const rows = await gm.listMemberPoints(message.guild.id, group.id, 10);
       const members = await Promise.all(rows.map(async row => ({ ...row, member: await message.guild.members.fetch(row.user_id).catch(() => null) })));
-      await message.reply({ files: [await renderMembers({ guild: message.guild, group, members, accentColor: group.color })] }).catch(() => {});
+      await message.reply({ files: [await renderMembers({ guild: message.guild, group, members, accentColor: null })] }).catch(() => {});
       return true;
     }
     if (!privileged && !system) { await reply(message, 'لا تملك الصلاحية.'); return true; }

@@ -14,13 +14,13 @@ module.exports = {
     if (HELP_TOKENS.has(action)) {
       return message.reply([
         '**إعداد نظام القروبات**',
-        '`:setup groups` — فتح لوحة الإعداد التفاعلية.',
-        '`:groups control` — فتح لوحة إدارة القروبات.',
-        '`:groups rules` — عرض قواعد النقاط أو تعديلها.',
-        'من لوحة الإعداد يمكنك تدقيق الجاهزية، ضبط القنوات والرتب، إدارة مسؤولي النظام، ومسح الإعدادات الخاطئة.'
+        '`setup groups` — فتح لوحة الإعداد التفاعلية.',
+        '`groups control` — فتح لوحة إدارة القروبات.',
+        '`groups rules` — عرض قواعد النقاط أو تعديلها.',
+        'استخدم البادئة المضبوطة للبوت قبل أوامر الرسائل. من لوحة الإعداد يمكنك تدقيق الجاهزية وضبط القنوات والرتب وإدارة مسؤولي النظام.'
       ].join('\n'));
     }
-    return message.reply('الخيار غير معروف. استخدم `:setup help` أو `:setup groups`.');
+    return message.reply('الخيار غير معروف. استخدم setup help أو setup groups بعد بادئة البوت المضبوطة.');
   },
   registerInteractionHandler: groups.registerInteractionHandler
 };
