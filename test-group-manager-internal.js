@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 const { DatabaseManager } = require('./utils/database');
 const { ChannelType } = require('discord.js');
 
@@ -10,6 +11,7 @@ databaseModule.dbManager = testDb;
 const gm = require('./utils/groupManager');
 const { handleInternalMessage } = require('./utils/groupInternal');
 const groupCommand = require('./commands/groups');
+const interactionRouter = require('./utils/interactionRouter');
 
 const GUILD = 'group-test-guild';
 const OWNER = '100000000000000001';
@@ -85,14 +87,17 @@ function testSetupValidation() {
 async function testDashboardPublishers() {
   const guildId = 'dashboard-publisher-guild';
   await insertGroup({ guildId, name: 'Member panel group' });
-  const guild = { id: guildId, client: { user: { id: 'dashboard-bot' } }, iconURL: () => null };
+  const guild = { id: guildId, client: { user: { id: 'dashboard-bot' } }, iconURL: () => 'https://cdn.discordapp.com/icons/123456789012345678/abcdef.png' };
   const messages = new Map();
   let sends = 0;
   let edits = 0;
+  let embedFallbacks = 0;
   const channel = {
     id: 'dashboard-channel',
     messages: { fetch: async () => new Map(messages) },
     send: async payload => {
+      if (payload.embeds) embedFallbacks += 1;
+      for (const component of payload.components || []) component.toJSON();
       const message = {
         id: `dashboard-message-${++sends}`,
         author: { id: 'dashboard-bot' },
@@ -116,6 +121,7 @@ async function testDashboardPublishers() {
   const second = await groupCommand.sendMemberControlPanels(channel, guild);
   assert.deepEqual({ total: second.total, published: second.published, overview: second.overview }, { total: 1, published: 1, overview: true });
   assert.equal(sends, afterFirstPublish, 'member group and overview panels are updated instead of duplicated');
+  assert.equal(embedFallbacks, 0, 'admin/member dashboards serialize as valid component payloads without legacy fallback');
 
   const emptyGuild = { ...guild, id: 'dashboard-empty-guild' };
   const emptyMessages = new Map();
@@ -125,6 +131,7 @@ async function testDashboardPublishers() {
     id: 'empty-dashboard-channel',
     messages: { fetch: async () => new Map(emptyMessages) },
     send: async payload => {
+      for (const component of payload.components || []) component.toJSON();
       const message = { id: `empty-${++emptySends}`, author: { id: 'dashboard-bot' }, components: payload.components };
       emptyMessages.set(message.id, message);
       return message;
@@ -133,6 +140,89 @@ async function testDashboardPublishers() {
   const empty = await groupCommand.sendMemberControlPanels(emptyChannel, emptyGuild);
   assert.equal(empty.total, 0);
   assert.equal(empty.overview, true, 'an explanatory member panel is still published when there are no groups');
+}
+
+async function testSetupDashboardSerialization() {
+  const botId = 'setup-dashboard-bot';
+  const ownerId = '100000000000000021';
+  const botMember = { id: botId, permissions: { has: () => true }, roles: { highest: { position: 20 } } };
+  const guild = {
+    id: 'setup-dashboard-guild',
+    ownerId,
+    client: { user: { id: botId } },
+    iconURL: () => 'https://cdn.discordapp.com/icons/123456789012345678/abcdef.png',
+    members: { me: botMember, fetchMe: async () => botMember },
+    roles: { cache: new Map(), fetch: async () => null },
+    channels: { cache: new Map(), fetch: async () => null }
+  };
+  const messages = new Map();
+  let sends = 0;
+  const channel = {
+    id: 'setup-dashboard-channel',
+    messages: { fetch: async () => new Map(messages) },
+    send: async payload => {
+      for (const component of payload.components || []) component.toJSON();
+      const message = { id: `setup-panel-${++sends}`, author: { id: botId }, components: payload.components, edit: async updated => { message.components = updated.components; return message; } };
+      messages.set(message.id, message);
+      return message;
+    }
+  };
+  const member = { id: ownerId, guild, roles: { cache: new Map() } };
+  await groupCommand.execute({ guild, channel, member, author: { id: ownerId } }, ['setup'], { client: { user: { id: botId } } });
+  assert.equal(sends, 2, 'both setup pages serialize and publish');
+}
+
+async function testDeleteCommandFlow() {
+  const guildId = 'delete-command-guild';
+  const groupId = await insertGroup({ guildId, name: 'Delete flow group' });
+  const guild = { id: guildId, ownerId: OWNER, channels: { cache: new Map(), fetch: async () => null }, roles: { cache: new Map() } };
+  const member = { id: OWNER, guild, roles: { cache: new Map() } };
+  const client = new EventEmitter();
+  interactionRouter.clear();
+  groupCommand.registerInteractionHandler(client);
+
+  function makeInteraction(customId, type, values = []) {
+    const interaction = {
+      customId,
+      guild,
+      client,
+      member,
+      user: { id: OWNER },
+      values,
+      replied: false,
+      deferred: false,
+      isButton: () => type === 'button',
+      isStringSelectMenu: () => type === 'stringSelect',
+      isModalSubmit: () => type === 'modal',
+      showModal: async modal => { interaction.response = modal.toJSON(); return interaction.response; },
+      reply: async payload => {
+        for (const component of payload.components || []) component.toJSON();
+        interaction.response = payload;
+        interaction.replied = true;
+        return payload;
+      }
+    };
+    return interaction;
+  }
+
+  const openCreate = makeInteraction('groups_admin:create', 'button');
+  assert.equal(await interactionRouter.route(openCreate), true);
+  assert.equal(openCreate.response.title, 'إنشاء قروب', 'create modal is built and serialized successfully');
+
+  const openDelete = makeInteraction('groups_admin:delete', 'button');
+  assert.equal(await interactionRouter.route(openDelete), true);
+  assert.ok(JSON.stringify(openDelete.response.components[0].toJSON()).includes(`groups_admin_select:delete`));
+
+  const chooseGroup = makeInteraction('groups_admin_select:delete', 'stringSelect', [String(groupId)]);
+  assert.equal(await interactionRouter.route(chooseGroup), true);
+  const confirmation = chooseGroup.response.components[0].toJSON();
+  assert.ok(JSON.stringify(confirmation).includes(`groups_admin_confirm:delete:${groupId}`));
+
+  const confirmDelete = makeInteraction(`groups_admin_confirm:delete:${groupId}`, 'button');
+  assert.equal(await interactionRouter.route(confirmDelete), true);
+  assert.equal((await gm.getGroup(guildId, groupId)).status, 'deleted');
+  assert.equal(confirmDelete.response.content, 'تم حذف القروب.');
+  interactionRouter.clear();
 }
 
 function makeParserGuild() {
@@ -364,6 +454,8 @@ async function main() {
   try {
     testSetupValidation();
     await testDashboardPublishers();
+    await testSetupDashboardSerialization();
+    await testDeleteCommandFlow();
     await testMembershipLimitsAndBlockedUsers();
     await testPointsAndReset();
     await testInternalCommandParser();

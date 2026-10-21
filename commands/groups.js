@@ -1,4 +1,4 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder, ChannelType, EmbedBuilder, LabelBuilder, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder, TextDisplayBuilder, SectionBuilder, ContainerBuilder, ThumbnailBuilder, UserSelectMenuBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder, ChannelType, EmbedBuilder, LabelBuilder, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder, TextDisplayBuilder, ContainerBuilder, UserSelectMenuBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
 const router = require('../utils/interactionRouter');
 const gm = require('../utils/groupManager');
 const colorManager = require('../utils/colorManager');
@@ -13,8 +13,7 @@ const locks = new Set();
 function safe(s, n=100) { return String(s||'').replace(/[\u0000-\u001f]/g,'').slice(0,n); }
 function isOwner(client, member) { return gm.isOwner(client, member); }
 function button(id, label, style=ButtonStyle.Secondary, emoji) { const b=new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(style); if(emoji)b.setEmoji(emoji); return b; }
-function groupThumb(guild) { return guild?.iconURL?.({ extension:'png', size:128 }) || undefined; }
-function baseContainer(guild, title, description='', color='#5865F2') { const c=new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || color || '#5865F2')); const text=[]; if(title)text.push(new TextDisplayBuilder().setContent(`## ${title}`)); if(description)text.push(new TextDisplayBuilder().setContent(description)); if(groupThumb(guild)){ const s=new SectionBuilder().addTextDisplayComponents(text).setThumbnailAccessory(new ThumbnailBuilder().setURL(groupThumb(guild))); c.addSectionComponents(s); } else text.forEach(t=>c.addTextDisplayComponents(t)); return c; }
+function baseContainer(guild, title, description='', color='#5865F2') { const c=new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || color || '#5865F2')); if(title)c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${title}`)); if(description)c.addTextDisplayComponents(new TextDisplayBuilder().setContent(description)); return c; }
 const RULE_METRICS = Object.freeze([
   ['messages', 'الرسائل', 'messages counted in group text channels', 100],
   ['voice_ms', 'الصوت', 'milliseconds spent in group voice channels', 3600000],
@@ -28,10 +27,11 @@ function rulesPayload(guild, rules = []) {
     const enabled = Number(rule?.enabled) === 1;
     const threshold = Number(rule?.threshold) || defaultThreshold;
     const points = Number(rule?.points) || 1;
-    c.addSectionComponents(new SectionBuilder()
-      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${description}\nThreshold: **${threshold.toLocaleString()}** | Points: **${points}** | Status: **${enabled ? 'مفعل' : 'متوقف'}**`))
-      .setButtonAccessory(button(`groups_rules:edit:${metric}`, 'تعديل', ButtonStyle.Primary)));
-    c.addActionRowComponents(new ActionRowBuilder().addComponents(button(`groups_rules:toggle:${metric}`, enabled ? 'تعطيل' : 'تفعيل', enabled ? ButtonStyle.Danger : ButtonStyle.Success)));
+    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${description}\nThreshold: **${threshold.toLocaleString()}** | Points: **${points}** | Status: **${enabled ? 'مفعل' : 'متوقف'}**`));
+    c.addActionRowComponents(new ActionRowBuilder().addComponents(
+      button(`groups_rules:edit:${metric}`, 'تعديل', ButtonStyle.Primary),
+      button(`groups_rules:toggle:${metric}`, enabled ? 'تعطيل' : 'تفعيل', enabled ? ButtonStyle.Danger : ButtonStyle.Success)
+    ));
   }
   return componentsV2Payload(c);
 }
@@ -102,7 +102,14 @@ function setupPayloads(guild, settings) {
     const c = includeSummary
       ? baseContainer(guild, title, summary)
       : new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || '#5865F2'));
-    for (const [label, desc, id] of items) c.addSectionComponents(new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${desc}`)).setButtonAccessory(button(id, 'Open')));
+    const openButtons = [];
+    for (const [label, desc, id] of items) {
+      c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${desc}`));
+      openButtons.push(button(id, label.slice(0, 80)));
+    }
+    for (let offset = 0; offset < openButtons.length; offset += 5) {
+      c.addActionRowComponents(new ActionRowBuilder().addComponents(openButtons.slice(offset, offset + 5)));
+    }
     if (includeSummary) c.addActionRowComponents(new ActionRowBuilder().addComponents(button('groups_setup:audit', 'تدقيق الإعداد', ButtonStyle.Primary), button('groups_setup:clear', 'مسح قيمة', ButtonStyle.Secondary)));
     return componentsV2Payload(c);
   };
@@ -169,7 +176,27 @@ async function sendSetupPanel(channel, guild, settings) {
   setupPanelLocks.set(key, work);
   try { return await work; } finally { setupPanelLocks.delete(key); }
 }
-function controlPayload(guild) { const c=baseContainer(guild,'التحكم بالقروب','استخدم الأزرار لإدارة القروبات.'); const items=[['إنشاء قروب','إنشاء قروب جديد','groups_admin:create',ButtonStyle.Success],['استيراد قروب','ربط عناصر Discord موجودة','groups_admin:import',ButtonStyle.Secondary],['حذف قروب','حذف قروب مُدار','groups_admin:delete',ButtonStyle.Danger],['معلومات القروب','عرض تفاصيل القروب','groups_admin:info',ButtonStyle.Secondary],['تعديل قروب','تعديل إعدادات القروب','groups_admin:edit',ButtonStyle.Primary],['تصفير نقاط قروب','تصفير قروب واحد','groups_admin:reset',ButtonStyle.Secondary],['تصفير كل النقاط','تصفير نقاط كل القروبات','groups_admin:resetall',ButtonStyle.Danger]]; for(const [label,desc,id,style] of items)c.addSectionComponents(new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${desc}`)).setButtonAccessory(button(id,'فتح',style))); return componentsV2Payload(c); }
+function controlPayload(guild) {
+  const c = baseContainer(guild, 'التحكم بالقروب', 'استخدم الأزرار لإدارة القروبات.');
+  const items = [
+    ['إنشاء قروب', 'إنشاء قروب جديد', 'groups_admin:create', ButtonStyle.Success],
+    ['استيراد قروب', 'ربط عناصر Discord موجودة', 'groups_admin:import', ButtonStyle.Secondary],
+    ['حذف قروب', 'حذف قروب مُدار', 'groups_admin:delete', ButtonStyle.Danger],
+    ['معلومات القروب', 'عرض تفاصيل القروب', 'groups_admin:info', ButtonStyle.Secondary],
+    ['تعديل قروب', 'تعديل إعدادات القروب', 'groups_admin:edit', ButtonStyle.Primary],
+    ['تصفير نقاط قروب', 'تصفير قروب واحد', 'groups_admin:reset', ButtonStyle.Secondary],
+    ['تصفير كل النقاط', 'تصفير نقاط كل القروبات', 'groups_admin:resetall', ButtonStyle.Danger]
+  ];
+  const buttons = [];
+  for (const [label, description, id, style] of items) {
+    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${description}`));
+    buttons.push(button(id, label, style));
+  }
+  for (let offset = 0; offset < buttons.length; offset += 5) {
+    c.addActionRowComponents(new ActionRowBuilder().addComponents(buttons.slice(offset, offset + 5)));
+  }
+  return componentsV2Payload(c);
+}
 async function sendAdminControlPanel(channel, guild) {
   const payload = controlPayload(guild);
   const messages = await channel?.messages?.fetch?.({ limit: 100 }).catch(() => null);
@@ -1017,7 +1044,7 @@ function controlGroupPayload(guild, groupId) {
     ['rename', 'both', 'تغيير الاسم'], ['limit', 'voice', 'حد الفويس'], ['permission', 'both', 'الصلاحيات']
   ];
   for (let offset = 0; offset < controls.length; offset += 5) c.addActionRowComponents(new ActionRowBuilder().addComponents(controls.slice(offset, offset + 5).map(([action, scope, label]) => button(`groups_control:${action}:${id}:${scope}`, label, action === 'deny' || action === 'kick' ? ButtonStyle.Danger : ButtonStyle.Secondary))));
-  c.addSectionComponents(new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent('عرض تفاصيل القروب.')).setButtonAccessory(button(`groups_member:info:${id}`, 'قروبي')));
+  c.addActionRowComponents(new ActionRowBuilder().addComponents(button(`groups_member:info:${id}`, 'تفاصيل القروب')));
   return componentsV2Payload(c);
 }
 function flowSelect(guild, flow, title, description, options) { return selectPayload(guild, title, description, flowId(flow), options); }
