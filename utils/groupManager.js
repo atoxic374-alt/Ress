@@ -1,4 +1,4 @@
-const { ChannelType, PermissionsBitField, ContainerBuilder, TextDisplayBuilder, MessageFlags } = require('discord.js');
+const { ChannelType, PermissionsBitField, ContainerBuilder, TextDisplayBuilder, SectionBuilder, ThumbnailBuilder, MessageFlags } = require('discord.js');
 const { dbManager } = require('./database');
 const colorManager = require('./colorManager');
 const { colorToNumber } = require('./structuredContainer');
@@ -196,7 +196,9 @@ async function logGroupEvent(guild, event, details = {}, actorId = null) {
       new TextDisplayBuilder().setContent(`## حدث القروب : ${eventLabel.slice(0, 80)}`),
       new TextDisplayBuilder().setContent(`السيرفر : ${guild.name ? String(guild.name).slice(0, 100) : guild.id}${actorText}\n\`\`\`json\n${detailText}\n\`\`\``)
     ];
-    container.addTextDisplayComponents(eventText);
+    const icon = guild.iconURL?.({ extension: 'png', size: 128 });
+    if (icon) container.addSectionComponents(new SectionBuilder().addTextDisplayComponents(eventText).setThumbnailAccessory(new ThumbnailBuilder().setURL(icon)));
+    else container.addTextDisplayComponents(eventText);
     return await channel.send({ components: [container], flags: MessageFlags.IsComponentsV2 });
   } catch {
     return null;
