@@ -128,17 +128,36 @@ function findSetupPanel(message, guildId, channelId) {
   for (const entry of setupPanels.values()) if (entry.first?.id === message?.id || entry.second?.id === message?.id) return entry;
   return setupPanels.get(`${String(guildId)}:${String(channelId)}`) || null;
 }
+function collectComponentCustomIds(value, ids = new Set(), visited = new Set(), depth = 0) {
+  if (!value || typeof value !== 'object' || visited.has(value) || depth > 20) return ids;
+  visited.add(value);
+  if (typeof value.customId === 'string') ids.add(value.customId);
+  if (typeof value.custom_id === 'string') ids.add(value.custom_id);
+  if (typeof value.toJSON === 'function') {
+    try {
+      const json = value.toJSON();
+      if (json && json !== value) collectComponentCustomIds(json, ids, visited, depth + 1);
+    } catch {}
+  }
+  for (const child of Array.isArray(value) ? value : Object.values(value)) {
+    if (child && typeof child === 'object') collectComponentCustomIds(child, ids, visited, depth + 1);
+  }
+  return ids;
+}
 async function recoverSetupPanel(channel, guild) {
   const messages = await channel?.messages?.fetch?.({ limit: 100 }).catch(() => null);
   if (!messages) return null;
   const botId = guild.client?.user?.id;
-  const panels = [...messages.values()].filter(message =>
-    (!botId || message.author?.id === botId) && JSON.stringify(message.components || []).includes('groups_setup:')
-  ).sort((a, b) => Number(a.createdTimestamp || 0) - Number(b.createdTimestamp || 0));
-  const firstPanels = panels.filter(message => JSON.stringify(message.components || []).includes('groups_setup:toggle'));
-  const secondPanels = panels.filter(message => JSON.stringify(message.components || []).includes('groups_setup:mainrole'));
-  const first = firstPanels[firstPanels.length - 1] || null;
-  const second = secondPanels[secondPanels.length - 1] || null;
+  const panels = [...messages.values()].map(message => ({
+    message,
+    ids: collectComponentCustomIds(message.components || [])
+  })).filter(({ message, ids }) =>
+    (!botId || message.author?.id === botId) && [...ids].some(id => id.startsWith('groups_setup:'))
+  ).sort((a, b) => Number(a.message.createdTimestamp || 0) - Number(b.message.createdTimestamp || 0));
+  const firstPanels = panels.filter(({ ids }) => ids.has('groups_setup:toggle'));
+  const secondPanels = panels.filter(({ ids }) => ids.has('groups_setup:mainrole'));
+  const first = firstPanels[firstPanels.length - 1]?.message || null;
+  const second = secondPanels[secondPanels.length - 1]?.message || null;
   return first || second ? rememberSetupPanel(guild.id, channel.id, first, second) : null;
 }
 async function refreshSetupPanel(interaction, settings) {

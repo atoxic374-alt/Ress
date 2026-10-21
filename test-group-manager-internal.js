@@ -157,19 +157,35 @@ async function testSetupDashboardSerialization() {
   };
   const messages = new Map();
   let sends = 0;
+  let edits = 0;
+  const serialize = components => (components || []).map(component => component.toJSON());
   const channel = {
     id: 'setup-dashboard-channel',
     messages: { fetch: async () => new Map(messages) },
     send: async payload => {
-      for (const component of payload.components || []) component.toJSON();
-      const message = { id: `setup-panel-${++sends}`, author: { id: botId }, components: payload.components, edit: async updated => { message.components = updated.components; return message; } };
+      const message = {
+        id: `setup-panel-${++sends}`,
+        author: { id: botId },
+        createdTimestamp: Date.now() + sends,
+        components: serialize(payload.components),
+        edit: async updated => { edits += 1; message.components = serialize(updated.components); return message; }
+      };
       messages.set(message.id, message);
       return message;
     }
   };
   const member = { id: ownerId, guild, roles: { cache: new Map() } };
-  await groupCommand.execute({ guild, channel, member, author: { id: ownerId } }, ['setup'], { client: { user: { id: botId } } });
+  const message = { guild, channel, member, author: { id: ownerId } };
+  const context = { client: { user: { id: botId } } };
+  await groupCommand.execute(message, ['setup'], context);
   assert.equal(sends, 2, 'both setup pages serialize and publish');
+
+  delete require.cache[require.resolve('./commands/groups')];
+  delete require.cache[require.resolve('./commands/setup')];
+  const setupCommand = require('./commands/setup');
+  await setupCommand.execute(message, ['groups'], context);
+  assert.equal(sends, 2, 'running setup after a process restart reuses existing panel messages');
+  assert.equal(edits, 2, 'both setup pages are edited rather than duplicated');
 }
 
 async function testDeleteCommandFlow() {
