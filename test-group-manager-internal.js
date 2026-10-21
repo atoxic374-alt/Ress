@@ -9,6 +9,7 @@ databaseModule.dbManager = testDb;
 
 const gm = require('./utils/groupManager');
 const { handleInternalMessage } = require('./utils/groupInternal');
+const groupCommand = require('./commands/groups');
 
 const GUILD = 'group-test-guild';
 const OWNER = '100000000000000001';
@@ -79,6 +80,59 @@ function testSetupValidation() {
   assert.ok(missing.includes('permission:ManageMessages'), 'setup detects permissions required by extra moderation tools');
   assert.ok(missing.includes('logChannelId'), 'setup validates configured log channels');
   assert.equal(missing.includes('permission:BOT_MEMBER'), false);
+}
+
+async function testDashboardPublishers() {
+  const guildId = 'dashboard-publisher-guild';
+  await insertGroup({ guildId, name: 'Member panel group' });
+  const guild = { id: guildId, client: { user: { id: 'dashboard-bot' } }, iconURL: () => null };
+  const messages = new Map();
+  let sends = 0;
+  let edits = 0;
+  const channel = {
+    id: 'dashboard-channel',
+    messages: { fetch: async () => new Map(messages) },
+    send: async payload => {
+      const message = {
+        id: `dashboard-message-${++sends}`,
+        author: { id: 'dashboard-bot' },
+        createdTimestamp: sends,
+        components: payload.components,
+        edit: async updated => { edits += 1; message.components = updated.components; return message; }
+      };
+      messages.set(message.id, message);
+      return message;
+    }
+  };
+
+  await groupCommand.sendAdminControlPanel(channel, guild);
+  await groupCommand.sendAdminControlPanel(channel, guild);
+  assert.equal(sends, 1, 'admin panel is updated instead of duplicated');
+  assert.equal(edits, 1);
+
+  const first = await groupCommand.sendMemberControlPanels(channel, guild);
+  assert.deepEqual({ total: first.total, published: first.published, overview: first.overview }, { total: 1, published: 1, overview: true });
+  const afterFirstPublish = sends;
+  const second = await groupCommand.sendMemberControlPanels(channel, guild);
+  assert.deepEqual({ total: second.total, published: second.published, overview: second.overview }, { total: 1, published: 1, overview: true });
+  assert.equal(sends, afterFirstPublish, 'member group and overview panels are updated instead of duplicated');
+
+  const emptyGuild = { ...guild, id: 'dashboard-empty-guild' };
+  const emptyMessages = new Map();
+  let emptySends = 0;
+  const emptyChannel = {
+    ...channel,
+    id: 'empty-dashboard-channel',
+    messages: { fetch: async () => new Map(emptyMessages) },
+    send: async payload => {
+      const message = { id: `empty-${++emptySends}`, author: { id: 'dashboard-bot' }, components: payload.components };
+      emptyMessages.set(message.id, message);
+      return message;
+    }
+  };
+  const empty = await groupCommand.sendMemberControlPanels(emptyChannel, emptyGuild);
+  assert.equal(empty.total, 0);
+  assert.equal(empty.overview, true, 'an explanatory member panel is still published when there are no groups');
 }
 
 function makeParserGuild() {
@@ -309,6 +363,7 @@ async function main() {
   await testDb.initialize();
   try {
     testSetupValidation();
+    await testDashboardPublishers();
     await testMembershipLimitsAndBlockedUsers();
     await testPointsAndReset();
     await testInternalCommandParser();

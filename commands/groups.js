@@ -170,6 +170,19 @@ async function sendSetupPanel(channel, guild, settings) {
   try { return await work; } finally { setupPanelLocks.delete(key); }
 }
 function controlPayload(guild) { const c=baseContainer(guild,'التحكم بالقروب','استخدم الأزرار لإدارة القروبات.'); const items=[['إنشاء قروب','إنشاء قروب جديد','groups_admin:create',ButtonStyle.Success],['استيراد قروب','ربط عناصر Discord موجودة','groups_admin:import',ButtonStyle.Secondary],['حذف قروب','حذف قروب مُدار','groups_admin:delete',ButtonStyle.Danger],['معلومات القروب','عرض تفاصيل القروب','groups_admin:info',ButtonStyle.Secondary],['تعديل قروب','تعديل إعدادات القروب','groups_admin:edit',ButtonStyle.Primary],['تصفير نقاط قروب','تصفير قروب واحد','groups_admin:reset',ButtonStyle.Secondary],['تصفير كل النقاط','تصفير نقاط كل القروبات','groups_admin:resetall',ButtonStyle.Danger]]; for(const [label,desc,id,style] of items)c.addSectionComponents(new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${desc}`)).setButtonAccessory(button(id,'فتح',style))); return componentsV2Payload(c); }
+async function sendAdminControlPanel(channel, guild) {
+  const payload = controlPayload(guild);
+  const messages = await channel?.messages?.fetch?.({ limit: 100 }).catch(() => null);
+  const botId = guild?.client?.user?.id;
+  const existing = messages && [...messages.values()].filter(message =>
+    (!botId || message.author?.id === botId) && JSON.stringify(message.components || []).includes('groups_admin:')
+  ).sort((a, b) => Number(a.createdTimestamp || 0) - Number(b.createdTimestamp || 0)).pop();
+  if (existing?.edit) {
+    const edited = await existing.edit(payload).catch(() => null);
+    if (edited) return edited;
+  }
+  return channel.send(payload);
+}
 function selectPayload(guild, title, description, customId, options) { const c=baseContainer(guild,title,description); const menu=new StringSelectMenuBuilder().setCustomId(customId).setPlaceholder('اختر خيارًا').setMinValues(1).setMaxValues(1).addOptions(options); c.addActionRowComponents(new ActionRowBuilder().addComponents(menu)); return componentsV2Payload(c); }
 async function reply(interaction, payload, ephemeral=true) { const data={...payload,allowedMentions:{parse:[]}}; if(interaction.deferred&&!interaction.replied)return interaction.editReply(data); if(interaction.replied)return interaction.followUp({...data,ephemeral}); return interaction.reply({...data,ephemeral}); }
 async function deny(interaction) { return reply(interaction,{content:'لا تملك صلاحية استخدام هذه العملية.'}); }
@@ -238,11 +251,23 @@ async function handleTopGroupsInteraction(interaction) {
 
 async function sendGroupPanel(channel, guild, groupId) {
   const payload = { ...controlGroupPayload(guild, groupId), allowedMentions: { parse: [] } };
+  const id = Number(groupId);
+  const messages = await channel?.messages?.fetch?.({ limit: 100 }).catch(() => null);
+  const botId = guild?.client?.user?.id;
+  const marker = `:${id}:`;
+  const existing = messages && [...messages.values()].filter(message =>
+    (!botId || message.author?.id === botId)
+    && JSON.stringify(message.components || []).includes('groups_control:')
+    && JSON.stringify(message.components || []).includes(marker)
+  ).sort((a, b) => Number(a.createdTimestamp || 0) - Number(b.createdTimestamp || 0)).pop();
+  if (existing?.edit) {
+    const edited = await existing.edit(payload).catch(() => null);
+    if (edited) return edited;
+  }
   try {
     return await channel.send(payload);
   } catch (error) {
     console.error(`تعذر إرسال Container لوحة القروب ${groupId}:`, error?.stack || error?.message || error);
-    const id = Number(groupId);
     const controls = [
       ['lock', 'text', 'قفل النص'], ['unlock', 'text', 'فتح النص'], ['hide', 'text', 'إخفاء النص'], ['show', 'text', 'إظهار النص'], ['mute', 'text', 'كتم النص'],
       ['unmute', 'text', 'فك كتم النص'], ['lock', 'voice', 'قفل الفويس'], ['unlock', 'voice', 'فتح الفويس'], ['hide', 'voice', 'إخفاء الفويس'], ['show', 'voice', 'إظهار الفويس'],
@@ -262,7 +287,40 @@ async function sendGroupPanel(channel, guild, groupId) {
     }
   }
 }
-async function createFromModal(interaction) { const settings=await checkSystem(interaction); if(!settings)return; await interaction.deferReply({flags:MessageFlags.Ephemeral}); const name=safe(interaction.fields.getTextInputValue('group_name'),80); const ownerId=interaction.fields.getTextInputValue('group_owner').match(/\d{16,20}/)?.[0]||interaction.user.id; if(!name)return reply(interaction,{content:'اسم القروب مطلوب.'}); try { const group=await gm.createGroup(interaction.guild,{name,ownerId,color:'#5865F2'},interaction.user.id); await gm.logGroupEvent(interaction.guild,'create',{groupId:group.id,name:group.name,ownerId:group.owner_id},interaction.user.id); const voiceChannel=interaction.guild.channels.cache.get(group.voice_channel_id)||await interaction.guild.channels.fetch(group.voice_channel_id).catch(()=>null); const musicResult=voiceChannel?await tempVoice.ensureMusicBotInVoice(interaction.guild,voiceChannel,{musicChannelId:settings.musicChannelId,reason:'Move music bot to newly created group'}):null; await gm.logGroupEvent(interaction.guild,'music',{groupId:group.id,ok:Boolean(musicResult?.ok),code:musicResult?.code||null},interaction.user.id); const defaultChannel=interaction.guild.channels.cache.get(group.thread_id||group.text_channel_id); const configuredChannel=settings.memberControlChannelId&&interaction.guild.channels.cache.get(settings.memberControlChannelId); const channel=configuredChannel||defaultChannel; if(channel) { if(group.thread_id&&channel.id===group.thread_id) await channel.members.add(ownerId).catch(()=>{}); await sendGroupPanel(channel,interaction.guild,group.id); } await reply(interaction,{content:`تم إنشاء القروب : **${safe(group.name)}**\nالميوزك : ${musicResultMessage(musicResult)}`}); } catch(error){ await reply(interaction,{content:error.message.startsWith('GROUP_SETUP_REQUIRED')?'أكمل إعدادات القروبات أولًا.':`تعذر إنشاء القروب : ${error.message}`}); } }
+async function sendMemberControlPanels(channel, guild) {
+  const groups = await gm.listGroups(guild.id);
+  let published = 0;
+  for (let offset = 0; offset < groups.length; offset += 5) {
+    const batch = groups.slice(offset, offset + 5);
+    const results = await Promise.all(batch.map(group => sendGroupPanel(channel, guild, group.id).catch(() => null)));
+    published += results.filter(Boolean).length;
+  }
+  const overview = await sendMemberOverviewPanel(channel, guild, groups.length).catch(() => null);
+  return { total: groups.length, published, failed: groups.length - published, overview: Boolean(overview) };
+}
+function memberOverviewPayload(guild, groupCount) {
+  const description = groupCount
+    ? `تم العثور على ${groupCount} قروب نشط. لوحات التحكم الخاصة بكل قروب موجودة في هذه القناة.`
+    : 'لا توجد قروبات نشطة الآن. ستظهر لوحة كل قروب هنا عند إنشائه.';
+  const c = baseContainer(guild, 'لوحة تحكم الأعضاء', description);
+  const notice = button('groups_member:overview', 'لوحات القروبات تظهر هنا', ButtonStyle.Secondary).setDisabled(true);
+  c.addActionRowComponents(new ActionRowBuilder().addComponents(notice));
+  return componentsV2Payload(c);
+}
+async function sendMemberOverviewPanel(channel, guild, groupCount) {
+  const payload = memberOverviewPayload(guild, groupCount);
+  const messages = await channel?.messages?.fetch?.({ limit: 100 }).catch(() => null);
+  const botId = guild?.client?.user?.id;
+  const existing = messages && [...messages.values()].filter(message =>
+    (!botId || message.author?.id === botId) && JSON.stringify(message.components || []).includes('groups_member:overview')
+  ).sort((a, b) => Number(a.createdTimestamp || 0) - Number(b.createdTimestamp || 0)).pop();
+  if (existing?.edit) {
+    const edited = await existing.edit(payload).catch(() => null);
+    if (edited) return edited;
+  }
+  return channel.send(payload);
+}
+async function createFromModal(interaction) { const settings=await checkSystem(interaction); if(!settings)return; await interaction.deferReply({flags:MessageFlags.Ephemeral}); const name=safe(interaction.fields.getTextInputValue('group_name'),80); const ownerId=interaction.fields.getTextInputValue('group_owner').match(/\d{16,20}/)?.[0]||interaction.user.id; if(!name)return reply(interaction,{content:'اسم القروب مطلوب.'}); try { const group=await gm.createGroup(interaction.guild,{name,ownerId,color:'#5865F2'},interaction.user.id); await gm.logGroupEvent(interaction.guild,'create',{groupId:group.id,name:group.name,ownerId:group.owner_id},interaction.user.id); const voiceChannel=interaction.guild.channels.cache.get(group.voice_channel_id)||await interaction.guild.channels.fetch(group.voice_channel_id).catch(()=>null); const musicResult=voiceChannel?await tempVoice.ensureMusicBotInVoice(interaction.guild,voiceChannel,{musicChannelId:settings.musicChannelId,reason:'Move music bot to newly created group'}):null; await gm.logGroupEvent(interaction.guild,'music',{groupId:group.id,ok:Boolean(musicResult?.ok),code:musicResult?.code||null},interaction.user.id); const defaultChannel=interaction.guild.channels.cache.get(group.thread_id||group.text_channel_id); const configuredChannel=settings.memberControlChannelId&&interaction.guild.channels.cache.get(settings.memberControlChannelId); const channel=configuredChannel||defaultChannel; if(channel) { if(group.thread_id&&channel.id===group.thread_id) await channel.members.add(ownerId).catch(()=>{}); await sendGroupPanel(channel,interaction.guild,group.id); if(configuredChannel) await sendMemberOverviewPanel(configuredChannel,interaction.guild,(await gm.listGroups(interaction.guild.id)).length).catch(()=>{}); } await reply(interaction,{content:`تم إنشاء القروب : **${safe(group.name)}**\nالميوزك : ${musicResultMessage(musicResult)}`}); } catch(error){ await reply(interaction,{content:error.message.startsWith('GROUP_SETUP_REQUIRED')?'أكمل إعدادات القروبات أولًا.':`تعذر إنشاء القروب : ${error.message}`}); } }
 const CLEARABLE_SETUP_FIELDS = [
   ['chatMode', 'نمط الشات', value => value === 'threads' ? 'ثريدات' : 'رومات مستقلة'],
   ['textCategoryId', 'كاتاقوري النص/الثريدات', value => `<#${value}>`],
@@ -463,8 +521,26 @@ async function handleSetupSelection(interaction, prefix, action) {
     if (!keys[action]) return reply(interaction, { content: 'نوع الروم غير صالح.' });
     const labels = { textcat: 'كاتاقوري النص', voicecat: 'كاتاقوري الصوت', music: 'مصدر الموسيقى', topchannel: 'روم الترتيب', adminchannel: 'روم تحكم الإدارة', memberchannel: 'روم تحكم الأعضاء', log: 'روم السجلات' };
     const updated = await gm.saveSettings(interaction.guild.id, { [keys[action]]: channelId }, interaction.user.id);
+    let resultText = `تم حفظ ${labels[action]}: <#${channelId}>.`;
+    try {
+      if (action === 'adminchannel') {
+        await sendAdminControlPanel(channel, interaction.guild);
+        resultText += ' وتم نشر لوحة تحكم الإدارة في القناة.';
+      } else if (action === 'topchannel') {
+        await sendTopGroupsPanel(channel, interaction.guild, { channelId });
+        resultText += ' وتم نشر لوحة التوب في القناة.';
+      } else if (action === 'memberchannel') {
+        const result = await sendMemberControlPanels(channel, interaction.guild);
+        resultText += result.total
+          ? ` تم تحديث لوحات ${result.published} من ${result.total} قروب نشط${result.failed ? `، وتعذر إرسال ${result.failed}` : ''}${result.overview ? '.' : '، وتعذر إرسال لوحة الملخص.'}`
+          : result.overview ? ' وتم نشر لوحة توضيحية؛ ستظهر لوحات القروبات عند إنشائها.' : ' لا توجد قروبات نشطة بعد، وتعذر إرسال لوحة الملخص.';
+      }
+    } catch (error) {
+      console.error(`تعذر نشر لوحة ${action} في ${channelId}:`, error?.stack || error?.message || error);
+      resultText += ' حُفظت القناة لكن تعذر نشر اللوحة؛ تحقق من View Channel وSend Messages، ومن Attach Files للوحة التوب، ثم أعد تحديد القناة.';
+    }
     await refreshSetupPanel(interaction, updated);
-    return reply(interaction, setupConfirmation(interaction, labels[action], `تم حفظ ${labels[action]}: <#${channelId}>.`));
+    return reply(interaction, setupConfirmation(interaction, labels[action], resultText));
   }
   return false;
 }
@@ -540,7 +616,7 @@ async function execute(message,args,{client}={}) {
   if(!message.guild)return;
   const settings=await gm.getSettings(message.guild.id); const member=message.member; const sub=String(args[0]||'').toLowerCase();
   if(sub==='setup'||sub==='إعدادات'){if(!gm.canManageSystem(client,settings,member))return message.reply('لا تملك الصلاحية.');return sendSetupPanel(message.channel,message.guild,settings);}
-  if(sub==='control'||sub==='تحكم'){if(!gm.canManageSystem(client,settings,member))return message.reply('لا تملك الصلاحية.');const target= settings.adminControlChannelId && message.guild.channels.cache.get(settings.adminControlChannelId);return (target||message.channel).send(controlPayload(message.guild));}
+  if(sub==='control'||sub==='تحكم'){if(!gm.canManageSystem(client,settings,member))return message.reply('لا تملك الصلاحية.');const target= settings.adminControlChannelId && message.guild.channels.cache.get(settings.adminControlChannelId);return sendAdminControlPanel(target||message.channel,message.guild);}
   if(['rules','قواعد'].includes(sub)){if(!gm.canManageSystem(client,settings,member))return message.reply('لا تملك الصلاحية.');if(!args[1])return message.channel.send(rulesPayload(message.guild,await gm.getRules(message.guild.id)));const metric=String(args[1]).toLowerCase()==='voice'?'voice_ms':String(args[1]).toLowerCase()==='reaction'||String(args[1]).toLowerCase()==='reactions'?'reactions':'messages';const threshold=Number(args[2]||100);const points=Number(args[3]||1);await gm.setRule(message.guild.id,metric,threshold,points,true,message.author.id);await gm.logGroupEvent(message.guild,'rule_update',{metric,threshold,points,enabled:true},message.author.id);return message.reply(`تم حفظ القاعدة : ${metric} / ${threshold} / ${points}`);}
   if(sub==='create'||sub==='انشاء'||sub==='إنشاء'){if(!gm.canManageSystem(client,settings,member))return message.reply('لا تملك الصلاحية.');return message.channel.send('استخدم لوحة التحكم لإنشاء القروب.');}
   if(['top','leaderboard','ranking','rank','ترتيب','تصنيف'].includes(sub)){const target=settings.topChannelId&&message.guild.channels.cache.get(settings.topChannelId);return sendTopGroupsPanel(target||message.channel,message.guild,{viewerId:message.author.id,channelId:(target||message.channel).id});}
@@ -1388,4 +1464,4 @@ async function handleGroupExtensions(interaction) {
   } finally { if (flow) flow.busy = false; }
 }
 
-module.exports={name,aliases,execute,registerInteractionHandler,handleInternalMessage:dispatchInternalMessage,sendGroupPanel,sendTopGroupsPanel,buildTopGroupsPayload,selectMemberGroup};
+module.exports={name,aliases,execute,registerInteractionHandler,handleInternalMessage:dispatchInternalMessage,sendGroupPanel,sendAdminControlPanel,sendMemberControlPanels,sendTopGroupsPanel,buildTopGroupsPayload,selectMemberGroup};
