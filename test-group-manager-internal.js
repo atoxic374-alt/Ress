@@ -184,8 +184,8 @@ async function testSetupDashboardSerialization() {
   delete require.cache[require.resolve('./commands/setup')];
   const setupCommand = require('./commands/setup');
   await setupCommand.execute(message, ['groups'], context);
-  assert.equal(sends, 2, 'running setup after a process restart reuses existing panel messages');
-  assert.equal(edits, 2, 'both setup pages are edited rather than duplicated');
+  assert.equal(sends, 4, 'each setup command invocation publishes two new panel messages');
+  assert.equal(edits, 0, 'setup command leaves existing panel messages unchanged');
 }
 
 async function testDeleteCommandFlow() {

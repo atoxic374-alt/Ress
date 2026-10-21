@@ -177,13 +177,10 @@ async function sendSetupPanel(channel, guild, settings) {
   const work = (async () => {
     await hydrateSetupReferences(guild, settings);
     const payloads = setupPayloads(guild, settings);
-    const entry = setupPanels.get(key) || await recoverSetupPanel(channel, guild);
-    let first = entry?.first ? await entry.first.edit(payloads[0]).catch(() => null) : null;
-    let second = entry?.second ? await entry.second.edit(payloads[1]).catch(() => null) : null;
-    if (!first) first = await channel.send(payloads[0]);
-    if (!second) second = await channel.send(payloads[1]);
-    rememberSetupPanel(guild.id, channel.id, first || entry?.first, second || entry?.second);
-    return first || entry?.first;
+    const first = await channel.send(payloads[0]);
+    const second = await channel.send(payloads[1]);
+    rememberSetupPanel(guild.id, channel.id, first, second);
+    return first;
   })();
   setupPanelLocks.set(key, work);
   try { return await work; } finally { setupPanelLocks.delete(key); }
