@@ -11,18 +11,19 @@ function groupHasUser(group, userId) {
   const id = String(userId);
   return String(group.owner_id) === id || group.memberIds.includes(id) || group.managerIds.includes(id);
 }
-async function syncMember(group, guild, userId, add) {
+async function syncMember(group, guild, userId, add, { ignoreMissing = false } = {}) {
   const member = await guild.members.fetch(String(userId)).catch(() => null);
   if (!member) throw new Error('MEMBER_NOT_FOUND');
   let role = null;
   if (group.role_id) {
     role = guild.roles.cache.get(group.role_id) || await guild.roles.fetch(group.role_id).catch(() => null);
-    if (!role) throw new Error('GROUP_ROLE_NOT_FOUND');
+    if (!role && (!ignoreMissing || add)) throw new Error('GROUP_ROLE_NOT_FOUND');
   }
   let thread = null;
   if (group.thread_id) {
     thread = guild.channels.cache.get(group.thread_id) || await guild.channels.fetch(group.thread_id).catch(() => null);
-    if (!thread?.isThread?.() || !thread.members) throw new Error('GROUP_THREAD_NOT_FOUND');
+    if ((!thread?.isThread?.() || !thread.members) && (!ignoreMissing || add)) throw new Error('GROUP_THREAD_NOT_FOUND');
+    if (!thread?.isThread?.() || !thread.members) thread = null;
   }
   const wasRoleMember = Boolean(role && member.roles.cache.has(role.id));
   const wasThreadMember = Boolean(thread && await thread.members.fetch(member.id).catch(() => null));
@@ -48,17 +49,40 @@ async function restoreMembership(group, guildId, userId, wasManager, actorId) {
   await gm.addMember(guildId, group.id, userId, actorId);
   if (wasManager) await gm.setManagers(guildId, group.id, [...group.managerIds, String(userId)], actorId);
 }
-async function syncManagerRole(guild, settings, userId) {
+async function syncManagerRole(guild, settings, userId, { ignoreMissing = false } = {}) {
   if (!settings.managerRoleId) return;
   const member = await guild.members.fetch(String(userId)).catch(() => null);
   if (!member) throw new Error('MEMBER_NOT_FOUND');
   const role = guild.roles.cache.get(settings.managerRoleId) || await guild.roles.fetch(settings.managerRoleId).catch(() => null);
-  if (!role) throw new Error('MANAGER_ROLE_NOT_FOUND');
+  if (!role) {
+    if (ignoreMissing) return;
+    throw new Error('MANAGER_ROLE_NOT_FOUND');
+  }
   const groups = await gm.listGroups(guild.id);
   const shouldHaveRole = groups.some(group => group.managerIds.includes(String(userId)));
   const hasRole = member.roles.cache.has(role.id);
   if (shouldHaveRole && !hasRole) await member.roles.add(role, 'Group manager role');
   else if (!shouldHaveRole && hasRole) await member.roles.remove(role, 'Group manager role');
+}
+async function leaveGroupMember(guild, settings, group, userId, actorId = userId) {
+  const id = String(userId);
+  if (String(group.owner_id) === id) throw new Error('OWNER_PROTECTED');
+  const wasMember = group.memberIds.includes(id);
+  const wasManager = group.managerIds.includes(id);
+  await gm.removeMember(guild.id, group.id, id, actorId);
+  try {
+    await syncMember(group, guild, id, false, { ignoreMissing: true });
+    await syncManagerRole(guild, settings, id, { ignoreMissing: true });
+  } catch (error) {
+    if (wasMember || wasManager) {
+      await restoreMembership(group, guild.id, id, wasManager, actorId).catch(() => { error.groupRollbackFailed = true; });
+      await syncMember(group, guild, id, true).catch(() => { error.groupRollbackFailed = true; });
+    }
+    await syncManagerRole(guild, settings, id, { ignoreMissing: true }).catch(() => { error.groupRollbackFailed = true; });
+    throw error;
+  }
+  await gm.logGroupEvent(guild, 'member_remove', { groupId: group.id, userId: id, reason: 'left' }, actorId).catch(() => null);
+  return true;
 }
 async function handleInternalMessage(message, { prefix = ':', sendPanel = null } = {}) {
   if (!message?.guild || message.author?.bot) return false;
@@ -207,4 +231,4 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
   }
   return true;
 }
-module.exports = { handleInternalMessage };
+module.exports = { handleInternalMessage, leaveGroupMember };

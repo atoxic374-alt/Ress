@@ -187,7 +187,21 @@ async function testDashboardPublishers() {
   const adminComponents = JSON.stringify([...messages.values()][0]?.components || []);
   assert.ok(adminComponents.includes('Group Management'), 'admin dashboard title is English');
   assert.ok(adminComponents.includes('Delete') && adminComponents.includes('Reset All'));
+  assert.doesNotMatch(adminComponents, /استخدم الأزرار لإدارة القروبات/);
   assert.ok(adminComponents.includes('1465336647477493894') && adminComponents.includes('1465373714060415180'), 'admin action buttons reuse matching role-panel emojis');
+  assert.ok(adminComponents.indexOf('groups_admin:delete') < adminComponents.indexOf('groups_admin:reset'), 'Delete appears above Reset');
+  const adminPayload = groupCommand.controlPayload(guild);
+  const adminButtons = [];
+  const collectButtons = value => {
+    if (!value || typeof value !== 'object') return;
+    if (value.custom_id) adminButtons.push(value);
+    for (const child of Object.values(value)) collectButtons(child);
+  };
+  collectButtons(JSON.parse(JSON.stringify(adminPayload.components[0])));
+  assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:create')?.style, 2, 'ordinary management buttons use Secondary styling');
+  assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:delete')?.style, 4, 'Delete remains Danger');
+  assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:reset')?.style, 4, 'Reset remains Danger');
+  assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:resetall')?.style, 4, 'Reset All remains Danger');
   await groupCommand.sendAdminControlPanel(channel, guild);
   assert.equal(sends, 1, 'admin panel is updated instead of duplicated');
   assert.equal(edits, 1);
@@ -204,12 +218,10 @@ async function testDashboardPublishers() {
   const topGuild = { ...guild, members: { cache: new Map(), fetch: async () => null }, iconURL: () => null, bannerURL: () => null };
   const topPayload = await groupCommand.buildTopGroupsPayload(topGuild, { viewerId: OWNER, channelId: 'dashboard-channel' });
   assert.equal(topPayload.files.length, 1, 'top groups is rendered as an attached image');
-  assert.equal(topPayload.components.length, 4, 'top navigation, group totals, all-groups totals and member bonuses use separate rows');
+  assert.equal(topPayload.components.length, 1, 'top board has one compact navigation row');
   const topButtonIds = topPayload.components.flatMap(row => row.toJSON().components).map(component => component.custom_id);
-  assert.ok(topButtonIds.includes('groups_top:refresh'));
-  assert.ok(topButtonIds.includes('groups_bonus:group-add') && topButtonIds.includes('groups_bonus:group-remove'));
-  assert.ok(topButtonIds.includes('groups_bonus:all-add') && topButtonIds.includes('groups_bonus:all-remove'));
-  assert.ok(topButtonIds.includes('groups_bonus:member-add') && topButtonIds.includes('groups_bonus:member-remove'));
+  assert.deepEqual(topButtonIds, ['groups_top:rank', 'groups_top:group', 'groups_top:manage']);
+  assert.equal(topButtonIds.includes('groups_top:refresh'), false, 'the top board no longer exposes a manual refresh button');
   assert.equal(topPayload.flags, undefined, 'top image is not a Components V2 container');
 
   const legacyMessage = {
@@ -231,11 +243,19 @@ async function testDashboardPublishers() {
       return message;
     }
   };
-  await groupCommand.sendTopGroupsPanel(topChannel, topGuild);
+  const refreshIntervals = [];
+  const originalSetInterval = global.setInterval;
+  global.setInterval = (callback, milliseconds) => { refreshIntervals.push(milliseconds); return { unref() {} }; };
+  try {
+    await groupCommand.sendTopGroupsPanel(topChannel, topGuild);
+    await groupCommand.sendTopGroupsPanel(topChannel, topGuild);
+  } finally {
+    global.setInterval = originalSetInterval;
+  }
   assert.equal(topSends, 1, 'legacy V2 top board is replaced with a normal image message');
   assert.equal(legacyDeleted, 1, 'old V2 board is removed only after the image message was sent');
-  await groupCommand.sendTopGroupsPanel(topChannel, topGuild);
   assert.equal(topEdits, 1, 'a normal top-image message refreshes in place');
+  assert.deepEqual(refreshIntervals, [30_000], 'the top board schedules one automatic refresh every 30 seconds');
 
   let oldBoardEditAttempts = 0, oldBoardDeleteCount = 0, migratedBoardSends = 0;
   const oldV2TopMessage = {
@@ -333,7 +353,7 @@ async function testSetupDashboardSerialization() {
 async function testDeleteCommandFlow() {
   const guildId = 'delete-command-guild';
   const groupId = await insertGroup({ guildId, name: 'Delete flow group' });
-  const guild = { id: guildId, ownerId: OWNER, channels: { cache: new Map(), fetch: async () => null }, roles: { cache: new Map() } };
+  const guild = { id: guildId, ownerId: OWNER, iconURL: () => 'https://cdn.example/guild.png', channels: { cache: new Map(), fetch: async () => null }, roles: { cache: new Map() } };
   const member = { id: OWNER, guild, roles: { cache: new Map() } };
   const client = new EventEmitter();
   interactionRouter.clear();
@@ -381,18 +401,51 @@ async function testDeleteCommandFlow() {
   const deleteCommand = require('./commands/delete');
   assert.equal(createCommand.name, 'create');
   assert.equal(deleteCommand.name, 'delete');
+  let createCollector = null;
+  let createMessage = null;
   const commandMessage = {
     guild,
     member,
     author: { id: OWNER },
     channel: {
       id: 'delete-command-text-channel',
-      send: async payload => { commandPayload = payload; return payload; }
+      send: async payload => {
+        commandPayload = payload;
+        if (!JSON.stringify(payload).includes('group_create_launch:')) return payload;
+        createMessage = {
+          edit: async updated => { commandPayload = updated; return createMessage; },
+          createMessageComponentCollector: options => {
+            createCollector = new EventEmitter();
+            createCollector.options = options;
+            createCollector.stop = reason => { createCollector.reason = reason; createCollector.emit('end', [], reason); };
+            createCollector.dispatch = async interaction => {
+              for (const listener of createCollector.listeners('collect')) await listener(interaction);
+            };
+            return createCollector;
+          }
+        };
+        return createMessage;
+      }
     },
     reply: async content => content
   };
   await createCommand.execute(commandMessage, [], { client });
-  assert.ok(JSON.stringify(commandPayload).includes('groups_admin:create'), 'create command launches the same modal route as the admin Create button');
+  const createPayloadJson = JSON.stringify(commandPayload);
+  assert.equal(commandPayload.flags, require('discord.js').MessageFlags.IsComponentsV2, 'create command is sent as a Components V2 card');
+  assert.ok(createPayloadJson.includes('Create Group') && createPayloadJson.includes('افتح النموذج') && createPayloadJson.includes('https://cdn.example/guild.png'), 'create card is concise and includes a thumbnail');
+  assert.ok(createPayloadJson.includes('group_create_launch:') && createPayloadJson.includes('"style":2'), 'create button is Secondary and owned by a collector');
+  const createCustomId = createPayloadJson.match(/"custom_id":"([^"]+)"/)?.[1];
+  assert.ok(createCustomId.startsWith('group_create_launch:') && !createCustomId.startsWith('groups_'), 'create collector custom ID is isolated from the central component router');
+  assert.equal(createCollector.options.time, 60_000, 'create collector expires after one minute');
+  let openedModal = null;
+  await createCollector.dispatch({
+    customId: createCustomId, guild, client, member, user: { id: OWNER }, replied: false, deferred: false,
+    showModal: async modal => { openedModal = modal.toJSON(); },
+    reply: async () => { throw new Error('authorized creator should not receive a denial'); }
+  });
+  assert.equal(openedModal.custom_id, 'groups_modal:create', 'collector opens the same create-modal submit route as the dashboard');
+  assert.equal(createCollector.reason, 'used', 'the Create collector stops after the first successful use');
+  assert.ok(JSON.stringify(commandPayload).includes('"disabled":true'), 'the used button is disabled');
   await deleteCommand.execute(commandMessage, ['Delete', 'flow', 'group'], { client });
   assert.ok(JSON.stringify(commandPayload).includes('groups_admin_select:delete'), 'delete command uses the existing protected group selector and confirmation route');
   assert.ok(JSON.stringify(commandPayload).includes('Delete flow group'), 'delete command can target a group by name');
@@ -689,7 +742,7 @@ function mockGroupInteraction({ customId, guild, userId = ACTOR, channelId = nul
     showModal: async modal => { state.modal = modal.toJSON(); return modal; },
     update: async payload => { state.update = payload; interaction.replied = true; return payload; },
     deferReply: async () => { interaction.deferred = true; },
-    deferUpdate: async () => { state.deferredUpdate = true; },
+    deferUpdate: async () => { state.deferredUpdate = true; interaction.deferred = true; },
     editReply: async payload => { state.editReply = payload; interaction.replied = true; return payload; },
     followUp: async payload => { state.followUp = payload; return payload; }
   };
@@ -707,6 +760,16 @@ async function testTopBonusControls() {
   const denied = mockGroupInteraction({ customId: 'groups_bonus:group-add', guild, userId: USER_B });
   await groupCommand.handleInteraction(denied);
   assert.ok(denied.state.reply?.content?.includes('لا تملك صلاحية'), 'bonus controls are restricted to group-system managers');
+
+  const deniedManage = mockGroupInteraction({ customId: 'groups_top:manage', guild, userId: USER_B });
+  await groupCommand.handleInteraction(deniedManage);
+  assert.ok(deniedManage.state.reply?.content?.includes('لا تملك صلاحية'), 'Manage menu is restricted to group-system managers');
+  const manage = mockGroupInteraction({ customId: 'groups_top:manage', guild, channelId: 'top-bonus-channel' });
+  await groupCommand.handleInteraction(manage);
+  const manageJson = JSON.stringify(manage.state.reply?.components?.map(component => component.toJSON()));
+  for (const action of ['group-add', 'group-remove', 'all-add', 'all-remove', 'member-add', 'member-remove']) {
+    assert.ok(manageJson.includes(`groups_bonus:${action}`), `Manage menu contains ${action}`);
+  }
 
   const openAdd = mockGroupInteraction({ customId: 'groups_bonus:group-add', guild, channelId: 'top-bonus-channel' });
   await groupCommand.handleInteraction(openAdd);
@@ -792,10 +855,23 @@ async function testTopBonusControls() {
 
   const rank = mockGroupInteraction({ customId: 'groups_top:rank', guild, userId: USER_A, channelId: 'top-bonus-channel' });
   await groupCommand.handleInteraction(rank);
-  assert.equal(rank.state.editReply?.files?.length, 1, 'My Rank responds with a private ranking image');
+  assert.equal(rank.state.editReply?.files?.length, 1, 'My Rank responds with a private image for the member\'s group');
+  assert.ok(rank.state.editReply.files[0].name.includes('my-group-rank'), 'My Rank renders a group-specific rank image instead of the public top-board image');
   const myGroup = mockGroupInteraction({ customId: 'groups_top:group', guild, userId: USER_A, channelId: 'top-bonus-channel' });
   await groupCommand.handleInteraction(myGroup);
-  assert.equal(myGroup.state.editReply?.files?.length, 1, 'My Group responds with a private group-info image');
+  const myGroupJson = JSON.stringify(myGroup.state.editReply);
+  assert.ok(myGroupJson.includes('groups_top:leave:' + groupId), 'My Group provides a Leave action');
+  assert.ok(myGroupJson.includes('Created:') && !myGroupJson.includes('تاريخ الإنشاء'), 'My Group uses structured text and an English date label');
+
+  const leaveRequest = mockGroupInteraction({ customId: `groups_top:leave:${groupId}`, guild, userId: USER_A, channelId: 'top-bonus-channel' });
+  await groupCommand.handleInteraction(leaveRequest);
+  assert.ok(JSON.stringify(leaveRequest.state.update).includes(`groups_top:leave-confirm:${groupId}`), 'Leave requires explicit confirmation');
+  const leavingMember = { id: USER_A, roles: { cache: { has: () => false }, add: async () => {}, remove: async () => {} } };
+  guild.members.fetch = async id => String(id) === USER_A ? leavingMember : null;
+  const leaveConfirm = mockGroupInteraction({ customId: `groups_top:leave-confirm:${groupId}`, guild, userId: USER_A, channelId: 'top-bonus-channel' });
+  await groupCommand.handleInteraction(leaveConfirm);
+  assert.equal((await gm.getGroup(guildId, groupId)).memberIds.includes(USER_A), false, 'confirmed Leave removes the member from the group');
+  assert.ok(leaveConfirm.state.editReply?.components?.length, 'confirmed Leave returns a completion card');
   const refresh = mockGroupInteraction({ customId: 'groups_top:refresh', guild, channelId: 'top-bonus-channel' });
   refresh.message = { edit: async payload => { refresh.state.messageEdit = payload; return payload; } };
   await groupCommand.handleInteraction(refresh);
