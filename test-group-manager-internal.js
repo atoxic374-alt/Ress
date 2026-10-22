@@ -376,6 +376,39 @@ async function testDeleteCommandFlow() {
   const confirmation = chooseGroup.response.components[0].toJSON();
   assert.ok(JSON.stringify(confirmation).includes(`groups_admin_confirm:delete:${groupId}`));
 
+  let commandPayload = null;
+  const createCommand = require('./commands/create');
+  const deleteCommand = require('./commands/delete');
+  assert.equal(createCommand.name, 'create');
+  assert.equal(deleteCommand.name, 'delete');
+  const commandMessage = {
+    guild,
+    member,
+    author: { id: OWNER },
+    channel: {
+      id: 'delete-command-text-channel',
+      send: async payload => { commandPayload = payload; return payload; }
+    },
+    reply: async content => content
+  };
+  await createCommand.execute(commandMessage, [], { client });
+  assert.ok(JSON.stringify(commandPayload).includes('groups_admin:create'), 'create command launches the same modal route as the admin Create button');
+  await deleteCommand.execute(commandMessage, ['Delete', 'flow', 'group'], { client });
+  assert.ok(JSON.stringify(commandPayload).includes('groups_admin_select:delete'), 'delete command uses the existing protected group selector and confirmation route');
+  assert.ok(JSON.stringify(commandPayload).includes('Delete flow group'), 'delete command can target a group by name');
+
+  let deniedReply = '';
+  const unauthorizedMessage = {
+    ...commandMessage,
+    member: { id: USER_A, guild, roles: { cache: { some: () => false } } },
+    author: { id: USER_A },
+    reply: async content => { deniedReply = content; return content; }
+  };
+  await createCommand.execute(unauthorizedMessage, [], { client });
+  assert.equal(deniedReply, 'لا تملك الصلاحية.', 'create is restricted to group-system managers');
+  await deleteCommand.execute(unauthorizedMessage, [], { client });
+  assert.equal(deniedReply, 'لا تملك الصلاحية.', 'delete is restricted to group-system managers');
+
   const confirmDelete = makeInteraction(`groups_admin_confirm:delete:${groupId}`, 'button');
   assert.equal(await interactionRouter.route(confirmDelete), true);
   assert.equal((await gm.getGroup(guildId, groupId)).status, 'deleted');

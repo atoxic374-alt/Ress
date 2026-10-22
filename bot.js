@@ -3292,6 +3292,11 @@ client.on('messageCreate', async message => {
       await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, client, colorManager });
       return;
     }
+    // create/delete use the per-guild group-system manager list, checked by the command itself.
+    if (commandName === 'create' || commandName === 'delete') {
+      await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, client, colorManager });
+      return;
+    }
     if (['groups', 'group', 'قروب', 'قروبات', 'setup', 'إعدادات'].includes(commandName)) {
       await command.execute(message, args, { responsibilities, points, scheduleSave, BOT_OWNERS, BOT_OWNER_ROLES, ADMIN_ROLES: CURRENT_ADMIN_ROLES, client, colorManager });
       return;
