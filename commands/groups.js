@@ -758,8 +758,8 @@ async function sendMemberOverviewPanel(channel, guild, groupCount) {
 }
 function groupCommandGuideText(group, settings) {
   const lines = [
-    `## أوامر القروب ${safe(group?.name || 'قروب', 80)}`,
-    'اكتب الأوامر العادية في بداية الرسالة بدون بادئة. لأوامر المسح والعقوبة استخدم البادئة : لتأكيد أنك تقصد أمرًا إداريًا.',
+    `اسم القروب : ${safe(group?.name || 'قروب', 80)}`,
+    'اكتب الأمر في بداية الرسالة مباشرة بدون : . الأوامر الحساسة تتطلب كلمة تأكيد منفصلة.',
     '',
     '**للمالك والمسؤولين**',
     '• `تحكم` لفتح لوحة التحكم.',
@@ -775,16 +775,17 @@ function groupCommandGuideText(group, settings) {
     '',
     '**للمالك أو مسؤول النظام فقط**',
     '• `مسؤول @عضو` لإضافة مسؤول للقروب بعد إضافته كعضو.',
-    '• `مسؤول إزالة @عضو` لإزالة مسؤول من القروب.'
+    '• `مسؤول إزالة @عضو` لإزالة مسؤول من القروب.',
+    '• `أوامر` لعرض هذا الدليل مرة أخرى.'
   ];
   if (settings?.extraPermissions) {
-    lines.push('', '**عند تفعيل الصلاحيات الإضافية**', '• `:مسح` لمسح الرسائل الحديثة بعد التأكد من الصلاحيات.', '• `:عقوبة @عضو` لتطبيق عقوبة 10 دقائق على عضو غير محمي.');
+    lines.push('', '**عند تفعيل الصلاحيات الإضافية**', '• `مسح تأكيد` لمسح الرسائل الحديثة بعد التأكد من الصلاحيات.', '• `عقوبة @عضو تأكيد` لتطبيق عقوبة 10 دقائق على عضو غير محمي.', '• `أوامر` لعرض هذا الدليل مرة أخرى.');
   }
   return lines.join('\n');
 }
 async function sendGroupCommandGuide(channel, group, settings) {
   if (!channel?.send) return null;
-  return channel.send({ content: groupCommandGuideText(group, settings), allowedMentions: { parse: [] } });
+  return channel.send(responsePayload({ content: groupCommandGuideText(group, settings), allowedMentions: { parse: [] } }));
 }
 function createGroupModal(defaultOwnerId = '') {
   const modal = new ModalBuilder().setCustomId('groups_modal:create').setTitle('إنشاء قروب');
@@ -856,7 +857,7 @@ async function createFromModal(interaction) {
 
   const panelNote = panelChannel && !panelPublished ? '\nتعذر نشر لوحة التحكم تلقائيًا؛ تحقق من صلاحيات البوت في القناة.' : '';
   return reply(interaction, {
-    content: `تم إنشاء القروب **${safe(group.name)}**\nحالة الموسيقى — ${musicResultMessage(musicResult)}${panelNote}`
+    content: `تم إنشاء القروب **${safe(group.name)}**\nالمالك : <@${safe(group.owner_id, 24)}>\nالموسيقى : ${musicResultMessage(musicResult)}${panelNote}`
   });
 }
 const CLEARABLE_SETUP_FIELDS = [
