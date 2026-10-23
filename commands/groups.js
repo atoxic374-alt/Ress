@@ -311,7 +311,7 @@ function myGroupPayload(guild, group, userId, memberPoints, roleName) {
     `### ${safe(group.name, 100)}\n**دورك:** ${membership}  •  **الحالة:** ${status === 'active' ? 'نشط' : status === 'orphaned' ? 'يحتاج تنظيفًا' : status}`
   ));
   c.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `### تفاصيل القروب\n**المالك:** <@${group.owner_id}>\n**الرول:** ${safe(roleName || 'غير متاح', 100)}\n**الأعضاء:** ${Number(group.memberIds?.length || 0).toLocaleString('ar')}`
+    `### تفاصيل القروب\n**المالك:** <@${group.owner_id}>\n**الرول:** ${safe(roleName || 'غير متاح', 100)}\n**الأعضاء:** ${new Set([String(group.owner_id || ''), ...(group.memberIds || []).map(String), ...(group.managerIds || []).map(String)].filter(Boolean)).size.toLocaleString('ar')}`
   ));
   c.addTextDisplayComponents(new TextDisplayBuilder().setContent(
     `### النقاط والتواريخ\n**نقاط القروب:** ${Number(group.points || 0).toLocaleString('ar')}\n**نقاطك:** ${Number(memberPoints?.points || 0).toLocaleString('ar')}\n**تاريخ الإنشاء:** ${formatGroupDate(group.created_at)}`
