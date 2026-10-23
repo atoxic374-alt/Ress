@@ -1350,7 +1350,8 @@ function registerInteractionHandler(client) {
       && (settings.countAllChannels || gm.channelBelongs(group, message.channelId))
     );
     if (!eligible) return;
-    const key = `${message.guild.id}:${userId}:${message.channelId}`;
+    // One message award per user per guild per minute prevents farming across multiple channels.
+    const key = `${message.guild.id}:${userId}`;
     const now = Date.now();
     if (now - Number(lastMessageAt.get(key) || 0) < 60000) return;
     lastMessageAt.set(key, now);
@@ -1361,6 +1362,8 @@ function registerInteractionHandler(client) {
   client.on('messageReactionAdd', async (reaction, user) => {
     const guild = reaction?.message?.guild;
     if (user?.bot || !guild) return;
+    // Self-reactions do not generate group points.
+    if (String(reaction?.message?.author?.id || '') === String(user.id)) return;
     const settings = await cachedSettings(guild.id).catch(() => null);
     if (!settings?.enabled) return;
     const groups = await cachedGroups(guild.id);
