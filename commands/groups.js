@@ -758,7 +758,7 @@ async function sendMemberOverviewPanel(channel, guild, groupCount) {
 }
 function groupCommandGuideText(group, settings) {
   const lines = [
-    `اسم القروب : ${safe(group?.name || 'قروب', 80)}`,
+    `دليل الأوامر : ${safe(group?.name || 'قروب', 80)}`,
     'اكتب الأمر في بداية الرسالة مباشرة بدون : . الأوامر الحساسة تتطلب كلمة تأكيد منفصلة.',
     '',
     '**للمالك والمسؤولين**',
@@ -812,7 +812,7 @@ async function createFromModal(interaction) {
   } catch (error) {
     const message = error.message?.startsWith('GROUP_SETUP_REQUIRED')
       ? 'أكمل إعدادات القروبات أولًا.'
-      : `تعذر إنشاء القروب ${error.message ? `— ${safe(error.message, 400)}` : ''}`;
+      : ({ GROUP_SYSTEM_DISABLED: 'نظام القروبات متوقف حاليًا.', BOT_NOT_ALLOWED: 'لا يمكن تعيين بوت كمالك للقروب.', OWNER_ALREADY_HAS_GROUP: 'المالك المحدد لديه قروب بالفعل.', USER_ALREADY_IN_GROUP: 'المالك المحدد مرتبط بقروب آخر.', GROUP_FULL: 'وصل القروب إلى الحد الأقصى للأعضاء.', NAME_REQUIRED: 'اسم القروب مطلوب وصالح.', MAIN_ROLE_INVALID: 'رتبة النظام الرئيسية غير صالحة؛ راجع الإعدادات.', LEADER_ROLE_INVALID: 'رتبة المالك غير صالحة؛ راجع الإعدادات.', MANAGER_ROLE_INVALID: 'رتبة المسؤول غير صالحة؛ راجع الإعدادات.' })[error.message] || 'تعذر إنشاء القروب. راجع الإعدادات وصلاحيات البوت.';
     return reply(interaction, { content: message });
   }
 
