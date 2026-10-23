@@ -465,7 +465,7 @@ async function restoreGroupRole(guild, group, forceMissing = false) {
   let role = !forceMissing && group.role_id && (guild.roles.cache.get(String(group.role_id)) || await guild.roles.fetch(String(group.role_id)).catch(() => null));
   if (role) return { role, group };
   const settings = await gm.getSettings(guild.id);
-  role = await guild.roles.create({ name: String(group.name || 'Group').slice(0, 100), color: /^#[0-9a-f]{6}$/i.test(group.color || '') ? group.color : undefined, reason: 'Restore deleted managed group role' });
+  role = await withDiscordRetry(() => guild.roles.create({ name: String(group.name || 'Group').slice(0, 100), color: /^#[0-9a-f]{6}$/i.test(group.color || '') ? group.color : undefined, reason: 'Restore deleted managed group role' }));
   if (settings.mainRoleId) {
     const mainRole = guild.roles.cache.get(settings.mainRoleId) || await guild.roles.fetch(settings.mainRoleId).catch(() => null);
     if (mainRole) await role.setPosition(Math.max(1, mainRole.position - 1), 'Restore managed group role position').catch(() => {});
@@ -499,7 +499,7 @@ async function restoreGroupResources(guild, sourceGroup, trigger = 'resource_del
     let voice = group.voice_channel_id && (guild.channels.cache.get(group.voice_channel_id) || await guild.channels.fetch(group.voice_channel_id).catch(() => null));
     let thread = group.thread_id && (guild.channels.cache.get(group.thread_id) || await guild.channels.fetch(group.thread_id).catch(() => null));
     if (!text || text.type !== ChannelType.GuildText) {
-      text = await guild.channels.create({ name: settings.chatMode === 'threads' ? 'groups-chat' : `📝・${String(group.name || 'Group').slice(0, 90)}`, type: ChannelType.GuildText, parent: settings.textCategoryId || undefined, permissionOverwrites: groupChannelOverwrites(guild, roleResult.role.id), reason: 'Restore deleted managed group text channel' });
+      text = await withDiscordRetry(() => guild.channels.create({ name: settings.chatMode === 'threads' ? 'groups-chat' : `📝・${String(group.name || 'Group').slice(0, 90)}`, type: ChannelType.GuildText, parent: settings.textCategoryId || undefined, permissionOverwrites: groupChannelOverwrites(guild, roleResult.role.id), reason: 'Restore deleted managed group text channel' }));
       patch.text_channel_id = text.id;
       thread = null;
     } else if (!text.permissionOverwrites.cache.get(roleResult.role.id)) {
@@ -507,14 +507,14 @@ async function restoreGroupResources(guild, sourceGroup, trigger = 'resource_del
     }
     if (settings.chatMode === 'threads') {
       if (!thread || !thread.isThread?.() || !thread.members) {
-        thread = await text.threads.create({ name: String(group.name || 'Group').slice(0, 100), type: ChannelType.PrivateThread, invitable: false, reason: 'Restore deleted managed group thread' });
+        thread = await withDiscordRetry(() => text.threads.create({ name: String(group.name || 'Group').slice(0, 100), type: ChannelType.PrivateThread, invitable: false, reason: 'Restore deleted managed group thread' }));
         patch.thread_id = thread.id;
       }
     } else if (group.thread_id) {
       patch.thread_id = null;
     }
     if (!voice || voice.type !== ChannelType.GuildVoice) {
-      voice = await guild.channels.create({ name: String(group.name || 'Group').slice(0, 100), type: ChannelType.GuildVoice, parent: settings.voiceCategoryId || undefined, permissionOverwrites: groupChannelOverwrites(guild, roleResult.role.id), reason: 'Restore deleted managed group voice channel' });
+      voice = await withDiscordRetry(() => guild.channels.create({ name: String(group.name || 'Group').slice(0, 100), type: ChannelType.GuildVoice, parent: settings.voiceCategoryId || undefined, permissionOverwrites: groupChannelOverwrites(guild, roleResult.role.id), reason: 'Restore deleted managed group voice channel' }));
       patch.voice_channel_id = voice.id;
     } else if (!voice.permissionOverwrites.cache.get(roleResult.role.id)) {
       await voice.permissionOverwrites.set(groupChannelOverwrites(guild, roleResult.role.id), 'Restore managed group permissions').catch(() => {});
@@ -1766,6 +1766,13 @@ async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
       await gm.audit(guild.id, actorId, group.id, 'group_resource_drift_detected', { roleMissing: !resourceRole, textMissing: !resourceText, threadMissing: settings.chatMode === 'threads' && !resourceThread, voiceMissing: !resourceVoice }).catch(() => {});
       await restoreGroupResources(guild, group, 'reconcile_missing_resource').catch(error => console.error('[groups] resource reconciliation failed:', guild.id, group.id, error?.message || error));
       continue;
+    }
+    const settingsDrift = [];
+    if (resourceText && settings.textCategoryId && String(resourceText.parentId || '') !== String(settings.textCategoryId)) settingsDrift.push('text_category');
+    if (resourceVoice && settings.voiceCategoryId && String(resourceVoice.parentId || '') !== String(settings.voiceCategoryId)) settingsDrift.push('voice_category');
+    if (settingsDrift.length) {
+      await gm.runtimeLog(guild.id, group.id, 'settings_drift', 'warning', { fields: settingsDrift }).catch(() => {});
+      issues.push({ groupId: group.id, groupName: group.name, type: 'settings_drift', detail: `الموارد لا تطابق إعدادات الكاتاقوري: ${settingsDrift.join(', ')}` });
     }
     const expected = [...new Set([String(group.owner_id), ...group.memberIds, ...group.managerIds].filter(Boolean))];
     const role = group.role_id ? (guild.roles.cache.get(String(group.role_id)) || await guild.roles.fetch(String(group.role_id)).catch(() => null)) : null;
