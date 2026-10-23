@@ -76,7 +76,7 @@ function text(ctx, value, x, y, maxWidth) {
   const originalFont = ctx.font;
   if (maxWidth > 0 && ctx.measureText(s).width > maxWidth) {
     // Shrink long Arabic/English names before truncating so the card remains readable.
-    const match = originalFont.match(/^(.*?)(\\d+(?:\\.\\d+)?)px(.*)$/);
+    const match = originalFont.match(/^(.*?)(\d+(?:\.\d+)?)px(.*)$/);
     if (match) {
       const prefix = match[1], originalSize = Number(match[2]), suffix = match[3];
       const minSize = Math.max(12, Math.min(originalSize, 15));
