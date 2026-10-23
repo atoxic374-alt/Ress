@@ -581,6 +581,23 @@ async function deleteGroup(guild, groupId, actorId) {
       await tx.run("UPDATE managed_groups SET status = 'deleted', archived_at = ?, updated_at = ? WHERE guild_id = ? AND id = ?", [now, now, String(guild.id), Number(groupId)]);
       await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [String(guild.id), Number(groupId), actorId ? String(actorId) : null, 'group_delete', '{}', now]);
     }, 'group-delete');
+    // Remove global leader/manager roles only when the deleted group was their last entitlement.
+    try {
+      const settings = await getSettings(guild.id);
+      const remaining = await listGroups(guild.id);
+      const roleCleanup = new Map();
+      if (settings.leaderRoleId && !remaining.some(item => String(item.owner_id) === String(group.owner_id))) roleCleanup.set(String(group.owner_id), settings.leaderRoleId);
+      for (const managerId of group.managerIds) {
+        if (settings.managerRoleId && !remaining.some(item => item.managerIds.includes(String(managerId)))) roleCleanup.set(String(managerId), settings.managerRoleId);
+      }
+      for (const [userId, roleId] of roleCleanup) {
+        const member = await guild.members.fetch(userId).catch(() => null);
+        const roleToRemove = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
+        if (member && roleToRemove && member.roles.cache.has(roleToRemove.id)) await member.roles.remove(roleToRemove, 'Group deleted; no remaining role entitlement');
+      }
+    } catch (error) {
+      await audit(guild.id, actorId, groupId, 'group_role_cleanup_incomplete', { message: String(error?.message || error).slice(0, 300) }).catch(() => null);
+    }
     return true;
   });
 }
