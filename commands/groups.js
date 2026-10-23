@@ -1961,7 +1961,7 @@ function registerInteractionHandler(client) {
     if (!oldTracked && !newTracked) { voiceStarts.delete(key); voiceChannels.delete(key); }
   });
 
-  client.on('channelDelete', async channel => {
+  const handleManagedResourceDelete = async channel => {
     if (!channel.guild) return;
     const groups = (await gm.listGroups(channel.guild.id, true)).filter(group => group.status !== 'deleted');
     for (const group of groups) {
@@ -1970,6 +1970,11 @@ function registerInteractionHandler(client) {
       await restoreGroupResources(channel.guild, group, `channel_deleted:${channel.id}`).catch(error => console.error('[groups] channel restore failed:', error?.message || error));
     }
     activityCache.delete(String(channel.guild.id));
+  };
+  client.on('channelDelete', handleManagedResourceDelete);
+  // Discord.js emits thread deletion separately from channelDelete for some thread types.
+  client.on('threadDelete', async thread => {
+    await handleManagedResourceDelete(thread).catch(error => console.error('[groups] thread restore failed:', error?.message || error));
   });
 
   client.on('roleDelete', async role => {
