@@ -759,7 +759,7 @@ async function sendMemberOverviewPanel(channel, guild, groupCount) {
 function groupCommandGuideText(group, settings) {
   const lines = [
     `دليل الأوامر : ${safe(group?.name || 'قروب', 80)}`,
-    'اكتب الأمر في بداية الرسالة مباشرة بدون : . الأوامر الحساسة تتطلب كلمة تأكيد منفصلة.',
+    'اكتب الأمر في بداية الرسالة مباشرة دون أي بادئة. الأوامر الحساسة تتطلب كلمة تأكيد منفصلة.',
     '',
     '**للمالك والمسؤولين**',
     '• `تحكم` لفتح لوحة التحكم.',
