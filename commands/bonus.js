@@ -2452,14 +2452,13 @@ async function handleInteraction(interaction, context = {}) {
         }
         try {
           if (rawGroupId === 'all' && (operation === 'add-points' || operation === 'remove-points')) {
-            const groups = await db.listGroups(interaction.guild.id, false);
-            const totals = await Promise.all(groups.map(async group => Number(await db.getGroupPoints(interaction.guild.id, group.id)) || 0));
-            const before = totals.reduce((sum, value) => sum + value, 0);
+            const preview = await db.previewAdjustAllGroupPoints(interaction.guild.id, operation === 'add-points' ? amount : -amount);
+            const before = preview.before;
+            const after = preview.after;
             const requestedDelta = operation === 'add-points' ? amount : -amount;
-            const after = operation === 'add-points' ? before + amount * groups.length : Math.max(0, before - amount * groups.length);
-            const effectiveDelta = after - before;
+            const effectiveDelta = preview.delta;
             await showPrivatePanel(interaction, {
-              content: `معاينة العملية الجماعية قبل التنفيذ\\nالقروبات المتأثرة: ${groups.length.toLocaleString()}\\nإجمالي النقاط قبل: ${before.toLocaleString()}\\nالتغيير المطلوب لكل قروب: ${requestedDelta > 0 ? '+' : ''}${requestedDelta.toLocaleString()}\\nالتغيير الفعلي التقديري: ${effectiveDelta >= 0 ? '+' : ''}${effectiveDelta.toLocaleString()}\\nإجمالي النقاط بعد: ${after.toLocaleString()}\\nراجع المعاينة ثم أكد التنفيذ.`,
+              content: `معاينة العملية الجماعية قبل التنفيذ\\nالقروبات المتأثرة: ${preview.groups.toLocaleString()}\\nإجمالي النقاط قبل: ${before.toLocaleString()}\\nالتغيير المطلوب لكل قروب: ${requestedDelta > 0 ? '+' : ''}${requestedDelta.toLocaleString()}\\nالتغيير الفعلي التقديري: ${effectiveDelta >= 0 ? '+' : ''}${effectiveDelta.toLocaleString()}\\nإجمالي النقاط بعد: ${after.toLocaleString()}\\nراجع المعاينة ثم أكد التنفيذ.`,
               components: [new ActionRowBuilder().addComponents(
                 button(`bonus:confirm:all-groups-points:${operation}:${amount}`, 'تأكيد العملية الجماعية', operation === 'remove-points' ? ButtonStyle.Danger : ButtonStyle.Success),
                 closeButton('إلغاء')
