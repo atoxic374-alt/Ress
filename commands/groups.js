@@ -195,12 +195,12 @@ function controlPayload(guild) {
   const c = baseContainer(guild, 'إدارة القروبات', '');
   const items = [
     ['إنشاء', 'إنشاء قروب جديد', 'groups_admin:create', ButtonStyle.Secondary, '<:emoji_33:1465383525644501238>'],
-    ['Import', 'ربط عناصر Discord الموجودة بقروب', 'groups_admin:import', ButtonStyle.Secondary, '<:emoji_30:1465383419641856233>'],
-    ['Info', 'عرض تفاصيل القروب', 'groups_admin:info', ButtonStyle.Secondary, '<:emoji_33:1465383582292771025>'],
-    ['Change', 'تعديل إعدادات القروب', 'groups_admin:edit', ButtonStyle.Secondary, '<:emoji_35:1465383704993202452>'],
-    ['Delete', 'حذف قروب مُدار', 'groups_admin:delete', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>'],
-    ['Reset', 'تصفير نقاط قروب واحد', 'groups_admin:reset', ButtonStyle.Danger, '<:emoji_34:1465383644339241073>'],
-    ['Reset All', 'تصفير نقاط كل القروبات', 'groups_admin:resetall', ButtonStyle.Danger, '<:emoji_26:1465373714060415180>']
+    ['استيراد', 'ربط عناصر Discord الموجودة بقروب', 'groups_admin:import', ButtonStyle.Secondary, '<:emoji_30:1465383419641856233>'],
+    ['معلومات', 'عرض تفاصيل القروب', 'groups_admin:info', ButtonStyle.Secondary, '<:emoji_33:1465383582292771025>'],
+    ['تعديل', 'تعديل إعدادات القروب', 'groups_admin:edit', ButtonStyle.Secondary, '<:emoji_35:1465383704993202452>'],
+    ['حذف', 'حذف قروب مُدار', 'groups_admin:delete', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>'],
+    ['تصفير', 'تصفير نقاط قروب واحد', 'groups_admin:reset', ButtonStyle.Danger, '<:emoji_34:1465383644339241073>'],
+    ['تصفير الكل', 'تصفير نقاط كل القروبات', 'groups_admin:resetall', ButtonStyle.Danger, '<:emoji_26:1465373714060415180>']
   ];
   for (const [label, description, id, style, emoji] of items) {
     c.addSectionComponents(new SectionBuilder()
