@@ -781,11 +781,11 @@ async function testTopBonusControls() {
   };
   const denied = mockGroupInteraction({ customId: 'groups_bonus:group-add', guild, userId: USER_B });
   await groupCommand.handleInteraction(denied);
-  assert.ok(denied.state.reply?.content?.includes('لا تملك صلاحية'), 'bonus controls are restricted to group-system managers');
+  assert.ok(responseText(denied.state.reply)?.includes('لا تملك صلاحية'), 'bonus controls are restricted to group-system managers');
 
   const deniedManage = mockGroupInteraction({ customId: 'groups_top:manage', guild, userId: USER_B });
   await groupCommand.handleInteraction(deniedManage);
-  assert.ok(deniedManage.state.reply?.content?.includes('لا تملك صلاحية'), 'Manage menu is restricted to group-system managers');
+  assert.ok(responseText(deniedManage.state.reply)?.includes('لا تملك صلاحية'), 'Manage menu is restricted to group-system managers');
   const manage = mockGroupInteraction({ customId: 'groups_top:manage', guild, channelId: 'top-bonus-channel' });
   await groupCommand.handleInteraction(manage);
   const manageJson = JSON.stringify(manage.state.reply?.components?.map(component => component.toJSON()));
