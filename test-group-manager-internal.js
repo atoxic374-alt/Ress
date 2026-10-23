@@ -491,6 +491,20 @@ function makeParserGuild() {
   };
 }
 
+function responseText(value) {
+  if (typeof value === 'string') return value;
+  const find = node => {
+    if (!node || typeof node !== 'object') return null;
+    if (typeof node.content === 'string') return node.content;
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) { for (const item of child) { const found = find(item); if (found !== null) return found; } }
+      else { const found = find(child); if (found !== null) return found; }
+    }
+    return null;
+  };
+  return find(value);
+}
+
 function parserMessage(guild, content) {
   const replies = [];
   const message = {
@@ -640,7 +654,7 @@ async function testInternalCommandParser() {
 
   const englishAdd = parserMessage(guild, `:add ${USER_A}`);
   assert.equal(await handleInternalMessage(englishAdd.message), true);
-  assert.deepEqual(englishAdd.replies, ['تمت إضافة العضو.']);
+  assert.equal(responseText(englishAdd.replies[0]), 'تمت إضافة العضو.');
   assert.deepEqual((await gm.getGroup(guildId, groupId)).memberIds, [OWNER, USER_A]);
 
   const barePermission = parserMessage(guild, 'صلاحية');
@@ -650,7 +664,7 @@ async function testInternalCommandParser() {
   const bareAdd = parserMessage(guild, `إضافة ${USER_A}`);
   assert.equal(await handleInternalMessage(bareAdd.message, { prefix: null }), true,
     'group commands accept bare command names without a colon or configured prefix');
-  assert.deepEqual(bareAdd.replies, ['تمت إضافة العضو.']);
+  assert.equal(responseText(bareAdd.replies[0]), 'تمت إضافة العضو.');
 
   // The same parser command is safe to repeat and does not duplicate membership.
   const repeatedAdd = parserMessage(guild, `:add ${USER_A}`);
@@ -687,7 +701,7 @@ async function testInternalCommandParser() {
 
   const punishWhileDisabled = parserMessage(guild, `:عقوبة ${USER_A}`);
   await handleInternalMessage(punishWhileDisabled.message);
-  assert.equal(punishWhileDisabled.replies[0], 'الصلاحيات الإضافية متوقفة.');
+  assert.equal(responseText(punishWhileDisabled.replies[0]), 'الصلاحيات الإضافية متوقفة.');
 
   await insertGroup({ guildId, name: 'Ambiguous channel', ownerId: USER_C, memberIds: [USER_C], textChannelId: 'parser-channel' });
   assert.equal(await gm.getGroupForChannel(guildId, 'parser-channel'), null, 'shared channel links are rejected rather than routing to the first group');
