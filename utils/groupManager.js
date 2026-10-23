@@ -249,10 +249,16 @@ async function logGroupEvent(guild, event, details = {}, actorId = null) {
     if (!channel && typeof guild.channels?.fetch === 'function') channel = await guild.channels.fetch(settings.logChannelId).catch(() => null);
     if (!channel || typeof channel.send !== 'function') return null;
     const safeDetails = details && typeof details === 'object' ? details : { value: String(details) };
-    const [title, description] = groupEventView(event, safeDetails);
-    const fields = Object.entries(safeDetails).filter(([, value]) => value !== undefined && value !== null).slice(0, 12);
+    const logDetails = { ...safeDetails };
+    if (logDetails.groupId != null) {
+      const group = await getGroup(guild.id, logDetails.groupId).catch(() => null);
+      const groupName = group?.name || logDetails.groupName || logDetails.name;
+      if (groupName) { logDetails.groupName = String(groupName).slice(0, 100); delete logDetails.groupId; }
+    }
+    const [title, description] = groupEventView(event, logDetails);
+    const fields = Object.entries(logDetails).filter(([, value]) => value !== undefined && value !== null).slice(0, 12);
     const actor = actorId ? `<@${String(actorId).replace(/[^0-9]/g, '')}>` : 'النظام';
-    const compactMembership = String(event) === 'update' && String(safeDetails.reason) === 'membership_reconciliation_drift';
+    const compactMembership = String(event) === 'update' && String(logDetails.reason) === 'membership_reconciliation_drift';
     const visibleFields = compactMembership ? fields.filter(([key]) => key !== 'reason') : fields;
     const fieldLines = visibleFields.flatMap(([key, value]) => groupLogFieldLines(key, value));
     const fieldText = fieldLines.length
