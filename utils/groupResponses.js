@@ -6,7 +6,7 @@ function normalizeGroupText(value) {
   if (typeof value !== 'string') return value;
   return value
     // Keep prose punctuation readable: "القروب : الاسم" rather than "القروب: الاسم".
-    .replace(/([\u0600-\u06FF])\s*:\s*([\u0600-\u06FF])/g, '$1 : $2')
+    .replace(/([\u0600-\u06FF])\s*:\s*/g, '$1 : ')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
