@@ -1609,6 +1609,17 @@ const reconciliationSignatures = new Map();
 async function reconcileGroupMembership(guild, actorId = null) {
   const groups = await gm.listGroups(guild.id);
   const issues = [];
+  const botCache = new Map();
+  const isBotId = async userId => {
+    const id = String(userId);
+    if (botCache.has(id)) return botCache.get(id);
+    const cached = guild.members.cache.get(id);
+    if (cached) { const result = Boolean(cached.user?.bot); botCache.set(id, result); return result; }
+    const fetched = await guild.members.fetch(id).catch(() => null);
+    const result = Boolean(fetched?.user?.bot);
+    botCache.set(id, result);
+    return result;
+  };
   for (const group of groups) {
     const expected = [...new Set([String(group.owner_id), ...group.memberIds, ...group.managerIds].filter(Boolean))];
     const role = group.role_id ? (guild.roles.cache.get(String(group.role_id)) || await guild.roles.fetch(String(group.role_id)).catch(() => null)) : null;
@@ -1616,12 +1627,14 @@ async function reconcileGroupMembership(guild, actorId = null) {
       issues.push({ groupId: group.id, groupName: group.name, type: 'role_missing', detail: 'رتبة القروب غير موجودة أو لا يمكن الوصول إليها.' });
     } else {
       for (const userId of expected) {
+        if (await isBotId(userId)) continue;
         let member = guild.members.cache.get(userId) || null;
         if (!member && !role.members.has(userId)) member = await guild.members.fetch(userId).catch(() => null);
         if (member && !member.roles.cache.has(role.id)) issues.push({ groupId: group.id, groupName: group.name, type: 'member_missing_role', userId, detail: 'عضو محفوظ في قاعدة البيانات ولا يحمل رتبة القروب.' });
         else if (!member && !role.members.has(userId)) issues.push({ groupId: group.id, groupName: group.name, type: 'member_not_found', userId, detail: 'العضو محفوظ في قاعدة البيانات لكنه غير موجود أو تعذر جلبه من السيرفر.' });
       }
       for (const [userId] of role.members) {
+        if (await isBotId(userId)) continue;
         if (!expected.includes(String(userId))) issues.push({ groupId: group.id, groupName: group.name, type: 'role_member_not_in_db', userId, detail: 'عضو يحمل رتبة القروب لكنه غير موجود في قائمة العضوية المحفوظة.' });
       }
     }
@@ -1634,8 +1647,9 @@ async function reconcileGroupMembership(guild, actorId = null) {
         if (!threadMembers) {
           issues.push({ groupId: group.id, groupName: group.name, type: 'thread_members_unavailable', detail: 'تعذر جلب عضوية الثريد؛ لم يتم إجراء أي تعديل تلقائي.' });
         } else {
-          const actual = new Set([...threadMembers.keys()].map(String));
-          for (const userId of expected) if (!actual.has(userId)) issues.push({ groupId: group.id, groupName: group.name, type: 'member_missing_thread', userId, detail: 'عضو محفوظ في قاعدة البيانات لكنه ليس عضوًا في الثريد.' });
+          const actual = new Set();
+          for (const [userId, threadMember] of threadMembers) if (!(threadMember?.user?.bot) && !(await isBotId(userId))) actual.add(String(userId));
+          for (const userId of expected) if (!(await isBotId(userId)) && !actual.has(userId)) issues.push({ groupId: group.id, groupName: group.name, type: 'member_missing_thread', userId, detail: 'عضو محفوظ في قاعدة البيانات لكنه ليس عضوًا في الثريد.' });
           for (const userId of actual) if (!expected.includes(userId)) issues.push({ groupId: group.id, groupName: group.name, type: 'thread_member_not_in_db', userId, detail: 'عضو في الثريد غير موجود في قائمة العضوية المحفوظة.' });
         }
       }
