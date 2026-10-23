@@ -271,7 +271,8 @@ function controlPayload(guild) {
   const c = baseContainer(guild, 'GROUP ADMINISTRATION', '');
   const items = [
     ['Create', 'ابدأ إنشاء قروب جديد من النموذج.', 'groups_admin:create', '<:emoji_33:1465383525644501238>', ButtonStyle.Secondary],
-    ['Add', 'إضافة رومات ورولات موجودة.', 'groups_admin:import', '<:emoji_30:1465383419641856233>', ButtonStyle.Secondary],
+    ['Add', 'إنشاء أو إصلاح الرومات والثريد والفويس الناقصة تلقائيًا.', 'groups_admin:repair', '<:emoji_30:1465383419641856233>', ButtonStyle.Secondary],
+    ['Import', 'ربط رومات ورولات موجودة فقط بدون إنشاء موارد.', 'groups_admin:import', '<:emoji_30:1465383419641856233>', ButtonStyle.Secondary],
     ['Info', 'عرض معلومات القروب وأعضائه.', 'groups_admin:info', '<:emoji_33:1465383582292771025>', ButtonStyle.Secondary],
     ['Edit', 'تعديل إعدادات القروب.', 'groups_admin:edit', '<:emoji_35:1465383704993202452>', ButtonStyle.Secondary],
     ['Delete', 'حذف القروب.', 'groups_admin:delete', '<:emoji_21:1465336647477493894>', ButtonStyle.Danger],
@@ -2837,13 +2838,34 @@ async function advancePermission(interaction, flow) {
 }
 async function handleGroupExtensions(interaction) {
   const [prefix, action, groupIdRaw, scope] = String(interaction.customId || '').split(':');
-  if (!['groups_control', 'groups_flow'].includes(prefix) && !(prefix === 'groups_admin' && action === 'import')) return false;
+  if (prefix === 'groups_admin_repair_select') {
+    const settings = await checkSystem(interaction);
+    if (!settings) return true;
+    const groupId = Number(action);
+    const group = await gm.getGroup(interaction.guild.id, groupId);
+    if (!group || group.status === 'deleted') return reply(interaction, { content: 'القروب غير موجود.' });
+    await interaction.deferUpdate();
+    try {
+      await restoreGroupResources(interaction.guild, group, 'admin_repair');
+      return reply(interaction, { content: `تم إنشاء أو إصلاح موارد القروب **${safe(group.name)}** وإعادة ربط الأعضاء.` });
+    } catch (error) {
+      return reply(interaction, { content: `تعذر إصلاح موارد القروب: ${String(error?.message || error).slice(0, 240)}` });
+    }
+  }
+  if (!['groups_control', 'groups_flow'].includes(prefix) && !(prefix === 'groups_admin' && ['import', 'repair'].includes(action))) return false;
   let flow;
   try {
     if (!interaction.guild) throw new Error('NO_PERMISSION');
     if (prefix === 'groups_admin') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await currentSystem(interaction);
+      if (action === 'repair') {
+        const groups = (await gm.listGroups(interaction.guild.id, true)).filter(group => group.status !== 'deleted');
+        if (!groups.length) return interaction.editReply({ content: 'لا توجد قروبات لإصلاح مواردها.' });
+        return interaction.editReply(selectPayload(interaction.guild, 'إصلاح موارد القروب', 'اختر القروب. سيتم إنشاء أي روم نصي أو ثريد أو روم صوتي مفقود، ثم إعادة ربط الأعضاء.', 'groups_admin_repair_select', groups.slice(0, 25).map(group => ({
+          label: safe(group.name, 90), value: String(group.id), description: group.status === 'orphaned' ? 'قروب متعثر — إصلاح الموارد' : 'فحص وإنشاء الموارد الناقصة'
+        }))));
+      }
       flow = newFlow(interaction.guild.id, interaction.user.id, 'import'); flow.step = 'role';
       return interaction.editReply(entitySelect(interaction.guild, flow, 'استيراد : رول القروب', 'ربط عناصر موجودة فقط. اختر رتبة غير مرتبطة بقروب آخر؛ لن يتم إنشاؤها أو تعديل صلاحياتها.', new RoleSelectMenuBuilder().setPlaceholder('رول القروب الموجود')));
     }
