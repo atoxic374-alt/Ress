@@ -39,7 +39,7 @@ const RULE_METRICS = Object.freeze([
 ]);
 function rulesPayload(guild, rules = []) {
   const byMetric = new Map(rules.map(rule => [String(rule.metric), rule]));
-  const c = baseContainer(guild, 'GROUP RULES', 'عرض وتعديل وتفعيل حدود ونقاط الرسائل والصوت والتفاعلات.');
+  const c = baseContainer(guild, 'GROUP RULES', 'عرض وتعديل حدود ونقاط الرسائل والصوت والتفاعلات. عند تغيير الحد، يستمر التقدم المتراكم ويؤثر في موعد النقطة التالية.');
   for (const [metric, label, description, defaultThreshold] of RULE_METRICS) {
     const rule = byMetric.get(metric);
     const enabled = Number(rule?.enabled) === 1;
