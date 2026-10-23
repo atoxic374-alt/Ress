@@ -445,6 +445,17 @@ async function restoreThreadMember(thread, userId) {
   return false;
 }
 
+async function runWithConcurrency(items, concurrency, worker) {
+  const queue = [...items];
+  const workers = Array.from({ length: Math.min(Math.max(1, concurrency), queue.length || 1) }, async () => {
+    while (queue.length) {
+      const item = queue.shift();
+      await worker(item);
+    }
+  });
+  await Promise.all(workers);
+}
+
 async function restoreGroupRole(guild, group, forceMissing = false) {
   let role = !forceMissing && group.role_id && (guild.roles.cache.get(String(group.role_id)) || await guild.roles.fetch(String(group.role_id)).catch(() => null));
   if (role) return { role, group };
@@ -499,11 +510,12 @@ async function restoreGroupResources(guild, sourceGroup, trigger = 'resource_del
     }
     group = await gm.updateGroup(guild.id, group.id, patch, null);
     const failedThreadMembers = [];
-    for (const userId of groupResourceMemberIds(group)) {
+    const memberIds = groupResourceMemberIds(group);
+    await runWithConcurrency(memberIds, 4, async userId => {
       const member = await guild.members.fetch(userId).catch(() => null);
       if (member && !member.user?.bot) await member.roles.add(roleResult.role, 'Restore managed group membership').catch(() => {});
       if (thread?.members && !(await restoreThreadMember(thread, userId))) failedThreadMembers.push(String(userId));
-    }
+    });
     await gm.audit(guild.id, null, group.id, 'group_resource_restored', { trigger, roleId: roleResult.role.id, textChannelId: group.text_channel_id, threadId: group.thread_id, voiceChannelId: group.voice_channel_id }).catch(() => {});
     if (failedThreadMembers.length) {
       await gm.audit(guild.id, null, group.id, 'group_thread_members_restore_failed', { trigger, threadId: group.thread_id, userIds: failedThreadMembers }).catch(() => {});
