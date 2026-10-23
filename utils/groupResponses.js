@@ -23,13 +23,30 @@ function normalizeComponent(value) {
   return out;
 }
 
+function responseTitle(content = '') {
+  const value = String(content || '');
+  if (/أوامر القروب|دليل الأوامر/.test(value)) return 'GROUP COMMANDS';
+  if (/تم إنشاء القروب/.test(value)) return 'GROUP CREATED';
+  if (/تم الإلغاء|تم إلغاء|أُلغي|ألغيت/.test(value)) return 'CANCELLED';
+  if (/تم استخدام|مسبقًا|بالفعل/.test(value)) return 'ALREADY PROCESSED';
+  if (/تأكيد|على وشك|لن يتم|اكتب:/.test(value)) return 'CONFIRMATION REQUIRED';
+  if (/لا تملك|غير مسموح|مخصص|متاح ل|متاحة ل|صلاحية|ممنوع/.test(value)) return 'ACCESS DENIED';
+  if (/غير موجود|لا توجد|لم يعد|لم يتم العثور|ليس ضمن|لا يمكن/.test(value)) return 'NOT FOUND';
+  if (/تعذر|فشل|فشلت|غير صالح|خطأ|ناقص|مطلوب/.test(value)) return 'REQUEST FAILED';
+  if (/تم\s|تمت\s|تم تنفيذ|تم تحديث|تم إضافة|تمت إضافة|تم حذف|تم تصفير|تم السماح|تم منع|تمت مغادرة/.test(value)) return 'SUCCESS';
+  if (/اختر|حدد|أدخل|استخدم/.test(value)) return 'NEXT STEP';
+  return 'GROUP UPDATE';
+}
+
 function responsePayload(payload = {}) {
   const data = { ...payload, allowedMentions: payload.allowedMentions || { parse: [] } };
   if (typeof data.content === 'string' && !data.embeds?.length && !data.poll && !data.sticker_ids?.length) {
     const content = normalizeGroupText(data.content);
+    const title = String(data.title || responseTitle(content));
+    delete data.title;
     delete data.content;
     const container = new ContainerBuilder().addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(content || 'تم تنفيذ الطلب.')
+      new TextDisplayBuilder().setContent('## ' + title + '\n' + (content || 'تم تنفيذ الطلب.'))
     );
     const components = Array.isArray(data.components) ? data.components.map(component =>
       typeof component?.toJSON === 'function' ? component : normalizeComponent(component)
