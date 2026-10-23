@@ -1356,7 +1356,7 @@ function registerInteractionHandler(client) {
     if (now - Number(lastMessageAt.get(key) || 0) < 60000) return;
     lastMessageAt.set(key, now);
     if (lastMessageAt.size > 10000) for (const [entry, time] of lastMessageAt) if (now - time > 600000) lastMessageAt.delete(entry);
-    await gm.recordActivity(message.guild.id, userId, 'messages', 1, message.channelId).catch(() => {});
+    await gm.recordActivity(message.guild.id, userId, 'messages', 1, message.channelId).catch(error => console.error('[groups] message points failed:', error?.message || error));
   });
 
   client.on('messageReactionAdd', async (reaction, user) => {
@@ -1377,7 +1377,7 @@ function registerInteractionHandler(client) {
     )) {
       const emojiKey = reaction.emoji?.id || reaction.emoji?.name || 'unknown';
       const eventId = `${sourceMessage.id}:${emojiKey}`;
-      await gm.recordActivity(guild.id, user.id, 'reactions', 1, sourceMessage.channelId, eventId).catch(() => {});
+      await gm.recordActivity(guild.id, user.id, 'reactions', 1, sourceMessage.channelId, eventId).catch(error => console.error('[groups] reaction points failed:', error?.message || error));
     }
   });
 
@@ -1401,7 +1401,7 @@ function registerInteractionHandler(client) {
     // In group-only scope, leaving the group's configured voice room closes the session.
     if (oldTracked && !newTracked) {
       const started = voiceStarts.get(key);
-      if (started) await gm.recordActivity(guildId, memberId, 'voice_ms', Date.now() - started, oldState.channelId).catch(() => {});
+      if (started) await gm.recordActivity(guildId, memberId, 'voice_ms', Date.now() - started, oldState.channelId).catch(error => console.error('[groups] voice points failed:', error?.message || error));
       voiceStarts.delete(key);
     }
     if (newTracked && !oldTracked) voiceStarts.set(key, Date.now());
@@ -1501,7 +1501,7 @@ function registerInteractionHandler(client) {
       if (!has && had && isLinked && String(group.owner_id) !== String(newMember.id)) {
         const voiceKey = `${newMember.guild.id}:${newMember.id}`;
         const voiceStarted = voiceStarts.get(voiceKey);
-        if (voiceStarted) await gm.recordActivity(newMember.guild.id, newMember.id, 'voice_ms', Date.now() - voiceStarted, group.voice_channel_id).catch(() => {});
+        if (voiceStarted) await gm.recordActivity(newMember.guild.id, newMember.id, 'voice_ms', Date.now() - voiceStarted, group.voice_channel_id).catch(error => console.error('[groups] voice points on role removal failed:', error?.message || error));
         voiceStarts.delete(voiceKey);
         const roleRemovalSettings = await gm.getSettings(newMember.guild.id);
         await leaveGroupMember(newMember.guild, roleRemovalSettings, group, newMember.id, 'role_removed').catch(async error => {
