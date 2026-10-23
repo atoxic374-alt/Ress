@@ -21,6 +21,17 @@ function groupThumb(guild) {
   } catch { return undefined; }
 }
 function baseContainer(guild, title, description='', color='#5865F2') { const c=new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || color || '#5865F2')); const text=[]; if(title)text.push(new TextDisplayBuilder().setContent(`## ${title}`)); if(description)text.push(new TextDisplayBuilder().setContent(description)); if(groupThumb(guild)){ const s=new SectionBuilder().addTextDisplayComponents(text).setThumbnailAccessory(new ThumbnailBuilder().setURL(groupThumb(guild))); c.addSectionComponents(s); } else text.forEach(t=>c.addTextDisplayComponents(t)); return c; }
+function formatRuleThreshold(metric, value) {
+  const threshold = Math.max(0, Number(value) || 0);
+  if (metric === 'voice_ms') {
+    const hours = Math.floor(threshold / 3600000);
+    const minutes = Math.floor((threshold % 3600000) / 60000);
+    const seconds = Math.floor((threshold % 60000) / 1000);
+    const human = [hours ? `${hours} ساعة` : '', minutes ? `${minutes} دقيقة` : '', seconds ? `${seconds} ثانية` : ''].filter(Boolean).join(' و ') || 'أقل من ثانية';
+    return `${human} (${threshold.toLocaleString('en-US')} مللي ثانية)`;
+  }
+  return `${threshold.toLocaleString('en-US')} ${metric === 'messages' ? 'رسالة' : 'تفاعل'}`;
+}
 const RULE_METRICS = Object.freeze([
   ['messages', 'الرسائل', 'عدد الرسائل المحتسبة في قنوات القروب النصية', 100],
   ['voice_ms', 'الصوت', 'مدة التواجد في القنوات الصوتية بالمللي ثانية', 3600000],
@@ -35,7 +46,7 @@ function rulesPayload(guild, rules = []) {
     const threshold = Number(rule?.threshold) || defaultThreshold;
     const points = Number(rule?.points) || 1;
     c.addSectionComponents(new SectionBuilder()
-      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${description}\nالحد : **${threshold.toLocaleString()}** | النقاط : **${points}** | الحالة : **${enabled ? 'مفعّل' : 'متوقف'}**`))
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${description}\nالحد : **${formatRuleThreshold(metric, threshold)}** | النقاط : **${points}** لكل حد مكتمل | الحالة : **${enabled ? 'مفعّل' : 'متوقف'}**`))
       .setButtonAccessory(button(`groups_rules:edit:${metric}`, 'تعديل', ButtonStyle.Primary)));
     c.addActionRowComponents(new ActionRowBuilder().addComponents(button(`groups_rules:toggle:${metric}`, enabled ? 'تعطيل' : 'تفعيل', enabled ? ButtonStyle.Danger : ButtonStyle.Success)));
   }
@@ -249,7 +260,7 @@ function topGroupsButtons() {
   )];
 }
 function topManagePayload(guild) {
-  const c = baseContainer(guild, 'إدارة', 'إدارة النقاط اليدوية للقروبات والأعضاء.');
+  const c = baseContainer(guild, 'BONUS POINTS MANAGEMENT', 'إدارة نقاط البونص اليدوية للقروبات والأعضاء. هذا النظام منفصل عن نقاط نشاط القروبات.');
   const actions = [
     ['Add Group Pts', 'groups_bonus:group-add', ButtonStyle.Success, '<:emoji_30:1465383419641856233>'],
     ['Remove Group Pts', 'groups_bonus:group-remove', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>'],
@@ -1113,7 +1124,7 @@ async function handleSetupSelection(interaction, prefix, action) {
   }
   return false;
 }
-async function handleAdmin(interaction, action) { const settings=await checkSystem(interaction);if(!settings)return true; if(action==='create')return interaction.showModal(createGroupModal(interaction.user.id)); if(action==='delete'||action==='info'||action==='edit'||action==='reset'){const groups=(await gm.listGroups(interaction.guild.id,action==='delete')).filter(g=>g.status==='active'||(action==='delete'&&g.status==='orphaned')); if(!groups.length)return reply(interaction,{content:'لا توجد قروبات متاحة.'});const opts=groups.slice(0,25).map(g=>({label:safe(g.name,90),value:String(g.id),description:`${Number(g.points||0).toLocaleString()} points${g.status==='orphaned'?' • يحتاج تنظيف':''}`}));return reply(interaction,selectPayload(interaction.guild,action==='delete'?'حذف قروب':action==='reset'?'تصفير النقاط':'اختر قروبًا','اختر قروبًا واحدًا.',`groups_admin_select:${action}`,opts));}if(action==='resetall'){const c=baseContainer(interaction.guild,'RESET ALL POINTS','سيتم تصفير نقاط كل القروبات النشطة.');c.addActionRowComponents(new ActionRowBuilder().addComponents(button('groups_admin_confirm:resetall','تأكيد',ButtonStyle.Danger),button('groups_admin_cancel','إلغاء')));return reply(interaction,componentsV2Payload(c));}return true; }
+async function handleAdmin(interaction, action) { const settings=await checkSystem(interaction);if(!settings)return true; if(action==='create')return interaction.showModal(createGroupModal(interaction.user.id)); if(action==='delete'||action==='info'||action==='edit'||action==='reset'){const groups=(await gm.listGroups(interaction.guild.id,action==='delete')).filter(g=>g.status==='active'||(action==='delete'&&g.status==='orphaned')); if(!groups.length)return reply(interaction,{content:'لا توجد قروبات متاحة.'});const opts=groups.slice(0,25).map(g=>({label:safe(g.name,90),value:String(g.id),description:`${Number(g.points||0).toLocaleString()} points${g.status==='orphaned'?' • يحتاج تنظيف':''}`}));return reply(interaction,selectPayload(interaction.guild,action==='delete'?'حذف قروب':action==='reset'?'تصفير النقاط':'اختر قروبًا','اختر قروبًا واحدًا.',`groups_admin_select:${action}`,opts));}if(action==='resetall'){const c=baseContainer(interaction.guild,'RESET ALL GROUP ACTIVITY POINTS','سيتم تصفير نقاط نشاط كل القروبات النشطة وعدادات الرسائل والصوت والتفاعلات. لن تتغير نقاط البونص.');c.addActionRowComponents(new ActionRowBuilder().addComponents(button('groups_admin_confirm:resetall','تأكيد',ButtonStyle.Danger),button('groups_admin_cancel','إلغاء')));return reply(interaction,componentsV2Payload(c));}return true; }
 async function handleMember(interaction, action, groupId) { const settings=await gm.getSettings(interaction.guild.id); let group=groupId>0?await gm.getGroup(interaction.guild.id,groupId):null; if(!group){const groups=await gm.listGroups(interaction.guild.id);group=selectMemberGroup(groups,interaction.user.id,interaction.channelId);} if(!group)return reply(interaction,{content:'لا يوجد قروب مرتبط بعضويتك في هذا السيرفر.'});if(!gm.canManageGroup(interaction.client,settings,group,interaction.member)&&!group.memberIds.includes(String(interaction.user.id)))return deny(interaction,'هذه اللوحة متاحة لأعضاء القروب ومالكه ومسؤوليه فقط.');if(action==='info'){const owner=await interaction.guild.members.fetch(group.owner_id).catch(()=>null);const managers=await Promise.all(group.managerIds.map(id=>interaction.guild.members.fetch(id).catch(()=>null)));const attachment=await renderInfo({guild:interaction.guild,group,owner,managers:managers.filter(Boolean),accentColor:null});return reply(interaction,{files:[attachment]});}return true;}
 async function handleRulesInteraction(interaction, action, parts = []) {
   const settings = await checkSystem(interaction);
@@ -1124,8 +1135,8 @@ async function handleRulesInteraction(interaction, action, parts = []) {
   const rules = await gm.getRules(interaction.guild.id);
   const current = rules.find(rule => String(rule.metric) === metric);
   if (action === 'edit') {
-    const modal = new ModalBuilder().setCustomId(`groups_rules_modal:edit:${metric}`).setTitle(`تعديل قاعدة ${definition[1]}`);
-    modal.addLabelComponents(new LabelBuilder().setLabel('الحد').setTextInputComponent(new TextInputBuilder().setCustomId('threshold').setStyle(TextInputStyle.Short).setRequired(true).setValue(String(current?.threshold || definition[3])).setMaxLength(12)));
+    const modal = new ModalBuilder().setCustomId(`groups_rules_modal:edit:${metric}`).setTitle('EDIT GROUP POINT RULE');
+    modal.addLabelComponents(new LabelBuilder().setLabel('الحد').setTextInputComponent(new TextInputBuilder().setCustomId('threshold').setStyle(TextInputStyle.Short).setRequired(true).setValue(String(current?.threshold || definition[3])).setPlaceholder(metric === 'voice_ms' ? 'بالمللي ثانية، مثال 3600000 = ساعة' : 'عدد الرسائل أو التفاعلات').setMaxLength(12)));
     modal.addLabelComponents(new LabelBuilder().setLabel('النقاط').setTextInputComponent(new TextInputBuilder().setCustomId('points').setStyle(TextInputStyle.Short).setRequired(true).setValue(String(current?.points || 1)).setMaxLength(8)));
     return interaction.showModal(modal);
   }
