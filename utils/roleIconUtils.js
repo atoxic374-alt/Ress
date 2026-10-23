@@ -117,7 +117,13 @@ async function resolveIconBuffer(input, attachments = []) {
 }
 
 async function applyRoleIcon(role, buffer) {
-  const updatedRole = await role.setIcon(buffer).catch(() => null);
+  let setError = null;
+  const updatedRole = await role.setIcon(buffer).catch(error => { setError = error; return null; });
+  if (setError) {
+    const error = new Error('icon_not_applied');
+    error.cause = setError;
+    throw error;
+  }
   const roleId = updatedRole?.id || role?.id;
   if (!roleId) {
     throw new Error('icon_not_applied');

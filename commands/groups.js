@@ -40,10 +40,17 @@ function normalizeGroupEmoji(value) {
 async function applyGroupEmojiRole(guild, group, value) {
   const role = group?.role_id && (guild.roles.cache.get(String(group.role_id)) || await guild.roles.fetch(String(group.role_id)).catch(() => null));
   if (!role) throw new Error('GROUP_ROLE_NOT_FOUND');
+  const me = guild.members.me || await guild.members.fetchMe().catch(() => null);
+  if (!me?.permissions?.has(PermissionsBitField.Flags.ManageRoles)) throw new Error('MISSING_MANAGE_ROLES');
+  if (!role.editable) throw new Error('GROUP_ROLE_NOT_EDITABLE');
   if (!value) { await role.setIcon(null); return; }
   const buffer = await resolveIconBuffer(value);
   if (!buffer) throw new Error('INVALID_EMOJI');
-  await applyRoleIcon(role, buffer);
+  try { await applyRoleIcon(role, buffer); }
+  catch (error) {
+    console.error('[groups] failed to apply group role icon:', error?.cause?.message || error?.message || error);
+    throw new Error('ROLE_ICON_UPDATE_FAILED');
+  }
 }
 async function saveGroupSettings(guildId, patch, actorId = null) {
   const updated = await gm.saveSettings(guildId, patch, actorId);
@@ -1790,7 +1797,13 @@ function registerInteractionHandler(client) {
       const settingsForEmoji = await gm.getSettings(message.guild.id).catch(() => null);
       if (!group || !gm.canManageGroup(message.client, settingsForEmoji, group, message.member)) return message.reply('لم تعد تملك صلاحية تعديل هذا القروب.').catch(() => null);
       try { await applyGroupEmojiRole(message.guild, group, value); }
-      catch (error) { return message.reply(error.message === 'INVALID_EMOJI' ? 'تعذر تحميل الإيموجي وتطبيقه على رتبة القروب.' : 'تعذر تطبيق الإيموجي على رتبة القروب؛ تحقق من صلاحيات البوت.').catch(() => null); }
+      catch (error) {
+        const messageText = error.message === 'INVALID_EMOJI' ? 'تعذر تحميل الإيموجي.'
+          : error.message === 'MISSING_MANAGE_ROLES' ? 'البوت لا يملك Manage Roles.'
+            : error.message === 'GROUP_ROLE_NOT_EDITABLE' ? 'رتبة القروب غير قابلة للتعديل؛ ارفع رتبة البوت فوقها.'
+              : 'رفض Discord تحديث أيقونة رتبة القروب.';
+        return message.reply(messageText).catch(() => null);
+      }
       await gm.updateGroup(message.guild.id, pending.groupId, { emoji: value, updated_at: Date.now() }, message.author.id);
       invalidateGroupCaches(message.guild.id);
       await gm.logGroupEvent?.(message.guild, 'update', { groupId: pending.groupId, field: 'emoji', value }, message.author.id);
@@ -2106,7 +2119,7 @@ function groupError(error) {
     FLOW_EXPIRED: 'انتهت هذه القائمة أو استُخدمت؛ افتح قائمة جديدة.', FLOW_OWNER: 'هذه القائمة تخص مستخدماً آخر.',
     INVALID_SELECTION: 'اختيار غير صالح؛ افتح القائمة مجدداً.', MEMBER_NOT_FOUND: 'العضو غير موجود في السيرفر.', NO_VOICE_MEMBERS: 'لا يوجد أعضاء حاليًا داخل قناة القروب الصوتي لفصلهم.',
     TARGET_PROTECTED: 'لا يمكن تقييد مالك القروب أو مسؤوليه أو مديري النظام أو البوت.', TARGET_NOT_IN_GROUP: 'الميوت والنميوت متاحان لأعضاء القروب فقط.',
-    CHANNEL_NOT_FOUND: 'قناة القروب المحددة غير موجودة أو نوعها غير صالح.',
+    CHANNEL_NOT_FOUND: 'قناة القروب المحددة غير موجودة أو نوعها غير صالح.', MISSING_MANAGE_ROLES: 'البوت لا يملك Manage Roles.', GROUP_ROLE_NOT_EDITABLE: 'رتبة القروب أعلى من رتبة البوت أو غير قابلة للتعديل.', ROLE_ICON_UPDATE_FAILED: 'رفض Discord تحديث أيقونة الرتبة؛ تحقق من أن الرتبة غير مُدارة وأنها قابلة للتعديل.',
     SHARED_CHANNEL: 'القناة/أب الثريد مشترك؛ لا يمكن تغيير صلاحياته دون التأثير على قروب أو ثريد آخر.',
     ASSET_LINKED: 'أحد العناصر أو الأعضاء المختارين مرتبط بقروب آخر؛ لم يتم الاستيراد.',
     INVALID_ROLE: 'اختر رتبة قروب عادية قابلة للإدارة، غير everyone أو رتبة نظام أو رتبة ذات صلاحيات إدارية.',
