@@ -1368,25 +1368,34 @@ function registerInteractionHandler(client) {
   // non-bot message without components, which destroyed normal group conversations.
   // Restore persisted voice sessions after a restart. Recovery is capped at two minutes
   // so downtime never creates a large artificial voice-point award.
-  gm.listVoiceSessions().then(async sessions => {
+  const restoreVoiceSessions = async () => {
+    const sessions = await gm.listVoiceSessions();
     const now = Date.now();
     for (const session of sessions) {
       const guild = client.guilds.cache.get(String(session.guild_id));
-      const member = guild?.members?.cache?.get(String(session.user_id));
-      if (!guild || !member || member.voice?.channelId !== String(session.channel_id)) {
+      if (!guild) continue;
+      const member = guild.members.cache.get(String(session.user_id))
+        || await guild.members.fetch(String(session.user_id)).catch(() => null);
+      if (!member) {
+        await gm.deleteVoiceSession(session.guild_id, session.user_id).catch(() => {});
+        continue;
+      }
+      if (member.voice?.channelId !== String(session.channel_id)) {
         await gm.deleteVoiceSession(session.guild_id, session.user_id).catch(() => {});
         continue;
       }
       const [groups, settings] = await Promise.all([cachedGroups(guild.id), cachedSettings(guild.id).catch(() => null)]);
-      const isEligible = groups.some(group =>
+      const eligibleGroup = groups.find(group =>
         (group.memberIds.includes(String(session.user_id)) || String(group.owner_id) === String(session.user_id) || group.managerIds.includes(String(session.user_id)))
-        && ((settings?.countAllChannels && groups.length > 0) || groups.some(group => group.voice_channel_id === String(session.channel_id) && (group.memberIds.includes(String(session.user_id)) || String(group.owner_id) === String(session.user_id) || group.managerIds.includes(String(session.user_id)))))
+        && (settings?.countAllChannels || group.voice_channel_id === String(session.channel_id))
       );
-      if (!isEligible) { await gm.deleteVoiceSession(session.guild_id, session.user_id).catch(() => {}); continue; }
+      if (!eligibleGroup) { await gm.deleteVoiceSession(session.guild_id, session.user_id).catch(() => {}); continue; }
       voiceStarts.set(`${session.guild_id}:${session.user_id}`, Math.max(now - 120000, Number(session.checkpoint_at) || now));
       voiceChannels.set(`${session.guild_id}:${session.user_id}`, String(session.channel_id));
     }
-  }).catch(error => console.error('[groups] voice session restore failed:', error?.message || error));
+  };
+  if (client.isReady?.()) restoreVoiceSessions().catch(error => console.error('[groups] voice session restore failed:', error?.message || error));
+  else client.once('ready', () => restoreVoiceSessions().catch(error => console.error('[groups] voice session restore failed:', error?.message || error)));
 
   const voiceCheckpoint = setInterval(async () => {
     const now = Date.now();
