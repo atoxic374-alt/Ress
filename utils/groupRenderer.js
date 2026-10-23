@@ -139,7 +139,7 @@ async function resolveChannel(guild, channelId) {
 function formatDate(value) {
   const date = new Date(Number(value));
   if (!Number.isFinite(date.getTime())) return 'غير محدد';
-  try { return new Intl.DateTimeFormat('ar-SA', { dateStyle: 'medium', timeStyle: 'short' }).format(date); }
+  try { return new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' }).format(date); }
   catch { return date.toLocaleString('en-GB'); }
 }
 function drawWrappedText(ctx, value, x, y, maxWidth, lineHeight, maxLines = 2) {
