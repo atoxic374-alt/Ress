@@ -1356,21 +1356,23 @@ async function execute(message, args, { client } = {}) {
       if (!choices.length) return replyMessage(message,'لم أجد قروبًا مطابقًا للاسم أو المعرف المحدد.');
     }
 
-    const options = choices.slice(0, 25).map(group => ({
+    const pageSize = 25;
+    const pageCount = Math.max(1, Math.ceil(choices.length / pageSize));
+    const options = choices.slice(0, pageSize).map(group => ({
       label: safe(group.name || `Group ${group.id}`, 90),
       value: String(group.id),
       description: `${Number(group.points || 0).toLocaleString()} points${group.status === 'orphaned' ? ' • يحتاج تنظيف' : ''}`.slice(0, 100)
     }));
-    const limitNote = choices.length > 25
-      ? ` عُرض أول 25 من ${choices.length} نتيجة؛ حدّد اسمًا أدق أو معرف القروب.`
-      : '';
     const payload = selectPayload(
       message.guild,
       'حذف قروب',
-      `اختر القروب المطلوب. ستظهر خطوة تأكيد قبل حذف الرتبة والقنوات المرتبطة به.${limitNote}`,
-      'groups_admin_select:delete',
+      `اختر القروب المطلوب. الصفحة 1/${pageCount} • الإجمالي ${choices.length}. ستظهر خطوة تأكيد قبل الحذف.`,
+      'groups_admin_select:delete:0',
       options
     );
+    if (pageCount > 1) payload.components.push(new ActionRowBuilder().addComponents(
+      button('groups_admin_page:delete:1', 'التالي')
+    ).toJSON());
     return message.channel.send({ ...payload, allowedMentions: { parse: [] } });
   }
   if (['top', 'leaderboard', 'ranking', 'rank', 'ترتيب', 'تصنيف'].includes(sub)) {
