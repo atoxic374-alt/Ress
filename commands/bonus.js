@@ -500,7 +500,10 @@ async function showPrivatePanel(interaction, payload, update = false) {
   delete payload.__bonusActionTitle;
   if (update && completedResult && !boardMessage) {
     const resultPayload = { ...payload, ephemeral: true };
-    delete resultPayload.components;
+    if ((Number(resultPayload.flags || 0) & MessageFlags.IsComponentsV2) !== 0) {
+      // Keep the V2 container while removing action buttons from the completed result.
+      resultPayload.components = (Array.isArray(resultPayload.components) ? resultPayload.components : []).slice(0, 1);
+    } else delete resultPayload.components;
     const originalPayload = await buildHome(interaction.guild);
     if (interaction.deferred || interaction.replied) {
       await interaction.followUp(resultPayload).catch(() => {});
