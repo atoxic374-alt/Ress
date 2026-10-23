@@ -1281,7 +1281,7 @@ async function execute(message, args, { client } = {}) {
   }
   if (['ledger', 'سجل_النقاط', 'points-audit'].includes(sub)) {
     if (!canManage) return replyMessage(message, 'لا تملك الصلاحية.');
-    const groupId = args[1] && /^\\d+$/.test(args[1]) ? Number(args[1]) : null;
+    const groupId = args[1] && /^\d+$/.test(args[1]) ? Number(args[1]) : null;
     const rows = await gm.listPointsLedger(message.guild.id, { groupId, limit: 15 });
     const lines = rows.map(row => `#${row.id} • Group ${row.group_id} • <@${row.user_id}> • ${row.metric} • ${Number(row.points_delta) >= 0 ? '+' : ''}${Number(row.points_delta)} • ${row.reason}`);
     const payload = baseContainer(message.guild, 'POINTS AUDIT', lines.length ? lines.join('\\n').slice(0, 3800) : 'لا توجد سجلات نقاط بعد.');
