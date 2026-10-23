@@ -1152,7 +1152,8 @@ async function transferGroupOwner(interaction, groupId, ownerId) {
     if (!newOwner || newOwner.user.bot) throw new Error('MEMBER_NOT_FOUND');
     const oldOwnerId = String(group.owner_id);
     const nextManagers = group.managerIds.filter(id => id !== targetId);
-    const nextMembers = [...new Set([...group.memberIds, targetId])];
+    // Keep the former owner as a regular member so they can explicitly leave afterward.
+    const nextMembers = [...new Set([...group.memberIds, oldOwnerId, targetId])].filter(id => id !== targetId || id === oldOwnerId);
     const nextBlocked = group.blockedIds.filter(id => id !== targetId);
     await gm.updateGroup(interaction.guild.id, group.id, {
       owner_id: targetId,
