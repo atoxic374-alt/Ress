@@ -1360,20 +1360,24 @@ function registerInteractionHandler(client) {
   });
 
   client.on('messageReactionAdd', async (reaction, user) => {
-    const guild = reaction?.message?.guild;
-    if (user?.bot || !guild) return;
+    if (user?.bot) return;
+    const sourceMessage = reaction?.message?.partial
+      ? await reaction.message.fetch().catch(() => null)
+      : reaction?.message;
+    const guild = sourceMessage?.guild;
+    if (!sourceMessage || !guild) return;
     // Self-reactions do not generate group points.
-    if (String(reaction?.message?.author?.id || '') === String(user.id)) return;
+    if (String(sourceMessage.author?.id || '') === String(user.id)) return;
     const settings = await cachedSettings(guild.id).catch(() => null);
     if (!settings?.enabled) return;
     const groups = await cachedGroups(guild.id);
     if (groups.some(group =>
       (group.memberIds.includes(String(user.id)) || String(group.owner_id) === String(user.id) || group.managerIds.includes(String(user.id)))
-      && (settings.countAllChannels || gm.channelBelongs(group, reaction.message.channelId))
+      && (settings.countAllChannels || gm.channelBelongs(group, sourceMessage.channelId))
     )) {
       const emojiKey = reaction.emoji?.id || reaction.emoji?.name || 'unknown';
-      const eventId = `${reaction.message.id}:${emojiKey}`;
-      await gm.recordActivity(guild.id, user.id, 'reactions', 1, reaction.message.channelId, eventId).catch(() => {});
+      const eventId = `${sourceMessage.id}:${emojiKey}`;
+      await gm.recordActivity(guild.id, user.id, 'reactions', 1, sourceMessage.channelId, eventId).catch(() => {});
     }
   });
 
