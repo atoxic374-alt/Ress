@@ -458,14 +458,14 @@ async function testDeleteCommandFlow() {
     reply: async content => { deniedReply = content; return content; }
   };
   await createCommand.execute(unauthorizedMessage, [], { client });
-  assert.equal(deniedReply, 'لا تملك الصلاحية.', 'create is restricted to group-system managers');
+  assert.equal(responseText(deniedReply), 'لا تملك الصلاحية.', 'create is restricted to group-system managers');
   await deleteCommand.execute(unauthorizedMessage, [], { client });
-  assert.equal(deniedReply, 'لا تملك الصلاحية.', 'delete is restricted to group-system managers');
+  assert.equal(responseText(deniedReply), 'لا تملك الصلاحية.', 'delete is restricted to group-system managers');
 
   const confirmDelete = makeInteraction(`groups_admin_confirm:delete:${groupId}`, 'button');
   assert.equal(await interactionRouter.route(confirmDelete), true);
   assert.equal((await gm.getGroup(guildId, groupId)).status, 'deleted');
-  assert.equal(confirmDelete.response.content, 'تم حذف القروب.');
+  assert.equal(responseText(confirmDelete.response), 'تم حذف القروب.');
   interactionRouter.clear();
 }
 
