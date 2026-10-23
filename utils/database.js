@@ -1404,6 +1404,64 @@ class DatabaseManager {
     async getPeriodActivityStats(userId, period = 'weekly', guildId = null) {
         try {
             const normalizedPeriod = String(period || 'weekly').toLowerCase();
+            const categoryNames = new Set(['voice', 'chat', 'reactions', 'joins']);
+            if (categoryNames.has(String(userId).toLowerCase())) {
+                const category = String(userId).toLowerCase();
+                const metricByCategory = {
+                    voice: 'voice_time',
+                    chat: 'messages',
+                    reactions: 'reactions',
+                    joins: 'voice_joins'
+                };
+                const metric = metricByCategory[category];
+                const now = moment().tz('Asia/Riyadh');
+                let dateFilter = '';
+                let params = [];
+                if (normalizedPeriod === 'daily' || normalizedPeriod === 'day') {
+                    dateFilter = 'AND date = ?';
+                    params.push(now.format('YYYY-MM-DD'));
+                } else if (normalizedPeriod === 'monthly' || normalizedPeriod === 'month') {
+                    dateFilter = 'AND date >= ?';
+                    params.push(now.clone().startOf('month').format('YYYY-MM-DD'));
+                } else if (normalizedPeriod !== 'total' && normalizedPeriod !== 'all' && normalizedPeriod !== 'lifetime') {
+                    dateFilter = 'AND date >= ?';
+                    params.push(now.clone().startOf('week').format('YYYY-MM-DD'));
+                }
+
+                let rows;
+                if (normalizedPeriod === 'total' || normalizedPeriod === 'all' || normalizedPeriod === 'lifetime') {
+                    const totalMetric = {
+                        voice: 'total_voice_time',
+                        chat: 'total_messages',
+                        reactions: 'total_reactions',
+                        joins: 'total_voice_joins'
+                    }[category];
+                    rows = await this.all(`
+                        SELECT user_id, ${totalMetric} AS value
+                        FROM user_totals
+                        WHERE ${totalMetric} > 0
+                        ORDER BY value DESC
+                    `);
+                } else {
+                    const source = guildId
+                        ? `(SELECT user_id, date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ?
+                           UNION ALL SELECT user_id, date, voice_time, messages, reactions, voice_joins FROM daily_activity)`
+                        : 'daily_activity';
+                    if (guildId) params.unshift(String(guildId));
+                    rows = await this.all(`
+                        SELECT user_id, SUM(${metric}) AS value
+                        FROM ${source}
+                        WHERE ${metric} > 0 ${dateFilter}
+                        GROUP BY user_id
+                        ORDER BY value DESC
+                    `, params);
+                }
+                return (rows || []).map(row => ({
+                    ...row,
+                    userId: String(row.user_id),
+                    value: Number(row.value || 0)
+                }));
+            }
             if (normalizedPeriod === 'daily' || normalizedPeriod === 'day') {
                 return await this.getDailyStats(userId, guildId);
             }
