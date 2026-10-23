@@ -417,7 +417,7 @@ async function handleTopGroupsInteraction(interaction, action, parts = []) {
   if (action === 'rank') {
     const groups = await gm.listGroups(interaction.guild.id);
     const group = selectMemberGroup(groups, interaction.user?.id, interaction.channelId);
-    if (!group) return interaction.editReply({ content: 'لا يوجد قروب مرتبط بعضويتك لعرض مركزه.', allowedMentions: { parse: [] } });
+    if (!group) return interaction.editReply(responsePayload({ content: 'لا يوجد قروب مرتبط بعضويتك لعرض مركزه.', allowedMentions: { parse: [] } }));
     const full = await gm.getGroup(interaction.guild.id, group.id);
     const sorted = [...groups].sort((a, b) => Number(b.points || 0) - Number(a.points || 0) || Number(a.id || 0) - Number(b.id || 0));
     const memberRows = await gm.listMemberPoints(interaction.guild.id, full.id, 1000).catch(() => []);
@@ -440,13 +440,13 @@ async function handleTopGroupsInteraction(interaction, action, parts = []) {
   if (action === 'group') {
     const groups = await gm.listGroups(interaction.guild.id);
     const group = selectMemberGroup(groups, interaction.user?.id, interaction.channelId);
-    if (!group) return interaction.editReply({ content: 'لا يوجد قروب مرتبط بعضويتك.', allowedMentions: { parse: [] } });
+    if (!group) return interaction.editReply(responsePayload({ content: 'لا يوجد قروب مرتبط بعضويتك.', allowedMentions: { parse: [] } }));
     const full = await gm.getGroup(interaction.guild.id, group.id);
     const role = full.role_id && (interaction.guild.roles.cache.get(String(full.role_id)) || await interaction.guild.roles.fetch(String(full.role_id)).catch(() => null));
     const memberPoints = await gm.getMemberPoints(interaction.guild.id, full.id, interaction.user.id).catch(() => null);
     return reply(interaction, myGroupPayload(interaction.guild, full, interaction.user.id, memberPoints, role?.name));
   }
-  return interaction.editReply({ content: 'الزر غير معروف.' });
+  return interaction.editReply(responsePayload({ content: 'الزر غير معروف.' }));
 }
 const TOP_BONUS_ACTIONS = new Set(['group-add', 'group-remove', 'all-add', 'all-remove', 'member-add', 'member-remove']);
 const usedTopBonusConfirmations = new Set();
@@ -538,7 +538,7 @@ async function openTopBonusConfirmation(interaction, action, group, amount, user
 async function handleTopBonusButton(interaction, action) {
   if (action === 'cancel') {
     if (!consumeTopBonusConfirmation(interaction.message?.id)) return reply(interaction, { content: 'تم استخدام تأكيد الخصم أو إلغاؤه مسبقًا.' });
-    return interaction.update({ content: 'تم الإلغاء.', components: [], allowedMentions: { parse: [] } });
+    return interaction.update(responsePayload({ content: 'تم الإلغاء.', components: [], allowedMentions: { parse: [] } }));
   }
   if (action === 'all-add' || action === 'all-remove') {
     if (!await checkSystem(interaction)) return true;
@@ -655,12 +655,12 @@ async function handleTopBonusConfirm(interaction, action, parts) {
   const amount = Number(isAllGroups ? rawGroupId : rawAmount);
   const userId = isAllGroups ? null : (rawUserId ? String(rawUserId) : null);
   if ((!isAllGroups && (!Number.isSafeInteger(groupId) || groupId <= 0)) || !Number.isSafeInteger(amount) || amount <= 0 || amount > 1000000) return reply(interaction, { content: 'بيانات الخصم غير صالحة.' });
-  await interaction.update({ content: 'جارٍ تنفيذ الخصم...', components: [], allowedMentions: { parse: [] } });
+  await interaction.update(responsePayload({ content: 'جارٍ تنفيذ الخصم...', components: [], allowedMentions: { parse: [] } }));
   try {
     const { content } = await performTopBonusAdjustment(interaction, settings, action, groupId, amount, userId);
     return interaction.followUp({ content, ephemeral: true, allowedMentions: { parse: [] } });
   } catch (error) {
-    return interaction.followUp({ content: pointsAdjustmentError(error), ephemeral: true, allowedMentions: { parse: [] } });
+    return interaction.followUp(responsePayload({ content: pointsAdjustmentError(error), ephemeral: true, allowedMentions: { parse: [] } }));
   }
 }
 async function sendGroupPanel(channel, guild, groupId) {
@@ -1148,15 +1148,15 @@ async function sendCreateCommandPanel(message) {
   });
   collector.on('collect', async interaction => {
     if (String(interaction.user?.id) !== String(message.author.id)) {
-      return interaction.reply({ content: 'هذا الزر متاح لمنشئ الأمر فقط.', ephemeral: true }).catch(() => null);
+      return interaction.reply(responsePayload({ content: 'هذا الزر متاح لمنشئ الأمر فقط.', ephemeral: true })).catch(() => null);
     }
-    if (busy || used) return interaction.reply({ content: 'تم استخدام هذا الزر أو أن الطلب قيد المعالجة.', ephemeral: true }).catch(() => null);
+    if (busy || used) return interaction.reply(responsePayload({ content: 'تم استخدام هذا الزر أو أن الطلب قيد المعالجة.', ephemeral: true })).catch(() => null);
     busy = true;
     try {
       const settings = await gm.getSettings(interaction.guild.id);
       if (!gm.canManageSystem(interaction.client, settings, interaction.member)) {
         busy = false;
-        return interaction.reply({ content: 'لا تملك صلاحية إدارة القروبات.', ephemeral: true });
+        return interaction.reply(responsePayload({ content: 'لا تملك صلاحية إدارة القروبات.', ephemeral: true }));
       }
       await interaction.showModal(createGroupModal(interaction.user.id));
       used = true;
@@ -1166,7 +1166,7 @@ async function sendCreateCommandPanel(message) {
       busy = false;
       console.error('[groups] create command collector failed:', error?.message || error);
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: 'تعذر فتح نموذج إنشاء القروب. أعد تنفيذ الأمر.', ephemeral: true }).catch(() => null);
+        await interaction.reply(responsePayload({ content: 'تعذر فتح نموذج إنشاء القروب. أعد تنفيذ الأمر.', ephemeral: true })).catch(() => null);
       }
     }
   });
