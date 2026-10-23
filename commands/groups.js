@@ -2102,7 +2102,7 @@ function groupError(error) {
     EXTRA_DISABLED: 'الصلاحيات الإضافية متوقفة؛ يجب تفعيلها من إعدادات القروبات أولًا.',
     FLOW_EXPIRED: 'انتهت هذه القائمة أو استُخدمت؛ افتح قائمة جديدة.', FLOW_OWNER: 'هذه القائمة تخص مستخدماً آخر.',
     INVALID_SELECTION: 'اختيار غير صالح؛ افتح القائمة مجدداً.', MEMBER_NOT_FOUND: 'العضو غير موجود في السيرفر.', NO_VOICE_MEMBERS: 'لا يوجد أعضاء حاليًا داخل روم القروب الصوتي لفصلهم.',
-    TARGET_PROTECTED: 'لا يمكن تقييد مالك القروب أو مسؤوليه أو مديري النظام أو البوت.',
+    TARGET_PROTECTED: 'لا يمكن تقييد مالك القروب أو مسؤوليه أو مديري النظام أو البوت.', TARGET_NOT_IN_GROUP: 'الميوت والنميوت متاحان لأعضاء القروب فقط.',
     CHANNEL_NOT_FOUND: 'قناة القروب المحددة غير موجودة أو نوعها غير صالح.',
     SHARED_CHANNEL: 'القناة/أب الثريد مشترك؛ لا يمكن تغيير صلاحياته دون التأثير على قروب أو ثريد آخر.',
     ASSET_LINKED: 'أحد العناصر أو الأعضاء المختارين مرتبط بقروب آخر؛ لم يتم الاستيراد.',
@@ -2417,6 +2417,21 @@ async function applyUserControl(interaction, flow, userId) {
       await gm.audit(interaction.guild.id, interaction.user.id, group.id, 'control_kick', { userId, channelId: voice.id });
       return 'تم فصل العضو من روم القروب فقط (ليس طرداً من السيرفر).';
     }
+    if (flow.action === 'mute' || flow.action === 'unmute') {
+      if (!isGroupMember(group, target.id)) throw new Error('TARGET_NOT_IN_GROUP');
+      const channels = await groupChannels(interaction.guild, group, flow.scope);
+      const enabled = flow.action === 'unmute';
+      const edits = channels.map(channel => ({
+        channel,
+        id: target.id,
+        patch: Object.fromEntries((channel.type === ChannelType.GuildVoice
+          ? ['Speak', 'Stream', 'UseVAD']
+          : ['SendMessages', 'SendMessagesInThreads', 'AddReactions']).map(flag => [flag, enabled]))
+      }));
+      await applyChannelEdits(edits, `Group ${flow.action} member by ${interaction.user.id}`);
+      await gm.audit(interaction.guild.id, interaction.user.id, group.id, `control_${flow.action}`, { scope: flow.scope, userId: target.id });
+      return `تم ${enabled ? 'فك الميوت' : 'تطبيق الميوت'} على <@${target.id}> في ${flow.scope === 'voice' ? 'روم الفويس' : flow.scope === 'text' ? 'الروم النصي' : 'الروم النصي والصوتي'} فقط.`;
+    }
     choose(flow.action, ['allow', 'deny']);
     if (flow.action === 'deny' && (String(group.owner_id) === String(target.id) || group.managerIds.includes(String(target.id)))) {
       throw new Error('TARGET_PROTECTED');
@@ -2725,7 +2740,7 @@ async function handleGroupExtensions(interaction) {
       }
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await currentManager(interaction, groupId, ['mute', 'unmute', 'kick', 'allow', 'deny', 'permission'].includes(action));
-      if (CONTROL_ACTIONS.has(action)) {
+      if (CONTROL_ACTIONS.has(action) && !['mute', 'unmute'].includes(action)) {
         const result = await applyGroupControl(interaction, action, scope, groupId);
         return interaction.editReply(componentsV2Payload(baseContainer(interaction.guild, 'GROUP UPDATED', result)));
       }
@@ -2737,7 +2752,7 @@ async function handleGroupExtensions(interaction) {
         flow = newFlow(interaction.guild.id, interaction.user.id, 'permission', groupId);
         return interaction.editReply(scopePayload(interaction.guild, flow));
       }
-      choose(action, ['kick', 'allow', 'deny']);
+      choose(action, ['kick', 'allow', 'deny', 'mute', 'unmute']);
       flow = newFlow(interaction.guild.id, interaction.user.id, 'userControl', groupId); flow.action = action;
       if (action === 'kick') {
         flow.scope = 'voice'; flow.step = 'member';
