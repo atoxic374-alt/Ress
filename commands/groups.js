@@ -295,7 +295,7 @@ async function buildTopGroupsPayload(guild, { viewerId = null, channelId = null 
     } catch { groupAvatars[String(group.id)] = null; }
   }));
   const attachment = await renderTopGroups({ guild, groups, memberRowsByGroup, groupAvatars, selectedGroup, viewerId, accentColor: null });
-  return { files: [attachment], components: topGroupsButtons(), allowedMentions: { parse: [] } };
+  return responsePayload({ title: 'TOP GROUPS', content: 'ترتيب القروبات حسب نقاط النشاط. تتحدث اللوحة تلقائيًا كل 30 ثانية.', files: [attachment], components: topGroupsButtons(), allowedMentions: { parse: [] } });
 }
 function formatGroupDate(value) {
   const date = new Date(Number(value));
@@ -475,7 +475,7 @@ async function handleTopGroupsInteraction(interaction, action, parts = []) {
       ownerName,
       accentColor: null
     });
-    return interaction.editReply({ files: [attachment], allowedMentions: { parse: [] } });
+    return interaction.editReply(responsePayload({ title: 'MY GROUP RANK', content: 'ترتيب قروبك ونقاطه مقارنة ببقية القروبات.', files: [attachment], allowedMentions: { parse: [] } }));
   }
   if (action === 'group') {
     const groups = await gm.listGroups(interaction.guild.id);
@@ -1325,7 +1325,7 @@ async function execute(message, args, { client } = {}) {
       ...row,
       member: await message.guild.members.fetch(row.user_id).catch(() => null)
     })));
-    return message.channel.send({ files: [await renderMembers({ guild: message.guild, group: full, members, accentColor: null })] });
+    return message.channel.send(responsePayload({ title: 'GROUP MEMBERS', content: `القروب : ${safe(full.name)}\\nترتيب الأعضاء حسب نقاط النشاط والرسائل.`, files: [await renderMembers({ guild: message.guild, group: full, members, accentColor: null })] }));
   }
   return replyMessage(message,'استخدم أمر القروبات مع الخيارات: setup، control، create، delete، top، members أو rules.');
 }
