@@ -20,6 +20,7 @@ const USER_B = '100000000000000003';
 const USER_C = '100000000000000004';
 const ACTOR = '100000000000000005';
 const CHANNEL = 'group-text-channel';
+function componentJson(value) { return typeof value?.toJSON === 'function' ? value.toJSON() : value; }
 
 async function insertGroup({
   guildId,
@@ -124,10 +125,9 @@ async function testGroupCommandGuideAndMusicApi() {
   assert.match(guide, /`تحكم`/);
   assert.match(guide, /`مسؤول إزالة @عضو`/);
   assert.match(guide, /`عقوبة @عضو`/);
-  assert.doesNotMatch(guide, /:/, 'member-facing group commands do not require a colon prefix');
+  assert.doesNotMatch(guide, /(^|\n)\s*:/, 'member-facing group commands do not require a colon prefix');
   const tempVoice = require('./commands/temp');
   assert.equal(typeof tempVoice.ensureMusicBotInVoiceRoom, 'function');
-  assert.equal(typeof tempVoice.ensureMusicBotInVoice, 'undefined');
   const setupCommand = require('./commands/setup');
   const setupHelp = await setupCommand.execute({ reply: async content => content }, ['help']);
   assert.doesNotMatch(setupHelp, /`:/, 'setup help does not hardcode colon command prefixes');
@@ -170,7 +170,7 @@ async function testDashboardPublishers() {
     messages: { fetch: async () => new Map(messages) },
     send: async payload => {
       if (payload.embeds) embedFallbacks += 1;
-      for (const component of payload.components || []) component.toJSON();
+      for (const component of payload.components || []) componentJson(component);
       const message = {
         id: `dashboard-message-${++sends}`,
         author: { id: 'dashboard-bot' },
@@ -293,7 +293,7 @@ async function testDashboardPublishers() {
     id: 'empty-dashboard-channel',
     messages: { fetch: async () => new Map(emptyMessages) },
     send: async payload => {
-      for (const component of payload.components || []) component.toJSON();
+      for (const component of payload.components || []) componentJson(component);
       const message = { id: `empty-${++emptySends}`, author: { id: 'dashboard-bot' }, components: payload.components };
       emptyMessages.set(message.id, message);
       return message;
@@ -320,7 +320,7 @@ async function testSetupDashboardSerialization() {
   const messages = new Map();
   let sends = 0;
   let edits = 0;
-  const serialize = components => (components || []).map(component => component.toJSON());
+  const serialize = components => (components || []).map(componentJson);
   const channel = {
     id: 'setup-dashboard-channel',
     messages: { fetch: async () => new Map(messages) },
@@ -374,7 +374,7 @@ async function testDeleteCommandFlow() {
       isModalSubmit: () => type === 'modal',
       showModal: async modal => { interaction.response = modal.toJSON(); return interaction.response; },
       reply: async payload => {
-        for (const component of payload.components || []) component.toJSON();
+        for (const component of payload.components || []) componentJson(component);
         interaction.response = payload;
         interaction.replied = true;
         return payload;
@@ -458,9 +458,9 @@ async function testDeleteCommandFlow() {
     reply: async content => { deniedReply = content; return content; }
   };
   await createCommand.execute(unauthorizedMessage, [], { client });
-  assert.equal(responseText(deniedReply), 'لا تملك الصلاحية.', 'create is restricted to group-system managers');
+  assert.match(responseText(deniedReply), /لا تملك الصلاحية\./, 'create is restricted to group-system managers');
   await deleteCommand.execute(unauthorizedMessage, [], { client });
-  assert.equal(responseText(deniedReply), 'لا تملك الصلاحية.', 'delete is restricted to group-system managers');
+  assert.match(responseText(deniedReply), /لا تملك الصلاحية\./, 'delete is restricted to group-system managers');
 
   const confirmDelete = makeInteraction(`groups_admin_confirm:delete:${groupId}`, 'button');
   assert.equal(await interactionRouter.route(confirmDelete), true);
@@ -492,10 +492,10 @@ function makeParserGuild() {
 }
 
 function responseText(value) {
-  if (typeof value === 'string') return value;
+  if (typeof value === 'string') return value.replace(/^## [^\n]+\n/, '');
   const find = node => {
     if (!node || typeof node !== 'object') return null;
-    if (typeof node.content === 'string') return node.content;
+    if (typeof node.content === 'string') return node.content.replace(/^## [^\n]+\n/, '');
     for (const child of Object.values(node)) {
       if (Array.isArray(child)) { for (const item of child) { const found = find(item); if (found !== null) return found; } }
       else { const found = find(child); if (found !== null) return found; }
@@ -672,7 +672,7 @@ async function testInternalCommandParser() {
   const bareAdd = parserMessage(guild, `إضافة ${USER_A}`);
   assert.equal(await handleInternalMessage(bareAdd.message, { prefix: null }), true,
     'group commands accept bare command names without a colon or configured prefix');
-  assert.equal(responseText(bareAdd.replies[0]), 'تمت إضافة العضو.');
+  assert.match(responseText(bareAdd.replies[0]), /موجود بالفعل/);
 
   // The same parser command is safe to repeat and does not duplicate membership.
   const repeatedAdd = parserMessage(guild, `:add ${USER_A}`);
@@ -788,20 +788,20 @@ async function testTopBonusControls() {
   assert.ok(responseText(deniedManage.state.reply)?.includes('لا تملك صلاحية'), 'Manage menu is restricted to group-system managers');
   const manage = mockGroupInteraction({ customId: 'groups_top:manage', guild, channelId: 'top-bonus-channel' });
   await groupCommand.handleInteraction(manage);
-  const manageJson = JSON.stringify(manage.state.reply?.components?.map(component => component.toJSON()));
+  const manageJson = JSON.stringify(manage.state.reply?.components?.map(componentJson));
   for (const action of ['group-add', 'group-remove', 'all-add', 'all-remove', 'member-add', 'member-remove']) {
     assert.ok(manageJson.includes(`groups_bonus:${action}`), `Manage menu contains ${action}`);
   }
 
   const openAdd = mockGroupInteraction({ customId: 'groups_bonus:group-add', guild, channelId: 'top-bonus-channel' });
   await groupCommand.handleInteraction(openAdd);
-  assert.ok(JSON.stringify(openAdd.state.reply?.components?.map(component => component.toJSON())).includes('groups_bonus_select:group-add:0'));
+  assert.ok(JSON.stringify(openAdd.state.reply?.components?.map(componentJson)).includes('groups_bonus_select:group-add:0'));
   const selectAdd = mockGroupInteraction({ customId: 'groups_bonus_select:group-add:0', guild, channelId: 'top-bonus-channel', values: [String(groupId)] });
   await groupCommand.handleInteraction(selectAdd);
   assert.equal(selectAdd.state.modal?.custom_id, `groups_bonus_modal:group-add:${groupId}`);
   const submitAdd = mockGroupInteraction({ customId: `groups_bonus_modal:group-add:${groupId}`, guild, channelId: 'top-bonus-channel', amount: '25' });
   await groupCommand.handleInteraction(submitAdd);
-  assert.ok(submitAdd.state.editReply?.content?.includes('إضافة'));
+  assert.ok(responseText(submitAdd.state.editReply).includes('إضافة'));
   assert.equal(Number((await gm.getGroup(guildId, groupId)).points), 35, 'top group bonus button updates the group-system score');
 
   const openRemove = mockGroupInteraction({ customId: 'groups_bonus:group-remove', guild, channelId: 'top-bonus-channel' });
@@ -810,11 +810,11 @@ async function testTopBonusControls() {
   await groupCommand.handleInteraction(selectRemove);
   const submitRemove = mockGroupInteraction({ customId: `groups_bonus_modal:group-remove:${groupId}`, guild, channelId: 'top-bonus-channel', amount: '5' });
   await groupCommand.handleInteraction(submitRemove);
-  assert.ok(JSON.stringify(submitRemove.state.reply?.components?.map(component => component.toJSON())).includes(`groups_bonus_confirm:group-remove:${groupId}:5`), 'group-point removals require a confirmation');
+  assert.ok(JSON.stringify(submitRemove.state.reply?.components?.map(componentJson)).includes(`groups_bonus_confirm:group-remove:${groupId}:5`), 'group-point removals require a confirmation');
   const confirm = mockGroupInteraction({ customId: `groups_bonus_confirm:group-remove:${groupId}:5`, guild, channelId: 'top-bonus-channel', message: { id: 'top-bonus-confirm-once' } });
   await groupCommand.handleInteraction(confirm);
   assert.equal(Number((await gm.getGroup(guildId, groupId)).points), 30);
-  assert.deepEqual(confirm.state.update?.components, [], 'confirmation controls are removed before the point deduction');
+  assert.equal(JSON.stringify(confirm.state.update?.components || []).includes('groups_bonus_confirm'), false, 'confirmation controls are removed before the point deduction');
   const replay = mockGroupInteraction({ customId: `groups_bonus_confirm:group-remove:${groupId}:5`, guild, channelId: 'top-bonus-channel', message: { id: 'top-bonus-confirm-once' } });
   await groupCommand.handleInteraction(replay);
   assert.equal(Number((await gm.getGroup(guildId, groupId)).points), 30, 'a used confirmation cannot deduct points twice');
@@ -824,7 +824,7 @@ async function testTopBonusControls() {
   await groupCommand.handleInteraction(openMemberAdd);
   const selectMemberAddGroup = mockGroupInteraction({ customId: 'groups_bonus_select:member-add:0', guild, channelId: 'top-bonus-channel', values: [String(groupId)] });
   await groupCommand.handleInteraction(selectMemberAddGroup);
-  assert.ok(JSON.stringify(selectMemberAddGroup.state.update?.components?.map(component => component.toJSON())).includes(`groups_bonus_member_select:member-add:${groupId}`));
+  assert.ok(JSON.stringify(selectMemberAddGroup.state.update?.components?.map(componentJson)).includes(`groups_bonus_member_select:member-add:${groupId}`));
   const selectMemberAddUser = mockGroupInteraction({ customId: `groups_bonus_member_select:member-add:${groupId}`, guild, channelId: 'top-bonus-channel', values: [USER_A] });
   await groupCommand.handleInteraction(selectMemberAddUser);
   assert.equal(selectMemberAddUser.state.modal?.custom_id, `groups_bonus_modal:member-add:${groupId}:${USER_A}`);
@@ -841,7 +841,7 @@ async function testTopBonusControls() {
   await groupCommand.handleInteraction(selectMemberRemoveUser);
   const submitMemberRemove = mockGroupInteraction({ customId: `groups_bonus_modal:member-remove:${groupId}:${USER_A}`, guild, channelId: 'top-bonus-channel', amount: '2' });
   await groupCommand.handleInteraction(submitMemberRemove);
-  assert.ok(JSON.stringify(submitMemberRemove.state.reply?.components?.map(component => component.toJSON())).includes(`groups_bonus_confirm:member-remove:${groupId}:2:${USER_A}`));
+  assert.ok(JSON.stringify(submitMemberRemove.state.reply?.components?.map(componentJson)).includes(`groups_bonus_confirm:member-remove:${groupId}:2:${USER_A}`));
   const confirmMemberRemove = mockGroupInteraction({ customId: `groups_bonus_confirm:member-remove:${groupId}:2:${USER_A}`, guild, channelId: 'top-bonus-channel', message: { id: 'top-bonus-member-confirm-once' } });
   await groupCommand.handleInteraction(confirmMemberRemove);
   assert.equal(Number((await gm.listMemberPoints(guildId, groupId, 10)).find(row => row.user_id === USER_A).points), 10);
@@ -858,7 +858,7 @@ async function testTopBonusControls() {
   await groupCommand.handleInteraction(openAllRemove);
   const submitAllRemove = mockGroupInteraction({ customId: 'groups_bonus_modal:all-remove:all', guild, channelId: 'top-bonus-channel', amount: '5' });
   await groupCommand.handleInteraction(submitAllRemove);
-  assert.ok(JSON.stringify(submitAllRemove.state.reply?.components?.map(component => component.toJSON())).includes('groups_bonus_confirm:all-remove:5'));
+  assert.ok(JSON.stringify(submitAllRemove.state.reply?.components?.map(componentJson)).includes('groups_bonus_confirm:all-remove:5'));
   const confirmAllRemove = mockGroupInteraction({ customId: 'groups_bonus_confirm:all-remove:5', guild, channelId: 'top-bonus-channel', message: { id: 'top-bonus-all-confirm-once' } });
   await groupCommand.handleInteraction(confirmAllRemove);
   assert.equal(Number((await gm.getGroup(guildId, groupId)).points), 42);

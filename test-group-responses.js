@@ -15,7 +15,7 @@ assert.equal(typeof payload.content, 'undefined');
 assert.ok(Array.isArray(payload.components));
 assert.ok((payload.flags & MessageFlags.IsComponentsV2) === MessageFlags.IsComponentsV2);
 assert.equal(payload.allowedMentions.parse.length, 0);
-assert.equal(payload.components[0].components[0].content, 'تم تحديث القروب.');
+assert.equal(payload.components[0].components[0].content, '## SUCCESS\nتم تحديث القروب.');
 
 const existingV2 = responsePayload({
   components: [{

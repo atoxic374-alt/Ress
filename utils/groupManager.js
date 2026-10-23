@@ -134,8 +134,11 @@ async function schema() {
     await dbManager.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_groups_active_name ON managed_groups(guild_id, name) WHERE status = 'active'`);
     await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_managed_groups_guild_status ON managed_groups(guild_id, status, points DESC)`);
     await dbManager.run(`CREATE TABLE IF NOT EXISTS group_audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, group_id INTEGER, actor_id TEXT, action TEXT NOT NULL, details_json TEXT DEFAULT '{}', created_at INTEGER NOT NULL)`);
+    await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_group_audit_log_lookup ON group_audit_log(guild_id, group_id, created_at DESC)`);
+    await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_group_audit_log_time ON group_audit_log(guild_id, created_at DESC)`);
     await dbManager.run(`CREATE TABLE IF NOT EXISTS group_points_rules (guild_id TEXT NOT NULL, metric TEXT NOT NULL, threshold INTEGER NOT NULL, points INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL, PRIMARY KEY(guild_id, metric))`);
     await dbManager.run(`CREATE TABLE IF NOT EXISTS group_member_points (guild_id TEXT NOT NULL, group_id INTEGER NOT NULL, user_id TEXT NOT NULL, points INTEGER NOT NULL DEFAULT 0, messages INTEGER NOT NULL DEFAULT 0, voice_ms INTEGER NOT NULL DEFAULT 0, reactions INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, PRIMARY KEY(guild_id, group_id, user_id))`);
+    await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_group_member_points_user ON group_member_points(guild_id, user_id, group_id)`);
     // Optional event ids make retries safe without changing the existing activity API.
     await dbManager.run(`CREATE TABLE IF NOT EXISTS group_activity_events (guild_id TEXT NOT NULL, event_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(guild_id, event_id))`);
     await dbManager.run(`CREATE TABLE IF NOT EXISTS group_points_ledger (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, group_id INTEGER NOT NULL, user_id TEXT NOT NULL, metric TEXT NOT NULL, activity_amount INTEGER NOT NULL DEFAULT 0, points_delta INTEGER NOT NULL DEFAULT 0, member_before INTEGER NOT NULL DEFAULT 0, member_after INTEGER NOT NULL DEFAULT 0, group_before INTEGER NOT NULL DEFAULT 0, group_after INTEGER NOT NULL DEFAULT 0, reason TEXT NOT NULL, event_id TEXT, created_at INTEGER NOT NULL)`);
@@ -300,6 +303,22 @@ async function addMember(guildId, groupId, userId, actorId) { return withLock(`m
   }
   const members = new Set(group.memberIds); members.add(safeUserId);
   await updateGroup(guildId, groupId, { member_ids_json: JSON.stringify([...members]), updated_at: Date.now() }, actorId);
+  // Keep the current leaderboard clean while the member is away, but restore
+  // the historical counters from the immutable ledger when they rejoin.
+  const historical = await dbManager.get(`
+    SELECT COALESCE(SUM(points_delta), 0) AS points,
+           COALESCE(SUM(CASE WHEN metric = 'messages' THEN activity_amount ELSE 0 END), 0) AS messages,
+           COALESCE(SUM(CASE WHEN metric = 'voice_ms' THEN activity_amount ELSE 0 END), 0) AS voice_ms,
+           COALESCE(SUM(CASE WHEN metric = 'reactions' THEN activity_amount ELSE 0 END), 0) AS reactions,
+           COALESCE(MAX(created_at), 0) AS updated_at
+    FROM group_points_ledger WHERE guild_id = ? AND group_id = ? AND user_id = ?`,
+  [String(guildId), Number(groupId), safeUserId]);
+  if (historical && [historical.points, historical.messages, historical.voice_ms, historical.reactions].some(value => Number(value) !== 0)) {
+    await dbManager.run(`INSERT OR REPLACE INTO group_member_points(guild_id, group_id, user_id, points, messages, voice_ms, reactions, updated_at) VALUES(?,?,?,?,?,?,?,?)`, [
+      String(guildId), Number(groupId), safeUserId, Number(historical.points) || 0, Number(historical.messages) || 0,
+      Number(historical.voice_ms) || 0, Number(historical.reactions) || 0, Number(historical.updated_at) || Date.now()
+    ]);
+  }
   return [...members];
 }); }
 async function removeMember(guildId, groupId, userId, actorId) { return withLock(`members:${guildId}`, async () => {
@@ -309,9 +328,10 @@ async function removeMember(guildId, groupId, userId, actorId) { return withLock
   if (String(group.owner_id) === safeUserId) throw new Error('OWNER_PROTECTED');
   const members = group.memberIds.filter(id => id !== safeUserId);
   const managers = group.managerIds.filter(id => id !== safeUserId);
-  await dbManager.transaction(async tx => {
-    await tx.run('UPDATE managed_groups SET member_ids_json = ?, manager_ids_json = ?, updated_at = ? WHERE guild_id = ? AND id = ?', [JSON.stringify(members), JSON.stringify(managers), Date.now(), String(guildId), Number(groupId)]);
-  }, 'group-member-remove');
+    await dbManager.transaction(async tx => {
+      await tx.run('UPDATE managed_groups SET member_ids_json = ?, manager_ids_json = ?, updated_at = ? WHERE guild_id = ? AND id = ?', [JSON.stringify(members), JSON.stringify(managers), Date.now(), String(guildId), Number(groupId)]);
+      await tx.run('DELETE FROM group_member_points WHERE guild_id = ? AND group_id = ? AND user_id = ?', [String(guildId), Number(groupId), safeUserId]);
+    }, 'group-member-remove');
   await audit(guildId, actorId, groupId, 'group_update', { removedMemberId: safeUserId });
   return members;
 }); }
@@ -333,8 +353,9 @@ async function setBlocked(guildId, groupId, userId, blocked, actorId) { return w
   const members = blocked ? group.memberIds.filter(id => id !== safeUserId) : group.memberIds;
   const managers = blocked ? group.managerIds.filter(id => id !== safeUserId) : group.managerIds;
   await dbManager.transaction(async tx => {
-    await tx.run('UPDATE managed_groups SET blocked_ids_json = ?, member_ids_json = ?, manager_ids_json = ?, updated_at = ? WHERE guild_id = ? AND id = ?', [JSON.stringify([...blockedIds]), JSON.stringify(members), JSON.stringify(managers), Date.now(), String(guildId), Number(groupId)]);
-  }, 'group-member-block');
+      await tx.run('UPDATE managed_groups SET blocked_ids_json = ?, member_ids_json = ?, manager_ids_json = ?, updated_at = ? WHERE guild_id = ? AND id = ?', [JSON.stringify([...blockedIds]), JSON.stringify(members), JSON.stringify(managers), Date.now(), String(guildId), Number(groupId)]);
+      if (blocked) await tx.run('DELETE FROM group_member_points WHERE guild_id = ? AND group_id = ? AND user_id = ?', [String(guildId), Number(groupId), safeUserId]);
+    }, 'group-member-block');
   await audit(guildId, actorId, groupId, blocked ? 'member_block' : 'member_unblock', { userId: safeUserId });
   return [...blockedIds];
 }); }
@@ -562,12 +583,10 @@ async function listMemberPoints(guildId, groupId, limit = 10) {
   if (!memberIds.length) return [];
   const placeholders = memberIds.map(() => '?').join(', ');
   const rows = await dbManager.all(`SELECT * FROM group_member_points WHERE guild_id = ? AND group_id = ? AND user_id IN (${placeholders})`, [String(guildId), Number(groupId), ...memberIds]);
-  const byUser = new Map(rows.map(row => [String(row.user_id), row]));
-  // Every current member gets a row, even before their first counted activity.
-  return memberIds.map(userId => byUser.get(userId) || {
-    guild_id: String(guildId), group_id: Number(groupId), user_id: userId,
-    points: 0, messages: 0, voice_ms: 0, reactions: 0, updated_at: 0
-  }).sort((a, b) => Number(b.points || 0) - Number(a.points || 0)
+  // Only persisted activity rows belong in the leaderboard. This avoids
+  // showing synthetic zero-score rows for owners/new members and ensures
+  // removed members disappear immediately while their ledger remains intact.
+  return rows.sort((a, b) => Number(b.points || 0) - Number(a.points || 0)
     || Number(b.messages || 0) - Number(a.messages || 0)
     || String(a.user_id).localeCompare(String(b.user_id), 'en', { numeric: true }))
     .slice(0, safeLimit);
