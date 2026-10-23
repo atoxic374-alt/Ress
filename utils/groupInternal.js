@@ -44,7 +44,8 @@ async function syncMember(group, guild, userId, add, { ignoreMissing = false } =
   }
   return member;
 }
-function reply(message, content) { return message.reply(content).catch(() => null); }
+const { responsePayload } = require('./groupResponses');
+function reply(message, content) { const payload = typeof content === 'string' ? responsePayload({ content }) : responsePayload(content); return message.reply(payload).catch(() => null); }
 async function restoreMembership(group, guildId, userId, wasManager, actorId) {
   await gm.addMember(guildId, group.id, userId, actorId);
   if (wasManager) await gm.setManagers(guildId, group.id, [...group.managerIds, String(userId)], actorId);
