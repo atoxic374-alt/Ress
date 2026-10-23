@@ -21,6 +21,7 @@ const GROUP_DEFAULTS = Object.freeze({
   systemRoles: [],
   extraPermissions: false,
   countAllChannels: false,
+  minMessageLength: 0,
   maxMembers: 10,
   settingsVersion: 1
 });
@@ -71,6 +72,7 @@ function normalizeSettings(row) {
     systemRoles: ids(valueOf('systemRoles', 'system_roles')),
     extraPermissions: valueOf('extraPermissions', 'extra_permissions') === true || valueOf('extraPermissions', 'extra_permissions') === 1,
     countAllChannels: valueOf('countAllChannels', 'count_all_channels') === true || valueOf('countAllChannels', 'count_all_channels') === 1,
+    minMessageLength: Number.isInteger(Number(valueOf('minMessageLength', 'min_message_length'))) && Number(valueOf('minMessageLength', 'min_message_length')) >= 0 && Number(valueOf('minMessageLength', 'min_message_length')) <= 2000 ? Number(valueOf('minMessageLength', 'min_message_length')) : GROUP_DEFAULTS.minMessageLength,
     maxMembers: Number.isInteger(maxMembers) && maxMembers >= 1 && maxMembers <= 1000 ? maxMembers : GROUP_DEFAULTS.maxMembers,
     settingsVersion: Number.isInteger(settingsVersion) && settingsVersion >= 1 ? settingsVersion : GROUP_DEFAULTS.settingsVersion
   };
@@ -105,6 +107,11 @@ function validateSettingsPatch(patch = {}) {
     }
   }
   for (const key of ['extraPermissions', 'countAllChannels']) if (key in patch) next[key] = booleanSetting(patch[key], key);
+  if ('minMessageLength' in patch) {
+    const minMessageLength = Number(patch.minMessageLength);
+    if (!Number.isInteger(minMessageLength) || minMessageLength < 0 || minMessageLength > 2000) throw new Error('INVALID_SETTING:minMessageLength');
+    next.minMessageLength = minMessageLength;
+  }
   if ('maxMembers' in patch) {
     const maxMembers = Number(patch.maxMembers);
     if (!Number.isInteger(maxMembers) || maxMembers < 1 || maxMembers > 1000) throw new Error('INVALID_SETTING:maxMembers');
@@ -131,6 +138,9 @@ async function schema() {
     await dbManager.run(`CREATE TABLE IF NOT EXISTS group_member_points (guild_id TEXT NOT NULL, group_id INTEGER NOT NULL, user_id TEXT NOT NULL, points INTEGER NOT NULL DEFAULT 0, messages INTEGER NOT NULL DEFAULT 0, voice_ms INTEGER NOT NULL DEFAULT 0, reactions INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL, PRIMARY KEY(guild_id, group_id, user_id))`);
     // Optional event ids make retries safe without changing the existing activity API.
     await dbManager.run(`CREATE TABLE IF NOT EXISTS group_activity_events (guild_id TEXT NOT NULL, event_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(guild_id, event_id))`);
+    await dbManager.run(`CREATE TABLE IF NOT EXISTS group_points_ledger (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, group_id INTEGER NOT NULL, user_id TEXT NOT NULL, metric TEXT NOT NULL, activity_amount INTEGER NOT NULL DEFAULT 0, points_delta INTEGER NOT NULL DEFAULT 0, member_before INTEGER NOT NULL DEFAULT 0, member_after INTEGER NOT NULL DEFAULT 0, group_before INTEGER NOT NULL DEFAULT 0, group_after INTEGER NOT NULL DEFAULT 0, reason TEXT NOT NULL, event_id TEXT, created_at INTEGER NOT NULL)`);
+    await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_group_points_ledger_lookup ON group_points_ledger(guild_id, group_id, created_at DESC)`);
+    await dbManager.run(`CREATE TABLE IF NOT EXISTS group_voice_sessions (guild_id TEXT NOT NULL, user_id TEXT NOT NULL, channel_id TEXT NOT NULL, checkpoint_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(guild_id, user_id))`);
     await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_group_activity_events_created ON group_activity_events(guild_id, created_at)`);
     return true;
   })().catch(error => { schemaPromise = null; throw error; });
@@ -484,9 +494,13 @@ async function recordActivity(guildId, userId, metric, amount, channelId = null,
       const delta = Math.max(0, Math.min(requestedDelta, MAX_ACTIVITY_AMOUNT - memberPoints, MAX_ACTIVITY_AMOUNT - groupPoints));
       await tx.run(`INSERT INTO group_member_points(guild_id,group_id,user_id,${column},updated_at) VALUES(?,?,?,?,?) ON CONFLICT(guild_id,group_id,user_id) DO UPDATE SET ${column}=excluded.${column},updated_at=excluded.updated_at`, [String(guildId), Number(group.id), String(userId), nextAmount, Date.now()]);
       if (delta > 0) {
-        await tx.run('UPDATE group_member_points SET points = points + ?, updated_at = ? WHERE guild_id = ? AND group_id = ? AND user_id = ?', [delta, Date.now(), String(guildId), Number(group.id), String(userId)]);
-        await tx.run("UPDATE managed_groups SET points = points + ?, updated_at = ? WHERE guild_id = ? AND id = ? AND status = 'active'", [delta, Date.now(), String(guildId), Number(group.id)]);
+        const now = Date.now();
+        await tx.run('UPDATE group_member_points SET points = points + ?, updated_at = ? WHERE guild_id = ? AND group_id = ? AND user_id = ?', [delta, now, String(guildId), Number(group.id), String(userId)]);
+        await tx.run("UPDATE managed_groups SET points = points + ?, updated_at = ? WHERE guild_id = ? AND id = ? AND status = 'active'", [delta, now, String(guildId), Number(group.id)]);
+        await tx.run(`INSERT INTO group_points_ledger(guild_id,group_id,user_id,metric,activity_amount,points_delta,member_before,member_after,group_before,group_after,reason,event_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, [String(guildId), Number(group.id), String(userId), safeMetric, increment, delta, memberPoints, memberPoints + delta, groupPoints, groupPoints + delta, 'activity_award', normalizedEventId, now]);
         awarded += delta;
+      } else {
+        await tx.run(`INSERT INTO group_points_ledger(guild_id,group_id,user_id,metric,activity_amount,points_delta,member_before,member_after,group_before,group_after,reason,event_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, [String(guildId), Number(group.id), String(userId), safeMetric, increment, 0, memberPoints, memberPoints, groupPoints, groupPoints, requestedDelta > 0 ? 'points_cap_reached' : 'threshold_not_reached', normalizedEventId, Date.now()]);
       }
     }
     return awarded;
@@ -510,6 +524,27 @@ async function listMemberPoints(guildId, groupId, limit = 10) {
     || Number(b.messages || 0) - Number(a.messages || 0)
     || String(a.user_id).localeCompare(String(b.user_id), 'en', { numeric: true }))
     .slice(0, safeLimit);
+}
+async function listPointsLedger(guildId, { groupId = null, userId = null, limit = 25, offset = 0 } = {}) {
+  await schema();
+  const filters = ['guild_id = ?']; const params = [String(guildId)];
+  if (groupId != null) { filters.push('group_id = ?'); params.push(Number(groupId)); }
+  if (userId != null) { filters.push('user_id = ?'); params.push(String(userId)); }
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 25));
+  const safeOffset = Math.max(0, Number(offset) || 0);
+  return dbManager.all(`SELECT * FROM group_points_ledger WHERE ${filters.join(' AND ')} ORDER BY id DESC LIMIT ? OFFSET ?`, [...params, safeLimit, safeOffset]);
+}
+async function upsertVoiceSession(guildId, userId, channelId, checkpointAt = Date.now()) {
+  await schema();
+  await dbManager.run(`INSERT INTO group_voice_sessions(guild_id,user_id,channel_id,checkpoint_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(guild_id,user_id) DO UPDATE SET channel_id=excluded.channel_id,checkpoint_at=excluded.checkpoint_at,updated_at=excluded.updated_at`, [String(guildId), String(userId), String(channelId), Number(checkpointAt), Date.now()]);
+}
+async function listVoiceSessions(guildId = null) {
+  await schema();
+  return guildId == null ? dbManager.all('SELECT * FROM group_voice_sessions') : dbManager.all('SELECT * FROM group_voice_sessions WHERE guild_id = ?', [String(guildId)]);
+}
+async function deleteVoiceSession(guildId, userId) {
+  await schema();
+  await dbManager.run('DELETE FROM group_voice_sessions WHERE guild_id = ? AND user_id = ?', [String(guildId), String(userId)]);
 }
 async function getMemberPoints(guildId, groupId, userId) {
   await schema();
@@ -613,4 +648,4 @@ async function deleteGroup(guild, groupId, actorId) {
     return true;
   });
 }
-module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, logGroupEvent, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, listMemberPoints, getMemberPoints, createGroup, deleteGroup };
+module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, logGroupEvent, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, listMemberPoints, listPointsLedger, upsertVoiceSession, listVoiceSessions, deleteVoiceSession, getMemberPoints, createGroup, deleteGroup };
