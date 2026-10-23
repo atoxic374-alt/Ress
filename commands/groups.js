@@ -1325,7 +1325,7 @@ async function execute(message, args, { client } = {}) {
       ...row,
       member: await message.guild.members.fetch(row.user_id).catch(() => null)
     })));
-    return message.channel.send(responsePayload({ title: 'GROUP MEMBERS', content: `القروب : ${safe(full.name)}\\nترتيب الأعضاء حسب نقاط النشاط والرسائل.`, files: [await renderMembers({ guild: message.guild, group: full, members, accentColor: null })] }));
+    return message.channel.send(responsePayload({ title: 'GROUP MEMBERS', content: `القروب : ${safe(full.name)}\nترتيب الأعضاء حسب نقاط النشاط والرسائل.`, files: [await renderMembers({ guild: message.guild, group: full, members, accentColor: null })] }));
   }
   return replyMessage(message,'استخدم أمر القروبات مع الخيارات: setup، control، create، delete، top، members أو rules.');
 }
