@@ -1377,19 +1377,28 @@ function registerInteractionHandler(client) {
   client.on('voiceStateUpdate', async (oldState, newState) => {
     const guildId = newState.guild?.id || oldState.guild?.id;
     if (!guildId) return;
-    const groups = await cachedGroups(guildId);
+    const [groups, settings] = await Promise.all([
+      cachedGroups(guildId),
+      cachedSettings(guildId).catch(() => null)
+    ]);
     const memberId = String(newState.id || oldState.id);
     const eligible = group => group && (group.memberIds.includes(memberId) || String(group.owner_id) === memberId || group.managerIds.includes(memberId));
-    const oldGroup = groups.find(group => group.voice_channel_id && group.voice_channel_id === oldState.channelId && eligible(group));
-    const newGroup = groups.find(group => group.voice_channel_id && group.voice_channel_id === newState.channelId && eligible(group));
+    const tracksChannel = channelId => Boolean(channelId && (
+      (settings?.countAllChannels && groups.some(eligible))
+      || groups.some(group => group.voice_channel_id === channelId && eligible(group))
+    ));
+    const oldTracked = tracksChannel(oldState.channelId);
+    const newTracked = tracksChannel(newState.channelId);
     const key = `${guildId}:${memberId}`;
-    if (oldGroup && (!newGroup || oldGroup.id !== newGroup.id)) {
+    // With all-channel scope, moving between voice rooms remains one continuous session.
+    // In group-only scope, leaving the group's configured voice room closes the session.
+    if (oldTracked && !newTracked) {
       const started = voiceStarts.get(key);
       if (started) await gm.recordActivity(guildId, memberId, 'voice_ms', Date.now() - started, oldState.channelId).catch(() => {});
       voiceStarts.delete(key);
     }
-    if (newGroup && (!oldGroup || oldGroup.id !== newGroup.id)) voiceStarts.set(key, Date.now());
-    if (!oldGroup && !newGroup) voiceStarts.delete(key);
+    if (newTracked && !oldTracked) voiceStarts.set(key, Date.now());
+    if (!oldTracked && !newTracked) voiceStarts.delete(key);
   });
 
   client.on('channelDelete', async channel => {
