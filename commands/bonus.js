@@ -484,7 +484,7 @@ async function buildAuditPayload(guild, page = 0) {
   if (result.page + 1 < pageCount) nav.push(button(`bonus:audit-page:${result.page + 1}`, 'التالي'));
   const rows = [];
   if (nav.length) rows.push(new ActionRowBuilder().addComponents(nav));
-  rows.push(new ActionRowBuilder().addComponents(button('bonus:audit-filter', 'فلترة'), closeButton('رجوع')));
+  rows.push(new ActionRowBuilder().addComponents(button('bonus:audit-filter', 'فلترة'), button('bonus:audit-reconcile', 'تدقيق الأرصدة'), closeButton('رجوع')));
   const embed = colorManager.createEmbed().setTitle('Bonus Audit Log')
     .setDescription(`Page : ${result.page + 1} / ${pageCount}\nTotal Records : ${result.total}\nFilters : ${Object.keys(filter).length ? 'Applied' : 'None'}`)
     .addFields(fields.length ? fields : [{ name: 'No Records', value: 'No audit records found.', inline: false }]);
@@ -1243,6 +1243,30 @@ async function handleInteraction(interaction, context = {}) {
         { id: 'user', label: 'معرف العضو (اختياري)', required: false, maxLength: 30 },
         { id: 'group', label: 'معرف القروب (اختياري)', required: false, maxLength: 20 }
       ]));
+      return true;
+    }
+
+    if (action === 'audit-reconcile') {
+      if (!await requireManager(interaction, context)) return true;
+      const rows = await getManager().getAccountingAudit(interaction.guild.id);
+      const fields = rows.slice(0, 25).map(row => ({
+        name: `Group #${row.group_id}`,
+        value: [
+          `Current total : ${Number(row.current_total_points).toLocaleString('en-US')}`,
+          `Member balance : ${Number(row.member_balance_points).toLocaleString('en-US')}`,
+          `Automatic awards : ${Number(row.automatic_awarded_points).toLocaleString('en-US')}`,
+          `Manual group balance : ${Number(row.manual_group_balance_points).toLocaleString('en-US')}`,
+          `Active adjustments : ${Number(row.active_group_adjustments).toLocaleString('en-US')}`,
+          `Events : ${Number(row.activity_events).toLocaleString('en-US')}`,
+          `Status : ${row.needs_review ? 'REVIEW REQUIRED' : 'MATCH'}`,
+          row.needs_review ? 'ملاحظة: قد يكون الفرق بسبب تصفير سابق أو خصم يدوي أو نقل عضو أو بيانات تاريخية.' : 'رصيد الأعضاء يطابق مجموع الجوائز التلقائية المسجلة.'
+        ].join('\\n').slice(0, 1024),
+        inline: false
+      }));
+      const embed = colorManager.createEmbed().setTitle('Bonus Balance Reconciliation')
+        .setDescription(`تمت مراجعة ${rows.length} قروب. هذا تقرير تشخيصي؛ الفروقات لا تعني بالضرورة وجود خطأ بسبب عمليات التصفير والنقل.`)
+        .addFields(fields.length ? fields : [{ name: 'No Groups', value: 'لا توجد قروبات نشطة للتدقيق.' }]);
+      await showPrivatePanel(interaction, { embeds: [embed], components: [new ActionRowBuilder().addComponents(button('bonus:audit', 'رجوع إلى سجل التدقيق'), closeButton('إغلاق'))] }, true);
       return true;
     }
 
