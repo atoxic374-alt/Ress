@@ -690,46 +690,36 @@ async function handleTopBonusConfirm(interaction, action, parts) {
     return interaction.followUp(responsePayload({ content: pointsAdjustmentError(error), ephemeral: true, allowedMentions: { parse: [] } }));
   }
 }
+function memberGroupPayload(guild, groupId) {
+  const id = Number(groupId);
+  const c = baseContainer(guild, 'معلومات القروب', 'هذه لوحة قراءة للأعضاء. أدوات الإدارة متاحة من أمر تحكم للمالك ومسؤولي القروب فقط.');
+  c.addActionRowComponents(new ActionRowBuilder().addComponents(
+    button(`groups_member:info:${id}`, 'عرض معلومات القروب', ButtonStyle.Primary)
+  ));
+  return componentsV2Payload(c);
+}
 async function sendGroupPanel(channel, guild, groupId) {
-  const payload = { ...controlGroupPayload(guild, groupId), allowedMentions: { parse: [] } };
+  const payload = { ...memberGroupPayload(guild, groupId), allowedMentions: { parse: [] } };
   const id = Number(groupId);
   const messages = await channel?.messages?.fetch?.({ limit: 100 }).catch(() => null);
   const botId = guild?.client?.user?.id;
-  const marker = `:${id}:`;
+  const marker = `groups_member:info:${id}`;
   const existing = messages && [...messages.values()].filter(message =>
-    (!botId || message.author?.id === botId)
-    && JSON.stringify(message.components || []).includes('groups_control:')
-    && JSON.stringify(message.components || []).includes(marker)
+    (!botId || message.author?.id === botId) && JSON.stringify(message.components || []).includes(marker)
   ).sort((a, b) => Number(a.createdTimestamp || 0) - Number(b.createdTimestamp || 0)).pop();
   if (existing?.edit) {
     const edited = await existing.edit(payload).catch(() => null);
     if (edited) return edited;
   }
-  try {
-    return await channel.send(payload);
-  } catch (error) {
-    console.error(`تعذر إرسال Container لوحة القروب ${groupId}:`, error?.stack || error?.message || error);
-    const controls = [
-      ['lock', 'text', 'قفل النص'], ['unlock', 'text', 'فتح النص'], ['hide', 'text', 'إخفاء النص'], ['show', 'text', 'إظهار النص'], ['mute', 'text', 'كتم النص'],
-      ['unmute', 'text', 'فك كتم النص'], ['lock', 'voice', 'قفل الفويس'], ['unlock', 'voice', 'فتح الفويس'], ['hide', 'voice', 'إخفاء الفويس'], ['show', 'voice', 'إظهار الفويس'],
-      ['mute', 'voice', 'كتم الفويس'], ['unmute', 'voice', 'فك كتم الفويس'], ['kick', 'voice', 'فصل من الفويس'], ['allow', 'both', 'سماح'], ['deny', 'both', 'منع'],
-      ['rename', 'both', 'تغيير الاسم'], ['limit', 'voice', 'حد الفويس'], ['permission', 'both', 'الصلاحيات']
-    ];
-    const rows = [];
-    for (let offset = 0; offset < controls.length; offset += 5) {
-      rows.push(new ActionRowBuilder().addComponents(controls.slice(offset, offset + 5).map(([action, scope, label]) => button(`groups_control:${action}:${id}:${scope}`, label, action === 'deny' || action === 'kick' ? ButtonStyle.Danger : ButtonStyle.Secondary))));
-    }
-    rows.push(new ActionRowBuilder().addComponents(button(`groups_member:info:${id}`, 'قروبي')));
-    try {
-      const fallback = new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || '#5865F2'));
-      fallback.addTextDisplayComponents(new TextDisplayBuilder().setContent('## التحكم بالقروب\nاستخدم الأزرار لإدارة القروب.'));
-      fallback.addActionRowComponents(...rows);
-      return await channel.send({ components: [fallback], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } });
-    } catch (fallbackError) {
-      console.error(`تعذر إرسال لوحة القروب الاحتياطية ${groupId}:`, fallbackError?.stack || fallbackError?.message || fallbackError);
-      return null;
-    }
+  try { return await channel.send(payload); }
+  catch (error) {
+    console.error(`تعذر إرسال لوحة معلومات القروب ${groupId}:`, error?.stack || error?.message || error);
+    return null;
   }
+}
+async function sendGroupAdminPanel(channel, guild, groupId) {
+  if (!channel?.send) return null;
+  return channel.send({ ...controlGroupPayload(guild, groupId), allowedMentions: { parse: [] } });
 }
 async function sendMemberControlPanels(channel, guild) {
   const groups = await gm.listGroups(guild.id);
@@ -1509,7 +1499,7 @@ async function dispatchInternalMessage(message, options = {}) {
       return true;
     }
   }
-  return handleInternalMessage(message, { ...options, sendPanel: sendGroupPanel });
+  return handleInternalMessage(message, { ...options, sendPanel: sendGroupAdminPanel });
 }
 
 // Group-scoped controls. Never edit guild roles, categories, or a shared thread parent.
@@ -2191,4 +2181,4 @@ async function handleGroupExtensions(interaction) {
   } finally { if (flow) flow.busy = false; }
 }
 
-module.exports={name,aliases,execute,registerInteractionHandler,handleInternalMessage:dispatchInternalMessage,sendGroupPanel,sendAdminControlPanel,sendMemberControlPanels,sendTopGroupsPanel,buildTopGroupsPayload,selectMemberGroup,buildGroupCommandGuide:groupCommandGuideText,controlPayload,handleInteraction};
+module.exports={name,aliases,execute,registerInteractionHandler,handleInternalMessage:dispatchInternalMessage,sendGroupPanel,sendGroupAdminPanel,sendAdminControlPanel,sendMemberControlPanels,sendTopGroupsPanel,buildTopGroupsPayload,selectMemberGroup,buildGroupCommandGuide:groupCommandGuideText,controlPayload,handleInteraction};
