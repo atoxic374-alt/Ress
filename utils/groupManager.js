@@ -212,8 +212,8 @@ const GROUP_EVENT_FIELDS = Object.freeze({
   code: 'النتيجة', ok: 'نجح', members: 'الأعضاء', type: 'النوع', detail: 'التفاصيل', issues: 'المشاكل'
 });
 const GROUP_LOG_TRANSLATIONS = Object.freeze({
-  membership_reconciliation_drift: 'اختلاف عضوية', thread_member_not_in_db: 'عضو الثريد غير مسجل', MUSIC_CHANNEL_NOT_CONFIGURED: 'روم الميوزك غير محدد',
-  MUSIC_CHANNEL_INVALID: 'روم الميوزك غير صالح', member_left: 'العضو غادر القروب', role_guard_removed: 'إزالة حماية الرتبة'
+  membership_reconciliation_drift: 'اختلاف عضوية', thread_member_not_in_db: 'عضو الثريد غير مسجل', MUSIC_CHANNEL_NOT_CONFIGURED: 'قناة الميوزك غير محددة',
+  MUSIC_CHANNEL_INVALID: 'قناة الميوزك غير صالحة', member_left: 'العضو غادر القروب', role_guard_removed: 'إزالة حماية الرتبة'
 });
 function groupEventView(event, details) {
   if (String(event) === 'update' && String(details?.reason) === 'membership_reconciliation_drift') return ['مشكلة عضوية القروب', 'تم العثور على اختلاف يحتاج إلى معالجة.'];
