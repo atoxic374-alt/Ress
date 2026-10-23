@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node bot.js",
     "test:bonus": "node test-bonus-system.js",
-    "test:check": "node test-check-activity.js"
+    "test:check": "node test-check-activity.js",
+    "test:groups": "node test-group-manager-internal.js && node test-group-responses.js"
   },
   "dependencies": {
     "@discordjs/voice": "^0.18.0",
