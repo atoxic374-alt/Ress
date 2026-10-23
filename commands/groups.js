@@ -305,9 +305,10 @@ function myGroupPayload(guild, group, userId, memberPoints, roleName) {
   c.addTextDisplayComponents(new TextDisplayBuilder().setContent(
     `### النقاط والتواريخ\n**نقاط القروب:** ${Number(group.points || 0).toLocaleString('ar')}\n**نقاطك:** ${Number(memberPoints?.points || 0).toLocaleString('ar')}\n**تاريخ الإنشاء:** ${formatGroupDate(group.created_at)}`
   ));
-  c.addActionRowComponents(new ActionRowBuilder().addComponents(
-    button(`groups_top:leave:${group.id}`, 'مغادرة القروب', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>')
-  ));
+  const groupActions = [];
+  if (String(group.owner_id) === String(userId)) groupActions.push(button(`groups_top:transfer:${group.id}`, 'نقل الملكية', ButtonStyle.Primary));
+  groupActions.push(button(`groups_top:leave:${group.id}`, 'مغادرة القروب', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>'));
+  c.addActionRowComponents(new ActionRowBuilder().addComponents(groupActions));
   return componentsV2Payload(c);
 }
 function leaveGroupPrompt(guild, group) {
