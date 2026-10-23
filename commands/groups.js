@@ -2358,7 +2358,7 @@ async function voiceMemberSelect(interaction, flow) {
   return entitySelect(interaction.guild, flow, 'KICK VOICE MEMBER', 'اختر عضوًا من الموجودين حاليًا في قناة القروب الصوتي لفصله من القناة فقط.', menu);
 }
 function scopePayload(guild, flow) {
-  return flowSelect(guild, flow, 'SELECT ROOM SCOPE', 'اختر نطاق الرومات الذي سيُطبق عليه الإجراء.', [{ label: 'Text Room / Thread', value: 'text', description: 'القناة النصية أو الثريد المرتبط.' }, { label: 'Voice Room', value: 'voice', description: 'القناة الصوتية المرتبطة.' }, { label: 'Text + Voice', value: 'both', description: 'القناتين النصية والصوتية معًا.' }]);
+  return flowSelect(guild, flow, 'SELECT ROOM SCOPE', 'اختر نطاق الرومات.', [{ label: 'Text Room / Thread', value: 'text', description: 'القناة النصية.' }, { label: 'Voice Room', value: 'voice', description: 'القناة الصوتية.' }, { label: 'Text + Voice', value: 'both', description: 'القناتان معًا.' }]);
 }
 function confirmFlowPayload(guild, flow, description) {
   const c = baseContainer(guild, 'CONFIRM GROUP ACTION', description);
@@ -2814,7 +2814,7 @@ async function handleGroupExtensions(interaction) {
       } else if (flow.kind === 'userControl') {
         if (step === 'scope') {
           flow.scope = choose(oneValue(interaction), ['text', 'voice', 'both']); flow.step = 'member';
-          payload = entitySelect(interaction.guild, flow, `${flow.action.toUpperCase()} MEMBER`, 'اختر عضوًا من السيرفر لتطبيق الإجراء على رومات القروب فقط.', new UserSelectMenuBuilder().setPlaceholder('اختر عضوًا'));
+          payload = entitySelect(interaction.guild, flow, `${flow.action.toUpperCase()} MEMBER`, 'اختر عضوًا من القروب.', new UserSelectMenuBuilder().setPlaceholder('اختر عضوًا'));
         } else if (step === 'member') {
           flow.targetId = oneValue(interaction);
           if (flow.memberFilterIds && !flow.memberFilterIds.includes(String(flow.targetId))) throw new Error('INVALID_SELECTION');
