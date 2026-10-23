@@ -1260,7 +1260,7 @@ async function handleInteraction(interaction, context = {}) {
           `Events : ${Number(row.activity_events).toLocaleString('en-US')}`,
           `Status : ${row.needs_review ? 'REVIEW REQUIRED' : 'MATCH'}`,
           row.needs_review ? 'ملاحظة: قد يكون الفرق بسبب تصفير سابق أو خصم يدوي أو نقل عضو أو بيانات تاريخية.' : 'رصيد الأعضاء يطابق مجموع الجوائز التلقائية المسجلة.'
-        ].join('\\n').slice(0, 1024),
+        ].join('\n').slice(0, 1024),
         inline: false
       }));
       const embed = colorManager.createEmbed().setTitle('Bonus Balance Reconciliation')
@@ -2458,7 +2458,7 @@ async function handleInteraction(interaction, context = {}) {
             const requestedDelta = operation === 'add-points' ? amount : -amount;
             const effectiveDelta = preview.delta;
             await showPrivatePanel(interaction, {
-              content: `معاينة العملية الجماعية قبل التنفيذ\\nالقروبات المتأثرة: ${preview.groups.toLocaleString()}\\nإجمالي النقاط قبل: ${before.toLocaleString()}\\nالتغيير المطلوب لكل قروب: ${requestedDelta > 0 ? '+' : ''}${requestedDelta.toLocaleString()}\\nالتغيير الفعلي التقديري: ${effectiveDelta >= 0 ? '+' : ''}${effectiveDelta.toLocaleString()}\\nإجمالي النقاط بعد: ${after.toLocaleString()}\\nراجع المعاينة ثم أكد التنفيذ.`,
+              content: `معاينة العملية الجماعية قبل التنفيذ\nالقروبات المتأثرة: ${preview.groups.toLocaleString()}\nإجمالي النقاط قبل: ${before.toLocaleString()}\nالتغيير المطلوب لكل قروب: ${requestedDelta > 0 ? '+' : ''}${requestedDelta.toLocaleString()}\nالتغيير الفعلي التقديري: ${effectiveDelta >= 0 ? '+' : ''}${effectiveDelta.toLocaleString()}\nإجمالي النقاط بعد: ${after.toLocaleString()}\nراجع المعاينة ثم أكد التنفيذ.`,
               components: [new ActionRowBuilder().addComponents(
                 button(`bonus:confirm:all-groups-points:${operation}:${amount}`, 'تأكيد العملية الجماعية', operation === 'remove-points' ? ButtonStyle.Danger : ButtonStyle.Success),
                 closeButton('إلغاء')
