@@ -193,7 +193,7 @@ async function logGroupEvent(guild, event, details = {}, actorId = null) {
     const actorText = actorId ? `\nالمنفذ : <@${String(actorId).replace(/[^0-9]/g, '')}>` : '';
     const container = new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || '#5865F2'));
     const eventText = [
-      new TextDisplayBuilder().setContent(`## حدث القروب : ${eventLabel.slice(0, 80)}`),
+      new TextDisplayBuilder().setContent(`## GROUP EVENT : ${eventLabel.slice(0, 80)}`),
       new TextDisplayBuilder().setContent(`السيرفر : ${guild.name ? String(guild.name).slice(0, 100) : guild.id}${actorText}\n\`\`\`json\n${detailText}\n\`\`\``)
     ];
     const icon = guild.iconURL?.({ extension: 'png', size: 128 });

@@ -12,8 +12,25 @@ function roundRect(ctx, x, y, w, h, r, fill, stroke = null) {
   ctx.beginPath(); ctx.moveTo(x + rr, y); ctx.arcTo(x + w, y, x + w, y + h, rr);
   ctx.arcTo(x + w, y + h, x, y + h, rr); ctx.arcTo(x, y + h, x, y, rr);
   ctx.arcTo(x, y, x + w, y, rr); ctx.closePath();
-  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
-  if (stroke) { ctx.strokeStyle = stroke; ctx.stroke(); }
+  if (fill) {
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,.34)';
+    ctx.shadowBlur = 14;
+    ctx.shadowOffsetY = 7;
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.restore();
+  }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1.2; ctx.stroke(); }
+  // Restrained top-edge sheen adds depth without reducing text contrast.
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y + 1);
+  ctx.lineTo(x + w - rr, y + 1);
+  ctx.strokeStyle = 'rgba(255,255,255,.12)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
 }
 function hex(value, fallback = '#5865F2') { return /^#[\da-f]{6}$/i.test(String(value || '')) ? String(value) : fallback; }
 function rgb(color) { const n = parseInt(hex(color).slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
@@ -135,7 +152,7 @@ async function renderMembers({ guild, group, members, accentColor = null }) {
   const guildImg = await image(iconUrl(guild));
   avatar(ctx, guildImg, 1375, 112, 48, accent, guild?.name || 'G');
   ctx.textAlign = 'right'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 42px Cairo, sans-serif';
-  text(ctx, 'أعضاء القروب', 1305, 78, 900);
+  text(ctx, 'GROUP MEMBERS', 1305, 78, 900);
   ctx.fillStyle = '#AAB4C5'; ctx.font = '22px Cairo, sans-serif';
   text(ctx, `${group?.name || 'قروب'}  •  ترتيب النقاط والتفاعل`, 1305, 122, 900);
 
@@ -212,7 +229,7 @@ async function renderInfo({ guild, group, owner, managers, accentColor = null })
   const [r, g, b] = rgb(accent);
   roundRect(ctx, 28, 28, W - 56, H - 56, 30, 'rgba(17,22,32,.95)', `rgba(${r},${g},${b},.65)`);
   const icon = await image(iconUrl(guild)); avatar(ctx, icon, 1240, 112, 54, accent, group?.name || 'G');
-  ctx.textAlign = 'right'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 42px Cairo, sans-serif'; text(ctx, 'معلومات القروب', 1148, 92, 900);
+  ctx.textAlign = 'right'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 42px Cairo, sans-serif'; text(ctx, 'GROUP OVERVIEW', 1148, 92, 900);
   ctx.fillStyle = '#AAB4C5'; ctx.font = '22px Cairo, sans-serif'; text(ctx, group?.name || 'قروب', 1148, 135, 900);
 
   roundRect(ctx, 70, 180, 1260, 120, 18, 'rgba(255,255,255,.045)', `rgba(${r},${g},${b},.25)`);
@@ -222,7 +239,7 @@ async function renderInfo({ guild, group, owner, managers, accentColor = null })
   const managerNames = resolvedManagers.map(manager => memberName(manager, memberId(manager))).filter(Boolean);
   const managerValue = managerNames.length ? `${managerNames.slice(0, 4).join('، ')}${managerNames.length > 4 ? ` +${managerNames.length - 4}` : ''}` : 'لا يوجد مسؤولون';
   const ownerName = resolvedOwner ? memberName(resolvedOwner) : 'غير موجود';
-  const memberCount = Array.isArray(group?.memberIds) ? group.memberIds.length : number(group?.memberCount);
+  const memberCount = group ? new Set([String(group.owner_id || ''), ...(group.memberIds || []).map(String), ...(group.managerIds || []).map(String)].filter(Boolean)).size : number(group?.memberCount);
   const status = ({ active: 'نشط', orphaned: 'يتطلب تنظيفًا', deleted: 'محذوف' })[String(group?.status || '').toLowerCase()] || 'غير محدد';
   const chatName = thread?.name ? `#${thread.name}` : chatChannel?.name ? `#${chatChannel.name}` : 'غير متاح';
   const voiceName = voiceChannel?.name ? `#${voiceChannel.name}` : 'غير متاح';
@@ -258,7 +275,7 @@ async function renderTopGroups({ guild, groups = [], memberRowsByGroup = {}, gro
   roundRect(ctx, 28, 28, W - 56, H - 56, 30, 'rgba(15,21,32,.94)', `rgba(${r},${g},${b},.65)`);
   avatar(ctx, guildImg, 1460, 104, 48, accent, guild?.name || 'G');
   ctx.textAlign = 'right'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 46px Cairo, sans-serif';
-  text(ctx, 'Top Groups', 1375, 86, 1070);
+  text(ctx, 'TOP GROUPS', 1375, 86, 1070);
   ctx.fillStyle = '#AAB4C5'; ctx.font = '22px Cairo, sans-serif';
   text(ctx, 'أفضل 10 قروبات حسب النقاط  •  تتحدث تلقائيًا كل 30 ثانية', 1375, 128, 1070);
 
@@ -266,7 +283,7 @@ async function renderTopGroups({ guild, groups = [], memberRowsByGroup = {}, gro
     ...group,
     id: String(group?.id ?? `group-${index}`),
     points: number(group?.points),
-    memberCount: Array.isArray(group?.memberIds) ? group.memberIds.length : number(group?.memberCount)
+    memberCount: group ? new Set([String(group.owner_id || ''), ...(group.memberIds || []).map(String), ...(group.managerIds || []).map(String)].filter(Boolean)).size : number(group?.memberCount)
   })).sort((a, b) => number(b.points) - number(a.points)
     || Number(a.id) - Number(b.id)
     || sortKey(a.name).localeCompare(sortKey(b.name), 'ar', { sensitivity: 'base' }));
@@ -324,7 +341,7 @@ async function renderMyRank({ guild, group, groupRank = 0, totalGroups = 0, memb
   const guildImage = await image(iconUrl(guild));
   avatar(ctx, guildImage, 1400, 100, 46, accent, guild?.name || 'G');
   ctx.textAlign = 'right'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 46px Cairo, sans-serif';
-  text(ctx, 'My Group Rank', 1320, 88, 1000);
+  text(ctx, 'MY GROUP RANK', 1320, 88, 1000);
   ctx.fillStyle = '#AAB4C5'; ctx.font = '22px Cairo, sans-serif';
   text(ctx, `Your group position in ${guild?.name || 'this server'}`, 1320, 126, 1000);
 
@@ -347,7 +364,7 @@ async function renderMyRank({ guild, group, groupRank = 0, totalGroups = 0, memb
 
   const stats = [
     ['GROUP POINTS', number(group?.points).toLocaleString('en-US')],
-    ['MEMBERS', number(group?.memberIds?.length).toLocaleString('en-US')],
+    ['MEMBERS', (group ? new Set([String(group.owner_id || ''), ...(group.memberIds || []).map(String), ...(group.managerIds || []).map(String)].filter(Boolean)).size : 0).toLocaleString('en-US')],
     ['GROUP ID', String(group?.id ?? '—')]
   ];
   stats.forEach(([label, value], index) => {

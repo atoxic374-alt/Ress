@@ -3,7 +3,7 @@ const { renderMembers, renderInfo } = require('./groupRenderer');
 const { PermissionsBitField } = require('discord.js');
 const { responsePayload } = require('./groupResponses');
 
-const COMMANDS = new Set(['تحكم', 'control', 'تعديل', 'edit', 'عقوبه', 'عقوبة', 'punish', 'صلاحية', 'permission', 'مسح', 'clear', 'اعضاء', 'أعضاء', 'members', 'اضافة', 'إضافة', 'add', 'ازالة', 'إزالة', 'remove', 'منع', 'block', 'سماح', 'allow', 'قروبي', 'my-group', 'مسؤول', 'manager']);
+const COMMANDS = new Set(['تحكم', 'control', 'تعديل', 'edit', 'عقوبه', 'عقوبة', 'punish', 'صلاحية', 'permission', 'مسح', 'clear', 'اعضاء', 'أعضاء', 'members', 'اضافة', 'إضافة', 'add', 'ازالة', 'إزالة', 'remove', 'منع', 'block', 'سماح', 'allow', 'قروبي', 'my-group', 'مسؤول', 'manager', 'أوامر', 'اوامر', 'commands', 'help']);
 
 function ids(message) {
   return [...new Set([...message.mentions.users.keys(), ...(String(message.content).match(/\b\d{16,20}\b/g) || [])])];
@@ -94,8 +94,7 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
   let command = String(words.shift() || '').toLowerCase();
   if (command === 'تعديل' && String(words[0] || '') === 'القروب') { command = 'تعديل'; words.shift(); }
   if (!COMMANDS.has(command)) return false;
-  // Destructive commands must be explicit; never interpret ordinary conversation as a purge/punishment.
-  if (!hasPrefix && ['مسح', 'clear', 'عقوبه', 'عقوبة', 'punish'].includes(command)) return false;
+  // Commands are prefix-free; destructive actions require an explicit confirmation word.
   const group = await gm.getGroupForChannel(message.guild.id, message.channel.id);
   if (!group || group.status !== 'active') {
     if (hasPrefix) { await reply(message, 'هذا الشات غير مرتبط بقروب نشط.'); return true; }
@@ -110,14 +109,20 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       if (!groupHasUser(group, message.author.id) && !system) return Boolean(await reply(message, 'أنت لست عضوًا في القروب.'));
       const owner = await message.guild.members.fetch(group.owner_id).catch(() => null);
       const managers = await Promise.all(group.managerIds.map(id => message.guild.members.fetch(id).catch(() => null)));
-      await message.reply({ files: [await renderInfo({ guild: message.guild, group, owner, managers: managers.filter(Boolean), accentColor: null })] }).catch(() => {});
+      await message.reply(responsePayload({ title: 'GROUP OVERVIEW', content: `القروب : ${group.name}\nهذه معلومات القروب الحالية.`, files: [await renderInfo({ guild: message.guild, group, owner, managers: managers.filter(Boolean), accentColor: null })] })).catch(() => {});
       return true;
     }
     if (command === 'اعضاء' || command === 'أعضاء' || command === 'members') {
       if (!groupHasUser(group, message.author.id) && !system) return Boolean(await reply(message, 'عرض الأعضاء متاح لأعضاء القروب فقط.'));
       const rows = await gm.listMemberPoints(message.guild.id, group.id, 10);
       const members = await Promise.all(rows.map(async row => ({ ...row, member: await message.guild.members.fetch(row.user_id).catch(() => null) })));
-      await message.reply({ files: [await renderMembers({ guild: message.guild, group, members, accentColor: null })] }).catch(() => {});
+      await message.reply(responsePayload({ title: 'GROUP MEMBERS', content: `القروب : ${group.name}\nترتيب الأعضاء حسب النقاط والرسائل.`, files: [await renderMembers({ guild: message.guild, group, members, accentColor: null })] })).catch(() => {});
+      return true;
+    }
+    if (['أوامر', 'اوامر', 'commands', 'help'].includes(command)) {
+      if (!groupHasUser(group, message.author.id) && !system) return Boolean(await reply(message, 'دليل الأوامر متاح لأعضاء القروب فقط.'));
+      const { buildGroupCommandGuide } = require('../commands/groups');
+      await reply(message, buildGroupCommandGuide(group, settings));
       return true;
     }
     if (!privileged && !system) { await reply(message, 'لا تملك الصلاحية.'); return true; }
@@ -199,6 +204,7 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
     }
     if (command === 'مسح' || command === 'clear') {
       if (!settings.extraPermissions) throw new Error('EXTRA_DISABLED');
+      if (!words.some(word => ['تأكيد', 'أكد', 'confirm'].includes(String(word).toLowerCase()))) { await reply(message, 'للتأكيد اكتب: مسح تأكيد. لن تُحذف أي رسالة قبل كتابة كلمة التأكيد.'); return true; }
       const fetched = await message.channel.messages.fetch({ limit: 100 });
       await message.channel.bulkDelete(fetched, true);
       const done = await reply(message, 'تم مسح الرسائل.');
@@ -207,6 +213,7 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
     }
     if (command === 'عقوبه' || command === 'عقوبة' || command === 'punish') {
       if (!settings.extraPermissions) throw new Error('EXTRA_DISABLED');
+      if (!words.some(word => ['تأكيد', 'أكد', 'confirm'].includes(String(word).toLowerCase()))) { await reply(message, 'للتأكيد اكتب: عقوبة @عضو تأكيد. مدة العقوبة 10 دقائق، ولن تُطبق قبل كلمة التأكيد.'); return true; }
       if (!targetId) throw new Error('MENTION_REQUIRED');
       const target = await message.guild.members.fetch(targetId).catch(() => null);
       if (!target || target.user?.bot) throw new Error('MEMBER_NOT_FOUND');
