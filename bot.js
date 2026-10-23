@@ -2676,7 +2676,7 @@ client.on('messageCreate', async message => {
   const groupContent = String(message.content || '').trim();
   const groupHasPrefix = typeof groupPrefix === 'string' && groupPrefix.length > 0 && groupContent.startsWith(groupPrefix);
   const groupRaw = (groupHasPrefix ? groupContent.slice(groupPrefix.length) : groupContent).trim();
-  const groupToken = String(groupRaw.split(/\\s+/)[0] || '').toLowerCase();
+  const groupToken = String(groupRaw.split(/\s+/)[0] || '').toLowerCase();
   const groupCommandTokens = new Set([
     'setup', 'group-setup', 'groups', 'group', 'قروب', 'قروبات', 'إعدادات', 'اعدادات', 'تهيئة',
     'تحكم', 'control', 'تعديل', 'edit', 'عقوبه', 'عقوبة', 'punish', 'صلاحية', 'permission',
