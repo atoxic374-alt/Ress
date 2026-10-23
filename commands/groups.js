@@ -1329,9 +1329,17 @@ async function execute(message, args, { client } = {}) {
   }
   return replyMessage(message,'استخدم أمر القروبات مع الخيارات: setup، control، create، delete، top، members أو rules.');
 }
-const activityCache=new Map(); const settingsCache=new Map(); const voiceStarts=new Map(); const voiceChannels=new Map(); const lastMessageAt=new Map();
+const activityCache=new Map(); const settingsCache=new Map(); const voiceStarts=new Map(); const voiceChannels=new Map(); const lastMessageAt=new Map(); const lastSkipAuditAt=new Map();
 async function cachedGroups(guildId){const hit=activityCache.get(String(guildId));if(hit&&Date.now()-hit.at<30000)return hit.groups;const groups=await gm.listGroups(guildId);activityCache.set(String(guildId),{at:Date.now(),groups});return groups;}
 async function cachedSettings(guildId){const hit=settingsCache.get(String(guildId));if(hit&&Date.now()-hit.at<30000)return hit.settings;const settings=await gm.getSettings(guildId);settingsCache.set(String(guildId),{at:Date.now(),settings});return settings;}
+async function logActivitySkip(guildId, userId, groupId, metric, reason, details = {}) {
+  const now = Date.now();
+  const key = `${guildId}:${userId}:${metric}:${reason}`;
+  if (now - Number(lastSkipAuditAt.get(key) || 0) < 5 * 60 * 1000) return;
+  lastSkipAuditAt.set(key, now);
+  if (lastSkipAuditAt.size > 5000) for (const [entry, time] of lastSkipAuditAt) if (now - time > 60 * 60 * 1000) lastSkipAuditAt.delete(entry);
+  await gm.audit(guildId, userId, groupId, 'activity_skipped', { metric, reason, ...details }).catch(error => console.error('[groups] activity diagnostic audit failed:', error?.message || error));
+}
 function registerInteractionHandler(client) {
   if (registered) return;
   registered = true;
@@ -1385,19 +1393,30 @@ function registerInteractionHandler(client) {
       (group.memberIds.includes(userId) || String(group.owner_id) === userId || group.managerIds.includes(userId))
       && (settings.countAllChannels || gm.channelBelongs(group, message.channelId))
     );
-    if (!eligible) return;
+    if (!eligible) {
+      const isMember = groups.some(group => group.memberIds.includes(userId) || String(group.owner_id) === userId || group.managerIds.includes(userId));
+      await logActivitySkip(message.guild.id, userId, null, 'messages', isMember ? 'channel_out_of_scope' : 'member_not_eligible', { channelId: message.channelId });
+      return;
+    }
     const minLength = Math.max(0, Number(settings.minMessageLength) || 0);
     if (minLength > 0 && Array.from(String(message.content || '').trim()).length < minLength) {
-      await gm.audit(message.guild.id, userId, null, 'activity_skipped', { metric: 'messages', reason: 'below_minimum_length', minimum: minLength, actual: Array.from(String(message.content || '').trim()).length, channelId: message.channelId }).catch(() => {});
+      await logActivitySkip(message.guild.id, userId, null, 'messages', 'below_minimum_length', { minimum: minLength, actual: Array.from(String(message.content || '').trim()).length, channelId: message.channelId });
       return;
     }
     // One message award per user per guild per minute prevents farming across multiple channels.
     const key = `${message.guild.id}:${userId}`;
     const now = Date.now();
-    if (now - Number(lastMessageAt.get(key) || 0) < 60000) return;
+    if (now - Number(lastMessageAt.get(key) || 0) < 60000) {
+      await logActivitySkip(message.guild.id, userId, null, 'messages', 'cooldown_active', { channelId: message.channelId, cooldownMs: 60000 });
+      return;
+    }
     lastMessageAt.set(key, now);
     if (lastMessageAt.size > 10000) for (const [entry, time] of lastMessageAt) if (now - time > 600000) lastMessageAt.delete(entry);
-    await gm.recordActivity(message.guild.id, userId, 'messages', 1, message.channelId).catch(error => console.error('[groups] message points failed:', error?.message || error));
+    const awarded = await gm.recordActivity(message.guild.id, userId, 'messages', 1, message.channelId).catch(error => { console.error('[groups] message points failed:', error?.message || error); return 0; });
+    if (!awarded) {
+      const diagnosis = await gm.explainActivity(message.guild.id, userId, 'messages', message.channelId, 1).catch(() => null);
+      if (diagnosis && diagnosis.reason !== 'eligible') await logActivitySkip(message.guild.id, userId, null, 'messages', diagnosis.reason, diagnosis);
+    }
   });
 
   client.on('messageReactionAdd', async (reaction, user) => {
