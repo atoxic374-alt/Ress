@@ -1522,23 +1522,53 @@ async function dispatchInternalMessage(message, options = {}) {
   const content = String(message?.content || '').trim();
   const hasPrefix = typeof prefix === 'string' && prefix.length > 0 && content.startsWith(prefix);
   const raw = (hasPrefix ? content.slice(prefix.length) : content).trim();
-  if(message?.guild&&!message.author?.bot) {
-    const command = raw.split(/\s+/)[0].toLowerCase();
-    if(command==='صلاحية'||command==='permission') {
-      try {
-        const linked=await gm.getGroupForChannel(message.guild.id,message.channel.id);
-        if(!linked) {
-          if(!hasPrefix)return false;
-          throw new Error('GROUP_NOT_FOUND');
-        }
-        const {group}=await currentManager(message,linked.id,true);
-        const flow=newFlow(message.guild.id,message.author.id,'permission',group.id);
-        await replyMessage(message,{...scopePayload(message.guild,flow),allowedMentions:{parse:[]}});
-      } catch(error) { await replyMessage(message,{content:groupError(error),allowedMentions:{parse:[]}}).catch(()=>null); }
-      return true;
-    }
+  if (!message?.guild || message.author?.bot) return false;
+
+  const words = raw.split(/\s+/).filter(Boolean);
+  const command = String(words[0] || '').toLowerCase();
+  const args = words.slice(1);
+  const client = message.client;
+
+  // Global group setup entry points work without the normal message prefix.
+  // Only reserved aliases are intercepted; ordinary conversation stays untouched.
+  if (!hasPrefix && ['setup', 'group-setup', 'إعدادات', 'اعدادات', 'تهيئة'].includes(command)) {
+    const setupCommand = client?.commands?.get('setup') || require('./setup');
+    await setupCommand.execute(message, args, { client, prefix });
+    return true;
   }
-  return handleInternalMessage(message, { ...options, sendPanel: sendGroupAdminPanel });
+  if (!hasPrefix && ['groups', 'group', 'قروب', 'قروبات'].includes(command)) {
+    await execute(message, args.length ? args : ['setup'], { client, prefix });
+    return true;
+  }
+
+  if (command === 'صلاحية' || command === 'permission') {
+    try {
+      const linked = await gm.getGroupForChannel(message.guild.id, message.channel.id);
+      if (!linked) {
+        if (!hasPrefix) {
+          await replyMessage(message, { content: 'لا توجد قناة قروب مرتبطة بهذا المكان. افتح أمر صلاحية داخل قناة القروب المرتبطة.', allowedMentions: { parse: [] } }).catch(() => null);
+          return true;
+        }
+        throw new Error('GROUP_NOT_FOUND');
+      }
+      const { group } = await currentManager(message, linked.id, true);
+      const flow = newFlow(message.guild.id, message.author.id, 'permission', group.id);
+      await replyMessage(message, { ...scopePayload(message.guild, flow), allowedMentions: { parse: [] } });
+    } catch (error) {
+      await replyMessage(message, { content: groupError(error), allowedMentions: { parse: [] } }).catch(() => null);
+    }
+    return true;
+  }
+
+  const consumed = await handleInternalMessage(message, { ...options, sendPanel: sendGroupAdminPanel });
+  if (consumed) return true;
+
+  // Outside a linked group channel, the existing system permission check still applies.
+  if (!hasPrefix && ['تحكم', 'control'].includes(command)) {
+    await execute(message, ['control'], { client, prefix });
+    return true;
+  }
+  return false;
 }
 
 // Group-scoped controls. Never edit guild roles, categories, or a shared thread parent.
