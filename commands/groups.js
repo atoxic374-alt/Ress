@@ -1772,6 +1772,7 @@ async function applyUserControl(interaction, flow, userId) {
     if (allowed && flow.scope === 'both' && !group.memberIds.includes(userId) && group.memberIds.length >= settings.maxMembers) throw new Error('GROUP_FULL');
     let wasThreadMember = false;
     let changedThread = false;
+    let groupRole = null, hadGroupRole = false, changedGroupRole = false;
     const edits = channels.map(channel => ({ channel, id: target.id, patch: Object.fromEntries((channel.type === ChannelType.GuildVoice ? VOICE_ACCESS : TEXT_ACCESS).map(flag => [flag, allowed])) }));
     try {
       await applyChannelEdits(edits, `Group ${flow.action} by ${interaction.user.id}`, async () => {
@@ -1783,6 +1784,13 @@ async function applyUserControl(interaction, flow, userId) {
           }
         }
         if (flow.scope === 'both') {
+          if (group.role_id) {
+            groupRole = interaction.guild.roles.cache.get(group.role_id) || await interaction.guild.roles.fetch(group.role_id).catch(() => null);
+            if (!groupRole) throw new Error('GROUP_ROLE_NOT_FOUND');
+            hadGroupRole = target.roles.cache.has(groupRole.id);
+            if (allowed && !hadGroupRole) { await target.roles.add(groupRole, 'Group membership allowed'); changedGroupRole = true; }
+            if (!allowed && hadGroupRole) { await target.roles.remove(groupRole, 'Group membership denied'); changedGroupRole = true; }
+          }
           await dbManager.transaction(async tx => {
             const row = await tx.get('SELECT * FROM managed_groups WHERE guild_id = ? AND id = ?', [interaction.guild.id, group.id]);
             if (!row || row.status !== 'active') throw new Error('GROUP_NOT_FOUND');
@@ -1799,6 +1807,7 @@ async function applyUserControl(interaction, flow, userId) {
       });
     } catch (error) {
       if (changedThread) await (wasThreadMember ? thread.members.add(target.id) : thread.members.remove(target.id)).catch(() => { error.groupRollbackFailed = true; });
+      if (changedGroupRole && groupRole) await (hadGroupRole ? target.roles.add(groupRole, 'Rollback group access') : target.roles.remove(groupRole, 'Rollback group access')).catch(() => { error.groupRollbackFailed = true; });
       throw error;
     }
     invalidateGroupCaches(interaction.guild.id);
