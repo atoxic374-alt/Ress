@@ -127,6 +127,7 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       if (!target) throw new Error('MEMBER_NOT_FOUND');
       if (target.user?.bot) throw new Error('BOT_NOT_ALLOWED');
       const wasMember = groupHasUser(group, targetId);
+      if (wasMember) { await reply(message, 'العضو موجود بالفعل في القروب.'); return true; }
       await gm.addMember(message.guild.id, group.id, targetId, message.author.id);
       try { await syncMember(group, message.guild, targetId, true); }
       catch (error) { if (!wasMember) await gm.removeMember(message.guild.id, group.id, targetId, message.author.id).catch(() => { error.groupRollbackFailed = true; }); throw error; }
@@ -158,6 +159,7 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       if (String(group.owner_id) === String(targetId)) throw new Error('OWNER_PROTECTED');
       const wasManager = group.managerIds.includes(String(targetId));
       if (wasManager && String(group.owner_id) !== String(message.author.id) && !system) throw new Error('MANAGER_PROTECTED');
+      if (group.blockedIds.includes(String(targetId))) { await reply(message, 'العضو ممنوع بالفعل من القروب.'); return true; }
       const wasMember = groupHasUser(group, targetId);
       await gm.setBlocked(message.guild.id, group.id, targetId, true, message.author.id);
       try { await syncMember(group, message.guild, targetId, false); await syncManagerRole(message.guild, settings, targetId); }
@@ -173,6 +175,7 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
     }
     if (command === 'سماح' || command === 'allow') {
       if (!targetId) throw new Error('MENTION_REQUIRED');
+      if (!group.blockedIds.includes(String(targetId))) { await reply(message, 'العضو غير ممنوع من القروب أصلًا.'); return true; }
       await gm.setBlocked(message.guild.id, group.id, targetId, false, message.author.id);
       await gm.logGroupEvent(message.guild, 'unblock', { groupId: group.id, userId: targetId }, message.author.id);
       await reply(message, 'تم السماح للعضو.'); return true;
