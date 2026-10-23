@@ -12,6 +12,7 @@ on:
   push:
     branches:
       - main
+      - improve/group-v2-responses
     paths:
       - 'commands/groups.js'
       - 'utils/group*.js'
