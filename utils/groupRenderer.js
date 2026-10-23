@@ -174,7 +174,7 @@ async function renderMembers({ guild, group, members, accentColor = null }) {
   ctx.textAlign = 'right'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 50px Cairo, sans-serif';
   text(ctx, 'GROUP MEMBERS', 1305, 78, 900);
   ctx.fillStyle = '#AAB4C5'; ctx.font = '27px Cairo, sans-serif';
-  text(ctx, `${group?.name || 'قروب'}  •  ترتيب النقاط فقط`, 1305, 122, 900);
+  text(ctx, `${group?.name || 'قروب'}  •  Points Ranking`, 1305, 122, 900);
 
   const rowsWithMembers = await Promise.all(asArray(members).map(async item => {
     const isMetricRow = item && (item.member !== undefined || item.user_id !== undefined || item.userId !== undefined || item.points !== undefined || item.messages !== undefined);
@@ -201,13 +201,13 @@ async function renderMembers({ guild, group, members, accentColor = null }) {
     avatar(ctx, podiumImages[index], p.x, y - 58, p.rank === 1 ? 48 : 42, medal, name);
     if (row) {
       ctx.fillStyle = '#FFF'; ctx.font = 'bold 27px Cairo, sans-serif'; text(ctx, name, p.x, y + 95, 195);
-      ctx.fillStyle = medal; ctx.font = 'bold 24px Cairo, sans-serif'; ctx.fillText(`${number(row.points).toLocaleString('ar-SA')} نقطة`, p.x, y + 132);
-      ctx.fillStyle = '#AAB4C5'; ctx.font = '21px Cairo, sans-serif'; ctx.fillText('ترتيب بالنقاط', p.x, y + 163);
+      ctx.fillStyle = medal; ctx.font = 'bold 24px Cairo, sans-serif'; ctx.fillText(`${number(row.points).toLocaleString('ar-SA')} Points`, p.x, y + 132);
+      ctx.fillStyle = '#AAB4C5'; ctx.font = '21px Cairo, sans-serif'; ctx.fillText('Points Ranking', p.x, y + 163);
     }
   }
   if (!sorted.length) {
     ctx.textAlign = 'center'; ctx.fillStyle = '#AAB4C5'; ctx.font = 'bold 24px Cairo, sans-serif';
-    ctx.fillText('لا توجد نقاط مسجلة حتى الآن', 750, 390);
+    ctx.fillText('No Points recorded yet', 750, 390);
   }
 
   ctx.textAlign = 'right'; ctx.fillStyle = accent; ctx.font = 'bold 30px Cairo, sans-serif';
@@ -225,9 +225,9 @@ async function renderMembers({ guild, group, members, accentColor = null }) {
     ctx.textAlign = 'right'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 27px Cairo, sans-serif';
     text(ctx, row?.name || 'لا يوجد عضو', card.x + cardW - 20, card.y + 52, 220);
     ctx.fillStyle = row ? accent : '#7F8CA1'; ctx.font = 'bold 23px Cairo, sans-serif';
-    ctx.fillText(row ? `${number(row.points).toLocaleString('ar-SA')} نقطة` : 'لا توجد نقاط', card.x + cardW - 20, card.y + 91);
+    ctx.fillText(row ? `${number(row.points).toLocaleString('ar-SA')} Points` : 'No Points', card.x + cardW - 20, card.y + 91);
     ctx.fillStyle = '#AAB4C5'; ctx.font = '21px Cairo, sans-serif';
-    ctx.fillText(row ? 'ترتيب بالنقاط' : '—', card.x + cardW - 20, card.y + 121);
+    ctx.fillText(row ? 'Points Ranking' : '—', card.x + cardW - 20, card.y + 121);
   }
   ctx.textAlign = 'right'; ctx.fillStyle = '#7F8CA1'; ctx.font = '21px Cairo, sans-serif';
   text(ctx, `آخر تحديث  ${group?.updated_at ? formatDate(group.updated_at) : 'غير محدد'}`, 1425, 1058, 900);
@@ -267,7 +267,7 @@ async function renderInfo({ guild, group, owner, managers, accentColor = null })
   const updatedAt = group?.updated_at ? formatDate(group.updated_at) : 'غير محدد';
   const fields = [
     ['المالك', ownerName], ['المسؤولون', managerValue],
-    ['عدد الأعضاء', memberCount.toLocaleString('ar-SA')], ['إجمالي النقاط', number(group?.points).toLocaleString('ar-SA')],
+    ['عدد الأعضاء', memberCount.toLocaleString('ar-SA')], ['Total Points', number(group?.points).toLocaleString('ar-SA')],
     ['اسم الرتبة', role?.name || (group?.role_id ? 'الرتبة غير موجودة' : 'غير محدد')], ['قناة الشات', chatName],
     ['القناة الصوتية', voiceName], ['الحالة', status],
     ['رقم القروب', String(group?.id ?? 'غير محدد')], ['تاريخ الإنشاء', createdAt],
@@ -324,7 +324,7 @@ async function renderTopGroups({ guild, groups = [], memberRowsByGroup = {}, gro
       ctx.textAlign = 'center'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 28px Cairo, sans-serif';
       text(ctx, row.name || 'Group', x + cardW / 2, y + 178, cardW - 34);
       ctx.fillStyle = medal; ctx.font = 'bold 30px Cairo, sans-serif';
-      ctx.fillText(`${number(row.points).toLocaleString('ar-SA')} نقطة`, x + cardW / 2, y + 224);
+      ctx.fillText(`${number(row.points).toLocaleString('ar-SA')} Points`, x + cardW / 2, y + 224);
       ctx.fillStyle = '#AAB4C5'; ctx.font = '25px Cairo, sans-serif';
       ctx.fillText(`${number(row.memberCount).toLocaleString('ar-SA')} أعضاء`, x + cardW / 2, y + 264);
       roundRect(ctx, x + 45, y + 280, cardW - 90, 3, 2, `rgba(${r},${g},${b},.65)`);
