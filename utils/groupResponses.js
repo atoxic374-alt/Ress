@@ -1,6 +1,6 @@
 'use strict';
 
-const { ContainerBuilder, TextDisplayBuilder, MediaGalleryBuilder, MediaGalleryItemBuilder, MessageFlags } = require('discord.js');
+const { ContainerBuilder, TextDisplayBuilder, SectionBuilder, ThumbnailBuilder, MediaGalleryBuilder, MediaGalleryItemBuilder, MessageFlags } = require('discord.js');
 const colorManager = require('./colorManager');
 
 function normalizeGroupText(value) {
@@ -53,12 +53,15 @@ function responsePayload(payload = {}) {
     const content = normalizeGroupText(data.content);
     const title = String(data.title || responseTitle(content));
     const accentColor = data.accentColor ?? colorManager.getColor?.();
+    const thumbnail = data.thumbnail;
     delete data.accentColor;
+    delete data.thumbnail;
     delete data.title;
     delete data.content;
-    const container = new ContainerBuilder().setAccentColor(accentNumber(accentColor)).addTextDisplayComponents(
-      new TextDisplayBuilder().setContent('## ' + title + '\n' + (content || 'تم تنفيذ الطلب.'))
-    );
+    const container = new ContainerBuilder().setAccentColor(accentNumber(accentColor));
+    const titleDisplay = new TextDisplayBuilder().setContent('## ' + title + '\n' + (content || 'تم تنفيذ الطلب.'));
+    if (thumbnail) container.addSectionComponents(new SectionBuilder().addTextDisplayComponents(titleDisplay).setThumbnailAccessory(new ThumbnailBuilder().setURL(String(thumbnail))));
+    else container.addTextDisplayComponents(titleDisplay);
     // Components V2 does not automatically display uploaded images; explicitly reference image attachments.
     const imageFiles = (Array.isArray(data.files) ? data.files : []).filter(file => /\.(png|jpe?g|webp|gif)$/i.test(String(file?.name || file?.attachment?.name || '')));
     if (imageFiles.length) {

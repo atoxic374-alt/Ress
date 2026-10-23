@@ -59,11 +59,10 @@ async function buildOurMembersPayload(guild, group, requestedPage = 0) {
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
   const page = Math.max(0, Math.min(pageCount - 1, Number(requestedPage) || 0));
   const visible = rows.slice(page * pageSize, (page + 1) * pageSize);
-  const lines = [`**${String(group.name || 'Group').slice(0, 80)}**`, `صفحة ${page + 1} / ${pageCount} · الترتيب بالنقاط فقط`, ''];
+  const lines = [`**${String(group.name || 'Group').slice(0, 80)}**`, `Page ${page + 1} / ${pageCount} · ترتيب بالنقاط`, ''];
   if (!visible.length) lines.push('لا توجد نقاط مسجلة لأعضاء القروب حتى الآن.');
   else visible.forEach((row, index) => {
-    const name = row.member?.displayName || row.member?.user?.username || `<@${row.user_id}>`;
-    lines.push(`**${page * pageSize + index + 1}.** ${name} — **${Number(row.points || 0).toLocaleString('en-US')} نقطة**`);
+    lines.push(`#${page * pageSize + index + 1} - <@${row.user_id}> : **${Number(row.points || 0).toLocaleString('en-US')} Points**`);
   });
   const buttons = [];
   if (pageCount > 1) {
@@ -71,7 +70,14 @@ async function buildOurMembersPayload(guild, group, requestedPage = 0) {
     buttons.push(new ButtonBuilder().setCustomId(`groups_our_members:page:${group.id}:${page}`).setLabel(`${page + 1}/${pageCount}`).setStyle(ButtonStyle.Secondary).setDisabled(true));
     buttons.push(new ButtonBuilder().setCustomId(`groups_our_members:next:${group.id}:${page}`).setLabel('التالي').setEmoji('<:emoji_14:1429263186539974708>').setStyle(ButtonStyle.Secondary).setDisabled(page === pageCount - 1));
   }
-  return { title: 'OUR MEMBERS', content: lines.join('\n'), components: buttons.length ? [new ActionRowBuilder().addComponents(buttons)] : [] };
+  const thumbnail = group.avatar_url || guild.iconURL?.({ extension: 'png', size: 128 }) || guild.client?.user?.displayAvatarURL?.({ extension: 'png', size: 128 }) || null;
+  return {
+    title: 'OUR MEMBERS',
+    content: lines.join('\n'),
+    thumbnail,
+    allowedMentions: { users: visible.map(row => String(row.user_id)).filter(Boolean) },
+    components: buttons.length ? [new ActionRowBuilder().addComponents(buttons)] : []
+  };
 }
 function memberPickerAction(command) {
   if (['اضافة', 'إضافة', 'اضف', 'أضف', 'ضيف', 'ضم', 'ادخل', 'add', 'invite', 'join', 'add-member', 'addmember'].includes(command)) return 'add';
