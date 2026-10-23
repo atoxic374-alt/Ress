@@ -1360,7 +1360,7 @@ function registerInteractionHandler(client) {
   });
 
   client.on('messageReactionAdd', async (reaction, user) => {
-    if (user?.bot) return;
+    if (!user || user.bot) return;
     const sourceMessage = reaction?.message?.partial
       ? await reaction.message.fetch().catch(() => null)
       : reaction?.message;
