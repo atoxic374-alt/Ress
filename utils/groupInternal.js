@@ -109,14 +109,14 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       if (!groupHasUser(group, message.author.id) && !system) return Boolean(await reply(message, 'أنت لست عضوًا في القروب.'));
       const owner = await message.guild.members.fetch(group.owner_id).catch(() => null);
       const managers = await Promise.all(group.managerIds.map(id => message.guild.members.fetch(id).catch(() => null)));
-      await message.reply({ files: [await renderInfo({ guild: message.guild, group, owner, managers: managers.filter(Boolean), accentColor: null })] }).catch(() => {});
+      await message.reply(responsePayload({ content: `Group overview : ${group.name}\\nهذه معلومات القروب الحالية.`, files: [await renderInfo({ guild: message.guild, group, owner, managers: managers.filter(Boolean), accentColor: null })] })).catch(() => {});
       return true;
     }
     if (command === 'اعضاء' || command === 'أعضاء' || command === 'members') {
       if (!groupHasUser(group, message.author.id) && !system) return Boolean(await reply(message, 'عرض الأعضاء متاح لأعضاء القروب فقط.'));
       const rows = await gm.listMemberPoints(message.guild.id, group.id, 10);
       const members = await Promise.all(rows.map(async row => ({ ...row, member: await message.guild.members.fetch(row.user_id).catch(() => null) })));
-      await message.reply({ files: [await renderMembers({ guild: message.guild, group, members, accentColor: null })] }).catch(() => {});
+      await message.reply(responsePayload({ content: `Group members : ${group.name}\\nترتيب الأعضاء حسب النقاط والرسائل.`, files: [await renderMembers({ guild: message.guild, group, members, accentColor: null })] })).catch(() => {});
       return true;
     }
     if (['أوامر', 'اوامر', 'commands', 'help'].includes(command)) {
