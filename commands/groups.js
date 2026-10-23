@@ -659,7 +659,7 @@ async function handleTopBonusConfirm(interaction, action, parts) {
   await interaction.update(responsePayload({ content: 'جارٍ تنفيذ الخصم...', components: [], allowedMentions: { parse: [] } }));
   try {
     const { content } = await performTopBonusAdjustment(interaction, settings, action, groupId, amount, userId);
-    return interaction.followUp({ content, ephemeral: true, allowedMentions: { parse: [] } });
+    return interaction.followUp(responsePayload({ content, ephemeral: true, allowedMentions: { parse: [] } }));
   } catch (error) {
     return interaction.followUp(responsePayload({ content: pointsAdjustmentError(error), ephemeral: true, allowedMentions: { parse: [] } }));
   }
