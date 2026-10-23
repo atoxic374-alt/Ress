@@ -215,6 +215,17 @@ const GROUP_LOG_TRANSLATIONS = Object.freeze({
   membership_reconciliation_drift: 'اختلاف عضوية', thread_member_not_in_db: 'عضو الثريد غير مسجل', MUSIC_CHANNEL_NOT_CONFIGURED: 'روم الميوزك غير محدد',
   MUSIC_CHANNEL_INVALID: 'روم الميوزك غير صالح', member_left: 'العضو غادر القروب', role_guard_removed: 'إزالة حماية الرتبة'
 });
+function groupEventView(event, details) {
+  if (String(event) === 'update' && String(details?.reason) === 'membership_reconciliation_drift') return ['مشكلة عضوية القروب', 'تم العثور على اختلاف يحتاج إلى معالجة.'];
+  return GROUP_EVENT_VIEWS[String(event)] || ['حدث في القروب', 'تم تسجيل حدث في نظام القروبات.'];
+}
+function groupLogFieldLines(key, value) {
+  if (key !== 'issues' || !Array.isArray(value)) return [`**${GROUP_EVENT_FIELDS[key] || key} :** ${groupLogValue(key, value)}`];
+  return value.slice(0, 5).flatMap(issue => {
+    if (!issue || typeof issue !== 'object') return [`**المشكلة :** ${groupLogValue(key, issue)}`];
+    return Object.entries(issue).slice(0, 4).map(([childKey, childValue]) => `**${GROUP_EVENT_FIELDS[childKey] || childKey} :** ${groupLogValue(childKey, childValue)}`);
+  });
+}
 function groupLogValue(key, value, depth = 0) {
   if (value == null || value === '') return '—';
   if (typeof value === 'boolean') return value ? 'نعم' : 'لا';
@@ -225,7 +236,7 @@ function groupLogValue(key, value, depth = 0) {
   const rawValue = String(value);
   const stringValue = GROUP_LOG_TRANSLATIONS[rawValue] || rawValue.slice(0, 300);
   if (/^(userId|ownerId|from|to)$/.test(key) && /^\d{16,20}$/.test(stringValue)) return `<@${stringValue}>`;
-  if (key === 'groupId') return `#${stringValue}`;
+  if (key === 'groupId') return `\`#${stringValue}\``;
   if (key === 'enabled' || key === 'resolved' || key === 'ok') return ['1', 'true', 'yes'].includes(stringValue.toLowerCase()) ? 'نعم' : 'لا';
   return stringValue;
 }
@@ -238,16 +249,19 @@ async function logGroupEvent(guild, event, details = {}, actorId = null) {
     if (!channel && typeof guild.channels?.fetch === 'function') channel = await guild.channels.fetch(settings.logChannelId).catch(() => null);
     if (!channel || typeof channel.send !== 'function') return null;
     const safeDetails = details && typeof details === 'object' ? details : { value: String(details) };
-    const [title, description] = GROUP_EVENT_VIEWS[String(event)] || ['GROUP EVENT', 'تم تسجيل حدث جديد في نظام القروبات.'];
+    const [title, description] = groupEventView(event, safeDetails);
     const fields = Object.entries(safeDetails).filter(([, value]) => value !== undefined && value !== null).slice(0, 12);
     const actor = actorId ? `<@${String(actorId).replace(/[^0-9]/g, '')}>` : 'النظام';
-    const fieldText = fields.length
-      ? fields.map(([key, value]) => `**${GROUP_EVENT_FIELDS[key] || key} :** ${groupLogValue(key, value)}`).join('\n')
+    const compactMembership = String(event) === 'update' && String(safeDetails.reason) === 'membership_reconciliation_drift';
+    const visibleFields = compactMembership ? fields.filter(([key]) => key !== 'reason') : fields;
+    const fieldLines = visibleFields.flatMap(([key, value]) => groupLogFieldLines(key, value));
+    const fieldText = fieldLines.length
+      ? fieldLines.join('\n')
       : '**التفاصيل :** لا توجد تفاصيل إضافية.';
     const container = new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || '#5865F2'));
     const header = [new TextDisplayBuilder().setContent(`## ${title}`), new TextDisplayBuilder().setContent(`**الحدث :** ${description}\n**المنفذ :** ${actor}`)];
     const body = new TextDisplayBuilder().setContent(fieldText.slice(0, 3800));
-    const footer = new TextDisplayBuilder().setContent(`-# ${guild.name ? String(guild.name).slice(0, 100) : guild.id} • Group Logs`);
+    const footer = new TextDisplayBuilder().setContent(`-# ${guild.name ? String(guild.name).slice(0, 100) : guild.id} • لوق القروبات`);
     const icon = guild.iconURL?.({ extension: 'png', size: 128 });
     if (icon) container.addSectionComponents(new SectionBuilder().addTextDisplayComponents(header).setThumbnailAccessory(new ThumbnailBuilder().setURL(icon)));
     else header.forEach(text => container.addTextDisplayComponents(text));
