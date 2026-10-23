@@ -1053,6 +1053,7 @@ async function handleSetupSelection(interaction, prefix, action) {
     if (!role || role.id === interaction.guild.id || role.managed || !role.editable) return reply(interaction, { content: 'اختر رتبة قابلة للإدارة، ولا يمكن استخدام @everyone أو الرتب المُدارة.' });
     const dangerous = [PermissionsBitField.Flags.Administrator, PermissionsBitField.Flags.ManageGuild, PermissionsBitField.Flags.ManageRoles, PermissionsBitField.Flags.ManageChannels, PermissionsBitField.Flags.ManageWebhooks, PermissionsBitField.Flags.KickMembers, PermissionsBitField.Flags.BanMembers, PermissionsBitField.Flags.ModerateMembers];
     if (['leaderrole', 'managerrole'].includes(action) && role.permissions.any(dangerous)) return reply(interaction, { content: 'هذه الرتبة تملك صلاحيات إدارية حساسة. اختر رتبة مخصصة للقروبات دون صلاحيات إدارة السيرفر.' });
+    if ((action === 'leaderrole' && roleId === String(settings.managerRoleId || '')) || (action === 'managerrole' && roleId === String(settings.leaderRoleId || ''))) return reply(interaction, { content: 'يجب أن تكون رتبة مالك القروب مختلفة عن رتبة مسؤول القروب.' });
     const keys = { mainrole: 'mainRoleId', leaderrole: 'leaderRoleId', managerrole: 'managerRoleId' };
     const labels = { mainrole: 'Main Role', leaderrole: 'Leader Role', managerrole: 'Manager Role' };
     const oldRoleId = settings[keys[action]] ? String(settings[keys[action]]) : null;
@@ -1805,7 +1806,7 @@ async function applyUserControl(interaction, flow, userId) {
     const allowed = flow.action === 'allow';
     const thread = flow.scope !== 'voice' && group.thread_id ? await channelById(interaction.guild, group.thread_id) : null;
     if (thread?.archived && allowed) throw new Error('THREAD_ARCHIVED');
-    if (allowed && flow.scope === 'both' && !group.memberIds.includes(userId) && group.memberIds.length >= settings.maxMembers) throw new Error('GROUP_FULL');
+    if (allowed && flow.scope === 'both' && !group.memberIds.includes(userId) && new Set([String(group.owner_id), ...group.memberIds.map(String)]).size >= settings.maxMembers) throw new Error('GROUP_FULL');
     let wasThreadMember = false;
     let changedThread = false;
     let groupRole = null, hadGroupRole = false, changedGroupRole = false;
@@ -1834,7 +1835,7 @@ async function applyUserControl(interaction, flow, userId) {
             const blocked = JSON.parse(row.blocked_ids_json || '[]');
             const managers = JSON.parse(row.manager_ids_json || '[]');
             if (!allowed && (row.owner_id === target.id || managers.includes(target.id))) throw new Error('TARGET_PROTECTED');
-            if (allowed && !members.includes(target.id) && members.length >= settings.maxMembers) throw new Error('GROUP_FULL');
+            if (allowed && !members.includes(target.id) && new Set([String(row.owner_id), ...members.map(String)]).size >= settings.maxMembers) throw new Error('GROUP_FULL');
             const now = Date.now();
             await tx.run('UPDATE managed_groups SET member_ids_json = ?, blocked_ids_json = ?, updated_at = ? WHERE guild_id = ? AND id = ?', [JSON.stringify(allowed ? [...new Set([...members, target.id])] : members.filter(id => id !== target.id)), JSON.stringify(allowed ? blocked.filter(id => id !== target.id) : [...new Set([...blocked, target.id])]), now, interaction.guild.id, group.id]);
             await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [interaction.guild.id, group.id, interaction.user.id, `control_${flow.action}`, JSON.stringify({ scope: flow.scope, userId: target.id }), now]);
