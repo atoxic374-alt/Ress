@@ -2443,10 +2443,15 @@ function groupMetadataPayload(guild, groupId) {
   ));
   return componentsV2Payload(c);
 }
-function flowSelect(guild, flow, title, description, options) { return selectPayload(guild, title, description, flowId(flow), options); }
-function entitySelect(guild, flow, title, description, menu) {
+function flowSelect(guild, flow, title, description, options, noValue = null) {
+  const payload = selectPayload(guild, title, description, flowId(flow), options);
+  if (noValue) payload.components[0].addActionRowComponents(new ActionRowBuilder().addComponents(button(`groups_flow:${flow.token}:${noValue}`, 'لا يوجد — إنشاء تلقائي', ButtonStyle.Secondary)));
+  return payload;
+}
+function entitySelect(guild, flow, title, description, menu, noValue = null) {
   const c = baseContainer(guild, title, description);
   c.addActionRowComponents(new ActionRowBuilder().addComponents(menu.setCustomId(flowId(flow)).setMinValues(1).setMaxValues(1)));
+  if (noValue) c.addActionRowComponents(new ActionRowBuilder().addComponents(button(`groups_flow:${flow.token}:${noValue}`, 'لا يوجد — إنشاء تلقائي', ButtonStyle.Secondary)));
   c.addActionRowComponents(new ActionRowBuilder().addComponents(button(`groups_flow:${flow.token}:cancel`, 'CANCEL')));
   return componentsV2Payload(c);
 }
@@ -2474,6 +2479,46 @@ function confirmFlowPayload(guild, flow, description) {
   const c = baseContainer(guild, 'CONFIRM GROUP ACTION', description);
   c.addActionRowComponents(new ActionRowBuilder().addComponents(button(flowId(flow), 'CONFIRM', ButtonStyle.Success), button(`groups_flow:${flow.token}:cancel`, 'CANCEL')));
   return componentsV2Payload(c);
+}
+function importGroupName(role) {
+  return safe(String(role?.name || '').replace(/^Group[・\s]+/i, ''), 80).trim() || 'Group';
+}
+async function createImportTextResources(guild, flow, settings, role) {
+  const name = importGroupName(role);
+  const created = [];
+  try {
+    const text = await guild.channels.create({
+      name: settings.chatMode === 'threads' ? 'groups-chat' : `📝・${name}`.slice(0, 100),
+      type: ChannelType.GuildText,
+      parent: settings.textCategoryId || undefined,
+      permissionOverwrites: groupChannelOverwrites(guild, role.id),
+      reason: 'Create group resources from admin Add'
+    });
+    created.push(text);
+    flow.textId = text.id;
+    flow.threadId = null;
+    if (settings.chatMode === 'threads') {
+      const thread = await text.threads.create({ name, type: ChannelType.PrivateThread, invitable: false, reason: 'Create group thread from admin Add' });
+      created.push(thread);
+      flow.threadId = thread.id;
+    }
+    return { text, thread: flow.threadId ? await channelById(guild, flow.threadId) : null };
+  } catch (error) {
+    for (const resource of created.reverse()) await resource.delete('Rollback failed group resource import').catch(() => {});
+    throw error;
+  }
+}
+async function createImportVoiceResource(guild, flow, settings, role) {
+  const name = importGroupName(role);
+  const voice = await guild.channels.create({
+    name,
+    type: ChannelType.GuildVoice,
+    parent: settings.voiceCategoryId || undefined,
+    permissionOverwrites: groupChannelOverwrites(guild, role.id),
+    reason: 'Create group voice resource from admin Add'
+  });
+  flow.voiceId = voice.id;
+  return voice;
 }
 async function showRenameModal(interaction, groupId, scope) {
   choose(scope, ['name', 'text', 'voice']);
@@ -2694,17 +2739,21 @@ async function validateImport(guild, flow, settings, includeMembers = false) {
     if (!members.includes(owner.id)) throw new Error('MEMBER_NOT_FOUND');
     if (members.length > settings.maxMembers) throw new Error('GROUP_FULL');
     if (groups.some(g => members.some(id => [g.owner_id, ...g.memberIds, ...g.managerIds].includes(id)))) throw new Error('ASSET_LINKED');
-    if (thread) {
-      for (let offset = 0; offset < members.length; offset += 5) {
-        const batch = members.slice(offset, offset + 5);
-        const memberships = await Promise.all(batch.map(id => thread.members.fetch(id).catch(() => null)));
-        if (memberships.some((membership, index) => !membership && batch[index] === owner.id)) throw new Error('OWNER_NOT_IN_THREAD');
-        if (memberships.some(membership => !membership)) throw new Error('THREAD_MEMBERS_MISMATCH');
-      }
-    }
     await groupChannels(guild, { id: null, text_channel_id: text.id, thread_id: thread?.id || null, voice_channel_id: voice.id }, 'both');
   }
   return { role, owner, text, thread, voice, members };
+}
+async function addImportThreadMembers(thread, members) {
+  if (!thread || !members.length) return;
+  const failed = [];
+  await runWithConcurrency(members, 4, async userId => {
+    if (!(await restoreThreadMember(thread, userId))) failed.push(String(userId));
+  });
+  if (failed.length) {
+    const error = new Error('THREAD_MEMBERS_ADD_FAILED');
+    error.userIds = failed;
+    throw error;
+  }
 }
 function importThreadPayload(guild, flow) {
   const offset = (flow.page || 0) * 25;
@@ -2721,6 +2770,7 @@ async function saveImportedGroup(interaction, flow) {
   return groupOperation(`import:${interaction.guild.id}`, async () => {
     const settings = await currentSystem(interaction);
     const { role, owner, text, thread, voice, members } = await validateImport(interaction.guild, flow, settings, true);
+    await addImportThreadMembers(thread, members);
     const groupName = safe(thread?.name || role.name.replace(/^Group[・\s]+/, '') || text.name, 80).trim();
     if (!groupName) throw new Error('NAME_REQUIRED');
     await gm.schema();
@@ -2741,11 +2791,11 @@ async function saveImportedGroup(interaction, flow) {
       return importedId;
     }, 'group-import');
     invalidateGroupCaches(interaction.guild.id);
-    return `تم استيراد **${safe(groupName)}** (#${groupId}) وربط ${members.length} عضواً. لم تُنشأ أو تُحذف أي قناة/رتبة ولم تتغير صلاحيات العناصر الموجودة.`;
+    return `تم إنشاء وربط القروب **${safe(groupName)}** (#${groupId}) مع الرول وإضافة ${members.length} عضوًا من أعضاء الرول.`;
   });
 }
 async function advanceImport(interaction, flow, settings) {
-  const value = flow.step === 'confirm' ? null : oneValue(interaction);
+  const value = ['confirm', 'no-text', 'no-thread', 'no-voice'].includes(flow.step) ? null : oneValue(interaction);
   if (flow.step === 'role') {
     flow.roleId = value; await validateImport(interaction.guild, flow, settings);
     flow.step = 'owner';
@@ -2754,12 +2804,12 @@ async function advanceImport(interaction, flow, settings) {
   if (flow.step === 'owner') {
     flow.ownerId = value; await validateImport(interaction.guild, flow, settings);
     flow.step = 'text';
-    return entitySelect(interaction.guild, flow, 'استيراد : الشات النصي', 'اختر قناة نصية موجودة ومخصصة لهذا القروب، أو أب ثريده.', new ChannelSelectMenuBuilder().setChannelTypes(ChannelType.GuildText).setPlaceholder('شات القروب النصي الموجود'));
+    return entitySelect(interaction.guild, flow, 'استيراد : الشات النصي', 'اختر الروم النصي أو أب الثريد. إذا لم يوجد اضغط «لا يوجد» لإنشائه باسم الرول.', new ChannelSelectMenuBuilder().setChannelTypes(ChannelType.GuildText).setPlaceholder('شات القروب النصي الموجود'), 'no-text');
   }
   if (flow.step === 'text') {
     flow.textId = value; await validateImport(interaction.guild, flow, settings);
     flow.step = 'chat';
-    return flowSelect(interaction.guild, flow, 'استيراد : نمط الشات', 'استيراد القناة نفسها أم ثريد موجود تحتها؟ لا يتم إنشاء عناصر جديدة.', [{ label: 'استخدام الشات النصي بدون ثريد', value: 'channel' }, { label: 'ربط ثريد موجود', value: 'thread' }]);
+    return flowSelect(interaction.guild, flow, 'استيراد : نمط الشات', 'استخدم الروم نفسه أو اختر ثريدًا موجودًا تحته. يمكنك إنشاء الثريد تلقائيًا إذا لم يوجد.', [{ label: 'استخدام الشات النصي بدون ثريد', value: 'channel' }, { label: 'ربط ثريد موجود', value: 'thread' }], 'no-thread');
   }
   if (flow.step === 'chat') {
     choose(value, ['channel', 'thread']);
@@ -2774,7 +2824,16 @@ async function advanceImport(interaction, flow, settings) {
     }
     if (threads.length) throw new Error('SHARED_CHANNEL');
     flow.threadId = null; flow.step = 'voice';
-    return entitySelect(interaction.guild, flow, 'استيراد : قناة الفويس', 'اختر قناة القروب الصوتي الموجود.', new ChannelSelectMenuBuilder().setChannelTypes(ChannelType.GuildVoice).setPlaceholder('قناة فويس القروب الموجود'));
+    return entitySelect(interaction.guild, flow, 'استيراد : قناة الفويس', 'اختر قناة القروب الصوتي أو اضغط «لا يوجد» لإنشائها باسم الرول.', new ChannelSelectMenuBuilder().setChannelTypes(ChannelType.GuildVoice).setPlaceholder('قناة فويس القروب الموجود'), 'no-voice');
+  }
+  if (flow.step === 'no-thread') {
+    const role = await interaction.guild.roles.fetch(flow.roleId).catch(() => null);
+    const text = await channelById(interaction.guild, flow.textId);
+    if (!role || !text || text.type !== ChannelType.GuildText) throw new Error('CHANNEL_NOT_FOUND');
+    const thread = await text.threads.create({ name: importGroupName(role), type: ChannelType.PrivateThread, invitable: false, reason: 'Create group thread from admin Add' });
+    flow.threadId = thread.id;
+    flow.step = 'voice';
+    return entitySelect(interaction.guild, flow, 'استيراد : قناة الفويس', 'اختر قناة القروب الصوتي أو اضغط «لا يوجد» لإنشائها باسم الرول.', new ChannelSelectMenuBuilder().setChannelTypes(ChannelType.GuildVoice).setPlaceholder('قناة فويس القروب الموجود'), 'no-voice');
   }
   if (flow.step === 'thread') {
     if (!flow.threads.slice((flow.page || 0) * 25, ((flow.page || 0) + 1) * 25).some(t => t.id === value)) throw new Error('INVALID_SELECTION');
@@ -2782,13 +2841,28 @@ async function advanceImport(interaction, flow, settings) {
     const parent = await channelById(interaction.guild, flow.textId);
     if ((await threadChoices(parent)).some(t => t.id !== value)) throw new Error('SHARED_CHANNEL');
     flow.step = 'voice';
-    return entitySelect(interaction.guild, flow, 'استيراد : قناة الفويس', 'اختر قناة القروب الصوتي الموجود.', new ChannelSelectMenuBuilder().setChannelTypes(ChannelType.GuildVoice).setPlaceholder('قناة فويس القروب الموجود'));
+    return entitySelect(interaction.guild, flow, 'استيراد : قناة الفويس', 'اختر قناة القروب الصوتي أو اضغط «لا يوجد» لإنشائها باسم الرول.', new ChannelSelectMenuBuilder().setChannelTypes(ChannelType.GuildVoice).setPlaceholder('قناة فويس القروب الموجود'), 'no-voice');
+  }
+  if (flow.step === 'no-text') {
+    const role = await interaction.guild.roles.fetch(flow.roleId).catch(() => null);
+    if (!role) throw new Error('INVALID_ROLE');
+    await createImportTextResources(interaction.guild, flow, settings, role);
+    flow.step = 'voice';
+    return entitySelect(interaction.guild, flow, 'استيراد : قناة الفويس', 'اختر قناة القروب الصوتي أو اضغط «لا يوجد» لإنشائها باسم الرول.', new ChannelSelectMenuBuilder().setChannelTypes(ChannelType.GuildVoice).setPlaceholder('قناة فويس القروب الموجود'), 'no-voice');
   }
   if (flow.step === 'voice') {
     flow.voiceId = value;
     const assets = await validateImport(interaction.guild, flow, settings, true);
     flow.step = 'confirm';
-    return confirmFlowPayload(interaction.guild, flow, `Role: <@&${assets.role.id}>\nOwner: <@${assets.owner.id}>\nText: <#${assets.text.id}>\nThread: ${assets.thread ? `<#${assets.thread.id}>` : 'لا يوجد'}\nVoice: <#${assets.voice.id}>\nMembers: ${assets.members.length}\nسيتم الربط فقط دون تعديل العناصر الموجودة.`);
+    return confirmFlowPayload(interaction.guild, flow, `Role: <@&${assets.role.id}>\nOwner: <@${assets.owner.id}>\nText: <#${assets.text.id}>\nThread: ${assets.thread ? `<#${assets.thread.id}>` : 'لا يوجد'}\nVoice: <#${assets.voice.id}>\nMembers: ${assets.members.length}\nسيتم ربط الرول وإنشاء القروب وإضافة جميع أعضائه.`);
+  }
+  if (flow.step === 'no-voice') {
+    const role = await interaction.guild.roles.fetch(flow.roleId).catch(() => null);
+    if (!role) throw new Error('INVALID_ROLE');
+    await createImportVoiceResource(interaction.guild, flow, settings, role);
+    const assets = await validateImport(interaction.guild, flow, settings, true);
+    flow.step = 'confirm';
+    return confirmFlowPayload(interaction.guild, flow, `Role: <@&${assets.role.id}>\nOwner: <@${assets.owner.id}>\nText: <#${assets.text.id}>\nThread: ${assets.thread ? `<#${assets.thread.id}>` : 'لا يوجد'}\nVoice: <#${assets.voice.id}>\nMembers: ${assets.members.length}\nسيتم ربط الرول وإضافة جميع أعضائه للقروب.`);
   }
   if (flow.step === 'confirm') {
     if (!interaction.isButton?.()) throw new Error('INVALID_SELECTION');
@@ -2845,7 +2919,7 @@ async function handleGroupExtensions(interaction) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await currentSystem(interaction);
       flow = newFlow(interaction.guild.id, interaction.user.id, 'import'); flow.step = 'role';
-      return interaction.editReply(entitySelect(interaction.guild, flow, 'استيراد : رول القروب', 'ربط عناصر موجودة فقط. اختر رتبة غير مرتبطة بقروب آخر؛ لن يتم إنشاؤها أو تعديل صلاحياتها.', new RoleSelectMenuBuilder().setPlaceholder('رول القروب الموجود')));
+      return interaction.editReply(entitySelect(interaction.guild, flow, 'إضافة قروب من رول', 'اختر الرول. بعد ذلك يمكنك اختيار الرومات الموجودة أو الضغط على «لا يوجد» لإنشائها تلقائيًا باسم الرول.', new RoleSelectMenuBuilder().setPlaceholder('رول القروب الموجود')));
     }
     if (prefix === 'groups_control') {
       const groupId = Number(groupIdRaw);
@@ -2891,9 +2965,11 @@ async function handleGroupExtensions(interaction) {
     if (flow.busy) throw new Error('ACTION_BUSY');
     if (step === 'submit' && !interaction.isModalSubmit?.()) throw new Error('INVALID_SELECTION');
     if (step === 'confirm' && !interaction.isButton?.()) throw new Error('INVALID_SELECTION');
-    if (!['submit', 'confirm', 'prev', 'next'].includes(step) && !interaction.isAnySelectMenu?.()) throw new Error('INVALID_SELECTION');
+    const automaticResourceStep = flow.kind === 'import' && ['no-text', 'no-thread', 'no-voice'].includes(step);
+    if (!['submit', 'confirm', 'prev', 'next'].includes(step) && !automaticResourceStep && !interaction.isAnySelectMenu?.()) throw new Error('INVALID_SELECTION');
     const paging = ['prev', 'next'].includes(step) && flow.kind === 'import' && flow.step === 'thread';
-    if (step !== flow.step && !paging) throw new Error('FLOW_EXPIRED');
+    if (step !== flow.step && !paging && !automaticResourceStep) throw new Error('FLOW_EXPIRED');
+    if (automaticResourceStep && !['text', 'chat', 'voice'].includes(flow.step)) throw new Error('FLOW_EXPIRED');
     if (flow.kind === 'rename' && step === 'scope') {
       const selected = choose(oneValue(interaction), ['name', 'text', 'voice']);
       await currentManager(interaction, flow.groupId);
@@ -2901,6 +2977,7 @@ async function handleGroupExtensions(interaction) {
       return showRenameModal(interaction, flow.groupId, selected);
     }
     flow.busy = true;
+    if (automaticResourceStep) flow.step = step;
     if (interaction.isModalSubmit?.()) await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     else await interaction.deferUpdate();
     let payload;
