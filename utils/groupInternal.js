@@ -67,9 +67,9 @@ async function buildOurMembersPayload(guild, group, requestedPage = 0) {
   });
   const buttons = [];
   if (pageCount > 1) {
-    buttons.push(new ButtonBuilder().setCustomId(`groups_our_members:prev:${group.id}:${page}`).setLabel('◀').setStyle(ButtonStyle.Secondary).setDisabled(page === 0));
+    buttons.push(new ButtonBuilder().setCustomId(`groups_our_members:prev:${group.id}:${page}`).setLabel('السابق').setEmoji('<:emoji_13:1429263136136888501>').setStyle(ButtonStyle.Secondary).setDisabled(page === 0));
     buttons.push(new ButtonBuilder().setCustomId(`groups_our_members:page:${group.id}:${page}`).setLabel(`${page + 1}/${pageCount}`).setStyle(ButtonStyle.Secondary).setDisabled(true));
-    buttons.push(new ButtonBuilder().setCustomId(`groups_our_members:next:${group.id}:${page}`).setLabel('▶').setStyle(ButtonStyle.Secondary).setDisabled(page === pageCount - 1));
+    buttons.push(new ButtonBuilder().setCustomId(`groups_our_members:next:${group.id}:${page}`).setLabel('التالي').setEmoji('<:emoji_14:1429263186539974708>').setStyle(ButtonStyle.Secondary).setDisabled(page === pageCount - 1));
   }
   return { title: 'OUR MEMBERS', content: lines.join('\n'), components: buttons.length ? [new ActionRowBuilder().addComponents(buttons)] : [] };
 }
