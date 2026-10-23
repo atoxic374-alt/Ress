@@ -489,6 +489,8 @@ async function restoreGroupResources(guild, sourceGroup, trigger = 'resource_del
     try {
     let group = await gm.getGroup(guild.id, sourceGroup.id);
     if (!group || group.status === 'deleted') return null;
+    await gm.updateGroup(guild.id, group.id, { sync_state: 'repairing', updated_at: Date.now() }, null);
+    await gm.runtimeLog(guild.id, group.id, 'resource_repair', 'info', { trigger }).catch(() => {});
     const roleResult = await restoreGroupRole(guild, group, String(trigger).startsWith('role_deleted:'));
     group = roleResult.group;
     const settings = await gm.getSettings(guild.id);
@@ -517,7 +519,7 @@ async function restoreGroupResources(guild, sourceGroup, trigger = 'resource_del
     } else if (!voice.permissionOverwrites.cache.get(roleResult.role.id)) {
       await voice.permissionOverwrites.set(groupChannelOverwrites(guild, roleResult.role.id), 'Restore managed group permissions').catch(() => {});
     }
-    group = await gm.updateGroup(guild.id, group.id, patch, null);
+    group = await gm.updateGroup(guild.id, group.id, { ...patch, sync_state: 'ready' }, null);
     const failedThreadMembers = [];
     const memberIds = groupResourceMemberIds(group);
     await runWithConcurrency(memberIds, 4, async userId => {
@@ -532,6 +534,10 @@ async function restoreGroupResources(guild, sourceGroup, trigger = 'resource_del
     await gm.logGroupEvent(guild, 'update', { groupId: group.id, reason: 'group_resource_restored', trigger, roleId: roleResult.role.id, textChannelId: group.text_channel_id, threadId: group.thread_id, voiceChannelId: group.voice_channel_id }, null);
     activityCache.delete(String(guild.id));
     return group;
+    } catch (error) {
+      await gm.updateGroup(guild.id, sourceGroup.id, { sync_state: 'repair_failed', updated_at: Date.now() }, null).catch(() => {});
+      await gm.runtimeLog(guild.id, sourceGroup.id, 'resource_repair', 'error', { trigger, message: String(error?.message || error).slice(0, 300) }).catch(() => {});
+      throw error;
     } finally {
       await gm.releaseOperationLock(lockKey, operationToken);
     }
@@ -1417,7 +1423,11 @@ async function handleRulesInteraction(interaction, action, parts = []) {
 }
 
 async function transferGroupOwner(interaction, groupId, ownerId) {
-  return groupOperation(`group:${interaction.guild.id}:${groupId}`, async () => {
+  const operationKey = `guild:${interaction.guild.id}:group:${groupId}:transfer-owner`;
+  const operationToken = await gm.acquireOperationLock(operationKey, 120000);
+  if (!operationToken) throw new Error('GROUP_OPERATION_BUSY');
+  try {
+  return await groupOperation(`group:${interaction.guild.id}:${groupId}`, async () => {
     const settings = await gm.getSettings(interaction.guild.id);
     const actor = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
     const group = await gm.getGroup(interaction.guild.id, Number(groupId));
@@ -1475,6 +1485,9 @@ async function transferGroupOwner(interaction, groupId, ownerId) {
     await gm.logGroupEvent(interaction.guild, 'owner', { groupId: group.id, from: oldOwnerId, to: targetId, warnings }, interaction.user.id);
     return warnings.length ? `تم نقل الملكية، لكن يلزم مراجعة الرتب: ${warnings.join('؛ ')}.` : 'تم نقل الملكية.';
   });
+  } finally {
+    await gm.releaseOperationLock(operationKey, operationToken);
+  }
 }
 function beginGroupEmojiInput(interaction, groupId) {
   const key = `${interaction.guild.id}:${interaction.user.id}:${groupId}`;
@@ -1708,8 +1721,13 @@ async function execute(message, args, { client, prefix } = {}) {
 const activityCache=new Map(); const settingsCache=new Map(); const voiceStarts=new Map(); const voiceChannels=new Map(); const lastMessageAt=new Map(); const lastSkipAuditAt=new Map();
 const reconciliationSignatures = new Map();
 const reconciliationLocks = new Map();
+const reconciliationCursors = new Map();
 async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
-  const groups = (await gm.listGroups(guild.id, true)).filter(group => group.status !== 'deleted');
+  const allGroups = (await gm.listGroups(guild.id, true)).filter(group => group.status !== 'deleted');
+  const cursorKey = String(guild.id);
+  const start = allGroups.length ? Number(reconciliationCursors.get(cursorKey) || 0) % allGroups.length : 0;
+  const groups = allGroups.length > 25 ? [...allGroups.slice(start), ...allGroups.slice(0, start)].slice(0, 25) : allGroups;
+  if (allGroups.length) reconciliationCursors.set(cursorKey, (start + groups.length) % allGroups.length);
   const issues = [];
   const botCache = new Map();
   const settings = await gm.getSettings(guild.id);
@@ -1725,10 +1743,24 @@ async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
   };
   for (const originalGroup of groups) {
     let group = originalGroup;
-    const resourceRole = group.role_id ? (guild.roles.cache.get(String(group.role_id)) || await guild.roles.fetch(String(group.role_id)).catch(() => null)) : null;
-    const resourceText = group.text_channel_id ? await channelById(guild, group.text_channel_id) : null;
-    const resourceVoice = group.voice_channel_id ? await channelById(guild, group.voice_channel_id) : null;
-    const resourceThread = group.thread_id ? await channelById(guild, group.thread_id) : null;
+    const roleState = await reconcileFetch(guild.roles, group.role_id);
+    const textState = await reconcileFetch(guild.channels, group.text_channel_id);
+    const voiceState = await reconcileFetch(guild.channels, group.voice_channel_id);
+    const threadState = await reconcileFetch(guild.channels, group.thread_id);
+    const resourceRole = roleState.value;
+    const resourceText = textState.value;
+    const resourceVoice = voiceState.value;
+    const resourceThread = threadState.value;
+    const temporaryFetchError = [roleState.error, textState.error, voiceState.error, threadState.error].find(error => error && retryableDiscordError(error));
+    if (temporaryFetchError) {
+      await gm.runtimeLog(guild.id, group.id, 'reconciliation_fetch', 'warning', { message: String(temporaryFetchError.message || temporaryFetchError).slice(0, 300) }).catch(() => {});
+      continue;
+    }
+    const unexpectedFetchError = [roleState.error, textState.error, voiceState.error, threadState.error].find(error => error && ![10003, 10007].includes(Number(error.code)));
+    if (unexpectedFetchError) {
+      await gm.runtimeLog(guild.id, group.id, 'reconciliation_fetch', 'warning', { code: unexpectedFetchError.code || null, message: String(unexpectedFetchError.message || unexpectedFetchError).slice(0, 300) }).catch(() => {});
+      continue;
+    }
     const missingResource = !resourceRole || !resourceText || resourceText.type !== ChannelType.GuildText || !resourceVoice || resourceVoice.type !== ChannelType.GuildVoice || (settings.chatMode === 'threads' && (!resourceThread || !resourceThread.isThread?.()));
     if (missingResource && group.status === 'active') {
       await gm.audit(guild.id, actorId, group.id, 'group_resource_drift_detected', { roleMissing: !resourceRole, textMissing: !resourceText, threadMissing: settings.chatMode === 'threads' && !resourceThread, voiceMissing: !resourceVoice }).catch(() => {});
@@ -1836,7 +1868,7 @@ async function cachedSettings(guildId){const hit=settingsCache.get(String(guildI
 function pruneRuntimeCaches(client) {
   const guildIds = new Set([...client.guilds.cache.keys()].map(String));
   const keepGuildKey = key => guildIds.has(String(key).split(':')[0]);
-  for (const map of [activityCache, settingsCache, reconciliationSignatures, topPanelLocks, topPanelRefreshTimers, topPanelRefreshChannels, topPanelMessageIds]) {
+  for (const map of [activityCache, settingsCache, reconciliationSignatures, reconciliationCursors, topPanelLocks, topPanelRefreshTimers, topPanelRefreshChannels, topPanelMessageIds]) {
     for (const key of map.keys()) if (!keepGuildKey(key)) map.delete(key);
   }
   for (const map of [voiceStarts, voiceChannels, lastMessageAt, lastSkipAuditAt]) {
@@ -2318,6 +2350,13 @@ async function groupOperation(key, operation) {
 }
 function invalidateGroupCaches(guildId) { activityCache.delete(String(guildId)); settingsCache.delete(String(guildId)); }
 async function channelById(guild, id) { return id ? guild.channels.fetch(String(id)).catch(() => null) : null; }
+async function reconcileFetch(collection, id) {
+  if (!id) return { value: null, error: null };
+  const cached = collection.cache.get(String(id));
+  if (cached) return { value: cached, error: null };
+  try { return { value: await collection.fetch(String(id)), error: null }; }
+  catch (error) { return { value: null, error }; }
+}
 async function threadChoices(parent) {
   const found = new Map();
   const active = await parent.threads.fetchActive();

@@ -130,12 +130,15 @@ async function schema() {
       id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, name TEXT NOT NULL, description TEXT DEFAULT '',
       owner_id TEXT NOT NULL, manager_ids_json TEXT NOT NULL DEFAULT '[]', member_ids_json TEXT NOT NULL DEFAULT '[]',
       blocked_ids_json TEXT NOT NULL DEFAULT '[]', role_id TEXT, text_channel_id TEXT, thread_id TEXT, voice_channel_id TEXT,
-      color TEXT DEFAULT '#5865F2', emoji TEXT, avatar_url TEXT, points INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'active',
+      color TEXT DEFAULT '#5865F2', emoji TEXT, avatar_url TEXT, points INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'active', sync_state TEXT NOT NULL DEFAULT 'ready',
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, archived_at INTEGER
     )`);
     const managedGroupColumns = await dbManager.all('PRAGMA table_info(managed_groups)');
     if (!managedGroupColumns.some(column => String(column.name) === 'avatar_url')) {
       await dbManager.run(`ALTER TABLE managed_groups ADD COLUMN avatar_url TEXT`);
+    }
+    if (!managedGroupColumns.some(column => String(column.name) === 'sync_state')) {
+      await dbManager.run(`ALTER TABLE managed_groups ADD COLUMN sync_state TEXT NOT NULL DEFAULT 'ready'`);
     }
     await dbManager.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_groups_active_name ON managed_groups(guild_id, name) WHERE status = 'active'`);
     await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_managed_groups_role_lookup ON managed_groups(guild_id, role_id, status)`);
@@ -144,6 +147,7 @@ async function schema() {
     await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_managed_groups_voice_lookup ON managed_groups(guild_id, voice_channel_id, status)`);
     await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_managed_groups_guild_status ON managed_groups(guild_id, status, points DESC)`);
     await dbManager.run(`CREATE TABLE IF NOT EXISTS group_audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, group_id INTEGER, actor_id TEXT, action TEXT NOT NULL, details_json TEXT DEFAULT '{}', created_at INTEGER NOT NULL)`);
+    await dbManager.run(`CREATE TABLE IF NOT EXISTS group_runtime_log (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, group_id INTEGER, operation TEXT NOT NULL, level TEXT NOT NULL, details_json TEXT DEFAULT '{}', created_at INTEGER NOT NULL)`);
     await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_group_audit_log_lookup ON group_audit_log(guild_id, group_id, created_at DESC)`);
     await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_group_audit_log_time ON group_audit_log(guild_id, created_at DESC)`);
     await dbManager.run(`CREATE TABLE IF NOT EXISTS group_points_rules (guild_id TEXT NOT NULL, metric TEXT NOT NULL, threshold INTEGER NOT NULL, points INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL, PRIMARY KEY(guild_id, metric))`);
@@ -196,6 +200,7 @@ async function getGroupForChannel(guildId, channelId) {
   return rows.length === 1 ? hydrate(rows[0]) : null;
 }
 async function audit(guildId, actorId, groupId, action, details = {}) { await schema(); return dbManager.run('INSERT INTO group_audit_log(guild_id, group_id, actor_id, action, details_json, created_at) VALUES(?,?,?,?,?,?)', [String(guildId), groupId == null ? null : Number(groupId), actorId ? String(actorId) : null, String(action), JSON.stringify(details), Date.now()]); }
+async function runtimeLog(guildId, groupId, operation, level, details = {}) { await schema(); return dbManager.run('INSERT INTO group_runtime_log(guild_id, group_id, operation, level, details_json, created_at) VALUES(?,?,?,?,?,?)', [String(guildId), groupId == null ? null : Number(groupId), String(operation), String(level), JSON.stringify(details), Date.now()]); }
 /**
  * Best-effort delivery of a structured audit event. Logging must never make a
  * group operation fail: missing settings, deleted channels, permission errors,
@@ -356,7 +361,7 @@ async function setSystemRole(guildId, targetId, enabled, actorId) {
     return saveSettingsLocked(guildId, { systemRoles: [...list] }, actorId);
   });
 }
-async function updateGroup(guildId, groupId, patch, actorId) { await schema(); const allowed = ['name','description','owner_id','color','emoji','avatar_url','role_id','text_channel_id','thread_id','voice_channel_id','manager_ids_json','member_ids_json','blocked_ids_json','points','status','updated_at','archived_at']; const keys = Object.keys(patch).filter(key => allowed.includes(key)); if (!keys.length) return getGroup(guildId, groupId); const values = keys.map(key => patch[key]); values.push(String(guildId), Number(groupId)); await dbManager.run(`UPDATE managed_groups SET ${keys.map(key => `${key} = ?`).join(', ')} WHERE guild_id = ? AND id = ?`, values); await audit(guildId, actorId, groupId, 'group_update', { keys }); return getGroup(guildId, groupId); }
+async function updateGroup(guildId, groupId, patch, actorId) { await schema(); const allowed = ['name','description','owner_id','color','emoji','avatar_url','role_id','text_channel_id','thread_id','voice_channel_id','manager_ids_json','member_ids_json','blocked_ids_json','points','status','sync_state','updated_at','archived_at']; const keys = Object.keys(patch).filter(key => allowed.includes(key)); if (!keys.length) return getGroup(guildId, groupId); const values = keys.map(key => patch[key]); values.push(String(guildId), Number(groupId)); await dbManager.run(`UPDATE managed_groups SET ${keys.map(key => `${key} = ?`).join(', ')} WHERE guild_id = ? AND id = ?`, values); await audit(guildId, actorId, groupId, 'group_update', { keys }); return getGroup(guildId, groupId); }
 async function addMember(guildId, groupId, userId, actorId) { return withLock(`members:${guildId}`, async () => {
   const safeUserId = String(userId);
   if (!isSnowflake(safeUserId)) throw new Error('INVALID_USER_ID');
@@ -704,7 +709,11 @@ async function createGroup(guild, { name, description = '', ownerId, color = '#5
   const settings = await getSettings(guild.id); const missing = validateConfig(guild, settings); if (!settings.enabled) throw new Error('GROUP_SYSTEM_DISABLED'); if (missing.length) throw new Error(`GROUP_SETUP_REQUIRED:${missing.join(',')}`); const owner = await guild.members.fetch(String(ownerId));
   if (owner.user?.bot) throw new Error('BOT_NOT_ALLOWED');
   return withLock(`members:${guild.id}`, async () => {
-  return withLock(`create:${guild.id}:${owner.id}`, async () => {
+  const operationKey = `guild:${guild.id}:create:${owner.id}`;
+  const operationToken = await acquireOperationLock(operationKey, 180000);
+  if (!operationToken) throw new Error('GROUP_OPERATION_BUSY');
+  try {
+  return await withLock(`create:${guild.id}:${owner.id}`, async () => {
     const existingRows = await dbManager.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status = 'active'", [guild.id]);
     const existing = existingRows.map(hydrate).find(group => String(group.owner_id) === String(owner.id) || group.memberIds.includes(String(owner.id)) || group.managerIds.includes(String(owner.id)));
     if (existing) throw new Error(String(existing.owner_id) === String(owner.id) ? 'OWNER_ALREADY_HAS_GROUP' : 'USER_ALREADY_IN_GROUP');
@@ -744,10 +753,16 @@ async function createGroup(guild, { name, description = '', ownerId, color = '#5
       throw error;
     }
   });
+  } finally {
+    await releaseOperationLock(operationKey, operationToken);
+  }
   });
 }
 async function deleteGroup(guild, groupId, actorId) {
   return withLock(`delete:${guild.id}:${groupId}`, async () => {
+    const operationKey = `guild:${guild.id}:group:${groupId}:delete`;
+    const operationToken = await acquireOperationLock(operationKey, 180000);
+    if (!operationToken) throw new Error('GROUP_OPERATION_BUSY');
     if (!global.groupResourceDeleteBypass) global.groupResourceDeleteBypass = new Set();
     const deleteBypassKey = `${guild.id}:${groupId}`;
     global.groupResourceDeleteBypass.add(deleteBypassKey);
@@ -815,6 +830,7 @@ async function deleteGroup(guild, groupId, actorId) {
     } finally {
       clearTimeout(timeout);
       releaseDeleteBypass();
+      await releaseOperationLock(operationKey, operationToken);
     }
   });
 }
@@ -837,4 +853,4 @@ async function releaseOperationLock(lockKey, ownerToken) {
   await schema();
   await dbManager.run('DELETE FROM group_operation_locks WHERE lock_key = ? AND owner_token = ?', [String(lockKey), String(ownerToken)]).catch(() => {});
 }
-module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, logGroupEvent, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, explainActivity, listMemberPoints, listPointsLedger, pruneGroupHistory, upsertVoiceSession, listVoiceSessions, deleteVoiceSession, getMemberPoints, createGroup, deleteGroup, acquireOperationLock, releaseOperationLock };
+module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, runtimeLog, logGroupEvent, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, explainActivity, listMemberPoints, listPointsLedger, pruneGroupHistory, upsertVoiceSession, listVoiceSessions, deleteVoiceSession, getMemberPoints, createGroup, deleteGroup, acquireOperationLock, releaseOperationLock };
