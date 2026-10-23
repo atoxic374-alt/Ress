@@ -213,7 +213,7 @@ function controlPayload(guild) {
   const items = [
     ['Create', 'إنشاء قروب جديد.', 'groups_admin:create', '<:emoji_33:1465383525644501238>', ButtonStyle.Secondary],
     ['Add', 'إضافة قنوات ورولات موجودة.', 'groups_admin:import', '<:emoji_30:1465383419641856233>', ButtonStyle.Secondary],
-    ['Information', 'عرض معلومات القروب وأعضائه.', 'groups_admin:info', '<:emoji_33:1465383582292771025>', ButtonStyle.Secondary],
+    ['Info', 'عرض معلومات القروب وأعضائه.', 'groups_admin:info', '<:emoji_33:1465383582292771025>', ButtonStyle.Secondary],
     ['Edit', 'تعديل إعدادات القروب.', 'groups_admin:edit', '<:emoji_35:1465383704993202452>', ButtonStyle.Secondary],
     ['Delete', 'حذف القروب.', 'groups_admin:delete', '<:emoji_21:1465336647477493894>', ButtonStyle.Danger],
     ['Reset', 'تصفير نقاط قروب واحد.', 'groups_admin:reset', '<:emoji_34:1465383644339241073>', ButtonStyle.Danger],
