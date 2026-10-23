@@ -28,7 +28,7 @@ const GROUP_DEFAULTS = Object.freeze({
 const GROUP_SETTING_KEYS = new Set([
   'enabled', 'chatMode', 'textCategoryId', 'voiceCategoryId', 'musicChannelId',
   'logChannelId', 'topChannelId', 'adminControlChannelId', 'memberControlChannelId', 'mainRoleId', 'leaderRoleId', 'managerRoleId', 'systemUsers', 'systemRoles',
-  'extraPermissions', 'countAllChannels', 'maxMembers'
+  'extraPermissions', 'countAllChannels', 'minMessageLength', 'maxMembers'
 ]);
 const GROUP_METRICS = new Set(['messages', 'voice_ms', 'reactions']);
 const MAX_ACTIVITY_AMOUNT = 1000000000000;

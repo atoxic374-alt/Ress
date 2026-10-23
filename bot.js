@@ -2669,6 +2669,38 @@ loadPairingStatus();
 
 client.on('messageCreate', async message => {
   if (message.author.bot) return;
+
+  // Dispatch group text commands before any other message workflow can consume them.
+  // This covers prefixless Arabic commands (منع، تحكم، قربي) and setup aliases.
+  const groupPrefix = getCachedPrefix();
+  const groupContent = String(message.content || '').trim();
+  const groupHasPrefix = typeof groupPrefix === 'string' && groupPrefix.length > 0 && groupContent.startsWith(groupPrefix);
+  const groupRaw = (groupHasPrefix ? groupContent.slice(groupPrefix.length) : groupContent).trim();
+  const groupToken = String(groupRaw.split(/\s+/)[0] || '').toLowerCase();
+  const groupCommandTokens = new Set([
+    'setup', 'group-setup', 'groups', 'group', 'قروب', 'قروبات', 'إعدادات', 'اعدادات', 'تهيئة',
+    'تحكم', 'control', 'تعديل', 'edit', 'عقوبه', 'عقوبة', 'punish', 'صلاحية', 'permission',
+    'مسح', 'clear', 'اعضاء', 'أعضاء', 'members', 'اضافة', 'إضافة', 'add', 'ازالة', 'إزالة',
+    'remove', 'منع', 'block', 'سماح', 'allow', 'قروبي', 'قربي', 'my-group', 'مسؤول', 'manager',
+    'أوامر', 'اوامر', 'commands', 'help'
+  ]);
+  const groupsCommand = client.commands.get('groups');
+  if (groupsCommand?.handleInternalMessage) {
+    try {
+      const consumed = await groupsCommand.handleInternalMessage(message, { prefix: groupPrefix });
+      if (consumed) return;
+    } catch (error) {
+      console.error('Group internal dispatcher error:', error);
+      if (groupCommandTokens.has(groupToken)) {
+        await message.reply('تعذر تنفيذ أمر القروبات بسبب خطأ داخلي. تم تسجيل الخطأ؛ جرّب مرة أخرى أو راجع سجل تشغيل البوت.').catch(() => null);
+        return;
+      }
+    }
+  } else if (groupCommandTokens.has(groupToken)) {
+    console.error('Group internal dispatcher unavailable: commands/groups.js did not register its handler.');
+    await message.reply('نظام القروبات غير محمّل حاليًا. راجع سجل بدء تشغيل البوت لمعرفة سبب عدم تحميل commands/groups.js.').catch(() => null);
+    return;
+  }
   const ALLOWED_ID = '636930315503534110';
 
   if (message.guild && pairingStatusCache.off) {
@@ -2923,38 +2955,6 @@ client.on('messageCreate', async message => {
 
     console.error('❌ خطأ في نظام word:', error);
 
-  }
-  // Route group commands before the general prefixed-command parser.
-  // Never leave a recognized group command completely silent if its handler throws
-  // or the group module failed to load.
-  const groupPrefix = getCachedPrefix();
-  const groupContent = String(message.content || '').trim();
-  const groupHasPrefix = typeof groupPrefix === 'string' && groupPrefix.length > 0 && groupContent.startsWith(groupPrefix);
-  const groupRaw = (groupHasPrefix ? groupContent.slice(groupPrefix.length) : groupContent).trim();
-  const groupToken = String(groupRaw.split(/\s+/)[0] || '').toLowerCase();
-  const groupCommandTokens = new Set([
-    'setup', 'group-setup', 'groups', 'group', 'قروب', 'قروبات', 'إعدادات', 'اعدادات', 'تهيئة',
-    'تحكم', 'control', 'تعديل', 'edit', 'عقوبه', 'عقوبة', 'punish', 'صلاحية', 'permission',
-    'مسح', 'clear', 'اعضاء', 'أعضاء', 'members', 'اضافة', 'إضافة', 'add', 'ازالة', 'إزالة',
-    'remove', 'منع', 'block', 'سماح', 'allow', 'قروبي', 'قربي', 'my-group', 'مسؤول', 'manager',
-    'أوامر', 'اوامر', 'commands', 'help'
-  ]);
-  const groupsCommand = client.commands.get('groups');
-  if (groupsCommand?.handleInternalMessage) {
-    try {
-      const consumed = await groupsCommand.handleInternalMessage(message, { prefix: groupPrefix });
-      if (consumed) return;
-    } catch (error) {
-      console.error('Group internal dispatcher error:', error);
-      if (groupCommandTokens.has(groupToken)) {
-        await message.reply('تعذر تنفيذ أمر القروبات بسبب خطأ داخلي. تم تسجيل الخطأ؛ جرّب مرة أخرى أو راجع سجل تشغيل البوت.').catch(() => null);
-        return;
-      }
-    }
-  } else if (groupCommandTokens.has(groupToken)) {
-    console.error('Group internal dispatcher unavailable: commands/groups.js did not register its handler.');
-    await message.reply('نظام القروبات غير محمّل حاليًا. راجع سجل بدء تشغيل البوت لمعرفة سبب عدم تحميل commands/groups.js.').catch(() => null);
-    return;
   }
   // معالجة الأوامر (البريفكس)
   const prefix = getCachedPrefix();
