@@ -954,6 +954,9 @@ async function handleSetupManager(interaction, action, parts = []) {
   }
   const settings = await checkSystem(interaction);
   if (!settings) return true;
+  if (String(interaction.guild.ownerId) !== String(interaction.user.id) && !gm.isOwner(interaction.client, interaction.member)) {
+    return reply(interaction, { content: 'إضافة مسؤولي النظام وإزالتهم متاحة لمالك السيرفر أو مالك البوت فقط.' });
+  }
   if (action === 'remove') {
     let removeIds = [];
     if (interaction.isModalSubmit?.()) {
@@ -1021,10 +1024,35 @@ async function handleSetupSelection(interaction, prefix, action) {
     if (!['mainrole', 'leaderrole', 'managerrole'].includes(action)) return reply(interaction, { content: 'نوع الرتبة غير صالح.' });
     const roleId = String(interaction.values?.[0] || '');
     const role = interaction.guild.roles.cache.get(roleId) || await interaction.guild.roles.fetch(roleId).catch(() => null);
-    if (!role || role.id === interaction.guild.id) return reply(interaction, { content: 'اختر رتبة موجودة، ولا يمكن استخدام @everyone.' });
+    if (!role || role.id === interaction.guild.id || role.managed || !role.editable) return reply(interaction, { content: 'اختر رتبة قابلة للإدارة، ولا يمكن استخدام @everyone أو الرتب المُدارة.' });
+    const dangerous = [PermissionsBitField.Flags.Administrator, PermissionsBitField.Flags.ManageGuild, PermissionsBitField.Flags.ManageRoles, PermissionsBitField.Flags.ManageChannels, PermissionsBitField.Flags.ManageWebhooks, PermissionsBitField.Flags.KickMembers, PermissionsBitField.Flags.BanMembers, PermissionsBitField.Flags.ModerateMembers];
+    if (['leaderrole', 'managerrole'].includes(action) && role.permissions.any(dangerous)) return reply(interaction, { content: 'هذه الرتبة تملك صلاحيات إدارية حساسة. اختر رتبة مخصصة للقروبات دون صلاحيات إدارة السيرفر.' });
     const keys = { mainrole: 'mainRoleId', leaderrole: 'leaderRoleId', managerrole: 'managerRoleId' };
     const labels = { mainrole: 'Main Role', leaderrole: 'Leader Role', managerrole: 'Manager Role' };
+    const oldRoleId = settings[keys[action]] ? String(settings[keys[action]]) : null;
+    const groups = await gm.listGroups(interaction.guild.id);
+    const entitled = new Set(action === 'leaderrole'
+      ? groups.map(group => String(group.owner_id))
+      : action === 'managerrole' ? groups.flatMap(group => group.managerIds.map(String)) : []);
     const updated = await gm.saveSettings(interaction.guild.id, { [keys[action]]: roleId }, interaction.user.id);
+    if (['leaderrole', 'managerrole'].includes(action)) {
+      for (const userId of entitled) {
+        const member = await interaction.guild.members.fetch(userId).catch(() => null);
+        if (member && !member.roles.cache.has(roleId)) await member.roles.add(role, 'Sync configured group role').catch(() => null);
+      }
+      if (oldRoleId && oldRoleId !== roleId) {
+        const oldRole = interaction.guild.roles.cache.get(oldRoleId) || await interaction.guild.roles.fetch(oldRoleId).catch(() => null);
+        if (oldRole) {
+          await interaction.guild.members.fetch().catch(() => null);
+          for (const member of oldRole.members.values()) {
+            const stillEntitled = groups.some(group => action === 'leaderrole'
+              ? String(group.owner_id) === String(member.id)
+              : group.managerIds.includes(String(member.id)));
+            if (!stillEntitled) await member.roles.remove(oldRole, 'Remove replaced group role').catch(() => null);
+          }
+        }
+      }
+    }
     await refreshSetupPanel(interaction, updated);
     return reply(interaction, setupConfirmation(interaction, labels[action], `تم حفظ ${labels[action]}: <@&${roleId}>.`));
   }
@@ -1836,6 +1864,7 @@ async function validateImport(guild, flow, settings, includeMembers = false) {
   if (flow.threadId) {
     thread = await channelById(guild, flow.threadId);
     if (!thread?.isThread?.() || thread.parentId !== flow.textId) throw new Error('INVALID_THREAD');
+    if (thread.archived) throw new Error('THREAD_ARCHIVED');
   }
   if (flow.voiceId) {
     voice = await channelById(guild, flow.voiceId);
