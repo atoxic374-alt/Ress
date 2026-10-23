@@ -320,8 +320,8 @@ function selectMemberGroup(groups, userId, channelId, requestedGroupId = null) {
 }
 function topGroupsButtons(canManage = false, manageableGroupId = null) {
   const buttons = [
-    button('groups_top:rank', 'MY RANK', ButtonStyle.Primary),
-    button('groups_top:group', 'MY GROUP', ButtonStyle.Secondary),
+    button('groups_top:rank', 'MY RANK', ButtonStyle.Secondary, '🏆'),
+    button('groups_top:group', 'MY GROUP', ButtonStyle.Secondary, '👥'),
     button('groups_top:manage', 'MANAGE', ButtonStyle.Secondary, '<:emoji_30:1465383419641856233>'),
     button('groups_top:avatar', 'AVATAR', ButtonStyle.Secondary, '<:emoji_3:1465210427494502400>')
   ];
