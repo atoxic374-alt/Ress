@@ -1,7 +1,8 @@
 const {
   ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder,
   AuditLogEvent, ChannelType, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder,
-  TextInputBuilder, TextInputStyle, UserSelectMenuBuilder, PermissionsBitField
+  TextInputBuilder, TextInputStyle, UserSelectMenuBuilder, PermissionsBitField,
+  ContainerBuilder, TextDisplayBuilder, MessageFlags
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
@@ -416,9 +417,11 @@ function structurePrivateResponse(payload) {
   const lines = raw.split(/\n+/).map(line => line.trim()).filter(Boolean);
   const first = lines.shift() || raw;
   const lower = raw.toLowerCase();
-  const title = /تأكيد|confirm|هل تريد|سيتم/.test(lower) ? 'Confirmation Required'
-    : /تم |تمت|نجاح|updated|saved|activated|disabled/.test(lower) ? 'Action Completed'
-      : /اختر|select|حدد|choose/.test(lower) ? 'Select Option' : 'Bonus Settings';
+  const title = /تعذر|فشل|خطأ|غير صالح|لم يتم|لا يمكن|insufficient|failed|error/i.test(raw) ? 'ACTION FAILED'
+    : /تم الإلغاء|ألغيت|إلغاء|cancelled|canceled/i.test(raw) ? 'ACTION CANCELLED'
+      : /تأكيد|confirm|هل تريد|سيتم/.test(lower) ? 'CONFIRMATION REQUIRED'
+        : /تم |تمت|نجاح|updated|saved|activated|disabled/.test(lower) ? 'ACTION COMPLETED'
+          : /اختر|select|حدد|choose/.test(lower) ? 'SELECT OPTION' : 'BONUS SETTINGS';
   const fields = [];
   const fieldNames = {
     'الإجمالي الحالي': 'Current Total', 'بعد الإزالة': 'After Removal', 'رصيده الحالي': 'Current Balance',
@@ -438,13 +441,22 @@ function structurePrivateResponse(payload) {
     else if (/تحديث|updated|saved|اعتماد|نشر|published/i.test(raw)) fields.push({ name: 'Status', value: 'Updated', inline: true });
     if (/دبل|double/i.test(raw)) fields.push({ name: 'Feature', value: 'Double Bonus ×2', inline: true });
   }
-  const description = title === 'Action Completed'
-    ? 'The requested action was completed successfully.'
-    : first.slice(0, 4000);
-  const embed = colorManager.createEmbed().setTitle(title).setDescription(description);
-  if (fields.length) embed.addFields(fields.slice(0, 25));
-  const normalized = { ...payload, embeds: [embed] };
+  const description = first.slice(0, 3500);
+  const container = new ContainerBuilder().addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`## ${title}\n${description || 'تمت معالجة الطلب.'}`)
+  );
+  if (fields.length) {
+    const details = fields.slice(0, 25).map(field => `**${field.name}**\n${field.value}`).join('\n\n').slice(0, 3900);
+    if (details) container.addTextDisplayComponents(new TextDisplayBuilder().setContent(details));
+  }
+  const normalized = {
+    ...payload,
+    components: [container, ...(Array.isArray(payload.components) ? payload.components : [])],
+    allowedMentions: payload.allowedMentions || { parse: [] },
+    flags: Number(payload.flags || 0) | MessageFlags.IsComponentsV2
+  };
   delete normalized.content;
+  delete normalized.embeds;
   return normalized;
 }
 
