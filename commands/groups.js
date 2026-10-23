@@ -1,4 +1,4 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder, ChannelType, LabelBuilder, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder, TextDisplayBuilder, SectionBuilder, SeparatorBuilder, ContainerBuilder, ThumbnailBuilder, UserSelectMenuBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder, ChannelType, LabelBuilder, ModalBuilder, PermissionsBitField, RoleSelectMenuBuilder, StringSelectMenuBuilder, TextDisplayBuilder, SectionBuilder, SeparatorBuilder, ContainerBuilder, ThumbnailBuilder, UserSelectMenuBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
 const router = require('../utils/interactionRouter');
 const gm = require('../utils/groupManager');
 const colorManager = require('../utils/colorManager');
@@ -2283,7 +2283,7 @@ async function dispatchInternalMessage(message, options = {}) {
 }
 
 // Group-scoped controls. Never edit guild roles, categories, or a shared thread parent.
-const { PermissionsBitField, OverwriteType } = require('discord.js');
+const { OverwriteType } = require('discord.js');
 const { randomBytes } = require('node:crypto');
 const { dbManager } = require('../utils/database');
 const groupFlows = new Map();
