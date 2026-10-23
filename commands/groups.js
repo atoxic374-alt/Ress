@@ -22,9 +22,9 @@ function groupThumb(guild) {
 }
 function baseContainer(guild, title, description='', color='#5865F2') { const c=new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || color || '#5865F2')); const text=[]; if(title)text.push(new TextDisplayBuilder().setContent(`## ${title}`)); if(description)text.push(new TextDisplayBuilder().setContent(description)); if(groupThumb(guild)){ const s=new SectionBuilder().addTextDisplayComponents(text).setThumbnailAccessory(new ThumbnailBuilder().setURL(groupThumb(guild))); c.addSectionComponents(s); } else text.forEach(t=>c.addTextDisplayComponents(t)); return c; }
 const RULE_METRICS = Object.freeze([
-  ['messages', 'الرسائل', 'messages counted in group text channels', 100],
-  ['voice_ms', 'الصوت', 'milliseconds spent in group voice channels', 3600000],
-  ['reactions', 'التفاعلات', 'reactions added to messages', 10]
+  ['messages', 'الرسائل', 'عدد الرسائل المحتسبة في قنوات القروب النصية', 100],
+  ['voice_ms', 'الصوت', 'مدة التواجد في القنوات الصوتية بالمللي ثانية', 3600000],
+  ['reactions', 'التفاعلات', 'عدد التفاعلات المضافة على الرسائل', 10]
 ]);
 function rulesPayload(guild, rules = []) {
   const byMetric = new Map(rules.map(rule => [String(rule.metric), rule]));
@@ -35,7 +35,7 @@ function rulesPayload(guild, rules = []) {
     const threshold = Number(rule?.threshold) || defaultThreshold;
     const points = Number(rule?.points) || 1;
     c.addSectionComponents(new SectionBuilder()
-      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${description}\nThreshold: **${threshold.toLocaleString()}** | Points: **${points}** | Status: **${enabled ? 'مفعل' : 'متوقف'}**`))
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${description}\nالحد : **${threshold.toLocaleString()}** | النقاط : **${points}** | الحالة : **${enabled ? 'مفعّل' : 'متوقف'}**`))
       .setButtonAccessory(button(`groups_rules:edit:${metric}`, 'تعديل', ButtonStyle.Primary)));
     c.addActionRowComponents(new ActionRowBuilder().addComponents(button(`groups_rules:toggle:${metric}`, enabled ? 'تعطيل' : 'تفعيل', enabled ? ButtonStyle.Danger : ButtonStyle.Success)));
   }
@@ -85,7 +85,7 @@ function setupPayloads(guild, settings) {
   const chatMode = settings.chatMode === 'threads' ? 'ثريدات' : settings.chatMode === 'channels' ? 'رومات مستقلة' : 'غير محدد';
   const issues = gm.validateConfig(guild, settings);
   const readiness = issues.length ? `الإعداد غير مكتمل (${issues.length}):\n${issues.slice(0, 6).map(setupIssueLabel).join('\n')}${issues.length > 6 ? '\n... استخدم زر تدقيق الإعداد لعرض الباقي.' : ''}` : 'الإعداد جاهز لإنشاء القروبات.';
-  const summary = `Status : ${status}\nReadiness : ${readiness}\nSystem Managers : ${managerCount} عضو/رول\nChat Mode : ${chatMode}\nText Category : ${channelMention(settings.textCategoryId)}\nVoice Category : ${channelMention(settings.voiceCategoryId)}\nTop Channel : ${channelMention(settings.topChannelId)}\nAdmin Control Channel : ${channelMention(settings.adminControlChannelId)}\nMember Control Channel : ${channelMention(settings.memberControlChannelId)}\nMain Role : ${roleMention(settings.mainRoleId)}\nLeader Role : ${roleMention(settings.leaderRoleId)}\nManager Role : ${roleMention(settings.managerRoleId)}\nMusic Source : ${channelMention(settings.musicChannelId)}\nLog Channel : ${channelMention(settings.logChannelId)}\nPoints Scope : ${settings.countAllChannels ? 'كل الرومات' : 'رومات القروبات فقط'}\nExtra Permissions : ${settings.extraPermissions ? 'مفعلة' : 'متوقفة'}\nPoint Rules : اضغط على زر قواعد النقاط للتفاصيل`;
+  const summary = `الحالة : ${status}\nجاهزية النظام : ${readiness}\nمسؤولو النظام : ${managerCount} عضو/رتبة\nنمط المحادثة : ${chatMode}\nكاتاقوري النص : ${channelMention(settings.textCategoryId)}\nكاتاقوري الصوت : ${channelMention(settings.voiceCategoryId)}\nقناة الترتيب : ${channelMention(settings.topChannelId)}\nقناة تحكم الإدارة : ${channelMention(settings.adminControlChannelId)}\nقناة تحكم الأعضاء : ${channelMention(settings.memberControlChannelId)}\nالرتبة الرئيسية : ${roleMention(settings.mainRoleId)}\nرتبة المالك : ${roleMention(settings.leaderRoleId)}\nرتبة المسؤول : ${roleMention(settings.managerRoleId)}\nقناة مصدر الموسيقى : ${channelMention(settings.musicChannelId)}\nقناة السجلات : ${channelMention(settings.logChannelId)}\nنطاق احتساب النقاط : ${settings.countAllChannels ? 'كل الرومات' : 'رومات القروبات فقط'}\nالصلاحيات الإضافية : ${settings.extraPermissions ? 'مفعلة' : 'متوقفة'}\nقواعد النقاط : اضغط على زر القواعد للتفاصيل`;
   const sections = [
     ['حالة نظام القروبات', 'تشغيل أو إيقاف نظام القروبات', 'groups_setup:toggle'],
     ['SYSTEM MANAGERS', 'إضافة أو إزالة مسؤولي النظام', 'groups_setup:managers'],
