@@ -1890,7 +1890,7 @@ async function handleInteraction(interaction, context = {}) {
       } catch (error) {
         const message = error.message === 'GLOBAL_DOUBLE_NOT_ACTIVE'
           ? 'Global Double Bonus is already inactive.' : 'تعذر إيقاف الدبل العام.';
-        await showPrivatePanel(interaction, buildActionResult('Global Double Bonus', message), true);
+        await showPrivatePanel(interaction, buildActionResult('Global Double Bonus', message, 'failure'), true);
         return true;
       }
       await publishAuditLogs(interaction.guild).catch(() => {});
