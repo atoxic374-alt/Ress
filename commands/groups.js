@@ -322,6 +322,7 @@ function leaveGroupPrompt(guild, group) {
 const topPanelLocks = new Map();
 const TOP_BOARD_REFRESH_MS = 30_000;
 const topPanelRefreshTimers = new Map();
+const topPanelRefreshChannels = new Map();
 function scheduleTopPanelRefresh(channel, guild, options = {}) {
   // One timer per guild: a new configured channel replaces the old timer instead of leaking intervals.
   const key = String(guild?.id || channel?.id || 'top-groups');
@@ -339,6 +340,7 @@ function scheduleTopPanelRefresh(channel, guild, options = {}) {
   }, TOP_BOARD_REFRESH_MS);
   timer.unref?.();
   topPanelRefreshTimers.set(key, timer);
+  topPanelRefreshChannels.set(key, String(channel?.id || ''));
 }
 function isComponentsV2Message(message) {
   if (message?.flags?.has?.(MessageFlags.IsComponentsV2)) return true;
@@ -1443,6 +1445,15 @@ function registerInteractionHandler(client) {
       }
     }
     activityCache.delete(String(member.guild.id));
+  });
+
+  client.on('channelDelete', channel => {
+    const guildId = String(channel?.guild?.id || '');
+    if (!guildId || topPanelRefreshChannels.get(guildId) !== String(channel.id)) return;
+    const timer = topPanelRefreshTimers.get(guildId);
+    if (timer) clearInterval(timer);
+    topPanelRefreshTimers.delete(guildId);
+    topPanelRefreshChannels.delete(guildId);
   });
 
   client.on('guildMemberUpdate', async (oldMember, newMember) => {
