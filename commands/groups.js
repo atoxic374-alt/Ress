@@ -136,7 +136,7 @@ function setupPayloads(guild, settings) {
   const managerCount = Number(settings.systemUsers?.length || 0) + Number(settings.systemRoles?.length || 0);
   const chatMode = settings.chatMode === 'threads' ? 'ثريدات' : settings.chatMode === 'channels' ? 'رومات مستقلة' : 'غير محدد';
   const issues = gm.validateConfig(guild, settings);
-  const readiness = issues.length ? `الإعداد غير مكتمل (${issues.length}):\n${issues.slice(0, 6).map(setupIssueLabel).join('\n')}${issues.length > 6 ? '\n... استخدم زر تدقيق الإعداد لعرض الباقي.' : ''}` : 'الإعداد جاهز لإنشاء القروبات.';
+  const readiness = issues.length ? `الإعداد غير مكتمل (${issues.length}):\n${issues.slice(0, 6).map(setupIssueLabel).join('\n')}${issues.length > 6 ? '\n... استخدم Info لعرض الباقي.' : ''}` : 'الإعداد جاهز لإنشاء القروبات.';
   const summary = `الحالة : ${status}\nجاهزية النظام : ${readiness}\nمسؤولو النظام : ${managerCount} عضو/رتبة\nنمط المحادثة : ${chatMode}\nكاتاقوري النص : ${channelMention(settings.textCategoryId)}\nكاتاقوري الصوت : ${channelMention(settings.voiceCategoryId)}\nقناة الترتيب : ${channelMention(settings.topChannelId)}\nقناة تحكم الإدارة : ${channelMention(settings.adminControlChannelId)}\nقناة تحكم الأعضاء : ${channelMention(settings.memberControlChannelId)}\nالرتبة الرئيسية : ${roleMention(settings.mainRoleId)}\nرتبة المالك : ${roleMention(settings.leaderRoleId)}\nرتبة المسؤول : ${roleMention(settings.managerRoleId)}\nقناة مصدر الموسيقى : ${channelMention(settings.musicChannelId)}\nقناة السجلات : ${channelMention(settings.logChannelId)}\nنطاق احتساب النقاط : ${settings.countAllChannels ? 'كل الرومات' : 'رومات القروبات فقط'}\nالصلاحيات الإضافية : ${settings.extraPermissions ? 'مفعلة' : 'متوقفة'}\nقواعد النقاط : اضغط على زر القواعد للتفاصيل`;
   const sections = [
     ['حالة نظام القروبات', 'تشغيل أو إيقاف نظام القروبات', 'groups_setup:toggle'],
@@ -156,15 +156,22 @@ function setupPayloads(guild, settings) {
     ['الصلاحيات الإضافية', 'تفعيل المسح وأدوات الإدارة', 'groups_setup:extra'],
     ['Point Rules', 'تخصيص قواعد نقاط القروبات', 'groups_setup:rules']
   ];
-  const make = (title, items, includeSummary) => {
+  const make = (title, items, includeSummary, includeTools = false) => {
     const c = includeSummary
       ? baseContainer(guild, title, summary)
       : new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || '#5865F2'));
     for (const [label, desc, id] of items) c.addSectionComponents(new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${desc}`)).setButtonAccessory(button(id, 'فتح')));
-    if (includeSummary) c.addActionRowComponents(new ActionRowBuilder().addComponents(button('groups_setup:audit', 'تدقيق الإعداد', ButtonStyle.Primary), button('groups_setup:clear', 'مسح قيمة', ButtonStyle.Secondary)));
+    if (includeTools) {
+      c.addSeparatorComponents(new SeparatorBuilder());
+      c.addTextDisplayComponents(new TextDisplayBuilder().setContent('### TOOLS\nأدوات سريعة لإدارة الإعدادات.'));
+      c.addActionRowComponents(new ActionRowBuilder().addComponents(
+        button('groups_setup:clear', 'Clear', ButtonStyle.Secondary, '<:emoji_23:1485476368740519986>'),
+        button('groups_setup:audit', 'Info', ButtonStyle.Primary, '<:emoji_17:1485476188091580446>')
+      ));
+    }
     return componentsV2Payload(c);
   };
-  return [make('GROUP SETTINGS', sections.slice(0, 8), true), make('', sections.slice(8), false)];
+  return [make('GROUP SETTINGS', sections.slice(0, 8), true), make('', sections.slice(8), false, true)];
 }
 
 const setupPanels = new Map();
@@ -1076,14 +1083,14 @@ async function handleSetup(interaction, action) {
     await hydrateSetupReferences(interaction.guild, settings);
     const missing = gm.validateConfig(interaction.guild, settings);
     const content = missing.length
-      ? `نتيجة التدقيق: يوجد ${missing.length} نقصًا يمنع إنشاء القروبات أو قد يعطلها:\n${missing.map(setupIssueLabel).join('\n')}`
-      : `نتيجة التدقيق: الإعدادات الأساسية مكتملة. النظام ${settings.enabled ? 'مفعل' : 'جاهز لكنه متوقف'}.`;
+      ? `يوجد ${missing.length} نقصًا في الإعداد:\n${missing.map(setupIssueLabel).join('\n')}`
+      : `الإعداد مكتمل. النظام ${settings.enabled ? 'مفعل' : 'جاهز لكنه متوقف'}.`;
     return reply(interaction, { content });
   }
   if (action === 'clear') {
     const options = CLEARABLE_SETUP_FIELDS.filter(([key]) => settings[key] != null && settings[key] !== '').map(([key, label, format]) => ({ label: safe(label, 100), value: key, description: safe(`الحالي: ${format(settings[key])}`, 100) }));
-    if (!options.length) return reply(interaction, { content: 'لا توجد قيم محفوظة لمسحها.' });
-    return reply(interaction, selectPayload(interaction.guild, 'مسح إعداد', 'اختر قيمة واحدة لمسحها. مسح إعداد مطلوب يمنع إنشاء القروبات حتى تعيد ضبطه.', 'groups_setup_clear_select', options));
+    if (!options.length) return reply(interaction, { content: 'لا توجد قيم لمسحها.' });
+    return reply(interaction, selectPayload(interaction.guild, 'CLEAR', 'اختر قيمة لمسحها.', 'groups_setup_clear_select', options));
   }
   if (action === 'chatmode') return reply(interaction, selectPayload(interaction.guild, 'نمط الشات', 'اختر طريقة إنشاء مساحات شات القروبات.', 'groups_setup_select:chatmode', [
     { label: 'ثريدات', value: 'threads', description: 'قناة أب واحد مع ثريدات خاصة' },
@@ -1189,7 +1196,7 @@ async function handleSetupSelection(interaction, prefix, action) {
     if (required && settings.enabled) patch.enabled = false;
     const updated = await saveGroupSettings(interaction.guild.id, patch, interaction.user.id);
     await refreshSetupPanel(interaction, updated);
-    return reply(interaction, setupConfirmation(interaction, 'مسح إعداد', `تم مسح ${field[1]}${required && settings.enabled ? '، وتم إيقاف النظام حتى تكتمل إعادة الإعداد' : ''}.`));
+    return reply(interaction, setupConfirmation(interaction, 'CLEAR', `تم مسح ${field[1]}${required && settings.enabled ? '، وأُوقف النظام حتى يكتمل الإعداد' : ''}.`));
   }
   if (prefix === 'groups_setup_select') {
     const value = String(interaction.values?.[0] || '');
