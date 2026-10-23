@@ -687,7 +687,7 @@ async function createGroup(guild, { name, description = '', ownerId, color = '#5
     if (existing) throw new Error(String(existing.owner_id) === String(owner.id) ? 'OWNER_ALREADY_HAS_GROUP' : 'USER_ALREADY_IN_GROUP');
     const now = Date.now(); let role = null; let text = null; let thread = null; let voice = null; let leaderRole = null; let leaderRoleAdded = false; let createdGroupId = null; const created = [];
     try {
-      role = await guild.roles.create({ name: groupName.slice(0, 100), reason: 'Create managed group' }); created.push(['role', role]);
+      role = await guild.roles.create({ name: groupName.slice(0, 100), color: color || '#5865F2', reason: 'Create managed group' }); created.push(['role', role]);
       if (settings.mainRoleId) {
         const mainRole = guild.roles.cache.get(settings.mainRoleId) || await guild.roles.fetch(settings.mainRoleId).catch(() => null);
         if (!mainRole || mainRole.id === guild.id || mainRole.position < 2) throw new Error('MAIN_ROLE_INVALID');
