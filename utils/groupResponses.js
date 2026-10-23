@@ -1,6 +1,6 @@
 'use strict';
 
-const { ContainerBuilder, TextDisplayBuilder, MessageFlags } = require('discord.js');
+const { ContainerBuilder, TextDisplayBuilder, MediaGalleryBuilder, MediaGalleryItemBuilder, MessageFlags } = require('discord.js');
 
 function normalizeGroupText(value) {
   if (typeof value !== 'string') return value;
@@ -48,6 +48,14 @@ function responsePayload(payload = {}) {
     const container = new ContainerBuilder().addTextDisplayComponents(
       new TextDisplayBuilder().setContent('## ' + title + '\n' + (content || 'تم تنفيذ الطلب.'))
     );
+    // Components V2 does not automatically display uploaded images; explicitly reference image attachments.
+    const imageFiles = (Array.isArray(data.files) ? data.files : []).filter(file => /\\.(png|jpe?g|webp|gif)$/i.test(String(file?.name || file?.attachment?.name || '')));
+    if (imageFiles.length) {
+      const gallery = new MediaGalleryBuilder().addItems(...imageFiles.slice(0, 10).map(file =>
+        new MediaGalleryItemBuilder().setURL('attachment://' + String(file.name || file.attachment?.name))
+      ));
+      container.addMediaGalleryComponents(gallery);
+    }
     const components = Array.isArray(data.components) ? data.components.map(component =>
       typeof component?.toJSON === 'function' ? component : normalizeComponent(component)
     ) : [];
