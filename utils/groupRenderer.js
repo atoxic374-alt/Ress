@@ -152,7 +152,7 @@ async function renderMembers({ guild, group, members, accentColor = null }) {
   const guildImg = await image(iconUrl(guild));
   avatar(ctx, guildImg, 1375, 112, 48, accent, guild?.name || 'G');
   ctx.textAlign = 'right'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 42px Cairo, sans-serif';
-  text(ctx, 'أعضاء القروب', 1305, 78, 900);
+  text(ctx, 'GROUP MEMBERS', 1305, 78, 900);
   ctx.fillStyle = '#AAB4C5'; ctx.font = '22px Cairo, sans-serif';
   text(ctx, `${group?.name || 'قروب'}  •  ترتيب النقاط والتفاعل`, 1305, 122, 900);
 
@@ -229,7 +229,7 @@ async function renderInfo({ guild, group, owner, managers, accentColor = null })
   const [r, g, b] = rgb(accent);
   roundRect(ctx, 28, 28, W - 56, H - 56, 30, 'rgba(17,22,32,.95)', `rgba(${r},${g},${b},.65)`);
   const icon = await image(iconUrl(guild)); avatar(ctx, icon, 1240, 112, 54, accent, group?.name || 'G');
-  ctx.textAlign = 'right'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 42px Cairo, sans-serif'; text(ctx, 'معلومات القروب', 1148, 92, 900);
+  ctx.textAlign = 'right'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 42px Cairo, sans-serif'; text(ctx, 'GROUP OVERVIEW', 1148, 92, 900);
   ctx.fillStyle = '#AAB4C5'; ctx.font = '22px Cairo, sans-serif'; text(ctx, group?.name || 'قروب', 1148, 135, 900);
 
   roundRect(ctx, 70, 180, 1260, 120, 18, 'rgba(255,255,255,.045)', `rgba(${r},${g},${b},.25)`);
@@ -239,7 +239,7 @@ async function renderInfo({ guild, group, owner, managers, accentColor = null })
   const managerNames = resolvedManagers.map(manager => memberName(manager, memberId(manager))).filter(Boolean);
   const managerValue = managerNames.length ? `${managerNames.slice(0, 4).join('، ')}${managerNames.length > 4 ? ` +${managerNames.length - 4}` : ''}` : 'لا يوجد مسؤولون';
   const ownerName = resolvedOwner ? memberName(resolvedOwner) : 'غير موجود';
-  const memberCount = Array.isArray(group?.memberIds) ? group.memberIds.length : number(group?.memberCount);
+  const memberCount = group ? new Set([String(group.owner_id || ''), ...(group.memberIds || []).map(String), ...(group.managerIds || []).map(String)].filter(Boolean)).size : number(group?.memberCount);
   const status = ({ active: 'نشط', orphaned: 'يتطلب تنظيفًا', deleted: 'محذوف' })[String(group?.status || '').toLowerCase()] || 'غير محدد';
   const chatName = thread?.name ? `#${thread.name}` : chatChannel?.name ? `#${chatChannel.name}` : 'غير متاح';
   const voiceName = voiceChannel?.name ? `#${voiceChannel.name}` : 'غير متاح';
@@ -283,7 +283,7 @@ async function renderTopGroups({ guild, groups = [], memberRowsByGroup = {}, gro
     ...group,
     id: String(group?.id ?? `group-${index}`),
     points: number(group?.points),
-    memberCount: Array.isArray(group?.memberIds) ? group.memberIds.length : number(group?.memberCount)
+    memberCount: group ? new Set([String(group.owner_id || ''), ...(group.memberIds || []).map(String), ...(group.managerIds || []).map(String)].filter(Boolean)).size : number(group?.memberCount)
   })).sort((a, b) => number(b.points) - number(a.points)
     || Number(a.id) - Number(b.id)
     || sortKey(a.name).localeCompare(sortKey(b.name), 'ar', { sensitivity: 'base' }));
@@ -364,7 +364,7 @@ async function renderMyRank({ guild, group, groupRank = 0, totalGroups = 0, memb
 
   const stats = [
     ['GROUP POINTS', number(group?.points).toLocaleString('en-US')],
-    ['MEMBERS', number(group?.memberIds?.length).toLocaleString('en-US')],
+    ['MEMBERS', (group ? new Set([String(group.owner_id || ''), ...(group.memberIds || []).map(String), ...(group.managerIds || []).map(String)].filter(Boolean)).size : 0).toLocaleString('en-US')],
     ['GROUP ID', String(group?.id ?? '—')]
   ];
   stats.forEach(([label, value], index) => {
