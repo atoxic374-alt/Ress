@@ -1970,7 +1970,7 @@ async function handleInteraction(interaction, context = {}) {
           const message = error.message === 'GLOBAL_DOUBLE_ALREADY_ACTIVE'
             ? 'Global Double Bonus is already active. Disable it first or wait for the timer to expire.'
             : 'تعذر تفعيل الدبل العام.';
-          await showPrivatePanel(interaction, buildActionResult('Global Double Bonus', message), true);
+          await showPrivatePanel(interaction, buildActionResult('Global Double Bonus', message, 'failure'), true);
           return true;
         }
         await publishAuditLogs(interaction.guild).catch(() => {});
