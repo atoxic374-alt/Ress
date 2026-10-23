@@ -146,7 +146,7 @@ async function renderMembers({ guild, group, members, accentColor = null }) {
     return resolved ? { ...item, member: resolved } : item;
   }));
   const sorted = normalizeRows(rowsWithMembers).slice(0, 10);
-  const memberCount = Array.isArray(group?.memberIds) ? group.memberIds.length : number(group?.memberCount ?? sorted.length);
+  const memberCount = group ? new Set([String(group.owner_id || ''), ...(group.memberIds || []).map(String), ...(group.managerIds || []).map(String)].filter(Boolean)).size : number(group?.memberCount ?? sorted.length);
   roundRect(ctx, 62, 55, 265, 105, 18, 'rgba(255,255,255,.045)', `rgba(${r},${g},${b},.42)`);
   ctx.textAlign = 'center'; ctx.fillStyle = '#AAB4C5'; ctx.font = '19px Cairo, sans-serif'; ctx.fillText('عدد الأعضاء', 195, 91);
   ctx.fillStyle = '#FFF'; ctx.font = 'bold 34px Cairo, sans-serif'; ctx.fillText(memberCount.toLocaleString('ar-SA'), 195, 137);

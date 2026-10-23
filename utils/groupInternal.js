@@ -94,6 +94,8 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
   let command = String(words.shift() || '').toLowerCase();
   if (command === 'تعديل' && String(words[0] || '') === 'القروب') { command = 'تعديل'; words.shift(); }
   if (!COMMANDS.has(command)) return false;
+  // Destructive commands must be explicit; never interpret ordinary conversation as a purge/punishment.
+  if (!hasPrefix && ['مسح', 'clear', 'عقوبه', 'عقوبة', 'punish'].includes(command)) return false;
   const group = await gm.getGroupForChannel(message.guild.id, message.channel.id);
   if (!group || group.status !== 'active') {
     if (hasPrefix) { await reply(message, 'هذا الشات غير مرتبط بقروب نشط.'); return true; }
@@ -112,6 +114,7 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       return true;
     }
     if (command === 'اعضاء' || command === 'أعضاء' || command === 'members') {
+      if (!groupHasUser(group, message.author.id) && !system) return Boolean(await reply(message, 'عرض الأعضاء متاح لأعضاء القروب فقط.'));
       const rows = await gm.listMemberPoints(message.guild.id, group.id, 10);
       const members = await Promise.all(rows.map(async row => ({ ...row, member: await message.guild.members.fetch(row.user_id).catch(() => null) })));
       await message.reply({ files: [await renderMembers({ guild: message.guild, group, members, accentColor: null })] }).catch(() => {});
@@ -124,6 +127,7 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       if (!target) throw new Error('MEMBER_NOT_FOUND');
       if (target.user?.bot) throw new Error('BOT_NOT_ALLOWED');
       const wasMember = groupHasUser(group, targetId);
+      if (wasMember) { await reply(message, 'العضو موجود بالفعل في القروب.'); return true; }
       await gm.addMember(message.guild.id, group.id, targetId, message.author.id);
       try { await syncMember(group, message.guild, targetId, true); }
       catch (error) { if (!wasMember) await gm.removeMember(message.guild.id, group.id, targetId, message.author.id).catch(() => { error.groupRollbackFailed = true; }); throw error; }
@@ -134,7 +138,9 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       if (!targetId) throw new Error('MENTION_REQUIRED');
       if (String(group.owner_id) === String(targetId)) throw new Error('OWNER_PROTECTED');
       const wasManager = group.managerIds.includes(String(targetId));
+      if (wasManager && String(group.owner_id) !== String(message.author.id) && !system) throw new Error('MANAGER_PROTECTED');
       const wasMember = groupHasUser(group, targetId);
+      if (!wasMember) { await reply(message, 'العضو ليس ضمن هذا القروب.'); return true; }
       await gm.removeMember(message.guild.id, group.id, targetId, message.author.id);
       try { await syncMember(group, message.guild, targetId, false); await syncManagerRole(message.guild, settings, targetId); }
       catch (error) {
@@ -152,6 +158,8 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       if (!targetId) throw new Error('MENTION_REQUIRED');
       if (String(group.owner_id) === String(targetId)) throw new Error('OWNER_PROTECTED');
       const wasManager = group.managerIds.includes(String(targetId));
+      if (wasManager && String(group.owner_id) !== String(message.author.id) && !system) throw new Error('MANAGER_PROTECTED');
+      if (group.blockedIds.includes(String(targetId))) { await reply(message, 'العضو ممنوع بالفعل من القروب.'); return true; }
       const wasMember = groupHasUser(group, targetId);
       await gm.setBlocked(message.guild.id, group.id, targetId, true, message.author.id);
       try { await syncMember(group, message.guild, targetId, false); await syncManagerRole(message.guild, settings, targetId); }
@@ -167,6 +175,7 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
     }
     if (command === 'سماح' || command === 'allow') {
       if (!targetId) throw new Error('MENTION_REQUIRED');
+      if (!group.blockedIds.includes(String(targetId))) { await reply(message, 'العضو غير ممنوع من القروب أصلًا.'); return true; }
       await gm.setBlocked(message.guild.id, group.id, targetId, false, message.author.id);
       await gm.logGroupEvent(message.guild, 'unblock', { groupId: group.id, userId: targetId }, message.author.id);
       await reply(message, 'تم السماح للعضو.'); return true;
@@ -219,7 +228,7 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
   } catch (error) {
     const messages = {
       MENTION_REQUIRED: 'اذكر عضوًا أولًا.', OWNER_ONLY: 'هذه العملية للمالك فقط.', OWNER_PROTECTED: 'لا يمكن إزالة أو منع مالك القروب.',
-      MANAGER_MUST_BE_MEMBER: 'يجب أن يكون المسؤول عضوًا في القروب.', EXTRA_DISABLED: 'الصلاحيات الإضافية متوقفة.',
+      MANAGER_MUST_BE_MEMBER: 'يجب أن يكون المسؤول عضوًا في القروب.', MANAGER_PROTECTED: 'لا يمكن لمدير القروب إزالة مدير آخر أو منعه؛ استخدم مسار إدارة المسؤولين بصلاحية المالك.', EXTRA_DISABLED: 'الصلاحيات الإضافية متوقفة.',
       MEMBER_NOT_FOUND: 'العضو غير موجود في السيرفر.', GROUP_ROLE_NOT_FOUND: 'رتبة القروب المرتبطة غير موجودة.',
       GROUP_THREAD_NOT_FOUND: 'ثريد القروب المرتبط غير موجود.', USER_BLOCKED: 'هذا العضو ممنوع من القروب.',
       USER_ALREADY_IN_GROUP: 'العضو مرتبط بقروب آخر بالفعل.', GROUP_FULL: 'وصل القروب إلى الحد الأقصى للأعضاء.',
