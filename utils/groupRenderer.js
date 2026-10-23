@@ -98,7 +98,7 @@ function text(ctx, value, x, y, maxWidth) {
 }
 function sortKey(value) { return String(value ?? '').normalize('NFKC').toLocaleLowerCase('ar'); }
 function compareRows(a, b) {
-  return number(b.points) - number(a.points) || number(b.messages) - number(a.messages) || sortKey(a.name).localeCompare(sortKey(b.name), 'ar', { sensitivity: 'base' }) || String(a.id).localeCompare(String(b.id), 'en', { numeric: true });
+  return number(b.points) - number(a.points) || sortKey(a.name).localeCompare(sortKey(b.name), 'ar', { sensitivity: 'base' }) || String(a.id).localeCompare(String(b.id), 'en', { numeric: true });
 }
 function normalizeRows(members) {
   return asArray(members).map((item, index) => {
@@ -174,7 +174,7 @@ async function renderMembers({ guild, group, members, accentColor = null }) {
   ctx.textAlign = 'right'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 50px Cairo, sans-serif';
   text(ctx, 'GROUP MEMBERS', 1305, 78, 900);
   ctx.fillStyle = '#AAB4C5'; ctx.font = '27px Cairo, sans-serif';
-  text(ctx, `${group?.name || 'قروب'}  •  ترتيب النقاط والتفاعل`, 1305, 122, 900);
+  text(ctx, `${group?.name || 'قروب'}  •  ترتيب النقاط فقط`, 1305, 122, 900);
 
   const rowsWithMembers = await Promise.all(asArray(members).map(async item => {
     const isMetricRow = item && (item.member !== undefined || item.user_id !== undefined || item.userId !== undefined || item.points !== undefined || item.messages !== undefined);
@@ -202,7 +202,7 @@ async function renderMembers({ guild, group, members, accentColor = null }) {
     if (row) {
       ctx.fillStyle = '#FFF'; ctx.font = 'bold 27px Cairo, sans-serif'; text(ctx, name, p.x, y + 95, 195);
       ctx.fillStyle = medal; ctx.font = 'bold 24px Cairo, sans-serif'; ctx.fillText(`${number(row.points).toLocaleString('ar-SA')} نقطة`, p.x, y + 132);
-      ctx.fillStyle = '#AAB4C5'; ctx.font = '21px Cairo, sans-serif'; ctx.fillText(`${number(row.messages).toLocaleString('ar-SA')} رسالة`, p.x, y + 163);
+      ctx.fillStyle = '#AAB4C5'; ctx.font = '21px Cairo, sans-serif'; ctx.fillText('ترتيب بالنقاط', p.x, y + 163);
     }
   }
   if (!sorted.length) {
@@ -227,7 +227,7 @@ async function renderMembers({ guild, group, members, accentColor = null }) {
     ctx.fillStyle = row ? accent : '#7F8CA1'; ctx.font = 'bold 23px Cairo, sans-serif';
     ctx.fillText(row ? `${number(row.points).toLocaleString('ar-SA')} نقطة` : 'لا توجد نقاط', card.x + cardW - 20, card.y + 91);
     ctx.fillStyle = '#AAB4C5'; ctx.font = '21px Cairo, sans-serif';
-    ctx.fillText(row ? `${number(row.messages).toLocaleString('ar-SA')} رسالة` : '—', card.x + cardW - 20, card.y + 121);
+    ctx.fillText(row ? 'ترتيب بالنقاط' : '—', card.x + cardW - 20, card.y + 121);
   }
   ctx.textAlign = 'right'; ctx.fillStyle = '#7F8CA1'; ctx.font = '21px Cairo, sans-serif';
   text(ctx, `آخر تحديث  ${group?.updated_at ? formatDate(group.updated_at) : 'غير محدد'}`, 1425, 1058, 900);

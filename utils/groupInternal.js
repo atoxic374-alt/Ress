@@ -1,11 +1,11 @@
 const gm = require('./groupManager');
 const { renderMembers, renderInfo } = require('./groupRenderer');
-const { ActionRowBuilder, PermissionsBitField, UserSelectMenuBuilder } = require('discord.js');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionsBitField, UserSelectMenuBuilder } = require('discord.js');
 const { randomBytes } = require('node:crypto');
 const { responsePayload } = require('./groupResponses');
 const colorManager = require('./colorManager');
 
-const COMMANDS = new Set(['تحكم', 'control', 'تعديل', 'edit', 'عقوبه', 'عقوبة', 'punish', 'صلاحية', 'permission', 'مسح', 'clear', 'اعضاء', 'أعضاء', 'members', 'اضافة', 'إضافة', 'اضف', 'أضف', 'ضيف', 'ضم', 'ادخل', 'add', 'invite', 'join', 'add-member', 'addmember', 'ازالة', 'إزالة', 'ازاله', 'إزاله', 'احذف', 'حذف', 'شيل', 'شطب', 'remove', 'remove-member', 'removemember', 'منع', 'block', 'سماح', 'allow', 'قروبي', 'قربي', 'my-group', 'مسؤول', 'manager', 'أوامر', 'اوامر', 'commands', 'help']);
+const COMMANDS = new Set(['تحكم', 'control', 'تعديل', 'edit', 'عقوبه', 'عقوبة', 'punish', 'صلاحية', 'permission', 'مسح', 'clear', 'اعضاء', 'أعضاء', 'members', 'اعضائنا', 'أعضاؤنا', 'our-members', 'ourmembers', 'اضافة', 'إضافة', 'اضف', 'أضف', 'ضيف', 'ضم', 'ادخل', 'add', 'invite', 'join', 'add-member', 'addmember', 'ازالة', 'إزالة', 'ازاله', 'إزاله', 'احذف', 'حذف', 'شيل', 'شطب', 'remove', 'remove-member', 'removemember', 'منع', 'block', 'سماح', 'allow', 'قروبي', 'قربي', 'my-group', 'مسؤول', 'manager', 'أوامر', 'اوامر', 'commands', 'help']);
 const memberPickerFlows = new Map();
 const MEMBER_PICKER_TTL = 10 * 60 * 1000;
 
@@ -50,6 +50,29 @@ async function syncMember(group, guild, userId, add, { ignoreMissing = false } =
   return member;
 }
 function reply(message, content) { const payload = typeof content === 'string' ? responsePayload({ content }) : responsePayload(content); return message.reply(payload).catch(() => null); }
+async function buildOurMembersPayload(guild, group, requestedPage = 0) {
+  const memberIds = [...new Set([String(group.owner_id), ...(group.memberIds || []), ...(group.managerIds || [])].filter(Boolean))];
+  const allRows = await Promise.all(memberIds.map(async userId => ({ ...((await gm.getMemberPoints(guild.id, group.id, userId).catch(() => null)) || {}), user_id: userId })));
+  allRows.sort((a, b) => Number(b.points || 0) - Number(a.points || 0) || String(a.user_id).localeCompare(String(b.user_id), 'en', { numeric: true }));
+  const rows = await Promise.all(allRows.map(async row => ({ ...row, member: await guild.members.fetch(row.user_id).catch(() => null) })));
+  const pageSize = 10;
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  const page = Math.max(0, Math.min(pageCount - 1, Number(requestedPage) || 0));
+  const visible = rows.slice(page * pageSize, (page + 1) * pageSize);
+  const lines = [`**${String(group.name || 'Group').slice(0, 80)}**`, `صفحة ${page + 1} / ${pageCount} · الترتيب بالنقاط فقط`, ''];
+  if (!visible.length) lines.push('لا توجد نقاط مسجلة لأعضاء القروب حتى الآن.');
+  else visible.forEach((row, index) => {
+    const name = row.member?.displayName || row.member?.user?.username || `<@${row.user_id}>`;
+    lines.push(`**${page * pageSize + index + 1}.** ${name} — **${Number(row.points || 0).toLocaleString('en-US')} نقطة**`);
+  });
+  const buttons = [];
+  if (pageCount > 1) {
+    buttons.push(new ButtonBuilder().setCustomId(`groups_our_members:prev:${group.id}:${page}`).setLabel('◀').setStyle(ButtonStyle.Secondary).setDisabled(page === 0));
+    buttons.push(new ButtonBuilder().setCustomId(`groups_our_members:page:${group.id}:${page}`).setLabel(`${page + 1}/${pageCount}`).setStyle(ButtonStyle.Secondary).setDisabled(true));
+    buttons.push(new ButtonBuilder().setCustomId(`groups_our_members:next:${group.id}:${page}`).setLabel('▶').setStyle(ButtonStyle.Secondary).setDisabled(page === pageCount - 1));
+  }
+  return { title: 'OUR MEMBERS', content: lines.join('\n'), components: buttons.length ? [new ActionRowBuilder().addComponents(buttons)] : [] };
+}
 function memberPickerAction(command) {
   if (['اضافة', 'إضافة', 'اضف', 'أضف', 'ضيف', 'ضم', 'ادخل', 'add', 'invite', 'join', 'add-member', 'addmember'].includes(command)) return 'add';
   if (['ازالة', 'إزالة', 'ازاله', 'إزاله', 'احذف', 'حذف', 'شيل', 'شطب', 'remove', 'remove-member', 'removemember'].includes(command)) return 'remove';
@@ -214,6 +237,11 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       await message.reply({ files: [await renderMembers({ guild: message.guild, group, members, accentColor: null })], allowedMentions: { parse: [] } }).catch(() => {});
       return true;
     }
+    if (['اعضائنا', 'أعضاؤنا', 'our-members', 'ourmembers'].includes(command)) {
+      if (!groupHasUser(group, message.author.id) && !system) return Boolean(await reply(message, 'عرض الأعضاء متاح لأعضاء القروب فقط.'));
+      await reply(message, await buildOurMembersPayload(message.guild, group, 0));
+      return true;
+    }
     if (['أوامر', 'اوامر', 'commands', 'help'].includes(command)) {
       if (!groupHasUser(group, message.author.id) && !system) return Boolean(await reply(message, 'دليل الأوامر متاح لأعضاء القروب فقط.'));
       const { buildGroupCommandGuide } = require('../commands/groups');
@@ -355,4 +383,4 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
   }
   return true;
 }
-module.exports = { handleInternalMessage, handleMemberPickerInteraction, leaveGroupMember };
+module.exports = { handleInternalMessage, handleMemberPickerInteraction, leaveGroupMember, buildOurMembersPayload };

@@ -588,7 +588,6 @@ async function listMemberPoints(guildId, groupId, limit = 10) {
   // showing synthetic zero-score rows for owners/new members and ensures
   // removed members disappear immediately while their ledger remains intact.
   return rows.sort((a, b) => Number(b.points || 0) - Number(a.points || 0)
-    || Number(b.messages || 0) - Number(a.messages || 0)
     || String(a.user_id).localeCompare(String(b.user_id), 'en', { numeric: true }))
     .slice(0, safeLimit);
 }

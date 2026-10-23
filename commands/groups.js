@@ -5,7 +5,7 @@ const colorManager = require('../utils/colorManager');
 const tempVoice = require('./temp');
 const { componentsV2Payload, colorToNumber } = require('../utils/structuredContainer');
 const { renderMembers, renderInfo, renderTopGroups, renderMyRank } = require('../utils/groupRenderer');
-const { handleInternalMessage, handleMemberPickerInteraction, leaveGroupMember } = require('../utils/groupInternal');
+const { handleInternalMessage, handleMemberPickerInteraction, leaveGroupMember, buildOurMembersPayload } = require('../utils/groupInternal');
 const { parseCustomEmoji, parseEmojiId, parseUnicodeEmoji, extractFirstEmoji } = require('../utils/roleIconUtils');
 const name = 'groups';
 const aliases = ['group', 'قروب', 'قروبات'];
@@ -74,10 +74,11 @@ function rulesPayload(guild, rules = []) {
   for (const [metric, label, description, defaultThreshold] of RULE_METRICS) {
     const rule = byMetric.get(metric);
     const enabled = Number(rule?.enabled) === 1;
-    const threshold = Number(rule?.threshold) || defaultThreshold;
-    const points = Number(rule?.points) || 1;
+    const configured = Boolean(rule && Number.isInteger(Number(rule.threshold)) && Number(rule.threshold) > 0 && Number.isInteger(Number(rule.points)) && Number(rule.points) > 0);
+    const threshold = configured ? Number(rule.threshold) : defaultThreshold;
+    const points = configured ? Number(rule.points) : 1;
     c.addSectionComponents(new SectionBuilder()
-      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${description}\nالحد : **${formatRuleThreshold(metric, threshold)}** | النقاط : **${points}** لكل حد مكتمل | الحالة : **${enabled ? 'مفعّل' : 'متوقف'}**`))
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${description}\nالحد : **${configured ? formatRuleThreshold(metric, threshold) : 'غير معين'}** | النقاط : **${configured ? points : 'غير معينة'}** لكل حد مكتمل | الحالة : **${configured && enabled ? 'مفعّل' : 'غير مهيأ'}**`))
       .setButtonAccessory(button(`groups_rules:edit:${metric}`, 'تعديل', ButtonStyle.Primary)));
     c.addActionRowComponents(new ActionRowBuilder().addComponents(button(`groups_rules:toggle:${metric}`, enabled ? 'تعطيل' : 'تفعيل', enabled ? ButtonStyle.Danger : ButtonStyle.Success)));
   }
@@ -907,6 +908,7 @@ function groupCommandGuideText(group, settings) {
     '**VIEW & TRACKING**',
     '`قروبي` · `قربي` · `my-group` — عرض معلومات القروب.',
     '`أعضاء` · `اعضاء` · `members` — عرض ترتيب الأعضاء ونقاطهم.',
+    '`أعضاؤنا` · `اعضائنا` · `our-members` — عرض أعضاء القروب في Container منظم، 10 أعضاء لكل صفحة.',
     '`أوامر` · `اوامر` · `commands` · `help` — عرض هذا الدليل.',
     '',
     '**MANAGERS**',
@@ -1353,7 +1355,14 @@ async function transferGroupOwner(interaction, groupId, ownerId) {
     return warnings.length ? `تم نقل الملكية، لكن يلزم مراجعة الرتب: ${warnings.join('؛ ')}.` : 'تم نقل الملكية.';
   });
 }
-async function handleInteraction(interaction) { const extended=await handleGroupExtensions(interaction); if(extended!==false)return extended; if(String(interaction.customId||'').startsWith('groups_member_picker:')) return handleMemberPickerInteraction(interaction); const [prefix,action,...parts]=String(interaction.customId||'').split(':'); if(prefix==='groups_top'&&['rank','group','manage','refresh','leave','leave-confirm','leave-cancel','transfer','transfer-select'].includes(action))return handleTopGroupsInteraction(interaction,action,parts); if(prefix==='groups_bonus')return handleTopBonusButton(interaction,action); if(prefix==='groups_bonus_select')return handleTopBonusSelection(interaction,action,parts); if(prefix==='groups_bonus_page')return handleTopBonusPage(interaction,action,parts); if(prefix==='groups_bonus_member_select')return handleTopBonusMemberSelection(interaction,action,parts); if(prefix==='groups_bonus_modal')return handleTopBonusModal(interaction,action,parts); if(prefix==='groups_bonus_confirm')return handleTopBonusConfirm(interaction,action,parts); if(prefix==='groups_rules_modal'){const metric=parts[0];const settings=await checkSystem(interaction);if(!settings)return true;const definition=RULE_METRICS.find(([key])=>key===metric);if(!definition)return reply(interaction,{content:'قاعدة النقاط غير معروفة.'});try{const rules=await gm.getRules(interaction.guild.id);const current=rules.find(rule=>String(rule.metric)===metric);const threshold=Number(interaction.fields.getTextInputValue('threshold'));const points=Number(interaction.fields.getTextInputValue('points'));await gm.setRule(interaction.guild.id,metric,threshold,points,Number(current?.enabled)===1,interaction.user.id);await gm.logGroupEvent(interaction.guild,'rule_update',{metric,threshold,points,enabled:Number(current?.enabled)===1},interaction.user.id);await refreshSetupPanel(interaction,settings);return reply(interaction,rulesPayload(interaction.guild,await gm.getRules(interaction.guild.id)));}catch(error){const messages={INVALID_THRESHOLD:'الحد يجب أن يكون عددًا صحيحًا أكبر من صفر ولا يتجاوز مليارًا.',INVALID_POINTS:'النقاط لكل حد يجب أن تكون عددًا صحيحًا بين 1 و1,000,000.',INVALID_METRIC:'نوع قاعدة النقاط غير معروف.'};return reply(interaction,{title:'RULE UPDATE FAILED',content:messages[error.message]||'تعذر حفظ قاعدة النقاط. تحقق من القيم وحاول مرة أخرى.'});}} if(prefix==='groups_meta_edit'){
+async function handleInteraction(interaction) { const extended=await handleGroupExtensions(interaction); if(extended!==false)return extended; if(String(interaction.customId||'').startsWith('groups_member_picker:')) return handleMemberPickerInteraction(interaction); const [prefix,action,...parts]=String(interaction.customId||'').split(':'); if(prefix==='groups_our_members'){
+  const groupId=Number(parts[0]); const currentPage=Number(parts[1])||0; const group=await gm.getGroup(interaction.guild.id,groupId);
+  const settings=await gm.getSettings(interaction.guild.id); const member=interaction.member;
+  if(!group||(!group.memberIds.includes(String(interaction.user.id))&&!group.managerIds.includes(String(interaction.user.id))&&String(group.owner_id)!==String(interaction.user.id)&&!gm.canManageSystem(interaction.client,settings,member))) return interaction.reply(responsePayload({content:'عرض الأعضاء متاح لأعضاء القروب فقط.',allowedMentions:{parse:[]},ephemeral:true}));
+  const page=action==='next'?currentPage+1:action==='prev'?currentPage-1:currentPage;
+  return interaction.update(responsePayload(await buildOurMembersPayload(interaction.guild,group,page)));
+ }
+ if(prefix==='groups_top'&&['rank','group','manage','refresh','leave','leave-confirm','leave-cancel','transfer','transfer-select'].includes(action))return handleTopGroupsInteraction(interaction,action,parts); if(prefix==='groups_bonus')return handleTopBonusButton(interaction,action); if(prefix==='groups_bonus_select')return handleTopBonusSelection(interaction,action,parts); if(prefix==='groups_bonus_page')return handleTopBonusPage(interaction,action,parts); if(prefix==='groups_bonus_member_select')return handleTopBonusMemberSelection(interaction,action,parts); if(prefix==='groups_bonus_modal')return handleTopBonusModal(interaction,action,parts); if(prefix==='groups_bonus_confirm')return handleTopBonusConfirm(interaction,action,parts); if(prefix==='groups_rules_modal'){const metric=parts[0];const settings=await checkSystem(interaction);if(!settings)return true;const definition=RULE_METRICS.find(([key])=>key===metric);if(!definition)return reply(interaction,{content:'قاعدة النقاط غير معروفة.'});try{const rules=await gm.getRules(interaction.guild.id);const current=rules.find(rule=>String(rule.metric)===metric);const threshold=Number(interaction.fields.getTextInputValue('threshold'));const points=Number(interaction.fields.getTextInputValue('points'));await gm.setRule(interaction.guild.id,metric,threshold,points,Number(current?.enabled)===1,interaction.user.id);await gm.logGroupEvent(interaction.guild,'rule_update',{metric,threshold,points,enabled:Number(current?.enabled)===1},interaction.user.id);await refreshSetupPanel(interaction,settings);return reply(interaction,rulesPayload(interaction.guild,await gm.getRules(interaction.guild.id)));}catch(error){const messages={INVALID_THRESHOLD:'الحد يجب أن يكون عددًا صحيحًا أكبر من صفر ولا يتجاوز مليارًا.',INVALID_POINTS:'النقاط لكل حد يجب أن تكون عددًا صحيحًا بين 1 و1,000,000.',INVALID_METRIC:'نوع قاعدة النقاط غير معروف.'};return reply(interaction,{title:'RULE UPDATE FAILED',content:messages[error.message]||'تعذر حفظ قاعدة النقاط. تحقق من القيم وحاول مرة أخرى.'});}} if(prefix==='groups_meta_edit'){
   const field=choose(action,['name','description','emoji','color','avatar']);
   try { await currentManager(interaction, Number(parts[0])); }
   catch (error) { return reply(interaction,{content:groupError(error)}); }
