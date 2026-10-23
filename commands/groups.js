@@ -286,24 +286,24 @@ async function buildTopGroupsPayload(guild, { viewerId = null, channelId = null 
   const attachment = await renderTopGroups({ guild, groups, memberRowsByGroup, groupAvatars, selectedGroup, viewerId, accentColor: null });
   return { files: [attachment], components: topGroupsButtons(), allowedMentions: { parse: [] } };
 }
-function formatEnglishDate(value) {
+function formatGroupDate(value) {
   const date = new Date(Number(value));
-  if (!Number.isFinite(date.getTime())) return 'Unknown';
-  return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+  if (!Number.isFinite(date.getTime())) return 'غير معروف';
+  return new Intl.DateTimeFormat('ar', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
 }
 function myGroupPayload(guild, group, userId, memberPoints, roleName) {
   const status = String(group.status || 'active').toLowerCase();
-  const membership = String(group.owner_id) === String(userId) ? 'Owner'
-    : group.managerIds.includes(String(userId)) ? 'Manager' : 'Member';
+  const membership = String(group.owner_id) === String(userId) ? 'المالك'
+    : group.managerIds.includes(String(userId)) ? 'مسؤول القروب' : 'عضو';
   const c = baseContainer(guild, 'قروبي', safe(group.name, 100));
   c.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `### ${safe(group.name, 100)}\n**Your role:** ${membership}  •  **Status:** ${status}`
+    `### ${safe(group.name, 100)}\n**دورك:** ${membership}  •  **الحالة:** ${status === 'active' ? 'نشط' : status === 'orphaned' ? 'يحتاج تنظيفًا' : status}`
   ));
   c.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `### Group details\n**Owner:** <@${group.owner_id}>\n**Role:** ${safe(roleName || 'Not available', 100)}\n**Members:** ${Number(group.memberIds?.length || 0).toLocaleString('en-US')}`
+    `### تفاصيل القروب\n**المالك:** <@${group.owner_id}>\n**الرول:** ${safe(roleName || 'غير متاح', 100)}\n**الأعضاء:** ${Number(group.memberIds?.length || 0).toLocaleString('ar')}`
   ));
   c.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `### Points & dates\n**Group points:** ${Number(group.points || 0).toLocaleString('en-US')}\n**Your points:** ${Number(memberPoints?.points || 0).toLocaleString('en-US')}\n**Created:** ${formatEnglishDate(group.created_at)}`
+    `### النقاط والتواريخ\n**نقاط القروب:** ${Number(group.points || 0).toLocaleString('ar')}\n**نقاطك:** ${Number(memberPoints?.points || 0).toLocaleString('ar')}\n**تاريخ الإنشاء:** ${formatGroupDate(group.created_at)}`
   ));
   c.addActionRowComponents(new ActionRowBuilder().addComponents(
     button(`groups_top:leave:${group.id}`, 'مغادرة القروب', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>')
@@ -311,7 +311,7 @@ function myGroupPayload(guild, group, userId, memberPoints, roleName) {
   return componentsV2Payload(c);
 }
 function leaveGroupPrompt(guild, group) {
-  const c = baseContainer(guild, 'تأكيد المغادرة', `You are about to leave **${safe(group.name, 100)}**. Your group role and private thread access will be removed.`);
+  const c = baseContainer(guild, 'تأكيد المغادرة', `أنت على وشك مغادرة **${safe(group.name, 100)}**. ستُزال رتبة القروب وصلاحية الوصول إلى الثريد الخاص به.`);
   c.addActionRowComponents(new ActionRowBuilder().addComponents(
     button(`groups_top:leave-confirm:${group.id}`, 'تأكيد المغادرة', ButtonStyle.Danger),
     button(`groups_top:leave-cancel:${group.id}`, 'إلغاء', ButtonStyle.Secondary)
