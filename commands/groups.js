@@ -1067,7 +1067,8 @@ async function handleSetupSelection(interaction, prefix, action) {
         const member = await interaction.guild.members.fetch(userId).catch(() => null);
         if (member && !member.roles.cache.has(roleId)) await member.roles.add(role, 'Sync configured group role').catch(() => null);
       }
-      if (oldRoleId && oldRoleId !== roleId) {
+      const oldRoleStillConfigured = (action === 'leaderrole' && oldRoleId === String(settings.managerRoleId || '')) || (action === 'managerrole' && oldRoleId === String(settings.leaderRoleId || ''));
+      if (oldRoleId && oldRoleId !== roleId && !oldRoleStillConfigured) {
         const oldRole = interaction.guild.roles.cache.get(oldRoleId) || await interaction.guild.roles.fetch(oldRoleId).catch(() => null);
         if (oldRole) {
           await interaction.guild.members.fetch().catch(() => null);
