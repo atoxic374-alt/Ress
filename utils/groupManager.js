@@ -472,7 +472,7 @@ async function recordActivity(guildId, userId, metric, amount, channelId = null,
     const rows = await tx.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status = 'active'", [String(guildId)]);
     const column = safeMetric === 'voice_ms' ? 'voice_ms' : safeMetric === 'reactions' ? 'reactions' : 'messages';
     const eligibleGroups = rows.map(hydrate).filter(group =>
-      (group.memberIds.includes(String(userId)) || String(group.owner_id) === String(userId))
+      (group.memberIds.includes(String(userId)) || String(group.owner_id) === String(userId) || group.managerIds.includes(String(userId)))
       && (settings.countAllChannels || !args.channelId || channelBelongs(group, args.channelId))
     );
     if (!eligibleGroups.length) return 0;
@@ -505,6 +505,36 @@ async function recordActivity(guildId, userId, metric, amount, channelId = null,
     }
     return awarded;
   }, 'group-record-activity'));
+}
+async function explainActivity(guildId, userId, metric, channelId = null, amount = 1) {
+  await schema();
+  const settings = await getSettings(guildId);
+  if (!settings.enabled) return { counted: false, reason: 'system_disabled' };
+  const safeMetric = String(metric);
+  if (!GROUP_METRICS.has(safeMetric)) return { counted: false, reason: 'unsupported_metric' };
+  const rule = (await getRules(guildId)).find(row => row.metric === safeMetric);
+  if (!rule || Number(rule.enabled) !== 1) return { counted: false, reason: 'rule_disabled', metric: safeMetric };
+  const groups = (await listGroups(guildId)).filter(group =>
+    group.memberIds.includes(String(userId)) || String(group.owner_id) === String(userId) || group.managerIds.includes(String(userId))
+  );
+  if (!groups.length) return { counted: false, reason: 'member_not_eligible', metric: safeMetric };
+  const scopedGroups = settings.countAllChannels || !channelId
+    ? groups
+    : groups.filter(group => channelBelongs(group, channelId));
+  if (!scopedGroups.length) return { counted: false, reason: 'channel_out_of_scope', metric: safeMetric, groupIds: groups.map(group => group.id) };
+  const column = safeMetric === 'voice_ms' ? 'voice_ms' : safeMetric === 'reactions' ? 'reactions' : 'messages';
+  const threshold = Number(rule.threshold) || 1;
+  const amountValue = Math.max(0, Math.floor(Number(amount) || 0));
+  const progress = [];
+  for (const group of scopedGroups) {
+    const row = await getMemberPoints(guildId, group.id, userId);
+    const before = Number(row?.[column]) || 0;
+    progress.push({ groupId: group.id, before, after: before + amountValue, threshold });
+  }
+  if (progress.every(item => Math.floor(item.after / threshold) === Math.floor(item.before / threshold))) {
+    return { counted: false, reason: 'threshold_not_completed', metric: safeMetric, threshold, progress };
+  }
+  return { counted: true, reason: 'eligible', metric: safeMetric, threshold, progress };
 }
 async function listMemberPoints(guildId, groupId, limit = 10) {
   await schema();
@@ -648,4 +678,4 @@ async function deleteGroup(guild, groupId, actorId) {
     return true;
   });
 }
-module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, logGroupEvent, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, listMemberPoints, listPointsLedger, upsertVoiceSession, listVoiceSessions, deleteVoiceSession, getMemberPoints, createGroup, deleteGroup };
+module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, logGroupEvent, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, explainActivity, listMemberPoints, listPointsLedger, upsertVoiceSession, listVoiceSessions, deleteVoiceSession, getMemberPoints, createGroup, deleteGroup };
