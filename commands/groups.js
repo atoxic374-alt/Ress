@@ -224,7 +224,7 @@ async function sendAdminControlPanel(channel, guild) {
 }
 function selectPayload(guild, title, description, customId, options) { const c=baseContainer(guild,title,description); const menu=new StringSelectMenuBuilder().setCustomId(customId).setPlaceholder('اختر خيارًا').setMinValues(1).setMaxValues(1).addOptions(options); c.addActionRowComponents(new ActionRowBuilder().addComponents(menu)); return componentsV2Payload(c); }
 const { responsePayload } = require('../utils/groupResponses');
-function replyMessage(message, payload) { return replyMessage(message,responsePayload(typeof payload === 'string' ? { content: payload } : payload)); }
+function replyMessage(message, payload) { return message.reply(responsePayload(typeof payload === 'string' ? { content: payload } : payload)); }
 async function reply(interaction, payload, ephemeral=true) { const data=responsePayload({...payload,allowedMentions:{parse:[]}}); if(interaction.deferred&&!interaction.replied)return interaction.editReply(data); if(interaction.replied)return interaction.followUp({...data,ephemeral}); return interaction.reply({...data,ephemeral}); }
 async function deny(interaction) { return reply(interaction,{content:'لا تملك صلاحية استخدام هذه العملية.'}); }
 function setupConfirmation(interaction, title, text) { const c = baseContainer(interaction.guild, title, `**- ${safe(text, 300)} **`); return componentsV2Payload(c); }
