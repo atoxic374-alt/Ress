@@ -12,8 +12,25 @@ function roundRect(ctx, x, y, w, h, r, fill, stroke = null) {
   ctx.beginPath(); ctx.moveTo(x + rr, y); ctx.arcTo(x + w, y, x + w, y + h, rr);
   ctx.arcTo(x + w, y + h, x, y + h, rr); ctx.arcTo(x, y + h, x, y, rr);
   ctx.arcTo(x, y, x + w, y, rr); ctx.closePath();
-  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
-  if (stroke) { ctx.strokeStyle = stroke; ctx.stroke(); }
+  if (fill) {
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,.34)';
+    ctx.shadowBlur = 14;
+    ctx.shadowOffsetY = 7;
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.restore();
+  }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1.2; ctx.stroke(); }
+  // Restrained top-edge sheen adds depth without reducing text contrast.
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y + 1);
+  ctx.lineTo(x + w - rr, y + 1);
+  ctx.strokeStyle = 'rgba(255,255,255,.12)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
 }
 function hex(value, fallback = '#5865F2') { return /^#[\da-f]{6}$/i.test(String(value || '')) ? String(value) : fallback; }
 function rgb(color) { const n = parseInt(hex(color).slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
@@ -258,7 +275,7 @@ async function renderTopGroups({ guild, groups = [], memberRowsByGroup = {}, gro
   roundRect(ctx, 28, 28, W - 56, H - 56, 30, 'rgba(15,21,32,.94)', `rgba(${r},${g},${b},.65)`);
   avatar(ctx, guildImg, 1460, 104, 48, accent, guild?.name || 'G');
   ctx.textAlign = 'right'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 46px Cairo, sans-serif';
-  text(ctx, 'Top Groups', 1375, 86, 1070);
+  text(ctx, 'TOP GROUPS', 1375, 86, 1070);
   ctx.fillStyle = '#AAB4C5'; ctx.font = '22px Cairo, sans-serif';
   text(ctx, 'أفضل 10 قروبات حسب النقاط  •  تتحدث تلقائيًا كل 30 ثانية', 1375, 128, 1070);
 
@@ -324,7 +341,7 @@ async function renderMyRank({ guild, group, groupRank = 0, totalGroups = 0, memb
   const guildImage = await image(iconUrl(guild));
   avatar(ctx, guildImage, 1400, 100, 46, accent, guild?.name || 'G');
   ctx.textAlign = 'right'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 46px Cairo, sans-serif';
-  text(ctx, 'My Group Rank', 1320, 88, 1000);
+  text(ctx, 'MY GROUP RANK', 1320, 88, 1000);
   ctx.fillStyle = '#AAB4C5'; ctx.font = '22px Cairo, sans-serif';
   text(ctx, `Your group position in ${guild?.name || 'this server'}`, 1320, 126, 1000);
 
