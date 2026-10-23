@@ -428,6 +428,23 @@ function groupResourceMemberIds(group) {
   return [...new Set([group.owner_id, ...group.memberIds, ...group.managerIds].filter(Boolean).map(String))];
 }
 
+async function restoreThreadMember(thread, userId) {
+  if (!thread?.members?.add) return false;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await thread.members.add(String(userId));
+      return true;
+    } catch (error) {
+      if (attempt === 2) {
+        console.error('[groups] failed to restore thread member:', thread.id, userId, error?.message || error);
+      } else {
+        await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+      }
+    }
+  }
+  return false;
+}
+
 async function restoreGroupRole(guild, group, forceMissing = false) {
   let role = !forceMissing && group.role_id && (guild.roles.cache.get(String(group.role_id)) || await guild.roles.fetch(String(group.role_id)).catch(() => null));
   if (role) return { role, group };
@@ -481,12 +498,16 @@ async function restoreGroupResources(guild, sourceGroup, trigger = 'resource_del
       await voice.permissionOverwrites.set(groupChannelOverwrites(guild, roleResult.role.id), 'Restore managed group permissions').catch(() => {});
     }
     group = await gm.updateGroup(guild.id, group.id, patch, null);
+    const failedThreadMembers = [];
     for (const userId of groupResourceMemberIds(group)) {
       const member = await guild.members.fetch(userId).catch(() => null);
       if (member && !member.user?.bot) await member.roles.add(roleResult.role, 'Restore managed group membership').catch(() => {});
-      if (thread?.members) await thread.members.add(userId).catch(() => {});
+      if (thread?.members && !(await restoreThreadMember(thread, userId))) failedThreadMembers.push(String(userId));
     }
     await gm.audit(guild.id, null, group.id, 'group_resource_restored', { trigger, roleId: roleResult.role.id, textChannelId: group.text_channel_id, threadId: group.thread_id, voiceChannelId: group.voice_channel_id }).catch(() => {});
+    if (failedThreadMembers.length) {
+      await gm.audit(guild.id, null, group.id, 'group_thread_members_restore_failed', { trigger, threadId: group.thread_id, userIds: failedThreadMembers }).catch(() => {});
+    }
     await gm.logGroupEvent(guild, 'update', { groupId: group.id, reason: 'group_resource_restored', trigger, roleId: roleResult.role.id, textChannelId: group.text_channel_id, threadId: group.thread_id, voiceChannelId: group.voice_channel_id }, null);
     activityCache.delete(String(guild.id));
     return group;
