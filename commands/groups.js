@@ -1019,10 +1019,6 @@ async function createFromModal(interaction) {
     try { panelPublished = Boolean(await sendGroupPanel(panelChannel, interaction.guild, group.id)); }
     catch (error) { console.error('[groups] failed to publish group control panel:', error?.message || error); }
   }
-  if (configuredChannel) {
-    const groups = await gm.listGroups(interaction.guild.id).catch(() => []);
-    await sendMemberOverviewPanel(configuredChannel, interaction.guild, groups.length).catch(() => null);
-  }
   const guideChannel = defaultChannel || panelChannel;
   await sendGroupCommandGuide(guideChannel, group, settings).catch(error => {
     console.error('[groups] failed to publish group command guide:', error?.message || error);
