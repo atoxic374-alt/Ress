@@ -432,7 +432,7 @@ async function testDeleteCommandFlow() {
   await createCommand.execute(commandMessage, [], { client });
   const createPayloadJson = JSON.stringify(commandPayload);
   assert.equal(commandPayload.flags, require('discord.js').MessageFlags.IsComponentsV2, 'create command is sent as a Components V2 card');
-  assert.ok(createPayloadJson.includes('Create Group') && createPayloadJson.includes('افتح النموذج') && createPayloadJson.includes('https://cdn.example/guild.png'), 'create card is concise and includes a thumbnail');
+  assert.ok(createPayloadJson.includes('إنشاء قروب') && createPayloadJson.includes('افتح النموذج') && createPayloadJson.includes('https://cdn.example/guild.png'), 'create card is concise and includes a thumbnail');
   assert.ok(createPayloadJson.includes('group_create_launch:') && createPayloadJson.includes('"style":2'), 'create button is Secondary and owned by a collector');
   const createCustomId = createPayloadJson.match(/"custom_id":"([^"]+)"/)?.[1];
   assert.ok(createCustomId.startsWith('group_create_launch:') && !createCustomId.startsWith('groups_'), 'create collector custom ID is isolated from the central component router');
@@ -883,7 +883,7 @@ async function testTopBonusControls() {
   await groupCommand.handleInteraction(myGroup);
   const myGroupJson = JSON.stringify(myGroup.state.editReply);
   assert.ok(myGroupJson.includes('groups_top:leave:' + groupId), 'My Group provides a Leave action');
-  assert.ok(myGroupJson.includes('Created:') && !myGroupJson.includes('تاريخ الإنشاء'), 'My Group uses structured text and an English date label');
+  assert.ok(myGroupJson.includes('تاريخ الإنشاء') && myGroupJson.includes('نقاط القروب'), 'group details use structured Arabic labels');
 
   const leaveRequest = mockGroupInteraction({ customId: `groups_top:leave:${groupId}`, guild, userId: USER_A, channelId: 'top-bonus-channel' });
   await groupCommand.handleInteraction(leaveRequest);
