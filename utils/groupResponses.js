@@ -31,8 +31,11 @@ function responsePayload(payload = {}) {
     const container = new ContainerBuilder().addTextDisplayComponents(
       new TextDisplayBuilder().setContent(content || 'تم تنفيذ الطلب.')
     );
-    const components = Array.isArray(data.components) ? normalizeComponent(data.components) : [];
-    data.components = [container.toJSON(), ...components.map(component => typeof component?.toJSON === 'function' ? component.toJSON() : component)];
+    const components = Array.isArray(data.components) ? data.components.map(component => {
+      const json = typeof component?.toJSON === 'function' ? component.toJSON() : component;
+      return normalizeComponent(json);
+    }) : [];
+    data.components = [container.toJSON(), ...components];
     data.flags = Number(data.flags || 0) | MessageFlags.IsComponentsV2;
   } else if (Array.isArray(data.components)) {
     data.components = data.components.map(component => {
