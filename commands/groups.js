@@ -1329,7 +1329,7 @@ async function execute(message, args, { client } = {}) {
   }
   return replyMessage(message,'استخدم أمر القروبات مع الخيارات: setup، control، create، delete، top، members أو rules.');
 }
-const activityCache=new Map(); const settingsCache=new Map(); const voiceStarts=new Map(); const lastMessageAt=new Map();
+const activityCache=new Map(); const settingsCache=new Map(); const voiceStarts=new Map(); const voiceChannels=new Map(); const lastMessageAt=new Map();
 async function cachedGroups(guildId){const hit=activityCache.get(String(guildId));if(hit&&Date.now()-hit.at<30000)return hit.groups;const groups=await gm.listGroups(guildId);activityCache.set(String(guildId),{at:Date.now(),groups});return groups;}
 async function cachedSettings(guildId){const hit=settingsCache.get(String(guildId));if(hit&&Date.now()-hit.at<30000)return hit.settings;const settings=await gm.getSettings(guildId);settingsCache.set(String(guildId),{at:Date.now(),settings});return settings;}
 function registerInteractionHandler(client) {
@@ -1339,6 +1339,42 @@ function registerInteractionHandler(client) {
 
   // Never bulk-delete ordinary messages here. A previous heuristic removed every
   // non-bot message without components, which destroyed normal group conversations.
+  // Restore persisted voice sessions after a restart. Recovery is capped at two minutes
+  // so downtime never creates a large artificial voice-point award.
+  gm.listVoiceSessions().then(async sessions => {
+    const now = Date.now();
+    for (const session of sessions) {
+      const guild = client.guilds.cache.get(String(session.guild_id));
+      const member = guild?.members?.cache?.get(String(session.user_id));
+      if (!guild || !member || member.voice?.channelId !== String(session.channel_id)) {
+        await gm.deleteVoiceSession(session.guild_id, session.user_id).catch(() => {});
+        continue;
+      }
+      const [groups, settings] = await Promise.all([cachedGroups(guild.id), cachedSettings(guild.id).catch(() => null)]);
+      const isEligible = groups.some(group =>
+        (group.memberIds.includes(String(session.user_id)) || String(group.owner_id) === String(session.user_id) || group.managerIds.includes(String(session.user_id)))
+        && ((settings?.countAllChannels && groups.length > 0) || groups.some(group => group.voice_channel_id === String(session.channel_id) && (group.memberIds.includes(String(session.user_id)) || String(group.owner_id) === String(session.user_id) || group.managerIds.includes(String(session.user_id)))))
+      );
+      if (!isEligible) { await gm.deleteVoiceSession(session.guild_id, session.user_id).catch(() => {}); continue; }
+      voiceStarts.set(`${session.guild_id}:${session.user_id}`, Math.max(now - 120000, Number(session.checkpoint_at) || now));
+      voiceChannels.set(`${session.guild_id}:${session.user_id}`, String(session.channel_id));
+    }
+  }).catch(error => console.error('[groups] voice session restore failed:', error?.message || error));
+
+  const voiceCheckpoint = setInterval(async () => {
+    const now = Date.now();
+    for (const [key, started] of voiceStarts) {
+      const [guildId, userId] = key.split(':');
+      const channelId = voiceChannels.get(key);
+      if (!channelId) continue;
+      const elapsed = Math.min(120000, Math.max(0, now - Number(started)));
+      if (elapsed > 0) await gm.recordActivity(guildId, userId, 'voice_ms', elapsed, channelId, `voice-checkpoint:${userId}:${Number(started)}:${now}`).catch(error => console.error('[groups] voice checkpoint failed:', error?.message || error));
+      voiceStarts.set(key, now);
+      await gm.upsertVoiceSession(guildId, userId, channelId, now).catch(error => console.error('[groups] voice checkpoint save failed:', error?.message || error));
+    }
+  }, 60000);
+  voiceCheckpoint.unref?.();
+
   client.on('messageCreate', async message => {
     if (!message.guild || message.author.bot) return;
     const settings = await cachedSettings(message.guild.id).catch(() => null);
@@ -1350,6 +1386,11 @@ function registerInteractionHandler(client) {
       && (settings.countAllChannels || gm.channelBelongs(group, message.channelId))
     );
     if (!eligible) return;
+    const minLength = Math.max(0, Number(settings.minMessageLength) || 0);
+    if (minLength > 0 && Array.from(String(message.content || '').trim()).length < minLength) {
+      await gm.audit(message.guild.id, userId, null, 'activity_skipped', { metric: 'messages', reason: 'below_minimum_length', minimum: minLength, actual: Array.from(String(message.content || '').trim()).length, channelId: message.channelId }).catch(() => {});
+      return;
+    }
     // One message award per user per guild per minute prevents farming across multiple channels.
     const key = `${message.guild.id}:${userId}`;
     const now = Date.now();
@@ -1401,11 +1442,21 @@ function registerInteractionHandler(client) {
     // In group-only scope, leaving the group's configured voice room closes the session.
     if (oldTracked && !newTracked) {
       const started = voiceStarts.get(key);
-      if (started) await gm.recordActivity(guildId, memberId, 'voice_ms', Date.now() - started, oldState.channelId).catch(error => console.error('[groups] voice points failed:', error?.message || error));
+      if (started) await gm.recordActivity(guildId, memberId, 'voice_ms', Math.min(120000, Math.max(0, Date.now() - started)), voiceChannels.get(key) || oldState.channelId).catch(error => console.error('[groups] voice points failed:', error?.message || error));
       voiceStarts.delete(key);
+      voiceChannels.delete(key);
+      await gm.deleteVoiceSession(guildId, memberId).catch(error => console.error('[groups] voice session cleanup failed:', error?.message || error));
     }
-    if (newTracked && !oldTracked) voiceStarts.set(key, Date.now());
-    if (!oldTracked && !newTracked) voiceStarts.delete(key);
+    if (newTracked && !oldTracked) {
+      const now = Date.now();
+      voiceStarts.set(key, now);
+      voiceChannels.set(key, newState.channelId);
+      await gm.upsertVoiceSession(guildId, memberId, newState.channelId, now).catch(error => console.error('[groups] voice session save failed:', error?.message || error));
+    } else if (newTracked && oldTracked && oldState.channelId !== newState.channelId) {
+      voiceChannels.set(key, newState.channelId);
+      await gm.upsertVoiceSession(guildId, memberId, newState.channelId, voiceStarts.get(key) || Date.now()).catch(error => console.error('[groups] voice session move update failed:', error?.message || error));
+    }
+    if (!oldTracked && !newTracked) { voiceStarts.delete(key); voiceChannels.delete(key); }
   });
 
   client.on('channelDelete', async channel => {
@@ -1440,6 +1491,8 @@ function registerInteractionHandler(client) {
 
   client.on('guildMemberRemove', async member => {
     voiceStarts.delete(`${member.guild.id}:${member.id}`);
+    voiceChannels.delete(`${member.guild.id}:${member.id}`);
+    await gm.deleteVoiceSession(member.guild.id, member.id).catch(() => {});
     const groups = await gm.listGroups(member.guild.id);
     for (const group of groups) {
       const userId = String(member.id);
