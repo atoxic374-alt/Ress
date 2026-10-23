@@ -224,6 +224,7 @@ async function sendAdminControlPanel(channel, guild) {
 }
 function selectPayload(guild, title, description, customId, options) { const c=baseContainer(guild,title,description); const menu=new StringSelectMenuBuilder().setCustomId(customId).setPlaceholder('اختر خيارًا').setMinValues(1).setMaxValues(1).addOptions(options); c.addActionRowComponents(new ActionRowBuilder().addComponents(menu)); return componentsV2Payload(c); }
 const { responsePayload } = require('../utils/groupResponses');
+function replyMessage(message, payload) { return replyMessage(message,responsePayload(typeof payload === 'string' ? { content: payload } : payload)); }
 async function reply(interaction, payload, ephemeral=true) { const data=responsePayload({...payload,allowedMentions:{parse:[]}}); if(interaction.deferred&&!interaction.replied)return interaction.editReply(data); if(interaction.replied)return interaction.followUp({...data,ephemeral}); return interaction.reply({...data,ephemeral}); }
 async function deny(interaction) { return reply(interaction,{content:'لا تملك صلاحية استخدام هذه العملية.'}); }
 function setupConfirmation(interaction, title, text) { const c = baseContainer(interaction.guild, title, `**- ${safe(text, 300)} **`); return componentsV2Payload(c); }
@@ -1183,16 +1184,16 @@ async function execute(message, args, { client } = {}) {
   const canManage = gm.canManageSystem(client, settings, member);
 
   if (sub === 'setup' || sub === 'إعدادات') {
-    if (!canManage) return message.reply('لا تملك الصلاحية.');
+    if (!canManage) return replyMessage(message,'لا تملك الصلاحية.');
     return sendSetupPanel(message.channel, message.guild, settings);
   }
   if (sub === 'control' || sub === 'تحكم') {
-    if (!canManage) return message.reply('لا تملك الصلاحية.');
+    if (!canManage) return replyMessage(message,'لا تملك الصلاحية.');
     const target = settings.adminControlChannelId && message.guild.channels.cache.get(settings.adminControlChannelId);
     return sendAdminControlPanel(target || message.channel, message.guild);
   }
   if (['rules', 'قواعد'].includes(sub)) {
-    if (!canManage) return message.reply('لا تملك الصلاحية.');
+    if (!canManage) return replyMessage(message,'لا تملك الصلاحية.');
     if (!args[1]) return message.channel.send(rulesPayload(message.guild, await gm.getRules(message.guild.id)));
     const metricName = String(args[1]).toLowerCase();
     const metric = metricName === 'voice' ? 'voice_ms' : ['reaction', 'reactions'].includes(metricName) ? 'reactions' : 'messages';
@@ -1200,17 +1201,17 @@ async function execute(message, args, { client } = {}) {
     const points = Number(args[3] || 1);
     await gm.setRule(message.guild.id, metric, threshold, points, true, message.author.id);
     await gm.logGroupEvent(message.guild, 'rule_update', { metric, threshold, points, enabled: true }, message.author.id);
-    return message.reply(`تم حفظ القاعدة : ${metric} / ${threshold} / ${points}`);
+    return replyMessage(message,`تم حفظ القاعدة : ${metric} / ${threshold} / ${points}`);
   }
   if (['create', 'انشاء', 'إنشاء'].includes(sub)) {
-    if (!canManage) return message.reply('لا تملك الصلاحية.');
+    if (!canManage) return replyMessage(message,'لا تملك الصلاحية.');
     return sendCreateCommandPanel(message);
   }
   if (['delete', 'حذف'].includes(sub)) {
-    if (!canManage) return message.reply('لا تملك الصلاحية.');
+    if (!canManage) return replyMessage(message,'لا تملك الصلاحية.');
     const groups = (await gm.listGroups(message.guild.id, true))
       .filter(group => group.status === 'active' || group.status === 'orphaned');
-    if (!groups.length) return message.reply('لا توجد قروبات متاحة للحذف.');
+    if (!groups.length) return replyMessage(message,'لا توجد قروبات متاحة للحذف.');
 
     const target = args.slice(1).join(' ').trim();
     let choices = groups;
@@ -1225,7 +1226,7 @@ async function execute(message, args, { client } = {}) {
       if (!choices.length) {
         choices = groups.filter(group => String(group.name || '').toLocaleLowerCase().includes(normalizedTarget));
       }
-      if (!choices.length) return message.reply('لم أجد قروبًا مطابقًا للاسم أو المعرف المحدد.');
+      if (!choices.length) return replyMessage(message,'لم أجد قروبًا مطابقًا للاسم أو المعرف المحدد.');
     }
 
     const options = choices.slice(0, 25).map(group => ({
@@ -1251,7 +1252,7 @@ async function execute(message, args, { client } = {}) {
   }
   if (['members', 'اعضاء'].includes(sub)) {
     const group = selectMemberGroup(await gm.listGroups(message.guild.id), message.author.id, message.channel.id);
-    if (!group) return message.reply('لا يوجد قروب نشط.');
+    if (!group) return replyMessage(message,'لا يوجد قروب نشط.');
     const full = await gm.getGroup(message.guild.id, group.id);
     const rows = await gm.listMemberPoints(message.guild.id, group.id, 10);
     const members = await Promise.all(rows.map(async row => ({
@@ -1260,7 +1261,7 @@ async function execute(message, args, { client } = {}) {
     })));
     return message.channel.send({ files: [await renderMembers({ guild: message.guild, group: full, members, accentColor: null })] });
   }
-  return message.reply('استخدم أمر القروبات مع الخيارات: setup، control، create، delete، top، members أو rules.');
+  return replyMessage(message,'استخدم أمر القروبات مع الخيارات: setup، control، create، delete، top، members أو rules.');
 }
 const activityCache=new Map(); const settingsCache=new Map(); const voiceStarts=new Map(); const lastMessageAt=new Map();
 async function cachedGroups(guildId){const hit=activityCache.get(String(guildId));if(hit&&Date.now()-hit.at<30000)return hit.groups;const groups=await gm.listGroups(guildId);activityCache.set(String(guildId),{at:Date.now(),groups});return groups;}
@@ -1439,8 +1440,8 @@ async function dispatchInternalMessage(message, options = {}) {
         }
         const {group}=await currentManager(message,linked.id,true);
         const flow=newFlow(message.guild.id,message.author.id,'permission',group.id);
-        await message.reply({...scopePayload(message.guild,flow),allowedMentions:{parse:[]}});
-      } catch(error) { await message.reply({content:groupError(error),allowedMentions:{parse:[]}}).catch(()=>null); }
+        await replyMessage(message,{...scopePayload(message.guild,flow),allowedMentions:{parse:[]}});
+      } catch(error) { await replyMessage(message,{content:groupError(error),allowedMentions:{parse:[]}}).catch(()=>null); }
       return true;
     }
   }
