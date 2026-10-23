@@ -40,6 +40,8 @@ function responseTitle(content = '') {
 
 function responsePayload(payload = {}) {
   const data = { ...payload, allowedMentions: payload.allowedMentions || { parse: [] } };
+  if (data.type && RESPONSE_TYPES[data.type]) data.title = data.title || RESPONSE_TYPES[data.type];
+  delete data.type;
   if (typeof data.content === 'string' && !data.embeds?.length && !data.poll && !data.sticker_ids?.length) {
     const content = normalizeGroupText(data.content);
     const title = String(data.title || responseTitle(content));
@@ -69,4 +71,32 @@ function responsePayload(payload = {}) {
   return data;
 }
 
-module.exports = { normalizeGroupText, responsePayload };
+
+const RESPONSE_TYPES = Object.freeze({
+  success: 'SUCCESS',
+  failure: 'REQUEST FAILED',
+  permission: 'ACCESS DENIED',
+  confirmation: 'CONFIRMATION REQUIRED',
+  cancelled: 'CANCELLED',
+  empty: 'NO RESULTS',
+  info: 'GROUP UPDATE'
+});
+
+function typedResponse(type, title, content, extra = {}) {
+  const normalizedType = Object.prototype.hasOwnProperty.call(RESPONSE_TYPES, type) ? type : 'info';
+  return responsePayload({
+    ...extra,
+    title: String(title || RESPONSE_TYPES[normalizedType]),
+    type: normalizedType,
+    content: String(content || ''),
+    allowedMentions: extra.allowedMentions || { parse: [] }
+  });
+}
+function successResponse(title, content, extra = {}) { return typedResponse('success', title, content, extra); }
+function failureResponse(title, content, extra = {}) { return typedResponse('failure', title, content, extra); }
+function permissionResponse(title, content, extra = {}) { return typedResponse('permission', title, content, extra); }
+function confirmationResponse(title, content, extra = {}) { return typedResponse('confirmation', title, content, extra); }
+function cancelledResponse(title, content, extra = {}) { return typedResponse('cancelled', title, content, extra); }
+function emptyResponse(title, content, extra = {}) { return typedResponse('empty', title, content, extra); }
+
+module.exports = { normalizeGroupText, responsePayload, typedResponse, successResponse, failureResponse, permissionResponse, confirmationResponse, cancelledResponse, emptyResponse, RESPONSE_TYPES };
