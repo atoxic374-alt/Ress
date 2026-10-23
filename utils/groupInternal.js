@@ -105,8 +105,8 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       if (mine.length === 1) {
         group = mine[0];
       } else if (mine.length > 1) {
-        const choices = mine.slice(0, 15).map(item => `• **${String(item.name || 'قروب').slice(0, 80)}** — ID: ${item.id}`).join('\\n');
-        await reply(message, `أنت مرتبط بأكثر من قروب؛ اكتب الأمر داخل قناة القروب المطلوب.\\n${choices}`);
+        const choices = mine.slice(0, 15).map(item => `• **${String(item.name || 'قروب').slice(0, 80)}** — ID: ${item.id}`).join('\n');
+        await reply(message, `أنت مرتبط بأكثر من قروب؛ اكتب الأمر داخل قناة القروب المطلوب.\n${choices}`);
         return true;
       } else {
         await reply(message, 'ما لقيت قروبًا نشطًا مرتبطًا بعضويتك.');
@@ -114,6 +114,15 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       }
     } else {
       if (hasPrefix) { await reply(message, 'هذا الشات غير مرتبط بقروب نشط.'); return true; }
+      const channelScopedCommands = new Set([
+        'منع', 'block', 'سماح', 'allow', 'اضافة', 'إضافة', 'add',
+        'ازالة', 'إزالة', 'remove', 'مسؤول', 'manager', 'عقوبه', 'عقوبة', 'punish',
+        'مسح', 'clear', 'تعديل', 'edit', 'صلاحية', 'permission'
+      ]);
+      if (channelScopedCommands.has(command)) {
+        await reply(message, 'هذا الأمر يحتاج قناة أو ثريد قروب نشطًا. افتح لوحة القروب باستخدام setup أو groups، ثم نفّذ الأمر داخل قناة القروب المرتبطة.');
+        return true;
+      }
       return false;
     }
   }
