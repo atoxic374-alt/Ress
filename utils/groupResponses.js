@@ -27,7 +27,7 @@ function responseTitle(content = '') {
   const value = String(content || '');
   if (/أوامر القروب|دليل الأوامر/.test(value)) return 'GROUP COMMANDS';
   if (/تم إنشاء القروب/.test(value)) return 'GROUP CREATED';
-  if (/تم\\s|تمت\\s|تم تنفيذ|تم تحديث|تم إضافة|تمت إضافة|تم حذف|تم تصفير|تم السماح|تم منع|تمت مغادرة/.test(value)) return 'SUCCESS';
+  if (/تم\s|تمت\s|تم تنفيذ|تم تحديث|تم إضافة|تمت إضافة|تم حذف|تم تصفير|تم السماح|تم منع|تمت مغادرة/.test(value)) return 'SUCCESS';
   if (/تأكيد|على وشك|لن يتم|اكتب:/.test(value)) return 'CONFIRMATION REQUIRED';
   if (/لا تملك|غير مسموح|مخصص|متاح ل|متاحة ل|صلاحية|ممنوع/.test(value)) return 'ACCESS DENIED';
   if (/غير موجود|لا توجد|لم يعد|لم يتم العثور|ليس ضمن|لا يمكن/.test(value)) return 'NOT FOUND';
@@ -42,7 +42,7 @@ function responsePayload(payload = {}) {
     const content = normalizeGroupText(data.content);
     delete data.content;
     const container = new ContainerBuilder().addTextDisplayComponents(
-      new TextDisplayBuilder().setContent('## ' + responseTitle(content) + '\\n' + (content || 'تم تنفيذ الطلب.'))
+      new TextDisplayBuilder().setContent('## ' + responseTitle(content) + '\n' + (content || 'تم تنفيذ الطلب.'))
     );
     const components = Array.isArray(data.components) ? data.components.map(component =>
       typeof component?.toJSON === 'function' ? component : normalizeComponent(component)
