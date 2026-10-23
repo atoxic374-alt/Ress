@@ -185,8 +185,8 @@ async function testDashboardPublishers() {
 
   await groupCommand.sendAdminControlPanel(channel, guild);
   const adminComponents = JSON.stringify([...messages.values()][0]?.components || []);
-  assert.ok(adminComponents.includes('Group Management'), 'admin dashboard title is English');
-  assert.ok(adminComponents.includes('Delete') && adminComponents.includes('Reset All'));
+  assert.ok(adminComponents.includes('إدارة القروبات'), 'admin dashboard title is Arabic');
+  assert.ok(adminComponents.includes('حذف') && adminComponents.includes('تصفير الكل'));
   assert.doesNotMatch(adminComponents, /استخدم الأزرار لإدارة القروبات/);
   assert.ok(adminComponents.includes('1465336647477493894') && adminComponents.includes('1465373714060415180'), 'admin action buttons reuse matching role-panel emojis');
   assert.ok(adminComponents.indexOf('groups_admin:delete') < adminComponents.indexOf('groups_admin:reset'), 'Delete appears above Reset');
