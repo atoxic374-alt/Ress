@@ -1284,6 +1284,28 @@ async function execute(message, args, { client } = {}) {
   const sub = String(args[0] || '').toLowerCase();
   const canManage = gm.canManageSystem(client, settings, member);
 
+  if (['status', 'diagnose', 'تشخيص', 'حالة'].includes(sub)) {
+    if (!canManage) return replyMessage(message, 'هذا التقرير متاح لمسؤولي نظام القروبات فقط.');
+    const [groups, linkedGroup] = await Promise.all([
+      gm.listGroups(message.guild.id, true),
+      gm.getGroupForChannel(message.guild.id, message.channel.id).catch(() => null)
+    ]);
+    const active = groups.filter(group => group.status === 'active').length;
+    const database = require('../utils/database').dbManager;
+    const dispatcherLoaded = typeof module.exports.handleInternalMessage === 'function';
+    const lines = [
+      `Command dispatcher : ${dispatcherLoaded ? 'Loaded' : 'Unavailable'}`,
+      `Database : ${database?.isInitialized ? (database.isDegraded ? 'Degraded' : 'Ready') : 'Not initialized'}`,
+      `Group system : ${settings.enabled ? 'Enabled' : 'Disabled'}`,
+      `Active groups : ${active}`,
+      `This channel : ${linkedGroup ? `Linked to group #${linkedGroup.id} (${safe(linkedGroup.name, 60)})` : 'Not linked to an active group'}`,
+      `Message prefix : ${String(options?.prefix ?? ':')}`,
+      `Next step : ${!dispatcherLoaded ? 'Restart/redeploy the current bot build.' : !database?.isInitialized || database?.isDegraded ? 'Check database startup logs and persistent storage.' : !settings.enabled ? 'Enable the group system from setup.' : 'If commands still do not respond, inspect bot.js messageCreate logs and confirm the running deployment contains this commit.'}`
+    ];
+    const payload = baseContainer(message.guild, 'GROUP SYSTEM DIAGNOSTICS', lines.join('\\n'));
+    return message.channel.send({ ...componentsV2Payload(payload), allowedMentions: { parse: [] } });
+  }
+
   if (sub === 'setup' || sub === 'إعدادات') {
     if (!canManage) return replyMessage(message,'لا تملك الصلاحية.');
     return sendSetupPanel(message.channel, message.guild, settings);
