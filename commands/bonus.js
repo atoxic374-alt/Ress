@@ -416,13 +416,17 @@ function structurePrivateResponse(payload) {
   if (!raw) return payload;
   const lines = raw.split(/\n+/).map(line => line.trim()).filter(Boolean);
   const first = lines.shift() || raw;
-  const classificationText = `${raw} ${String(payload.title || '')}`;
-  const lower = classificationText.toLowerCase();
-  const semanticTitle = /تعذر|فشل|خطأ|غير صالح|لم يتم|لا يمكن|insufficient|failed|error/i.test(classificationText) ? 'ACTION FAILED'
-    : /تم الإلغاء|ألغيت|إلغاء|cancelled|canceled/i.test(classificationText) ? 'ACTION CANCELLED'
-      : /تأكيد|confirm|هل تريد|سيتم/.test(lower) ? 'CONFIRMATION REQUIRED'
-        : /تم |تمت|نجاح|updated|saved|activated|disabled/.test(lower) ? 'ACTION COMPLETED'
-          : /اختر|select|حدد|choose/.test(lower) ? 'SELECT OPTION' : 'BONUS SETTINGS';
+  const responseTitles = {
+    success: 'ACTION COMPLETED',
+    failure: 'ACTION FAILED',
+    permission: 'ACCESS DENIED',
+    confirmation: 'CONFIRMATION REQUIRED',
+    cancelled: 'ACTION CANCELLED',
+    empty: 'NO RESULTS',
+    info: 'BONUS UPDATE'
+  };
+  const responseType = Object.prototype.hasOwnProperty.call(responseTitles, payload.responseType) ? payload.responseType : 'info';
+  const semanticTitle = responseTitles[responseType];
   const title = String(payload.title || semanticTitle).toUpperCase();
   const fields = [];
   const fieldNames = {
@@ -436,7 +440,7 @@ function structurePrivateResponse(payload) {
     fields.push({ name: fieldNames[rawName] || rawName, value: (separator ? separator[2] : line).slice(0, 1024), inline: false });
   }
   const mentions = [...raw.matchAll(/<@!?\d+>|<@&\d+>|<#\d+>/g)].map(match => match[0]);
-  if (semanticTitle === 'ACTION COMPLETED') {
+  if (responseType === 'success') {
     if (mentions.length) fields.unshift({ name: 'Target', value: [...new Set(mentions)].join(' • '), inline: true });
     if (/إيقاف|disabled|deactivated/i.test(raw)) fields.push({ name: 'Status', value: 'Disabled', inline: true });
     else if (/تفعيل|activated|enabled/i.test(raw)) fields.push({ name: 'Status', value: 'Enabled', inline: true });
@@ -456,11 +460,12 @@ function structurePrivateResponse(payload) {
     components: [container, ...(Array.isArray(payload.components) ? payload.components : [])],
     allowedMentions: payload.allowedMentions || { parse: [] },
     flags: Number(payload.flags || 0) | MessageFlags.IsComponentsV2,
-    __bonusActionTitle: semanticTitle
+    __bonusActionTitle: responseType === 'success' ? 'ACTION COMPLETED' : semanticTitle
   };
   delete normalized.title;
   delete normalized.content;
   delete normalized.embeds;
+  delete normalized.responseType;
   return normalized;
 }
 
@@ -1027,8 +1032,13 @@ function buildOwnerAvatarResult(message, success = false) {
   };
 }
 
-function buildActionResult(title, message) {
-  return { title, content: message, components: [] };
+function buildActionResult(title, message, responseType = 'info') {
+  const normalizedTitle = String(title || '');
+  const inferredType = responseType !== 'info' ? responseType
+    : /failed|failure|error/i.test(normalizedTitle) ? 'failure'
+      : /updated|completed|reset|removed|added|published/i.test(normalizedTitle) ? 'success'
+        : /confirm|confirmation/i.test(normalizedTitle) ? 'confirmation' : 'info';
+  return { title: normalizedTitle, content: message, responseType: inferredType, components: [] };
 }
 
 async function publishBoard(guild, actorId) {
@@ -1880,7 +1890,7 @@ async function handleInteraction(interaction, context = {}) {
       } catch (error) {
         const message = error.message === 'GLOBAL_DOUBLE_NOT_ACTIVE'
           ? 'Global Double Bonus is already inactive.' : 'تعذر إيقاف الدبل العام.';
-        await showPrivatePanel(interaction, buildActionResult('Global Double Bonus', message), true);
+        await showPrivatePanel(interaction, buildActionResult('Global Double Bonus', message, 'failure'), true);
         return true;
       }
       await publishAuditLogs(interaction.guild).catch(() => {});
@@ -1960,7 +1970,7 @@ async function handleInteraction(interaction, context = {}) {
           const message = error.message === 'GLOBAL_DOUBLE_ALREADY_ACTIVE'
             ? 'Global Double Bonus is already active. Disable it first or wait for the timer to expire.'
             : 'تعذر تفعيل الدبل العام.';
-          await showPrivatePanel(interaction, buildActionResult('Global Double Bonus', message), true);
+          await showPrivatePanel(interaction, buildActionResult('Global Double Bonus', message, 'failure'), true);
           return true;
         }
         await publishAuditLogs(interaction.guild).catch(() => {});

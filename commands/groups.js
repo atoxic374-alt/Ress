@@ -1277,12 +1277,34 @@ async function sendCreateCommandPanel(message) {
   });
   return sent;
 }
-async function execute(message, args, { client } = {}) {
+async function execute(message, args, { client, prefix } = {}) {
   if (!message.guild) return;
   const settings = await gm.getSettings(message.guild.id);
   const member = message.member;
   const sub = String(args[0] || '').toLowerCase();
   const canManage = gm.canManageSystem(client, settings, member);
+
+  if (['status', 'diagnose', 'تشخيص', 'حالة'].includes(sub)) {
+    if (!canManage) return replyMessage(message, 'هذا التقرير متاح لمسؤولي نظام القروبات فقط.');
+    const [groups, linkedGroup] = await Promise.all([
+      gm.listGroups(message.guild.id, true),
+      gm.getGroupForChannel(message.guild.id, message.channel.id).catch(() => null)
+    ]);
+    const active = groups.filter(group => group.status === 'active').length;
+    const database = require('../utils/database').dbManager;
+    const dispatcherLoaded = typeof module.exports.handleInternalMessage === 'function';
+    const lines = [
+      `Command dispatcher : ${dispatcherLoaded ? 'Loaded' : 'Unavailable'}`,
+      `Database : ${database?.isInitialized ? (database.isDegraded ? 'Degraded' : 'Ready') : 'Not initialized'}`,
+      `Group system : ${settings.enabled ? 'Enabled' : 'Disabled'}`,
+      `Active groups : ${active}`,
+      `This channel : ${linkedGroup ? `Linked to group #${linkedGroup.id} (${safe(linkedGroup.name, 60)})` : 'Not linked to an active group'}`,
+      `Message prefix : ${String(prefix ?? ':')}`,
+      `Next step : ${!dispatcherLoaded ? 'Restart/redeploy the current bot build.' : !database?.isInitialized || database?.isDegraded ? 'Check database startup logs and persistent storage.' : !settings.enabled ? 'Enable the group system from setup.' : 'If commands still do not respond, inspect bot.js messageCreate logs and confirm the running deployment contains this commit.'}`
+    ];
+    const payload = baseContainer(message.guild, 'GROUP SYSTEM DIAGNOSTICS', lines.join('\\n'));
+    return message.channel.send({ ...componentsV2Payload(payload), allowedMentions: { parse: [] } });
+  }
 
   if (sub === 'setup' || sub === 'إعدادات') {
     if (!canManage) return replyMessage(message,'لا تملك الصلاحية.');
@@ -1575,13 +1597,21 @@ function registerInteractionHandler(client) {
     const settings = await cachedSettings(guild.id).catch(() => null);
     if (!settings?.enabled) return;
     const groups = await cachedGroups(guild.id);
-    if (groups.some(group =>
+    const eligible = groups.some(group =>
       (group.memberIds.includes(String(user.id)) || String(group.owner_id) === String(user.id) || group.managerIds.includes(String(user.id)))
       && (settings.countAllChannels || gm.channelBelongs(group, sourceMessage.channelId))
-    )) {
-      const emojiKey = reaction.emoji?.id || reaction.emoji?.name || 'unknown';
-      const eventId = `${sourceMessage.id}:${emojiKey}`;
-      await gm.recordActivity(guild.id, user.id, 'reactions', 1, sourceMessage.channelId, eventId).catch(error => console.error('[groups] reaction points failed:', error?.message || error));
+    );
+    if (!eligible) {
+      const isMember = groups.some(group => group.memberIds.includes(String(user.id)) || String(group.owner_id) === String(user.id) || group.managerIds.includes(String(user.id)));
+      await logActivitySkip(guild.id, user.id, null, 'reactions', isMember ? 'channel_out_of_scope' : 'member_not_eligible', { channelId: sourceMessage.channelId, messageId: sourceMessage.id }).catch(() => {});
+      return;
+    }
+    const emojiKey = reaction.emoji?.id || reaction.emoji?.name || 'unknown';
+    const eventId = `${sourceMessage.id}:${emojiKey}`;
+    const awarded = await gm.recordActivity(guild.id, user.id, 'reactions', 1, sourceMessage.channelId, eventId).catch(error => { console.error('[groups] reaction points failed:', error?.message || error); return 0; });
+    if (!awarded) {
+      const diagnosis = await gm.explainActivity(guild.id, user.id, 'reactions', sourceMessage.channelId, 1).catch(() => null);
+      if (diagnosis && diagnosis.reason !== 'eligible') await logActivitySkip(guild.id, user.id, null, 'reactions', diagnosis.reason, { ...diagnosis, channelId: sourceMessage.channelId, messageId: sourceMessage.id }).catch(() => {});
     }
   });
 
@@ -1601,6 +1631,10 @@ function registerInteractionHandler(client) {
     const oldTracked = tracksChannel(oldState.channelId);
     const newTracked = tracksChannel(newState.channelId);
     const key = `${guildId}:${memberId}`;
+    if (newState.channelId && !newTracked && oldState.channelId !== newState.channelId) {
+      const isMember = groups.some(eligible);
+      await logActivitySkip(guildId, memberId, null, 'voice_ms', isMember ? 'channel_out_of_scope' : 'member_not_eligible', { channelId: newState.channelId }).catch(() => {});
+    }
     // With all-channel scope, moving between voice rooms remains one continuous session.
     // In group-only scope, leaving the group's configured voice room closes the session.
     if (oldTracked && !newTracked) {
