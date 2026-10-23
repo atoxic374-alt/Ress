@@ -416,9 +416,10 @@ function structurePrivateResponse(payload) {
   if (!raw) return payload;
   const lines = raw.split(/\n+/).map(line => line.trim()).filter(Boolean);
   const first = lines.shift() || raw;
-  const lower = raw.toLowerCase();
-  const semanticTitle = /تعذر|فشل|خطأ|غير صالح|لم يتم|لا يمكن|insufficient|failed|error/i.test(raw) ? 'ACTION FAILED'
-    : /تم الإلغاء|ألغيت|إلغاء|cancelled|canceled/i.test(raw) ? 'ACTION CANCELLED'
+  const classificationText = `${raw} ${String(payload.title || '')}`;
+  const lower = classificationText.toLowerCase();
+  const semanticTitle = /تعذر|فشل|خطأ|غير صالح|لم يتم|لا يمكن|insufficient|failed|error/i.test(classificationText) ? 'ACTION FAILED'
+    : /تم الإلغاء|ألغيت|إلغاء|cancelled|canceled/i.test(classificationText) ? 'ACTION CANCELLED'
       : /تأكيد|confirm|هل تريد|سيتم/.test(lower) ? 'CONFIRMATION REQUIRED'
         : /تم |تمت|نجاح|updated|saved|activated|disabled/.test(lower) ? 'ACTION COMPLETED'
           : /اختر|select|حدد|choose/.test(lower) ? 'SELECT OPTION' : 'BONUS SETTINGS';
