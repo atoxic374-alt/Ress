@@ -274,10 +274,22 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
     }
     if (command === 'سماح' || command === 'allow') {
       if (!targetId) throw new Error('MENTION_REQUIRED');
-      if (!group.blockedIds.includes(String(targetId))) { await reply(message, 'العضو غير ممنوع من القروب أصلًا.'); return true; }
-      await gm.setBlocked(message.guild.id, group.id, targetId, false, message.author.id);
-      await gm.logGroupEvent(message.guild, 'unblock', { groupId: group.id, userId: targetId }, message.author.id);
-      await reply(message, 'تم السماح للعضو.'); return true;
+      const userId = String(targetId);
+      if (!group.blockedIds.includes(userId)) { await reply(message, 'العضو غير ممنوع من القروب أصلًا.'); return true; }
+      const wasMember = group.memberIds.includes(userId);
+      await gm.setBlocked(message.guild.id, group.id, userId, false, message.author.id);
+      try {
+        // Keep the text command contract identical to the panel's Allow action:
+        // restore database membership and Discord role/thread access together.
+        if (!wasMember) await gm.addMember(message.guild.id, group.id, userId, message.author.id);
+        await syncMember(group, message.guild, userId, true);
+      } catch (error) {
+        if (!wasMember) await gm.removeMember(message.guild.id, group.id, userId, message.author.id).catch(() => { error.groupRollbackFailed = true; });
+        await gm.setBlocked(message.guild.id, group.id, userId, true, message.author.id).catch(() => { error.groupRollbackFailed = true; });
+        throw error;
+      }
+      await gm.logGroupEvent(message.guild, 'unblock', { groupId: group.id, userId, restoredAccess: true }, message.author.id);
+      await reply(message, 'تم السماح للعضو وإعادة وصوله للقروب.'); return true;
     }
     if (command === 'مسؤول' || command === 'manager') {
       if (!targetId) throw new Error('MENTION_REQUIRED');
