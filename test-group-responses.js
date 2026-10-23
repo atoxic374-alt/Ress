@@ -5,6 +5,7 @@ const { MessageFlags } = require('discord.js');
 const { normalizeGroupText, responsePayload } = require('./utils/groupResponses');
 
 assert.equal(normalizeGroupText('القروب: الاسم'), 'القروب : الاسم');
+assert.equal(normalizeGroupText('الرتبة: <@&123>'), 'الرتبة : <@&123>');
 assert.equal(normalizeGroupText('تم الحفظ : بنجاح'), 'تم الحفظ : بنجاح');
 assert.equal(normalizeGroupText('رابط https://example.com/a:b'), 'رابط https://example.com/a:b');
 assert.equal(normalizeGroupText('سطر أول   \n\n\nسطر ثانٍ'), 'سطر أول\n\nسطر ثانٍ');
