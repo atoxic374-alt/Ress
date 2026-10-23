@@ -73,8 +73,28 @@ function avatar(ctx, img, x, y, radius, ring = '#5865F2', label = '?') {
 }
 function text(ctx, value, x, y, maxWidth) {
   let s = String(value ?? '—').trim() || '—';
-  if (maxWidth > 0) { const chars = Array.from(s); while (chars.length > 1 && ctx.measureText(`${chars.join('')}…`).width > maxWidth) chars.pop(); if (chars.length < Array.from(s).length) s = `${chars.join('')}…`; }
-  ctx.fillText(s, x, y); return s;
+  const originalFont = ctx.font;
+  if (maxWidth > 0 && ctx.measureText(s).width > maxWidth) {
+    // Shrink long Arabic/English names before truncating so the card remains readable.
+    const match = originalFont.match(/^(.*?)(\d+(?:\.\d+)?)px(.*)$/);
+    if (match) {
+      const prefix = match[1], originalSize = Number(match[2]), suffix = match[3];
+      const minSize = Math.max(12, Math.min(originalSize, 15));
+      let size = originalSize;
+      while (size > minSize && ctx.measureText(s).width > maxWidth) {
+        size -= 1;
+        ctx.font = `${prefix}${size}px${suffix}`;
+      }
+    }
+    if (ctx.measureText(s).width > maxWidth) {
+      const chars = Array.from(s);
+      while (chars.length > 1 && ctx.measureText(`${chars.join('')}…`).width > maxWidth) chars.pop();
+      if (chars.length < Array.from(s).length) s = `${chars.join('')}…`;
+    }
+  }
+  ctx.fillText(s, x, y);
+  ctx.font = originalFont;
+  return s;
 }
 function sortKey(value) { return String(value ?? '').normalize('NFKC').toLocaleLowerCase('ar'); }
 function compareRows(a, b) {

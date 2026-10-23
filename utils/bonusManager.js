@@ -623,6 +623,22 @@ function createBonusManager(dbManager) {
     return value?.active === true && (value.endsAt == null || Number(value.endsAt) > Date.now()) ? value : null;
   }
 
+  async function previewAdjustAllGroupPoints(guildId, delta) {
+    const safeDelta = Number(delta);
+    if (!Number.isSafeInteger(safeDelta) || safeDelta === 0 || Math.abs(safeDelta) > MAX_POINTS_PER_EVENT) throw new Error('INVALID_POINTS_ADJUSTMENT');
+    const groups = await dbManager.all('SELECT id FROM bonus_groups WHERE guild_id = ? AND archived_at IS NULL ORDER BY id ASC', [String(guildId)]);
+    const rows = [];
+    for (const group of groups) {
+      const currentRow = await dbManager.get('SELECT points FROM bonus_group_point_balances WHERE guild_id = ? AND group_id = ?', [String(guildId), Number(group.id)]);
+      const membersRow = await dbManager.get('SELECT COALESCE(SUM(points), 0) AS points FROM bonus_balances WHERE guild_id = ? AND group_id = ?', [String(guildId), Number(group.id)]);
+      const adjustmentsRow = await dbManager.get('SELECT COALESCE(SUM(delta), 0) AS points FROM bonus_group_adjustments WHERE guild_id = ? AND group_id = ? AND active = 1', [String(guildId), Number(group.id)]);
+      const before = Number(currentRow?.points || 0) + Number(membersRow?.points || 0) + Number(adjustmentsRow?.points || 0);
+      const actualDelta = safeDelta > 0 ? safeDelta : -Math.min(Math.abs(safeDelta), Math.max(0, before));
+      rows.push({ groupId: Number(group.id), before, delta: actualDelta, after: before + actualDelta });
+    }
+    return { groups: rows.length, before: rows.reduce((sum, row) => sum + row.before, 0), delta: rows.reduce((sum, row) => sum + row.delta, 0), after: rows.reduce((sum, row) => sum + row.after, 0), rows };
+  }
+
   async function adjustAllGroupPoints(guildId, delta, actorId) {
     const safeDelta = Number(delta);
     if (!Number.isSafeInteger(safeDelta) || safeDelta === 0 || Math.abs(safeDelta) > MAX_POINTS_PER_EVENT) throw new Error('INVALID_POINTS_ADJUSTMENT');
@@ -961,6 +977,45 @@ function createBonusManager(dbManager) {
     return row ? Number(row.points) || 0 : null;
   }
 
+  async function getAccountingAudit(guildId, { groupId = null } = {}) {
+    const params = [String(guildId)];
+    const groupFilter = groupId == null ? '' : ' AND g.id = ?';
+    if (groupId != null) params.push(Number(groupId));
+    const rows = await dbManager.all(`
+      SELECT g.id AS group_id, g.role_id,
+        COALESCE((SELECT SUM(b.points) FROM bonus_balances b WHERE b.guild_id = g.guild_id AND b.group_id = g.id), 0) AS member_balance_points,
+        COALESCE((SELECT SUM(b.grace_points) FROM bonus_balances b WHERE b.guild_id = g.guild_id AND b.grace_group_id = g.id AND b.grace_expires_at > ?), 0) AS grace_points,
+        COALESCE((SELECT SUM(e.awarded_points) FROM bonus_activity_events e WHERE e.guild_id = g.guild_id AND e.group_id = g.id), 0) AS automatic_awarded_points,
+        COALESCE((SELECT points FROM bonus_group_point_balances p WHERE p.guild_id = g.guild_id AND p.group_id = g.id), 0) AS manual_group_balance_points,
+        COALESCE((SELECT SUM(a.delta) FROM bonus_group_adjustments a WHERE a.guild_id = g.guild_id AND a.group_id = g.id AND a.active = 1), 0) AS active_group_adjustments,
+        COALESCE((SELECT COUNT(*) FROM bonus_activity_events e WHERE e.guild_id = g.guild_id AND e.group_id = g.id), 0) AS activity_events
+      FROM bonus_groups g
+      WHERE g.guild_id = ? AND g.archived_at IS NULL ${groupFilter}
+      ORDER BY g.id ASC
+    `, [Date.now(), ...params]);
+    return rows.map(row => {
+      const memberCurrent = Number(row.member_balance_points) || 0;
+      const automatic = Number(row.automatic_awarded_points) || 0;
+      const manualGroup = Number(row.manual_group_balance_points) || 0;
+      const adjustments = Number(row.active_group_adjustments) || 0;
+      const grace = Number(row.grace_points) || 0;
+      return {
+        ...row,
+        member_balance_points: memberCurrent,
+        automatic_awarded_points: automatic,
+        manual_group_balance_points: manualGroup,
+        active_group_adjustments: adjustments,
+        grace_points: grace,
+        current_total_points: memberCurrent + manualGroup + adjustments + grace,
+        automatic_vs_current_delta: memberCurrent - automatic,
+        needs_review: memberCurrent !== automatic,
+        note: memberCurrent === automatic
+          ? 'Member balances match the sum of recorded automatic awards.'
+          : 'Review required: manual adjustments, resets, transfers, expired grace balances, or historical data can explain this delta.'
+      };
+    });
+  }
+
   async function getBalance(guildId, userId) {
     return dbManager.get('SELECT * FROM bonus_balances WHERE guild_id = ? AND user_id = ?', [String(guildId), String(userId)]);
   }
@@ -974,8 +1029,8 @@ function createBonusManager(dbManager) {
     readConfig, saveConfig, audit, listAuditLog, listGroups, getRules, setRule, disableRule, addGroup, resolveTargetGroup,
     getRoleGrantHistory, recordRoleChanges, seedRoleGrantHistory,
     syncAssignment, addActivity, setMultiplier, clearMultiplier, setGlobalMultiplier, clearGlobalMultiplier, getGlobalMultiplier, listActiveUserMultipliers, getActiveGroupMultiplier,
-    adjustGroupPoints, adjustAllGroupPoints, adjustUserPoints, resetGroup, listGroupResetSnapshots, restoreGroupReset, resetUser, updateGroup, archiveGroup, expireGraceBalances,
-    getLeaderboard, getLeaderboardSummary, getGroupPoints, getBalance, isReady
+    adjustGroupPoints, adjustAllGroupPoints, previewAdjustAllGroupPoints, adjustUserPoints, resetGroup, listGroupResetSnapshots, restoreGroupReset, resetUser, updateGroup, archiveGroup, expireGraceBalances,
+    getLeaderboard, getLeaderboardSummary, getGroupPoints, getBalance, getAccountingAudit, isReady
   };
 }
 
