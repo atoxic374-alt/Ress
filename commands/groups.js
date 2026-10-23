@@ -1259,7 +1259,7 @@ async function handleAdmin(interaction, action, page = 0) {
   }
   return true;
 }
-async function handleMember(interaction, action, groupId) { const settings=await gm.getSettings(interaction.guild.id); let group=groupId>0?await gm.getGroup(interaction.guild.id,groupId):null; if(!group){const groups=await gm.listGroups(interaction.guild.id);group=selectMemberGroup(groups,interaction.user.id,interaction.channelId);} if(!group)return reply(interaction,{content:'لا يوجد قروب مرتبط بعضويتك في هذا السيرفر.'});if(!gm.canManageGroup(interaction.client,settings,group,interaction.member)&&!group.memberIds.includes(String(interaction.user.id)))return deny(interaction,'هذه اللوحة متاحة لأعضاء القروب ومالكه ومسؤوليه فقط.');if(action==='info'){const owner=await interaction.guild.members.fetch(group.owner_id).catch(()=>null);const managers=await Promise.all(group.managerIds.map(id=>interaction.guild.members.fetch(id).catch(()=>null)));const attachment=await renderInfo({guild:interaction.guild,group,owner,managers:managers.filter(Boolean),accentColor:null});return reply(interaction,{title:'GROUP OVERVIEW',content:`القروب : ${safe(group.name)}\nهذه معلومات القروب الحالية.`,files:[attachment]});}return true;}
+async function handleMember(interaction, action, groupId) { const settings=await gm.getSettings(interaction.guild.id); let group=groupId>0?await gm.getGroup(interaction.guild.id,groupId):null; if(!group){const groups=await gm.listGroups(interaction.guild.id);group=selectMemberGroup(groups,interaction.user.id,interaction.channelId);} if(!group)return reply(interaction,{content:'لا يوجد قروب مرتبط بعضويتك في هذا السيرفر.'});if(!gm.canManageGroup(interaction.client,settings,group,interaction.member)&&!group.memberIds.includes(String(interaction.user.id)))return deny(interaction,'هذه اللوحة متاحة لأعضاء القروب ومالكه ومسؤوليه فقط.');if(action==='info'){const owner=await interaction.guild.members.fetch(group.owner_id).catch(()=>null);const managers=await Promise.all(group.managerIds.map(id=>interaction.guild.members.fetch(id).catch(()=>null)));const attachment=await renderInfo({guild:interaction.guild,group,owner,managers:managers.filter(Boolean),accentColor:null});return reply(interaction,{files:[attachment],allowedMentions:{parse:[]}});}return true;}
 async function handleRulesInteraction(interaction, action, parts = []) {
   const settings = await checkSystem(interaction);
   if (!settings) return true;
@@ -1509,7 +1509,7 @@ async function execute(message, args, { client, prefix } = {}) {
       ...row,
       member: await message.guild.members.fetch(row.user_id).catch(() => null)
     })));
-    return message.channel.send(responsePayload({ title: 'GROUP MEMBERS', content: `القروب : ${safe(full.name)}\nترتيب الأعضاء حسب نقاط النشاط والرسائل.`, files: [await renderMembers({ guild: message.guild, group: full, members, accentColor: null })] }));
+    return message.channel.send({ files: [await renderMembers({ guild: message.guild, group: full, members, accentColor: null })], allowedMentions: { parse: [] } });
   }
   return replyMessage(message,'استخدم أمر القروبات مع الخيارات: setup، control، create، delete، top، members أو rules.');
 }

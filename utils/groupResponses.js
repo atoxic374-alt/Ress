@@ -1,6 +1,7 @@
 'use strict';
 
 const { ContainerBuilder, TextDisplayBuilder, MediaGalleryBuilder, MediaGalleryItemBuilder, MessageFlags } = require('discord.js');
+const colorManager = require('./colorManager');
 
 function normalizeGroupText(value) {
   if (typeof value !== 'string') return value;
@@ -51,7 +52,7 @@ function responsePayload(payload = {}) {
   if (typeof data.content === 'string' && !data.embeds?.length && !data.poll && !data.sticker_ids?.length) {
     const content = normalizeGroupText(data.content);
     const title = String(data.title || responseTitle(content));
-    const accentColor = data.accentColor;
+    const accentColor = data.accentColor ?? colorManager.getColor?.();
     delete data.accentColor;
     delete data.title;
     delete data.content;
