@@ -417,11 +417,12 @@ function structurePrivateResponse(payload) {
   const lines = raw.split(/\n+/).map(line => line.trim()).filter(Boolean);
   const first = lines.shift() || raw;
   const lower = raw.toLowerCase();
-  const title = /تعذر|فشل|خطأ|غير صالح|لم يتم|لا يمكن|insufficient|failed|error/i.test(raw) ? 'ACTION FAILED'
+  const semanticTitle = /تعذر|فشل|خطأ|غير صالح|لم يتم|لا يمكن|insufficient|failed|error/i.test(raw) ? 'ACTION FAILED'
     : /تم الإلغاء|ألغيت|إلغاء|cancelled|canceled/i.test(raw) ? 'ACTION CANCELLED'
       : /تأكيد|confirm|هل تريد|سيتم/.test(lower) ? 'CONFIRMATION REQUIRED'
         : /تم |تمت|نجاح|updated|saved|activated|disabled/.test(lower) ? 'ACTION COMPLETED'
           : /اختر|select|حدد|choose/.test(lower) ? 'SELECT OPTION' : 'BONUS SETTINGS';
+  const title = String(payload.title || semanticTitle).toUpperCase();
   const fields = [];
   const fieldNames = {
     'الإجمالي الحالي': 'Current Total', 'بعد الإزالة': 'After Removal', 'رصيده الحالي': 'Current Balance',
@@ -434,7 +435,7 @@ function structurePrivateResponse(payload) {
     fields.push({ name: fieldNames[rawName] || rawName, value: (separator ? separator[2] : line).slice(0, 1024), inline: false });
   }
   const mentions = [...raw.matchAll(/<@!?\d+>|<@&\d+>|<#\d+>/g)].map(match => match[0]);
-  if (title === 'Action Completed') {
+  if (semanticTitle === 'ACTION COMPLETED') {
     if (mentions.length) fields.unshift({ name: 'Target', value: [...new Set(mentions)].join(' • '), inline: true });
     if (/إيقاف|disabled|deactivated/i.test(raw)) fields.push({ name: 'Status', value: 'Disabled', inline: true });
     else if (/تفعيل|activated|enabled/i.test(raw)) fields.push({ name: 'Status', value: 'Enabled', inline: true });
@@ -454,8 +455,9 @@ function structurePrivateResponse(payload) {
     components: [container, ...(Array.isArray(payload.components) ? payload.components : [])],
     allowedMentions: payload.allowedMentions || { parse: [] },
     flags: Number(payload.flags || 0) | MessageFlags.IsComponentsV2,
-    __bonusActionTitle: title
+    __bonusActionTitle: semanticTitle
   };
+  delete normalized.title;
   delete normalized.content;
   delete normalized.embeds;
   return normalized;
@@ -1022,10 +1024,7 @@ function buildOwnerAvatarResult(message, success = false) {
 }
 
 function buildActionResult(title, message) {
-  return {
-    embeds: [colorManager.createEmbed().setTitle(title).setDescription(message)],
-    components: []
-  };
+  return { title, content: message, components: [] };
 }
 
 async function publishBoard(guild, actorId) {
