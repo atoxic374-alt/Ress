@@ -3,6 +3,7 @@ const { renderMembers, renderInfo } = require('./groupRenderer');
 const { ActionRowBuilder, PermissionsBitField, UserSelectMenuBuilder } = require('discord.js');
 const { randomBytes } = require('node:crypto');
 const { responsePayload } = require('./groupResponses');
+const colorManager = require('./colorManager');
 
 const COMMANDS = new Set(['تحكم', 'control', 'تعديل', 'edit', 'عقوبه', 'عقوبة', 'punish', 'صلاحية', 'permission', 'مسح', 'clear', 'اعضاء', 'أعضاء', 'members', 'اضافة', 'إضافة', 'اضف', 'أضف', 'ضيف', 'ضم', 'ادخل', 'add', 'invite', 'join', 'add-member', 'addmember', 'ازالة', 'إزالة', 'ازاله', 'إزاله', 'احذف', 'حذف', 'شيل', 'شطب', 'remove', 'remove-member', 'removemember', 'منع', 'block', 'سماح', 'allow', 'قروبي', 'قربي', 'my-group', 'مسؤول', 'manager', 'أوامر', 'اوامر', 'commands', 'help']);
 const memberPickerFlows = new Map();
@@ -216,7 +217,7 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
     if (['أوامر', 'اوامر', 'commands', 'help'].includes(command)) {
       if (!groupHasUser(group, message.author.id) && !system) return Boolean(await reply(message, 'دليل الأوامر متاح لأعضاء القروب فقط.'));
       const { buildGroupCommandGuide } = require('../commands/groups');
-      await reply(message, buildGroupCommandGuide(group, settings));
+      await reply(message, { title: 'GROUP COMMANDS', content: buildGroupCommandGuide(group, settings), accentColor: colorManager.getColor?.() });
       return true;
     }
     if (!privileged && !system) { await reply(message, 'لا تملك الصلاحية.'); return true; }

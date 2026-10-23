@@ -38,6 +38,12 @@ function responseTitle(content = '') {
   return 'GROUP UPDATE';
 }
 
+function accentNumber(value) {
+  const raw = String(value || '').trim().replace(/^#/, '');
+  const parsed = Number.parseInt(raw, 16);
+  return Number.isFinite(parsed) ? parsed : 0x5865f2;
+}
+
 function responsePayload(payload = {}) {
   const data = { ...payload, allowedMentions: payload.allowedMentions || { parse: [] } };
   if (data.type && RESPONSE_TYPES[data.type]) data.title = data.title || RESPONSE_TYPES[data.type];
@@ -45,9 +51,11 @@ function responsePayload(payload = {}) {
   if (typeof data.content === 'string' && !data.embeds?.length && !data.poll && !data.sticker_ids?.length) {
     const content = normalizeGroupText(data.content);
     const title = String(data.title || responseTitle(content));
+    const accentColor = data.accentColor;
+    delete data.accentColor;
     delete data.title;
     delete data.content;
-    const container = new ContainerBuilder().addTextDisplayComponents(
+    const container = new ContainerBuilder().setAccentColor(accentNumber(accentColor)).addTextDisplayComponents(
       new TextDisplayBuilder().setContent('## ' + title + '\n' + (content || 'تم تنفيذ الطلب.'))
     );
     // Components V2 does not automatically display uploaded images; explicitly reference image attachments.
