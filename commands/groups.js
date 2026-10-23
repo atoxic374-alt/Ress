@@ -1545,7 +1545,10 @@ async function dispatchInternalMessage(message, options = {}) {
     try {
       const linked = await gm.getGroupForChannel(message.guild.id, message.channel.id);
       if (!linked) {
-        if (!hasPrefix) return false;
+        if (!hasPrefix) {
+          await replyMessage(message, { content: 'لا توجد قناة قروب مرتبطة بهذا المكان. افتح أمر صلاحية داخل قناة القروب المرتبطة.', allowedMentions: { parse: [] } }).catch(() => null);
+          return true;
+        }
         throw new Error('GROUP_NOT_FOUND');
       }
       const { group } = await currentManager(message, linked.id, true);
