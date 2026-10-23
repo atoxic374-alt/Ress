@@ -2,6 +2,7 @@ const { ChannelType, PermissionsBitField, ContainerBuilder, TextDisplayBuilder, 
 const { dbManager } = require('./database');
 const colorManager = require('./colorManager');
 const { colorToNumber } = require('./structuredContainer');
+const { randomBytes } = require('node:crypto');
 
 const GROUP_CHAT_MODES = Object.freeze({ THREADS: 'threads', CHANNELS: 'channels' });
 const GROUP_DEFAULTS = Object.freeze({
@@ -124,6 +125,7 @@ async function schema() {
   schemaPromise = (async () => {
     await dbManager.initialize();
     await dbManager.run(`CREATE TABLE IF NOT EXISTS group_system_settings (guild_id TEXT PRIMARY KEY, settings_json TEXT NOT NULL, updated_at INTEGER NOT NULL)`);
+    await dbManager.run(`CREATE TABLE IF NOT EXISTS group_operation_locks (lock_key TEXT PRIMARY KEY, owner_token TEXT NOT NULL, locked_until INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
     await dbManager.run(`CREATE TABLE IF NOT EXISTS managed_groups (
       id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, name TEXT NOT NULL, description TEXT DEFAULT '',
       owner_id TEXT NOT NULL, manager_ids_json TEXT NOT NULL DEFAULT '[]', member_ids_json TEXT NOT NULL DEFAULT '[]',
@@ -816,4 +818,23 @@ async function deleteGroup(guild, groupId, actorId) {
     }
   });
 }
-module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, logGroupEvent, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, explainActivity, listMemberPoints, listPointsLedger, pruneGroupHistory, upsertVoiceSession, listVoiceSessions, deleteVoiceSession, getMemberPoints, createGroup, deleteGroup };
+async function acquireOperationLock(lockKey, ttlMs = 120000) {
+  await schema();
+  const key = String(lockKey);
+  const ownerToken = randomBytes(16).toString('hex');
+  const now = Date.now();
+  const lockedUntil = now + Math.max(1000, Number(ttlMs) || 120000);
+  const acquired = await dbManager.transaction(async tx => {
+    const current = await tx.get('SELECT owner_token, locked_until FROM group_operation_locks WHERE lock_key = ?', [key]);
+    if (current && Number(current.locked_until) > now) return false;
+    await tx.run('INSERT INTO group_operation_locks(lock_key, owner_token, locked_until, updated_at) VALUES(?,?,?,?) ON CONFLICT(lock_key) DO UPDATE SET owner_token=excluded.owner_token, locked_until=excluded.locked_until, updated_at=excluded.updated_at', [key, ownerToken, lockedUntil, now]);
+    return true;
+  }, 'group-operation-lock');
+  return acquired ? ownerToken : null;
+}
+async function releaseOperationLock(lockKey, ownerToken) {
+  if (!ownerToken) return;
+  await schema();
+  await dbManager.run('DELETE FROM group_operation_locks WHERE lock_key = ? AND owner_token = ?', [String(lockKey), String(ownerToken)]).catch(() => {});
+}
+module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, logGroupEvent, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, explainActivity, listMemberPoints, listPointsLedger, pruneGroupHistory, upsertVoiceSession, listVoiceSessions, deleteVoiceSession, getMemberPoints, createGroup, deleteGroup, acquireOperationLock, releaseOperationLock };

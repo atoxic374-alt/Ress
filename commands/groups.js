@@ -428,21 +428,26 @@ function groupResourceMemberIds(group) {
   return [...new Set([group.owner_id, ...group.memberIds, ...group.managerIds].filter(Boolean).map(String))];
 }
 
-async function restoreThreadMember(thread, userId) {
-  if (!thread?.members?.add) return false;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      await thread.members.add(String(userId));
-      return true;
-    } catch (error) {
-      if (attempt === 2) {
-        console.error('[groups] failed to restore thread member:', thread.id, userId, error?.message || error);
-      } else {
-        await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
-      }
+function retryableDiscordError(error) {
+  const code = Number(error?.code);
+  return code === 429 || [500, 502, 503, 504].includes(code) || /rate.?limit|temporar|timeout|network/i.test(String(error?.message || ''));
+}
+async function withDiscordRetry(work, attempts = 3) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try { return await work(); } catch (error) {
+      lastError = error;
+      if (!retryableDiscordError(error) || attempt === attempts - 1) throw error;
+      const retryAfter = Number(error?.retryAfter || error?.rawError?.retry_after || 0);
+      await new Promise(resolve => setTimeout(resolve, Math.min(10000, retryAfter > 0 ? retryAfter * 1000 : 250 * (attempt + 1))));
     }
   }
-  return false;
+  throw lastError;
+}
+async function restoreThreadMember(thread, userId) {
+  if (!thread?.members?.add) return false;
+  try { await withDiscordRetry(() => thread.members.add(String(userId)), 3); return true; }
+  catch (error) { console.error('[groups] failed to restore thread member:', thread.id, userId, error?.message || error); return false; }
 }
 
 async function runWithConcurrency(items, concurrency, worker) {
@@ -478,6 +483,10 @@ function groupChannelOverwrites(guild, roleId) {
 
 async function restoreGroupResources(guild, sourceGroup, trigger = 'resource_deleted') {
   return withGroupResourceLock(guild.id, sourceGroup.id, async () => {
+    const lockKey = `group:${guild.id}:${sourceGroup.id}:resources`;
+    const operationToken = await gm.acquireOperationLock(lockKey, 180000);
+    if (!operationToken) return null;
+    try {
     let group = await gm.getGroup(guild.id, sourceGroup.id);
     if (!group || group.status === 'deleted') return null;
     const roleResult = await restoreGroupRole(guild, group, String(trigger).startsWith('role_deleted:'));
@@ -523,6 +532,9 @@ async function restoreGroupResources(guild, sourceGroup, trigger = 'resource_del
     await gm.logGroupEvent(guild, 'update', { groupId: group.id, reason: 'group_resource_restored', trigger, roleId: roleResult.role.id, textChannelId: group.text_channel_id, threadId: group.thread_id, voiceChannelId: group.voice_channel_id }, null);
     activityCache.delete(String(guild.id));
     return group;
+    } finally {
+      await gm.releaseOperationLock(lockKey, operationToken);
+    }
   });
 }
 function scheduleTopPanelRefresh(channel, guild, options = {}) {
@@ -1770,7 +1782,12 @@ async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
           await runWithConcurrency(missingThreadMembers, 4, async userId => {
             if (!(await restoreThreadMember(thread, userId))) await gm.audit(guild.id, actorId, group.id, 'group_thread_member_repair_failed', { userId }).catch(() => {});
           });
-          for (const userId of actual) if (!expected.includes(userId)) issues.push({ groupId: group.id, groupName: group.name, type: 'thread_member_not_in_db', userId, detail: 'عضو في الثريد غير موجود في قائمة العضوية المحفوظة.' });
+          const extraThreadMembers = [...actual].filter(userId => !expected.includes(userId));
+          for (const userId of extraThreadMembers) issues.push({ groupId: group.id, groupName: group.name, type: 'thread_member_not_in_db', userId, detail: 'عضو في الثريد غير موجود في قائمة العضوية المحفوظة.' });
+          await runWithConcurrency(extraThreadMembers, 4, async userId => {
+            try { await withDiscordRetry(() => thread.members.remove(userId), 3); }
+            catch (error) { await gm.audit(guild.id, actorId, group.id, 'group_thread_member_remove_failed', { userId, message: String(error?.message || error).slice(0, 200) }).catch(() => {}); }
+          });
         }
       }
     }
@@ -1816,6 +1833,16 @@ async function reconcileGroupMembership(guild, actorId = null) {
 
 async function cachedGroups(guildId){const hit=activityCache.get(String(guildId));if(hit&&Date.now()-hit.at<30000)return hit.groups;const groups=await gm.listGroups(guildId);activityCache.set(String(guildId),{at:Date.now(),groups});return groups;}
 async function cachedSettings(guildId){const hit=settingsCache.get(String(guildId));if(hit&&Date.now()-hit.at<30000)return hit.settings;const settings=await gm.getSettings(guildId);settingsCache.set(String(guildId),{at:Date.now(),settings});return settings;}
+function pruneRuntimeCaches(client) {
+  const guildIds = new Set([...client.guilds.cache.keys()].map(String));
+  const keepGuildKey = key => guildIds.has(String(key).split(':')[0]);
+  for (const map of [activityCache, settingsCache, reconciliationSignatures, topPanelLocks, topPanelRefreshTimers, topPanelRefreshChannels, topPanelMessageIds]) {
+    for (const key of map.keys()) if (!keepGuildKey(key)) map.delete(key);
+  }
+  for (const map of [voiceStarts, voiceChannels, lastMessageAt, lastSkipAuditAt]) {
+    for (const key of map.keys()) if (!keepGuildKey(key)) map.delete(key);
+  }
+}
 async function logActivitySkip(guildId, userId, groupId, metric, reason, details = {}) {
   const now = Date.now();
   const key = `${guildId}:${userId}:${metric}:${reason}`;
@@ -1875,6 +1902,7 @@ function registerInteractionHandler(client) {
         }
       } finally {
         running = false;
+        pruneRuntimeCaches(client);
       }
     };
     run().catch(error => console.error('[groups] membership reconciliation run failed:', error?.message || error));
@@ -2251,7 +2279,7 @@ function groupError(error) {
     FLOW_EXPIRED: 'انتهت هذه القائمة أو استُخدمت؛ افتح قائمة جديدة.', FLOW_OWNER: 'هذه القائمة تخص مستخدماً آخر.',
     INVALID_SELECTION: 'اختيار غير صالح؛ افتح القائمة مجدداً.', MEMBER_NOT_FOUND: 'العضو غير موجود في السيرفر.', NO_VOICE_MEMBERS: 'لا يوجد أعضاء حاليًا داخل قناة القروب الصوتي لفصلهم.',
     TARGET_PROTECTED: 'لا يمكن تقييد مالك القروب أو مسؤوليه أو مديري النظام أو البوت.', TARGET_NOT_IN_GROUP: 'الميوت والنميوت متاحان لأعضاء القروب فقط.',
-    CHANNEL_NOT_FOUND: 'قناة القروب المحددة غير موجودة أو نوعها غير صالح.', MISSING_MANAGE_ROLES: 'البوت لا يملك Manage Roles.', GROUP_ROLE_NOT_EDITABLE: 'رتبة القروب أعلى من رتبة البوت أو غير قابلة للتعديل.', ROLE_ICON_UPDATE_FAILED: 'رفض Discord تحديث أيقونة الرتبة؛ تحقق من أن الرتبة غير مُدارة وأنها قابلة للتعديل.', ROLE_COLOR_UPDATE_FAILED: 'رفض Discord تحديث لون الرتبة؛ تحقق من أن الرتبة غير مُدارة وقابلة للتعديل.',
+    CHANNEL_NOT_FOUND: 'قناة القروب المحددة غير موجودة أو نوعها غير صالح.', GROUP_OPERATION_BUSY: 'توجد عملية أخرى تعمل على هذا القروب أو الرول؛ حاول بعد قليل.', MISSING_MANAGE_ROLES: 'البوت لا يملك Manage Roles.', MISSING_MANAGE_CHANNELS: 'البوت لا يملك Manage Channels.', GROUP_ROLE_NOT_EDITABLE: 'رتبة القروب أعلى من رتبة البوت أو غير قابلة للتعديل.', ROLE_ICON_UPDATE_FAILED: 'رفض Discord تحديث أيقونة الرتبة؛ تحقق من أن الرتبة غير مُدارة وأنها قابلة للتعديل.', ROLE_COLOR_UPDATE_FAILED: 'رفض Discord تحديث لون الرتبة؛ تحقق من أن الرتبة غير مُدارة وقابلة للتعديل.',
     SHARED_CHANNEL: 'القناة/أب الثريد مشترك؛ لا يمكن تغيير صلاحياته دون التأثير على قروب أو ثريد آخر.',
     ASSET_LINKED: 'أحد العناصر أو الأعضاء المختارين مرتبط بقروب آخر؛ لم يتم الاستيراد.',
     INVALID_ROLE: 'اختر رتبة قروب عادية قابلة للإدارة، غير everyone أو رتبة نظام أو رتبة ذات صلاحيات إدارية.',
@@ -2804,9 +2832,14 @@ async function saveImportedGroup(interaction, flow) {
   return groupOperation(`import:${interaction.guild.id}`, async () => {
     const settings = await currentSystem(interaction);
     const created = [];
+    const permissionSnapshots = [];
+    let operationToken = null;
+    const operationKey = `guild:${interaction.guild.id}:role-import:${flow.roleId}`;
     try {
       let { role, owner } = await validateImport(interaction.guild, flow, settings, false);
       if (!role || !owner) throw new Error('MEMBER_NOT_FOUND');
+      operationToken = await gm.acquireOperationLock(operationKey, 180000);
+      if (!operationToken) throw new Error('GROUP_OPERATION_BUSY');
       if (!flow.textId) {
         const resources = await createImportTextResources(interaction.guild, flow, settings, role);
         created.push(resources.text);
@@ -2829,8 +2862,14 @@ async function saveImportedGroup(interaction, flow) {
       if (!groupName) throw new Error('NAME_REQUIRED');
       const existingNames = await gm.listGroups(interaction.guild.id, true);
       if (existingNames.some(item => item.status === 'active' && String(item.name).toLowerCase() === groupName.toLowerCase())) throw new Error('NAME_EXISTS');
-      await text.permissionOverwrites.edit(role.id, { ViewChannel: true, SendMessages: true, SendMessagesInThreads: true, ReadMessageHistory: true }, { reason: 'Apply imported group text permissions' });
-      await voice.permissionOverwrites.edit(role.id, { ViewChannel: true, Connect: true, Speak: true }, { reason: 'Apply imported group voice permissions' });
+      const textFlags = ['ViewChannel', 'SendMessages', 'SendMessagesInThreads', 'ReadMessageHistory'];
+      const voiceFlags = ['ViewChannel', 'Connect', 'Speak'];
+      for (const [channel, flags] of [[text, textFlags], [voice, voiceFlags]]) {
+        const previous = channel.permissionOverwrites.cache.get(role.id);
+        permissionSnapshots.push({ channel, roleId: role.id, existed: Boolean(previous), values: Object.fromEntries(flags.map(flag => [flag, previous?.allow.has(PermissionsBitField.Flags[flag]) ? true : previous?.deny.has(PermissionsBitField.Flags[flag]) ? false : null])) });
+      }
+      await text.permissionOverwrites.edit(role.id, Object.fromEntries(textFlags.map(flag => [flag, true])), { reason: 'Apply imported group text permissions' });
+      await voice.permissionOverwrites.edit(role.id, Object.fromEntries(voiceFlags.map(flag => [flag, true])), { reason: 'Apply imported group voice permissions' });
       await gm.schema();
       const groupId = await dbManager.transaction(async tx => {
         const existing = await tx.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status != 'deleted'", [interaction.guild.id]);
@@ -2851,9 +2890,17 @@ async function saveImportedGroup(interaction, flow) {
       const failedMembers = await addImportThreadMembers(thread, members);
       if (failedMembers.length) await gm.audit(interaction.guild.id, interaction.user.id, groupId, 'group_thread_members_restore_failed', { userIds: failedMembers }).catch(() => {});
       invalidateGroupCaches(interaction.guild.id);
-      return `تم إنشاء وربط القروب **${safe(groupName)}** (#${groupId}) مع الرول وإضافة ${members.length - failedMembers.length} من ${members.length} عضوًا.${failedMembers.length ? ` تعذرت إضافة ${failedMembers.length} عضوًا للثريد وسيتم تسجيلها للمراجعة.` : ''}`;
+      const result = `تم إنشاء وربط القروب **${safe(groupName)}** (#${groupId}) مع الرول وإضافة ${members.length - failedMembers.length} من ${members.length} عضوًا.${failedMembers.length ? ` تعذرت إضافة ${failedMembers.length} عضوًا للثريد وسيتم تسجيلها للمراجعة.` : ''}`;
+      await gm.releaseOperationLock(operationKey, operationToken);
+      operationToken = null;
+      return result;
     } catch (error) {
+      for (const snapshot of permissionSnapshots.reverse()) {
+        await snapshot.channel.permissionOverwrites.edit(snapshot.roleId, snapshot.values, { reason: 'Rollback failed group Add permissions' }).catch(() => {});
+        if (!snapshot.existed) await snapshot.channel.permissionOverwrites.delete(snapshot.roleId, 'Remove rollback group overwrite').catch(() => {});
+      }
       for (const resource of created.reverse()) await resource?.delete?.('Rollback failed group Add').catch(() => {});
+      await gm.releaseOperationLock(operationKey, operationToken);
       throw error;
     }
   });
