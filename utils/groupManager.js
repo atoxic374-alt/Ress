@@ -342,8 +342,22 @@ async function resetPoints(guildId, groupId, actorId = null) {
   await schema();
   if (groupId != null && (!Number.isInteger(Number(groupId)) || Number(groupId) <= 0)) throw new Error('INVALID_GROUP_ID');
   return withLock(`points:${String(guildId)}`, async () => {
-    await dbManager.transaction(async tx => {
+    const resetDetails = await dbManager.transaction(async tx => {
       const now = Date.now();
+      const groups = groupId == null
+        ? await tx.all("SELECT id, points FROM managed_groups WHERE guild_id = ? AND status = 'active'", [String(guildId)])
+        : await tx.all("SELECT id, points FROM managed_groups WHERE guild_id = ? AND id = ?", [String(guildId), Number(groupId)]);
+      let memberRows = 0;
+      let memberPointsBefore = 0;
+      for (const group of groups) {
+        const members = await tx.all('SELECT user_id, points FROM group_member_points WHERE guild_id = ? AND group_id = ?', [String(guildId), Number(group.id)]);
+        memberRows += members.length;
+        memberPointsBefore += members.reduce((sum, row) => sum + Math.max(0, Number(row.points) || 0), 0);
+        for (const member of members) {
+          await tx.run(`INSERT INTO group_points_ledger(guild_id,group_id,user_id,metric,activity_amount,points_delta,member_before,member_after,group_before,group_after,reason,event_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            [String(guildId), Number(group.id), String(member.user_id), 'manual', 0, -Math.max(0, Number(member.points) || 0), Math.max(0, Number(member.points) || 0), 0, Math.max(0, Number(group.points) || 0), 0, 'points_reset', null, now]);
+        }
+      }
       if (groupId == null) {
         await tx.run("UPDATE managed_groups SET points = 0, updated_at = ? WHERE guild_id = ? AND status = 'active'", [now, String(guildId)]);
         await tx.run('UPDATE group_member_points SET points = 0, messages = 0, voice_ms = 0, reactions = 0, updated_at = ? WHERE guild_id = ?', [now, String(guildId)]);
@@ -351,8 +365,9 @@ async function resetPoints(guildId, groupId, actorId = null) {
         await tx.run('UPDATE managed_groups SET points = 0, updated_at = ? WHERE guild_id = ? AND id = ?', [now, String(guildId), Number(groupId)]);
         await tx.run('UPDATE group_member_points SET points = 0, messages = 0, voice_ms = 0, reactions = 0, updated_at = ? WHERE guild_id = ? AND group_id = ?', [now, String(guildId), Number(groupId)]);
       }
+      return { groupsAffected: groups.length, memberRows, groupPointsBefore: groups.reduce((sum, row) => sum + Math.max(0, Number(row.points) || 0), 0), memberPointsBefore };
     }, 'group-points-reset');
-    await audit(guildId, actorId, groupId, 'points_reset');
+    await audit(guildId, actorId, groupId, 'points_reset', resetDetails);
   });
 }
 function validateManualPointsDelta(delta) {
@@ -423,6 +438,8 @@ async function adjustMemberPoints(guildId, groupId, userId, delta, actorId = nul
       ON CONFLICT(guild_id,group_id,user_id) DO UPDATE SET points = excluded.points, updated_at = excluded.updated_at`, [String(guildId), safeGroupId, safeUserId, after, now]);
     await tx.run("UPDATE managed_groups SET points = ?, updated_at = ? WHERE guild_id = ? AND id = ? AND status = 'active'", [groupAfter, now, String(guildId), safeGroupId]);
     await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [String(guildId), safeGroupId, actorId ? String(actorId) : null, 'manual_member_points', JSON.stringify({ userId: safeUserId, delta: safeDelta, before, after, groupBefore, groupAfter }), now]);
+    await tx.run(`INSERT INTO group_points_ledger(guild_id,group_id,user_id,metric,activity_amount,points_delta,member_before,member_after,group_before,group_after,reason,event_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [String(guildId), safeGroupId, safeUserId, 'manual', 0, safeDelta, before, after, groupBefore, groupAfter, 'manual_adjustment', null, now]);
     return { userId: safeUserId, before, after, delta: safeDelta, groupBefore, groupAfter };
   }, 'group-manual-member-points'));
 }
