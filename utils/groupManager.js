@@ -192,6 +192,55 @@ async function audit(guildId, actorId, groupId, action, details = {}) { await sc
  * group operation fail: missing settings, deleted channels, permission errors,
  * and Discord API failures are intentionally swallowed and returned as null.
  */
+const GROUP_EVENT_VIEWS = Object.freeze({
+  create: ['GROUP CREATED', 'تم إنشاء قروب جديد في النظام.'],
+  update: ['GROUP UPDATED', 'تم تحديث بيانات أو موارد القروب.'],
+  delete: ['GROUP DELETED', 'تم حذف القروب وموارده.'],
+  member_add: ['MEMBER ADDED', 'تمت إضافة عضو إلى القروب.'],
+  member_remove: ['MEMBER REMOVED', 'تمت إزالة عضو من القروب.'],
+  manager_update: ['MANAGERS UPDATED', 'تم تحديث مسؤولي القروب.'],
+  owner: ['OWNER UPDATED', 'تم تغيير مالك القروب أو تغيّرت حالته.'],
+  block: ['MEMBER BLOCKED', 'تم منع عضو من الوصول إلى القروب.'],
+  unblock: ['MEMBER UNBLOCKED', 'تم السماح لعضو بالعودة إلى القروب.'],
+  rule_update: ['POINT RULE UPDATED', 'تم تعديل قاعدة من قواعد احتساب النقاط.'],
+  rule_enable: ['POINT RULE ENABLED', 'تم تفعيل قاعدة احتساب النقاط.'],
+  rule_disable: ['POINT RULE DISABLED', 'تم تعطيل قاعدة احتساب النقاط.'],
+  music: ['MUSIC BOT UPDATED', 'تمت معالجة بوت الموسيقى المرتبط بالقروب.'],
+  group_import: ['GROUP IMPORTED', 'تم استيراد وربط قروب موجود.'],
+  group_resource_restored: ['GROUP RESOURCES RESTORED', 'تمت استعادة موارد القروب بعد تعذر العثور عليها.'],
+  membership_reconciliation_drift: ['MEMBERSHIP DRIFT', 'تم اكتشاف اختلاف بين عضوية القروب والرتبة المرتبطة.'],
+  membership_reconciliation_clean: ['MEMBERSHIP SYNCED', 'تمت مزامنة عضوية القروب مع الرتبة بنجاح.'],
+  member_role_restored: ['MEMBER ROLE RESTORED', 'تمت استعادة رتبة القروب للعضو.'],
+  member_role_restore_failed: ['MEMBER ROLE RESTORE FAILED', 'تعذر استعادة رتبة القروب للعضو.'],
+  role_guard_removed: ['ROLE GUARD REMOVED', 'تمت إزالة رتبة القروب بسبب مخالفة حماية الرتبة.'],
+  group_role_cleanup_incomplete: ['CLEANUP INCOMPLETE', 'لم تكتمل إزالة موارد القروب، وتحتاج إلى إعادة المحاولة.'],
+  points_reset: ['POINTS RESET', 'تم تصفير نقاط القروب وعدادات النشاط.'],
+  activity_skipped: ['ACTIVITY SKIPPED', 'تم تجاهل نشاط ولم تتم إضافة نقاط.'],
+  group_create: ['GROUP CREATED', 'تم إنشاء قروب جديد في النظام.'],
+  group_update: ['GROUP UPDATED', 'تم تحديث بيانات أو موارد القروب.'],
+  group_delete: ['GROUP DELETED', 'تم حذف القروب وموارده.'],
+  member_block: ['MEMBER BLOCKED', 'تم منع عضو من الوصول إلى القروب.'],
+  member_unblock: ['MEMBER UNBLOCKED', 'تم السماح لعضو بالعودة إلى القروب.'],
+  owner_transferred: ['OWNER TRANSFERRED', 'تم نقل ملكية القروب إلى عضو آخر.'],
+  owner_left: ['OWNER LEFT', 'غادر مالك القروب وأصبح القروب بحاجة إلى معالجة.']
+});
+const GROUP_EVENT_FIELDS = Object.freeze({
+  groupId: 'القروب', name: 'الاسم', ownerId: 'المالك', userId: 'العضو', from: 'من', to: 'إلى',
+  field: 'الحقل', value: 'القيمة', metric: 'المقياس', threshold: 'الحد', points: 'النقاط', enabled: 'الحالة',
+  reason: 'السبب', scope: 'النطاق', channelId: 'القناة', roleId: 'الرتبة', issueCount: 'عدد المشاكل',
+  resolved: 'تم الحل', status: 'الحالة', code: 'النتيجة', ok: 'نجح', members: 'الأعضاء'
+});
+function groupLogValue(key, value) {
+  if (value == null || value === '') return '—';
+  if (typeof value === 'boolean') return value ? 'نعم' : 'لا';
+  if (Array.isArray(value)) return value.slice(0, 8).map(item => groupLogValue(key, item)).join('، ') || '—';
+  if (typeof value === 'object') return JSON.stringify(value).slice(0, 300);
+  const stringValue = String(value).slice(0, 300);
+  if (/^(userId|ownerId|from|to)$/.test(key) && /^\d{16,20}$/.test(stringValue)) return `<@${stringValue}>`;
+  if (key === 'groupId') return `#${stringValue}`;
+  if (key === 'enabled' || key === 'resolved' || key === 'ok') return ['1', 'true', 'yes'].includes(stringValue.toLowerCase()) ? 'نعم' : 'لا';
+  return stringValue;
+}
 async function logGroupEvent(guild, event, details = {}, actorId = null) {
   try {
     if (!guild?.id) return null;
@@ -201,18 +250,20 @@ async function logGroupEvent(guild, event, details = {}, actorId = null) {
     if (!channel && typeof guild.channels?.fetch === 'function') channel = await guild.channels.fetch(settings.logChannelId).catch(() => null);
     if (!channel || typeof channel.send !== 'function') return null;
     const safeDetails = details && typeof details === 'object' ? details : { value: String(details) };
-    const eventNames = { create: 'إنشاء قروب', update: 'تعديل القروب', delete: 'حذف قروب', member_add: 'إضافة عضو', member_remove: 'إزالة عضو', manager_update: 'تعديل المسؤولين', owner: 'تغيير المالك', block: 'منع عضو', unblock: 'السماح لعضو', rule_update: 'تعديل قاعدة نقاط', music: 'نقل بوت الميوزك', group_import: 'استيراد قروب' };
-    const eventLabel = eventNames[String(event)] || String(event || 'حدث غير معروف');
-    const detailText = JSON.stringify(safeDetails).slice(0, 3500);
-    const actorText = actorId ? `\nالمنفذ : <@${String(actorId).replace(/[^0-9]/g, '')}>` : '';
+    const [title, description] = GROUP_EVENT_VIEWS[String(event)] || ['GROUP EVENT', 'تم تسجيل حدث جديد في نظام القروبات.'];
+    const fields = Object.entries(safeDetails).filter(([, value]) => value !== undefined && value !== null).slice(0, 12);
+    const actor = actorId ? `<@${String(actorId).replace(/[^0-9]/g, '')}>` : 'النظام';
+    const fieldText = fields.length
+      ? fields.map(([key, value]) => `**${GROUP_EVENT_FIELDS[key] || key}:** ${groupLogValue(key, value)}`).join('\n')
+      : '**التفاصيل:** لا توجد تفاصيل إضافية.';
     const container = new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || '#5865F2'));
-    const eventText = [
-      new TextDisplayBuilder().setContent(`## GROUP EVENT : ${eventLabel.slice(0, 80)}`),
-      new TextDisplayBuilder().setContent(`السيرفر : ${guild.name ? String(guild.name).slice(0, 100) : guild.id}${actorText}\n\`\`\`json\n${detailText}\n\`\`\``)
-    ];
+    const header = [new TextDisplayBuilder().setContent(`## ${title}`), new TextDisplayBuilder().setContent(`**الحدث:** ${description}\n**المنفذ:** ${actor}`)];
+    const body = new TextDisplayBuilder().setContent(fieldText.slice(0, 3800));
+    const footer = new TextDisplayBuilder().setContent(`-# ${guild.name ? String(guild.name).slice(0, 100) : guild.id} • Group Logs`);
     const icon = guild.iconURL?.({ extension: 'png', size: 128 });
-    if (icon) container.addSectionComponents(new SectionBuilder().addTextDisplayComponents(eventText).setThumbnailAccessory(new ThumbnailBuilder().setURL(icon)));
-    else container.addTextDisplayComponents(eventText);
+    if (icon) container.addSectionComponents(new SectionBuilder().addTextDisplayComponents(header).setThumbnailAccessory(new ThumbnailBuilder().setURL(icon)));
+    else header.forEach(text => container.addTextDisplayComponents(text));
+    container.addTextDisplayComponents(body, footer);
     return await channel.send({ components: [container], flags: MessageFlags.IsComponentsV2 });
   } catch {
     return null;
