@@ -477,7 +477,11 @@ async function recordActivity(guildId, userId, metric, amount, channelId = null,
       const nextAmount = Math.min(MAX_ACTIVITY_AMOUNT, oldAmount + increment);
       const beforeUnits = Math.floor(oldAmount / threshold);
       const afterUnits = Math.floor(nextAmount / threshold);
-      const delta = Math.max(0, afterUnits - beforeUnits) * rulePoints;
+      const requestedDelta = Math.max(0, afterUnits - beforeUnits) * rulePoints;
+      const memberPoints = Math.max(0, Number(previous?.points) || 0);
+      const groupPoints = Math.max(0, Number(group.points) || 0);
+      // Keep persisted points within the safe, shared system limit even when a rule is configured very high.
+      const delta = Math.max(0, Math.min(requestedDelta, MAX_ACTIVITY_AMOUNT - memberPoints, MAX_ACTIVITY_AMOUNT - groupPoints));
       await tx.run(`INSERT INTO group_member_points(guild_id,group_id,user_id,${column},updated_at) VALUES(?,?,?,?,?) ON CONFLICT(guild_id,group_id,user_id) DO UPDATE SET ${column}=excluded.${column},updated_at=excluded.updated_at`, [String(guildId), Number(group.id), String(userId), nextAmount, Date.now()]);
       if (delta > 0) {
         await tx.run('UPDATE group_member_points SET points = points + ?, updated_at = ? WHERE guild_id = ? AND group_id = ? AND user_id = ?', [delta, Date.now(), String(guildId), Number(group.id), String(userId)]);

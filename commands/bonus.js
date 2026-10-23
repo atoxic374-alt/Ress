@@ -1,7 +1,8 @@
 const {
   ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder,
   AuditLogEvent, ChannelType, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder,
-  TextInputBuilder, TextInputStyle, UserSelectMenuBuilder, PermissionsBitField
+  TextInputBuilder, TextInputStyle, UserSelectMenuBuilder, PermissionsBitField,
+  ContainerBuilder, TextDisplayBuilder, MessageFlags
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
@@ -415,10 +416,14 @@ function structurePrivateResponse(payload) {
   if (!raw) return payload;
   const lines = raw.split(/\n+/).map(line => line.trim()).filter(Boolean);
   const first = lines.shift() || raw;
-  const lower = raw.toLowerCase();
-  const title = /تأكيد|confirm|هل تريد|سيتم/.test(lower) ? 'Confirmation Required'
-    : /تم |تمت|نجاح|updated|saved|activated|disabled/.test(lower) ? 'Action Completed'
-      : /اختر|select|حدد|choose/.test(lower) ? 'Select Option' : 'Bonus Settings';
+  const classificationText = `${raw} ${String(payload.title || '')}`;
+  const lower = classificationText.toLowerCase();
+  const semanticTitle = /تعذر|فشل|خطأ|غير صالح|لم يتم|لا يمكن|insufficient|failed|error/i.test(classificationText) ? 'ACTION FAILED'
+    : /تم الإلغاء|ألغيت|إلغاء|cancelled|canceled/i.test(classificationText) ? 'ACTION CANCELLED'
+      : /تأكيد|confirm|هل تريد|سيتم/.test(lower) ? 'CONFIRMATION REQUIRED'
+        : /تم |تمت|نجاح|updated|saved|activated|disabled/.test(lower) ? 'ACTION COMPLETED'
+          : /اختر|select|حدد|choose/.test(lower) ? 'SELECT OPTION' : 'BONUS SETTINGS';
+  const title = String(payload.title || semanticTitle).toUpperCase();
   const fields = [];
   const fieldNames = {
     'الإجمالي الحالي': 'Current Total', 'بعد الإزالة': 'After Removal', 'رصيده الحالي': 'Current Balance',
@@ -431,20 +436,31 @@ function structurePrivateResponse(payload) {
     fields.push({ name: fieldNames[rawName] || rawName, value: (separator ? separator[2] : line).slice(0, 1024), inline: false });
   }
   const mentions = [...raw.matchAll(/<@!?\d+>|<@&\d+>|<#\d+>/g)].map(match => match[0]);
-  if (title === 'Action Completed') {
+  if (semanticTitle === 'ACTION COMPLETED') {
     if (mentions.length) fields.unshift({ name: 'Target', value: [...new Set(mentions)].join(' • '), inline: true });
     if (/إيقاف|disabled|deactivated/i.test(raw)) fields.push({ name: 'Status', value: 'Disabled', inline: true });
     else if (/تفعيل|activated|enabled/i.test(raw)) fields.push({ name: 'Status', value: 'Enabled', inline: true });
     else if (/تحديث|updated|saved|اعتماد|نشر|published/i.test(raw)) fields.push({ name: 'Status', value: 'Updated', inline: true });
     if (/دبل|double/i.test(raw)) fields.push({ name: 'Feature', value: 'Double Bonus ×2', inline: true });
   }
-  const description = title === 'Action Completed'
-    ? 'The requested action was completed successfully.'
-    : first.slice(0, 4000);
-  const embed = colorManager.createEmbed().setTitle(title).setDescription(description);
-  if (fields.length) embed.addFields(fields.slice(0, 25));
-  const normalized = { ...payload, embeds: [embed] };
+  const description = first.slice(0, 3500);
+  const container = new ContainerBuilder().addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`## ${title}\n${description || 'تمت معالجة الطلب.'}`)
+  );
+  if (fields.length) {
+    const details = fields.slice(0, 25).map(field => `**${field.name}**\n${field.value}`).join('\n\n').slice(0, 3900);
+    if (details) container.addTextDisplayComponents(new TextDisplayBuilder().setContent(details));
+  }
+  const normalized = {
+    ...payload,
+    components: [container, ...(Array.isArray(payload.components) ? payload.components : [])],
+    allowedMentions: payload.allowedMentions || { parse: [] },
+    flags: Number(payload.flags || 0) | MessageFlags.IsComponentsV2,
+    __bonusActionTitle: semanticTitle
+  };
+  delete normalized.title;
   delete normalized.content;
+  delete normalized.embeds;
   return normalized;
 }
 
@@ -480,10 +496,14 @@ async function showPrivatePanel(interaction, payload, update = false) {
   const boardMessage = isBonusBoardMessage(interaction.message);
   const shouldUpdateBoard = boardMessage && Array.isArray(payload.files) && payload.files.length > 0;
   payload = (!boardMessage || !shouldUpdateBoard) ? structurePrivateResponse(payload) : payload;
-  const completedResult = payload?.embeds?.[0]?.data?.title === 'Action Completed';
+  const completedResult = payload?.__bonusActionTitle === 'ACTION COMPLETED' || payload?.embeds?.[0]?.data?.title === 'Action Completed';
+  delete payload.__bonusActionTitle;
   if (update && completedResult && !boardMessage) {
     const resultPayload = { ...payload, ephemeral: true };
-    delete resultPayload.components;
+    if ((Number(resultPayload.flags || 0) & MessageFlags.IsComponentsV2) !== 0) {
+      // Keep the V2 container while removing action buttons from the completed result.
+      resultPayload.components = (Array.isArray(resultPayload.components) ? resultPayload.components : []).slice(0, 1);
+    } else delete resultPayload.components;
     const originalPayload = await buildHome(interaction.guild);
     if (interaction.deferred || interaction.replied) {
       await interaction.followUp(resultPayload).catch(() => {});
@@ -1008,10 +1028,7 @@ function buildOwnerAvatarResult(message, success = false) {
 }
 
 function buildActionResult(title, message) {
-  return {
-    embeds: [colorManager.createEmbed().setTitle(title).setDescription(message)],
-    components: []
-  };
+  return { title, content: message, components: [] };
 }
 
 async function publishBoard(guild, actorId) {
