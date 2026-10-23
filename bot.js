@@ -2894,36 +2894,6 @@ client.on('messageCreate', async message => {
     }
   }
 
-  // فحص البلوك قبل معالجة أي أمر
-  const { isUserBlocked } = require('./commands/block.js');
-  const canBypassMessageBlocks = isBotOwner(message.member || message.author)
-    || message.guild?.ownerId === message.author.id;
-  if (!canBypassMessageBlocks && isUserBlocked(message.author.id)) {
-    return; // تجاهل المستخدمين المحظورين بصمت لتوفير الأداء
-  }
-  const { isChannelBlocked } = require('./commands/chatblock.js');
-  if (!canBypassMessageBlocks && isChannelBlocked(message.channel.id)) {
-    return; // تجاهل الأوامر في القنوات المحظورة بصمت
-  }
-  // نظام كلمات word
-
-  try {
-
-    const wordCommand = client.commands.get('word');
-
-    if (wordCommand && typeof wordCommand.handleMessage === 'function') {
-
-      const consumed = await wordCommand.handleMessage(message, { client, BOT_OWNERS, BOT_OWNER_ROLES });
-
-      if (consumed) return;
-
-    }
-
-  } catch (error) {
-
-    console.error('❌ خطأ في نظام word:', error);
-
-  }
   // Route group commands before the general prefixed-command parser.
   // Never leave a recognized group command completely silent if its handler throws
   // or the group module failed to load.
@@ -2955,6 +2925,37 @@ client.on('messageCreate', async message => {
     console.error('Group internal dispatcher unavailable: commands/groups.js did not register its handler.');
     await message.reply('نظام القروبات غير محمّل حاليًا. راجع سجل بدء تشغيل البوت لمعرفة سبب عدم تحميل commands/groups.js.').catch(() => null);
     return;
+  }
+
+  // فحص البلوك قبل معالجة أي أمر
+  const { isUserBlocked } = require('./commands/block.js');
+  const canBypassMessageBlocks = isBotOwner(message.member || message.author)
+    || message.guild?.ownerId === message.author.id;
+  if (!canBypassMessageBlocks && isUserBlocked(message.author.id)) {
+    return; // تجاهل المستخدمين المحظورين بصمت لتوفير الأداء
+  }
+  const { isChannelBlocked } = require('./commands/chatblock.js');
+  if (!canBypassMessageBlocks && isChannelBlocked(message.channel.id)) {
+    return; // تجاهل الأوامر في القنوات المحظورة بصمت
+  }
+  // نظام كلمات word
+
+  try {
+
+    const wordCommand = client.commands.get('word');
+
+    if (wordCommand && typeof wordCommand.handleMessage === 'function') {
+
+      const consumed = await wordCommand.handleMessage(message, { client, BOT_OWNERS, BOT_OWNER_ROLES });
+
+      if (consumed) return;
+
+    }
+
+  } catch (error) {
+
+    console.error('❌ خطأ في نظام word:', error);
+
   }
   // معالجة الأوامر (البريفكس)
   const prefix = getCachedPrefix();
