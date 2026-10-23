@@ -193,49 +193,37 @@ async function audit(guildId, actorId, groupId, action, details = {}) { await sc
  * and Discord API failures are intentionally swallowed and returned as null.
  */
 const GROUP_EVENT_VIEWS = Object.freeze({
-  create: ['GROUP CREATED', 'تم إنشاء قروب جديد في النظام.'],
-  update: ['GROUP UPDATED', 'تم تحديث بيانات أو موارد القروب.'],
-  delete: ['GROUP DELETED', 'تم حذف القروب وموارده.'],
-  member_add: ['MEMBER ADDED', 'تمت إضافة عضو إلى القروب.'],
-  member_remove: ['MEMBER REMOVED', 'تمت إزالة عضو من القروب.'],
-  manager_update: ['MANAGERS UPDATED', 'تم تحديث مسؤولي القروب.'],
-  owner: ['OWNER UPDATED', 'تم تغيير مالك القروب أو تغيّرت حالته.'],
-  block: ['MEMBER BLOCKED', 'تم منع عضو من الوصول إلى القروب.'],
-  unblock: ['MEMBER UNBLOCKED', 'تم السماح لعضو بالعودة إلى القروب.'],
-  rule_update: ['POINT RULE UPDATED', 'تم تعديل قاعدة من قواعد احتساب النقاط.'],
-  rule_enable: ['POINT RULE ENABLED', 'تم تفعيل قاعدة احتساب النقاط.'],
-  rule_disable: ['POINT RULE DISABLED', 'تم تعطيل قاعدة احتساب النقاط.'],
-  music: ['MUSIC BOT UPDATED', 'تمت معالجة بوت الموسيقى المرتبط بالقروب.'],
-  group_import: ['GROUP IMPORTED', 'تم استيراد وربط قروب موجود.'],
-  group_resource_restored: ['GROUP RESOURCES RESTORED', 'تمت استعادة موارد القروب بعد تعذر العثور عليها.'],
-  membership_reconciliation_drift: ['MEMBERSHIP DRIFT', 'تم اكتشاف اختلاف بين عضوية القروب والرتبة المرتبطة.'],
-  membership_reconciliation_clean: ['MEMBERSHIP SYNCED', 'تمت مزامنة عضوية القروب مع الرتبة بنجاح.'],
-  member_role_restored: ['MEMBER ROLE RESTORED', 'تمت استعادة رتبة القروب للعضو.'],
-  member_role_restore_failed: ['MEMBER ROLE RESTORE FAILED', 'تعذر استعادة رتبة القروب للعضو.'],
-  role_guard_removed: ['ROLE GUARD REMOVED', 'تمت إزالة رتبة القروب بسبب مخالفة حماية الرتبة.'],
-  group_role_cleanup_incomplete: ['CLEANUP INCOMPLETE', 'لم تكتمل إزالة موارد القروب، وتحتاج إلى إعادة المحاولة.'],
-  points_reset: ['POINTS RESET', 'تم تصفير نقاط القروب وعدادات النشاط.'],
-  activity_skipped: ['ACTIVITY SKIPPED', 'تم تجاهل نشاط ولم تتم إضافة نقاط.'],
-  group_create: ['GROUP CREATED', 'تم إنشاء قروب جديد في النظام.'],
-  group_update: ['GROUP UPDATED', 'تم تحديث بيانات أو موارد القروب.'],
-  group_delete: ['GROUP DELETED', 'تم حذف القروب وموارده.'],
-  member_block: ['MEMBER BLOCKED', 'تم منع عضو من الوصول إلى القروب.'],
-  member_unblock: ['MEMBER UNBLOCKED', 'تم السماح لعضو بالعودة إلى القروب.'],
-  owner_transferred: ['OWNER TRANSFERRED', 'تم نقل ملكية القروب إلى عضو آخر.'],
-  owner_left: ['OWNER LEFT', 'غادر مالك القروب وأصبح القروب بحاجة إلى معالجة.']
+  create: ['إنشاء قروب', 'تم إنشاء قروب جديد.'], update: ['تحديث القروب', 'تم تحديث بيانات أو موارد القروب.'], delete: ['حذف قروب', 'تم حذف القروب وموارده.'],
+  member_add: ['إضافة عضو', 'تمت إضافة عضو للقروب.'], member_remove: ['إزالة عضو', 'تمت إزالة عضو من القروب.'], manager_update: ['تحديث المسؤولين', 'تم تحديث مسؤولي القروب.'],
+  owner: ['تحديث المالك', 'تم تغيير مالك القروب أو حالته.'], block: ['منع عضو', 'تم منع عضو من القروب.'], unblock: ['السماح لعضو', 'تم السماح لعضو بالعودة.'],
+  rule_update: ['تعديل قاعدة نقاط', 'تم تعديل قاعدة احتساب النقاط.'], rule_enable: ['تفعيل قاعدة نقاط', 'تم تفعيل قاعدة احتساب النقاط.'], rule_disable: ['تعطيل قاعدة نقاط', 'تم تعطيل قاعدة احتساب النقاط.'],
+  music: ['تحديث بوت الميوزك', 'تمت معالجة بوت الميوزك.'], group_import: ['استيراد قروب', 'تم استيراد قروب موجود.'], group_resource_restored: ['استعادة الموارد', 'تمت استعادة موارد القروب.'],
+  membership_reconciliation_drift: ['اختلاف العضوية', 'تم اكتشاف اختلاف في عضوية القروب.'], membership_reconciliation_clean: ['مزامنة العضوية', 'تمت مزامنة العضوية بنجاح.'],
+  member_role_restored: ['استعادة رتبة عضو', 'تمت استعادة رتبة القروب للعضو.'], member_role_restore_failed: ['فشل استعادة الرتبة', 'تعذر استعادة رتبة القروب.'],
+  role_guard_removed: ['إزالة حماية الرتبة', 'تمت إزالة رتبة القروب.'], group_role_cleanup_incomplete: ['تنظيف غير مكتمل', 'لم تكتمل إزالة موارد القروب.'],
+  points_reset: ['تصفير النقاط', 'تم تصفير نقاط القروب وعداداته.'], activity_skipped: ['تجاهل النشاط', 'لم تتم إضافة نقاط لهذا النشاط.'],
+  group_create: ['إنشاء قروب', 'تم إنشاء قروب جديد.'], group_update: ['تحديث القروب', 'تم تحديث بيانات أو موارد القروب.'], group_delete: ['حذف قروب', 'تم حذف القروب وموارده.'],
+  member_block: ['منع عضو', 'تم منع عضو من القروب.'], member_unblock: ['السماح لعضو', 'تم السماح لعضو بالعودة.'], owner_transferred: ['نقل الملكية', 'تم نقل ملكية القروب.'], owner_left: ['مغادرة المالك', 'غادر مالك القروب ويحتاج القروب للمعالجة.']
 });
 const GROUP_EVENT_FIELDS = Object.freeze({
-  groupId: 'القروب', name: 'الاسم', ownerId: 'المالك', userId: 'العضو', from: 'من', to: 'إلى',
-  field: 'الحقل', value: 'القيمة', metric: 'المقياس', threshold: 'الحد', points: 'النقاط', enabled: 'الحالة',
-  reason: 'السبب', scope: 'النطاق', channelId: 'القناة', roleId: 'الرتبة', issueCount: 'عدد المشاكل',
-  resolved: 'تم الحل', status: 'الحالة', code: 'النتيجة', ok: 'نجح', members: 'الأعضاء'
+  groupId: 'القروب', groupName: 'اسم القروب', name: 'الاسم', ownerId: 'المالك', userId: 'العضو', from: 'من', to: 'إلى',
+  field: 'الحقل', value: 'القيمة', metric: 'المقياس', threshold: 'الحد', points: 'النقاط', enabled: 'الحالة', reason: 'السبب',
+  scope: 'النطاق', channelId: 'القناة', roleId: 'الرتبة', issueCount: 'عدد المشاكل', resolved: 'تم الحل', status: 'الحالة',
+  code: 'النتيجة', ok: 'نجح', members: 'الأعضاء', type: 'النوع', detail: 'التفاصيل', issues: 'المشاكل'
 });
-function groupLogValue(key, value) {
+const GROUP_LOG_TRANSLATIONS = Object.freeze({
+  membership_reconciliation_drift: 'اختلاف عضوية', thread_member_not_in_db: 'عضو الثريد غير مسجل', MUSIC_CHANNEL_NOT_CONFIGURED: 'روم الميوزك غير محدد',
+  MUSIC_CHANNEL_INVALID: 'روم الميوزك غير صالح', member_left: 'العضو غادر القروب', role_guard_removed: 'إزالة حماية الرتبة'
+});
+function groupLogValue(key, value, depth = 0) {
   if (value == null || value === '') return '—';
   if (typeof value === 'boolean') return value ? 'نعم' : 'لا';
-  if (Array.isArray(value)) return value.slice(0, 8).map(item => groupLogValue(key, item)).join('، ') || '—';
-  if (typeof value === 'object') return JSON.stringify(value).slice(0, 300);
-  const stringValue = String(value).slice(0, 300);
+  if (Array.isArray(value)) return value.slice(0, 8).map(item => groupLogValue(key, item, depth + 1)).join(depth ? '\n' : '، ') || '—';
+  if (typeof value === 'object') {
+    return Object.entries(value).slice(0, 8).map(([childKey, childValue]) => `**${GROUP_EVENT_FIELDS[childKey] || childKey} :** ${groupLogValue(childKey, childValue, depth + 1)}`).join(' • ').slice(0, 500);
+  }
+  const rawValue = String(value);
+  const stringValue = GROUP_LOG_TRANSLATIONS[rawValue] || rawValue.slice(0, 300);
   if (/^(userId|ownerId|from|to)$/.test(key) && /^\d{16,20}$/.test(stringValue)) return `<@${stringValue}>`;
   if (key === 'groupId') return `#${stringValue}`;
   if (key === 'enabled' || key === 'resolved' || key === 'ok') return ['1', 'true', 'yes'].includes(stringValue.toLowerCase()) ? 'نعم' : 'لا';
@@ -254,10 +242,10 @@ async function logGroupEvent(guild, event, details = {}, actorId = null) {
     const fields = Object.entries(safeDetails).filter(([, value]) => value !== undefined && value !== null).slice(0, 12);
     const actor = actorId ? `<@${String(actorId).replace(/[^0-9]/g, '')}>` : 'النظام';
     const fieldText = fields.length
-      ? fields.map(([key, value]) => `**${GROUP_EVENT_FIELDS[key] || key}:** ${groupLogValue(key, value)}`).join('\n')
-      : '**التفاصيل:** لا توجد تفاصيل إضافية.';
+      ? fields.map(([key, value]) => `**${GROUP_EVENT_FIELDS[key] || key} :** ${groupLogValue(key, value)}`).join('\n')
+      : '**التفاصيل :** لا توجد تفاصيل إضافية.';
     const container = new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || '#5865F2'));
-    const header = [new TextDisplayBuilder().setContent(`## ${title}`), new TextDisplayBuilder().setContent(`**الحدث:** ${description}\n**المنفذ:** ${actor}`)];
+    const header = [new TextDisplayBuilder().setContent(`## ${title}`), new TextDisplayBuilder().setContent(`**الحدث :** ${description}\n**المنفذ :** ${actor}`)];
     const body = new TextDisplayBuilder().setContent(fieldText.slice(0, 3800));
     const footer = new TextDisplayBuilder().setContent(`-# ${guild.name ? String(guild.name).slice(0, 100) : guild.id} • Group Logs`);
     const icon = guild.iconURL?.({ extension: 'png', size: 128 });
