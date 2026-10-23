@@ -1139,8 +1139,10 @@ async function handleRulesInteraction(interaction, action, parts = []) {
 
 async function transferGroupOwner(interaction, groupId, ownerId) {
   return groupOperation(`group:${interaction.guild.id}:${groupId}`, async () => {
-    const settings = await currentSystem(interaction);
+    const settings = await gm.getSettings(interaction.guild.id);
+    const actor = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
     const group = await gm.getGroup(interaction.guild.id, Number(groupId));
+    if (!actor || (String(group?.owner_id) !== String(interaction.user.id) && !gm.canManageSystem(interaction.client, settings, actor))) throw new Error('OWNER_ONLY');
     const targetId = String(ownerId || '');
     if (!group || group.status !== 'active' || !group.memberIds.includes(targetId)) throw new Error('OWNER_MUST_BE_MEMBER');
     if (String(group.owner_id) === targetId) return 'العضو هو مالك القروب الحالي بالفعل.';
