@@ -1318,7 +1318,7 @@ async function execute(message, args, { client } = {}) {
     if (!canManage) return replyMessage(message, 'لا تملك الصلاحية.');
     const result = await reconcileGroupMembership(message.guild, message.author.id);
     const lines = result.issues.slice(0, 25).map(issue => `• Group ${issue.groupId} (${safe(issue.groupName, 60)}) — ${issue.detail}${issue.userId ? ` <@${issue.userId}>` : ''}`);
-    const summary = `تم فحص ${result.groups} قروب. عدد حالات الاختلاف : ${result.issues.length}. لم يتم تعديل الرتب أو العضويات تلقائيًا.\\n\\n${lines.join('\\n') || 'لم يتم العثور على اختلافات.'}`;
+    const summary = `تم فحص ${result.groups} قروب. عدد حالات الاختلاف : ${result.issues.length}. لم يتم تعديل الرتب أو العضويات تلقائيًا.\n\n${lines.join('\n') || 'لم يتم العثور على اختلافات.'}`;
     return message.channel.send({ ...componentsV2Payload(baseContainer(message.guild, 'MEMBERSHIP RECONCILIATION', summary.slice(0, 3800))), allowedMentions: { parse: [] } });
   }
   if (['ledger', 'سجل_النقاط', 'points-audit'].includes(sub)) {
@@ -1326,7 +1326,7 @@ async function execute(message, args, { client } = {}) {
     const groupId = args[1] && /^\d+$/.test(args[1]) ? Number(args[1]) : null;
     const rows = await gm.listPointsLedger(message.guild.id, { groupId, limit: 15 });
     const lines = rows.map(row => `#${row.id} • Group ${row.group_id} • <@${row.user_id}> • ${row.metric} • ${Number(row.points_delta) >= 0 ? '+' : ''}${Number(row.points_delta)} • ${row.reason}`);
-    const payload = baseContainer(message.guild, 'POINTS AUDIT', lines.length ? lines.join('\\n').slice(0, 3800) : 'لا توجد سجلات نقاط بعد.');
+    const payload = baseContainer(message.guild, 'POINTS AUDIT', lines.length ? lines.join('\n').slice(0, 3800) : 'لا توجد سجلات نقاط بعد.');
     return message.channel.send({ ...componentsV2Payload(payload), allowedMentions: { parse: [] } });
   }
 
