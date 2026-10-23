@@ -1314,6 +1314,13 @@ async function execute(message, args, { client } = {}) {
     await gm.audit(message.guild.id, message.author.id, null, 'minimum_message_length_update', { before: settings.minMessageLength, after: updated.minMessageLength }).catch(() => {});
     return replyMessage(message, `تم تحديث الحد الأدنى لطول الرسالة : ${updated.minMessageLength} حرف.`);
   }
+  if (['reconcile', 'مصالحة', 'مزامنة_فحص'].includes(sub)) {
+    if (!canManage) return replyMessage(message, 'لا تملك الصلاحية.');
+    const result = await reconcileGroupMembership(message.guild, message.author.id);
+    const lines = result.issues.slice(0, 25).map(issue => `• Group ${issue.groupId} (${safe(issue.groupName, 60)}) — ${issue.detail}${issue.userId ? ` <@${issue.userId}>` : ''}`);
+    const summary = `تم فحص ${result.groups} قروب. عدد حالات الاختلاف : ${result.issues.length}. لم يتم تعديل الرتب أو العضويات تلقائيًا.\\n\\n${lines.join('\\n') || 'لم يتم العثور على اختلافات.'}`;
+    return message.channel.send({ ...componentsV2Payload(baseContainer(message.guild, 'MEMBERSHIP RECONCILIATION', summary.slice(0, 3800))), allowedMentions: { parse: [] } });
+  }
   if (['ledger', 'سجل_النقاط', 'points-audit'].includes(sub)) {
     if (!canManage) return replyMessage(message, 'لا تملك الصلاحية.');
     const groupId = args[1] && /^\d+$/.test(args[1]) ? Number(args[1]) : null;
@@ -1384,6 +1391,63 @@ async function execute(message, args, { client } = {}) {
   return replyMessage(message,'استخدم أمر القروبات مع الخيارات: setup، control، create، delete، top، members أو rules.');
 }
 const activityCache=new Map(); const settingsCache=new Map(); const voiceStarts=new Map(); const voiceChannels=new Map(); const lastMessageAt=new Map(); const lastSkipAuditAt=new Map();
+const reconciliationSignatures = new Map();
+async function reconcileGroupMembership(guild, actorId = null) {
+  const groups = await gm.listGroups(guild.id);
+  const issues = [];
+  for (const group of groups) {
+    const expected = [...new Set([String(group.owner_id), ...group.memberIds, ...group.managerIds].filter(Boolean))];
+    const role = group.role_id ? (guild.roles.cache.get(String(group.role_id)) || await guild.roles.fetch(String(group.role_id)).catch(() => null)) : null;
+    if (!role) {
+      issues.push({ groupId: group.id, groupName: group.name, type: 'role_missing', detail: 'رتبة القروب غير موجودة أو لا يمكن الوصول إليها.' });
+    } else {
+      for (const userId of expected) {
+        const member = await guild.members.fetch(userId).catch(() => null);
+        if (member && !member.roles.cache.has(role.id)) issues.push({ groupId: group.id, groupName: group.name, type: 'member_missing_role', userId, detail: 'عضو محفوظ في قاعدة البيانات ولا يحمل رتبة القروب.' });
+      }
+      for (const [userId] of role.members) {
+        if (!expected.includes(String(userId))) issues.push({ groupId: group.id, groupName: group.name, type: 'role_member_not_in_db', userId, detail: 'عضو يحمل رتبة القروب لكنه غير موجود في قائمة العضوية المحفوظة.' });
+      }
+    }
+    if (group.thread_id) {
+      const thread = guild.channels.cache.get(String(group.thread_id)) || await guild.channels.fetch(String(group.thread_id)).catch(() => null);
+      if (!thread || typeof thread.members?.fetch !== 'function') {
+        issues.push({ groupId: group.id, groupName: group.name, type: 'thread_missing', detail: 'ثريد القروب غير موجود أو تعذر قراءة أعضائه.' });
+      } else {
+        const threadMembers = await thread.members.fetch().catch(() => null);
+        if (!threadMembers) {
+          issues.push({ groupId: group.id, groupName: group.name, type: 'thread_members_unavailable', detail: 'تعذر جلب عضوية الثريد؛ لم يتم إجراء أي تعديل تلقائي.' });
+        } else {
+          const actual = new Set([...threadMembers.keys()].map(String));
+          for (const userId of expected) if (!actual.has(userId)) issues.push({ groupId: group.id, groupName: group.name, type: 'member_missing_thread', userId, detail: 'عضو محفوظ في قاعدة البيانات لكنه ليس عضوًا في الثريد.' });
+          for (const userId of actual) if (!expected.includes(userId)) issues.push({ groupId: group.id, groupName: group.name, type: 'thread_member_not_in_db', userId, detail: 'عضو في الثريد غير موجود في قائمة العضوية المحفوظة.' });
+        }
+      }
+    }
+  }
+  const byGroup = new Map();
+  for (const issue of issues) {
+    const key = String(issue.groupId);
+    if (!byGroup.has(key)) byGroup.set(key, []);
+    byGroup.get(key).push(issue);
+  }
+  for (const group of groups) {
+    const groupIssues = byGroup.get(String(group.id)) || [];
+    const signature = JSON.stringify(groupIssues.map(({ type, userId }) => [type, userId || null]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
+    const key = `${guild.id}:${group.id}`;
+    if (reconciliationSignatures.get(key) !== signature) {
+      reconciliationSignatures.set(key, signature);
+      if (groupIssues.length) {
+        await gm.audit(guild.id, actorId, group.id, 'membership_reconciliation_drift', { issueCount: groupIssues.length, issues: groupIssues.slice(0, 50) }).catch(() => {});
+        await gm.logGroupEvent(guild, 'update', { groupId: group.id, reason: 'membership_reconciliation_drift', issueCount: groupIssues.length, issues: groupIssues.slice(0, 10) }, actorId).catch(() => {});
+      } else if (reconciliationSignatures.has(key)) {
+        await gm.audit(guild.id, actorId, group.id, 'membership_reconciliation_clean', { resolved: true }).catch(() => {});
+      }
+    }
+  }
+  return { groups: groups.length, issues };
+}
+
 async function cachedGroups(guildId){const hit=activityCache.get(String(guildId));if(hit&&Date.now()-hit.at<30000)return hit.groups;const groups=await gm.listGroups(guildId);activityCache.set(String(guildId),{at:Date.now(),groups});return groups;}
 async function cachedSettings(guildId){const hit=settingsCache.get(String(guildId));if(hit&&Date.now()-hit.at<30000)return hit.settings;const settings=await gm.getSettings(guildId);settingsCache.set(String(guildId),{at:Date.now(),settings});return settings;}
 async function logActivitySkip(guildId, userId, groupId, metric, reason, details = {}) {
@@ -1431,6 +1495,19 @@ function registerInteractionHandler(client) {
   };
   if (client.isReady?.()) restoreVoiceSessions().catch(error => console.error('[groups] voice session restore failed:', error?.message || error));
   else client.once('ready', () => restoreVoiceSessions().catch(error => console.error('[groups] voice session restore failed:', error?.message || error)));
+
+  const startReconciliation = () => {
+    const run = () => {
+      for (const guild of client.guilds.cache.values()) {
+        reconcileGroupMembership(guild).catch(error => console.error('[groups] membership reconciliation failed:', error?.message || error));
+      }
+    };
+    run();
+    const timer = setInterval(run, 30 * 60 * 1000);
+    timer.unref?.();
+  };
+  if (client.isReady?.()) startReconciliation();
+  else client.once('ready', startReconciliation);
 
   const voiceCheckpoint = setInterval(async () => {
     const now = Date.now();
