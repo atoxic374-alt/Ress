@@ -1404,8 +1404,10 @@ async function reconcileGroupMembership(guild, actorId = null) {
       issues.push({ groupId: group.id, groupName: group.name, type: 'role_missing', detail: 'رتبة القروب غير موجودة أو لا يمكن الوصول إليها.' });
     } else {
       for (const userId of expected) {
-        const member = await guild.members.fetch(userId).catch(() => null);
+        let member = guild.members.cache.get(userId) || null;
+        if (!member && !role.members.has(userId)) member = await guild.members.fetch(userId).catch(() => null);
         if (member && !member.roles.cache.has(role.id)) issues.push({ groupId: group.id, groupName: group.name, type: 'member_missing_role', userId, detail: 'عضو محفوظ في قاعدة البيانات ولا يحمل رتبة القروب.' });
+        else if (!member && !role.members.has(userId)) issues.push({ groupId: group.id, groupName: group.name, type: 'member_not_found', userId, detail: 'العضو محفوظ في قاعدة البيانات لكنه غير موجود أو تعذر جلبه من السيرفر.' });
       }
       for (const [userId] of role.members) {
         if (!expected.includes(String(userId))) issues.push({ groupId: group.id, groupName: group.name, type: 'role_member_not_in_db', userId, detail: 'عضو يحمل رتبة القروب لكنه غير موجود في قائمة العضوية المحفوظة.' });
