@@ -1269,6 +1269,25 @@ async function execute(message, args, { client } = {}) {
     await gm.logGroupEvent(message.guild, 'rule_update', { metric, threshold, points, enabled: true }, message.author.id);
     return replyMessage(message,`تم حفظ القاعدة : ${metric} / ${threshold} / ${points}`);
   }
+  if (['minlength', 'حد_الرسالة', 'طول_الرسالة'].includes(sub)) {
+    if (!canManage) return replyMessage(message, 'لا تملك الصلاحية.');
+    if (args[1] == null) return replyMessage(message, `الحد الأدنى الحالي لطول الرسالة : ${Number(settings.minMessageLength) || 0} حرف. استخدم groups minlength 0 لإيقاف الشرط، أو رقمًا من 1 إلى 2000.`);
+    const value = Number(args[1]);
+    if (!Number.isInteger(value) || value < 0 || value > 2000) return replyMessage(message, 'اكتب رقمًا صحيحًا من 0 إلى 2000. القيمة 0 تعطل الحد الأدنى.');
+    const updated = await gm.saveSettings(message.guild.id, { minMessageLength: value }, message.author.id);
+    settingsCache.delete(String(message.guild.id));
+    await gm.audit(message.guild.id, message.author.id, null, 'minimum_message_length_update', { before: settings.minMessageLength, after: updated.minMessageLength }).catch(() => {});
+    return replyMessage(message, `تم تحديث الحد الأدنى لطول الرسالة : ${updated.minMessageLength} حرف.`);
+  }
+  if (['ledger', 'سجل_النقاط', 'points-audit'].includes(sub)) {
+    if (!canManage) return replyMessage(message, 'لا تملك الصلاحية.');
+    const groupId = args[1] && /^\\d+$/.test(args[1]) ? Number(args[1]) : null;
+    const rows = await gm.listPointsLedger(message.guild.id, { groupId, limit: 15 });
+    const lines = rows.map(row => `#${row.id} • Group ${row.group_id} • <@${row.user_id}> • ${row.metric} • ${Number(row.points_delta) >= 0 ? '+' : ''}${Number(row.points_delta)} • ${row.reason}`);
+    const payload = baseContainer(message.guild, 'POINTS AUDIT', lines.length ? lines.join('\\n').slice(0, 3800) : 'لا توجد سجلات نقاط بعد.');
+    return message.channel.send({ ...componentsV2Payload(payload), allowedMentions: { parse: [] } });
+  }
+
   if (['create', 'انشاء', 'إنشاء'].includes(sub)) {
     if (!canManage) return replyMessage(message,'لا تملك الصلاحية.');
     return sendCreateCommandPanel(message);
