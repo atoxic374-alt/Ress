@@ -1695,7 +1695,8 @@ async function execute(message, args, { client, prefix } = {}) {
 }
 const activityCache=new Map(); const settingsCache=new Map(); const voiceStarts=new Map(); const voiceChannels=new Map(); const lastMessageAt=new Map(); const lastSkipAuditAt=new Map();
 const reconciliationSignatures = new Map();
-async function reconcileGroupMembership(guild, actorId = null) {
+const reconciliationLocks = new Map();
+async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
   const groups = (await gm.listGroups(guild.id, true)).filter(group => group.status !== 'deleted');
   const issues = [];
   const botCache = new Map();
@@ -1805,6 +1806,13 @@ async function reconcileGroupMembership(guild, actorId = null) {
   }
   return { groups: groups.length, issues };
 }
+async function reconcileGroupMembership(guild, actorId = null) {
+  const key = String(guild.id);
+  if (reconciliationLocks.has(key)) return { skipped: true, reason: 'RECONCILIATION_LOCKED' };
+  const work = reconcileGroupMembershipUnlocked(guild, actorId);
+  reconciliationLocks.set(key, work);
+  try { return await work; } finally { if (reconciliationLocks.get(key) === work) reconciliationLocks.delete(key); }
+}
 
 async function cachedGroups(guildId){const hit=activityCache.get(String(guildId));if(hit&&Date.now()-hit.at<30000)return hit.groups;const groups=await gm.listGroups(guildId);activityCache.set(String(guildId),{at:Date.now(),groups});return groups;}
 async function cachedSettings(guildId){const hit=settingsCache.get(String(guildId));if(hit&&Date.now()-hit.at<30000)return hit.settings;const settings=await gm.getSettings(guildId);settingsCache.set(String(guildId),{at:Date.now(),settings});return settings;}
@@ -1870,7 +1878,7 @@ function registerInteractionHandler(client) {
       }
     };
     run().catch(error => console.error('[groups] membership reconciliation run failed:', error?.message || error));
-    const timer = setInterval(run, 60 * 60 * 1000);
+    const timer = setInterval(run, 15 * 60 * 1000);
     timer.unref?.();
   };
   if (client.isReady?.()) startReconciliation();
