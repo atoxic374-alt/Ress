@@ -2040,6 +2040,7 @@ async function handleInteraction(interaction, context = {}) {
         return true;
       }
       if (confirmAction === 'all-groups-points') {
+        if (!await requireManager(interaction, context)) return true;
         const operation = rawGroupId === 'remove-points' ? 'remove-points' : 'add-points';
         const amount = Number(rawUserId);
         try {
@@ -2452,6 +2453,7 @@ async function handleInteraction(interaction, context = {}) {
         }
         try {
           if (rawGroupId === 'all' && (operation === 'add-points' || operation === 'remove-points')) {
+            if (!await requireManager(interaction, context)) return true;
             const preview = await db.previewAdjustAllGroupPoints(interaction.guild.id, operation === 'add-points' ? amount : -amount);
             const before = preview.before;
             const after = preview.after;
