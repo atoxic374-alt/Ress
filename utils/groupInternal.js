@@ -3,7 +3,7 @@ const { renderMembers, renderInfo } = require('./groupRenderer');
 const { PermissionsBitField } = require('discord.js');
 const { responsePayload } = require('./groupResponses');
 
-const COMMANDS = new Set(['تحكم', 'control', 'تعديل', 'edit', 'عقوبه', 'عقوبة', 'punish', 'صلاحية', 'permission', 'مسح', 'clear', 'اعضاء', 'أعضاء', 'members', 'اضافة', 'إضافة', 'add', 'ازالة', 'إزالة', 'remove', 'منع', 'block', 'سماح', 'allow', 'قروبي', 'my-group', 'مسؤول', 'manager', 'أوامر', 'اوامر', 'commands', 'help']);
+const COMMANDS = new Set(['تحكم', 'control', 'تعديل', 'edit', 'عقوبه', 'عقوبة', 'punish', 'صلاحية', 'permission', 'مسح', 'clear', 'اعضاء', 'أعضاء', 'members', 'اضافة', 'إضافة', 'add', 'ازالة', 'إزالة', 'remove', 'منع', 'block', 'سماح', 'allow', 'قروبي', 'قربي', 'my-group', 'مسؤول', 'manager', 'أوامر', 'اوامر', 'commands', 'help']);
 
 function ids(message) {
   return [...new Set([...message.mentions.users.keys(), ...(String(message.content).match(/\b\d{16,20}\b/g) || [])])];
@@ -95,17 +95,34 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
   if (command === 'تعديل' && String(words[0] || '') === 'القروب') { command = 'تعديل'; words.shift(); }
   if (!COMMANDS.has(command)) return false;
   // Commands are prefix-free; destructive actions require an explicit confirmation word.
-  const group = await gm.getGroupForChannel(message.guild.id, message.channel.id);
+  let group = await gm.getGroupForChannel(message.guild.id, message.channel.id);
   if (!group || group.status !== 'active') {
-    if (hasPrefix) { await reply(message, 'هذا الشات غير مرتبط بقروب نشط.'); return true; }
-    return false;
+    // "قروبي" is useful outside the group room too. Resolve it only when membership
+    // identifies one unambiguous active group; never guess for multi-group members.
+    if (!hasPrefix && ['قروبي', 'قربي', 'my-group'].includes(command)) {
+      const mine = (await gm.listGroups(message.guild.id))
+        .filter(item => item.status === 'active' && groupHasUser(item, message.author.id));
+      if (mine.length === 1) {
+        group = mine[0];
+      } else if (mine.length > 1) {
+        const choices = mine.slice(0, 15).map(item => `• **${String(item.name || 'قروب').slice(0, 80)}** — ID: ${item.id}`).join('\\n');
+        await reply(message, `أنت مرتبط بأكثر من قروب؛ اكتب الأمر داخل قناة القروب المطلوب.\\n${choices}`);
+        return true;
+      } else {
+        await reply(message, 'ما لقيت قروبًا نشطًا مرتبطًا بعضويتك.');
+        return true;
+      }
+    } else {
+      if (hasPrefix) { await reply(message, 'هذا الشات غير مرتبط بقروب نشط.'); return true; }
+      return false;
+    }
   }
   const settings = await gm.getSettings(message.guild.id);
   const privileged = gm.canManageGroup(message.client, settings, group, message.member);
   const system = gm.canManageSystem(message.client, settings, message.member);
   const targetId = ids(message)[0];
   try {
-    if (command === 'قروبي' || command === 'my-group') {
+    if (command === 'قروبي' || command === 'قربي' || command === 'my-group') {
       if (!groupHasUser(group, message.author.id) && !system) return Boolean(await reply(message, 'أنت لست عضوًا في القروب.'));
       const owner = await message.guild.members.fetch(group.owner_id).catch(() => null);
       const managers = await Promise.all(group.managerIds.map(id => message.guild.members.fetch(id).catch(() => null)));
