@@ -199,9 +199,9 @@ async function testDashboardPublishers() {
   };
   collectButtons(JSON.parse(JSON.stringify(adminPayload.components[0])));
   assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:create')?.style, 2, 'ordinary management buttons use Secondary styling');
-  assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:delete')?.style, 2, 'Delete uses the neutral panel style');
-  assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:reset')?.style, 2, 'Reset uses the neutral panel style');
-  assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:resetall')?.style, 2, 'Reset All uses the neutral panel style');
+  assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:delete')?.style, 4, 'Delete uses Danger styling');
+  assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:reset')?.style, 4, 'Reset uses Danger styling');
+  assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:resetall')?.style, 4, 'Reset All uses Danger styling');
   await groupCommand.sendAdminControlPanel(channel, guild);
   assert.equal(sends, 1, 'admin panel is updated instead of duplicated');
   assert.equal(edits, 1);

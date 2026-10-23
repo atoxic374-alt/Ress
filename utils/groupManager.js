@@ -666,6 +666,11 @@ async function createGroup(guild, { name, description = '', ownerId, color = '#5
 }
 async function deleteGroup(guild, groupId, actorId) {
   return withLock(`delete:${guild.id}:${groupId}`, async () => {
+    if (!global.groupResourceDeleteBypass) global.groupResourceDeleteBypass = new Set();
+    const deleteBypassKey = `${guild.id}:${groupId}`;
+    global.groupResourceDeleteBypass.add(deleteBypassKey);
+    const releaseDeleteBypass = () => global.groupResourceDeleteBypass.delete(deleteBypassKey);
+    setTimeout(releaseDeleteBypass, 30_000).unref?.();
     const group = await getGroup(guild.id, groupId);
     if (!group) throw new Error('GROUP_NOT_FOUND');
     if (group.status === 'deleted') return true;
@@ -684,6 +689,7 @@ async function deleteGroup(guild, groupId, actorId) {
     if (role) await role.delete('Delete managed group').catch(() => failed.push({ type: 'role', id: group.role_id }));
     const now = Date.now();
     if (failed.length) {
+      releaseDeleteBypass();
       await dbManager.transaction(async tx => {
         await tx.run("UPDATE managed_groups SET status = 'orphaned', updated_at = ? WHERE guild_id = ? AND id = ?", [now, String(guild.id), Number(groupId)]);
         await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [String(guild.id), Number(groupId), actorId ? String(actorId) : null, 'group_delete_incomplete', JSON.stringify({ failed }), now]);
@@ -694,6 +700,7 @@ async function deleteGroup(guild, groupId, actorId) {
       await tx.run("UPDATE managed_groups SET status = 'deleted', archived_at = ?, updated_at = ? WHERE guild_id = ? AND id = ?", [now, now, String(guild.id), Number(groupId)]);
       await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [String(guild.id), Number(groupId), actorId ? String(actorId) : null, 'group_delete', '{}', now]);
     }, 'group-delete');
+    releaseDeleteBypass();
     // Remove global leader/manager roles only when the deleted group was their last entitlement.
     try {
       const settings = await getSettings(guild.id);

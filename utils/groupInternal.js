@@ -1,9 +1,12 @@
 const gm = require('./groupManager');
 const { renderMembers, renderInfo } = require('./groupRenderer');
-const { PermissionsBitField } = require('discord.js');
+const { ActionRowBuilder, PermissionsBitField, UserSelectMenuBuilder } = require('discord.js');
+const { randomBytes } = require('node:crypto');
 const { responsePayload } = require('./groupResponses');
 
-const COMMANDS = new Set(['تحكم', 'control', 'تعديل', 'edit', 'عقوبه', 'عقوبة', 'punish', 'صلاحية', 'permission', 'مسح', 'clear', 'اعضاء', 'أعضاء', 'members', 'اضافة', 'إضافة', 'add', 'ازالة', 'إزالة', 'remove', 'منع', 'block', 'سماح', 'allow', 'قروبي', 'قربي', 'my-group', 'مسؤول', 'manager', 'أوامر', 'اوامر', 'commands', 'help']);
+const COMMANDS = new Set(['تحكم', 'control', 'تعديل', 'edit', 'عقوبه', 'عقوبة', 'punish', 'صلاحية', 'permission', 'مسح', 'clear', 'اعضاء', 'أعضاء', 'members', 'اضافة', 'إضافة', 'اضف', 'أضف', 'ضيف', 'ضم', 'ادخل', 'add', 'invite', 'join', 'add-member', 'addmember', 'ازالة', 'إزالة', 'ازاله', 'إزاله', 'احذف', 'حذف', 'شيل', 'شطب', 'remove', 'remove-member', 'removemember', 'منع', 'block', 'سماح', 'allow', 'قروبي', 'قربي', 'my-group', 'مسؤول', 'manager', 'أوامر', 'اوامر', 'commands', 'help']);
+const memberPickerFlows = new Map();
+const MEMBER_PICKER_TTL = 10 * 60 * 1000;
 
 function ids(message) {
   return [...new Set([...message.mentions.users.keys(), ...(String(message.content).match(/\b\d{16,20}\b/g) || [])])];
@@ -46,6 +49,82 @@ async function syncMember(group, guild, userId, add, { ignoreMissing = false } =
   return member;
 }
 function reply(message, content) { const payload = typeof content === 'string' ? responsePayload({ content }) : responsePayload(content); return message.reply(payload).catch(() => null); }
+function memberPickerAction(command) {
+  if (['اضافة', 'إضافة', 'اضف', 'أضف', 'ضيف', 'ضم', 'ادخل', 'add', 'invite', 'join', 'add-member', 'addmember'].includes(command)) return 'add';
+  if (['ازالة', 'إزالة', 'ازاله', 'إزاله', 'احذف', 'حذف', 'شيل', 'شطب', 'remove', 'remove-member', 'removemember'].includes(command)) return 'remove';
+  return null;
+}
+async function openMemberPicker(message, group, action) {
+  for (const [token, flow] of memberPickerFlows) if (flow.expires <= Date.now()) memberPickerFlows.delete(token);
+  const token = randomBytes(12).toString('hex');
+  memberPickerFlows.set(token, { guildId: String(message.guild.id), groupId: Number(group.id), actorId: String(message.author.id), action, expires: Date.now() + MEMBER_PICKER_TTL });
+  const menu = new UserSelectMenuBuilder()
+    .setCustomId(`groups_member_picker:${action}:${group.id}:${token}`)
+    .setPlaceholder(action === 'add' ? 'ابحث واختر الأعضاء المراد إضافتهم' : 'ابحث واختر الأعضاء المراد إزالتهم')
+    .setMinValues(1)
+    .setMaxValues(25);
+  const title = action === 'add' ? 'ADD MEMBERS' : 'REMOVE MEMBERS';
+  const description = action === 'add'
+    ? 'ابحث عن الأعضاء واختر حتى 25 عضوًا لإضافتهم دفعة واحدة إلى القروب.'
+    : 'ابحث عن الأعضاء واختر حتى 25 عضوًا لإزالتهم دفعة واحدة من القروب.';
+  return reply(message, responsePayload({ title, content: description, components: [new ActionRowBuilder().addComponents(menu)] }));
+}
+async function handleMemberPickerInteraction(interaction) {
+  const parts = String(interaction.customId || '').split(':');
+  if (parts[0] !== 'groups_member_picker') return false;
+  const [, action, groupIdRaw, token] = parts;
+  const flow = memberPickerFlows.get(token);
+  if (!flow || flow.expires <= Date.now() || flow.guildId !== String(interaction.guild?.id)) {
+    await interaction.reply(responsePayload({ title: 'PICKER EXPIRED', content: 'انتهت صلاحية قائمة الأعضاء؛ أعد كتابة الأمر لفتح قائمة جديدة.' })).catch(() => {});
+    return true;
+  }
+  if (flow.actorId !== String(interaction.user?.id)) {
+    await interaction.reply(responsePayload({ title: 'ACCESS DENIED', content: 'هذه القائمة مخصصة للشخص الذي فتحها.' })).catch(() => {});
+    return true;
+  }
+  if (!interaction.isUserSelectMenu?.()) return true;
+  memberPickerFlows.delete(token);
+  try {
+    const settings = await gm.getSettings(interaction.guild.id);
+    const group = await gm.getGroup(interaction.guild.id, Number(groupIdRaw));
+    if (!group || group.status !== 'active') throw new Error('GROUP_NOT_FOUND');
+    if (!gm.canManageGroup(interaction.client, settings, group, interaction.member)) throw new Error('NO_PERMISSION');
+    const success = [], skipped = [], failed = [];
+    for (const userId of [...new Set((interaction.values || []).map(String))].slice(0, 25)) {
+      const member = await interaction.guild.members.fetch(userId).catch(() => null);
+      if (!member || member.user?.bot) { failed.push(`<@${userId}> : العضو غير موجود أو بوت`); continue; }
+      const already = groupHasUser(group, userId);
+      try {
+        if (action === 'add') {
+          if (already) { skipped.push(`<@${userId}> : موجود مسبقًا`); continue; }
+          if (group.blockedIds.includes(userId)) { failed.push(`<@${userId}> : ممنوع من القروب`); continue; }
+          await gm.addMember(interaction.guild.id, group.id, userId, interaction.user.id);
+          try { await syncMember(group, interaction.guild, userId, true); }
+          catch (error) { await gm.removeMember(interaction.guild.id, group.id, userId, interaction.user.id).catch(() => { error.groupRollbackFailed = true; }); throw error; }
+          success.push(`<@${userId}>`);
+        } else {
+          if (!already) { skipped.push(`<@${userId}> : ليس عضوًا في القروب`); continue; }
+          if (String(group.owner_id) === userId) { failed.push(`<@${userId}> : لا يمكن إزالة المالك`); continue; }
+          const wasManager = group.managerIds.includes(userId);
+          await gm.removeMember(interaction.guild.id, group.id, userId, interaction.user.id);
+          try { await syncMember(group, interaction.guild, userId, false); await syncManagerRole(interaction.guild, settings, userId); }
+          catch (error) { await restoreMembership(group, interaction.guild.id, userId, wasManager, interaction.user.id).catch(() => { error.groupRollbackFailed = true; }); throw error; }
+          success.push(`<@${userId}>`);
+        }
+      } catch (error) { failed.push(`<@${userId}> : ${error.message === 'GROUP_FULL' ? 'القروب ممتلئ' : 'تعذر تنفيذ العملية'}`); }
+    }
+    const actionText = action === 'add' ? 'الإضافة' : 'الإزالة';
+    const lines = [`تمت ${actionText} الجماعية.`, `نجح : ${success.length}`, `تجاوز : ${skipped.length}`, `فشل : ${failed.length}`];
+    if (success.length) lines.push('', `**تم التنفيذ:** ${success.join('، ')}`);
+    if (skipped.length) lines.push('', `**تم التجاوز:** ${skipped.join('، ')}`);
+    if (failed.length) lines.push('', `**فشل:** ${failed.join('، ')}`);
+    await interaction.reply(responsePayload({ title: action === 'add' ? 'MEMBERS ADDED' : 'MEMBERS REMOVED', content: lines.join('\n') })).catch(() => {});
+  } catch (error) {
+    const content = error.message === 'NO_PERMISSION' ? 'لا تملك صلاحية إدارة أعضاء هذا القروب.' : error.message === 'GROUP_NOT_FOUND' ? 'القروب غير موجود أو غير نشط.' : 'تعذر تنفيذ العملية الجماعية.';
+    await interaction.reply(responsePayload({ title: 'REQUEST FAILED', content })).catch(() => {});
+  }
+  return true;
+}
 async function restoreMembership(group, guildId, userId, wasManager, actorId) {
   await gm.addMember(guildId, group.id, userId, actorId);
   if (wasManager) await gm.setManagers(guildId, group.id, [...group.managerIds, String(userId)], actorId);
@@ -71,6 +150,9 @@ async function leaveGroupMember(guild, settings, group, userId, actorId = userId
   const wasMember = group.memberIds.includes(id);
   const wasManager = group.managerIds.includes(id);
   await gm.removeMember(guild.id, group.id, id, actorId);
+  if (!global.groupLeaveRoleBypass) global.groupLeaveRoleBypass = new Set();
+  const bypassKey = `${guild.id}:${id}:${group.role_id || 'no-role'}`;
+  global.groupLeaveRoleBypass.add(bypassKey);
   try {
     await syncMember(group, guild, id, false, { ignoreMissing: true });
     await syncManagerRole(guild, settings, id, { ignoreMissing: true });
@@ -81,6 +163,8 @@ async function leaveGroupMember(guild, settings, group, userId, actorId = userId
     }
     await syncManagerRole(guild, settings, id, { ignoreMissing: true }).catch(() => { error.groupRollbackFailed = true; });
     throw error;
+  } finally {
+    global.groupLeaveRoleBypass.delete(bypassKey);
   }
   await gm.logGroupEvent(guild, 'member_remove', { groupId: group.id, userId: id, reason: 'left' }, actorId).catch(() => null);
   return true;
@@ -136,8 +220,8 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       return true;
     }
     if (!privileged && !system) { await reply(message, 'لا تملك الصلاحية.'); return true; }
-    if (command === 'اضافة' || command === 'إضافة' || command === 'add') {
-      if (!targetId) throw new Error('MENTION_REQUIRED');
+    if (memberPickerAction(command) === 'add') {
+      if (!targetId) return Boolean(await openMemberPicker(message, group, 'add'));
       const target = await message.guild.members.fetch(targetId).catch(() => null);
       if (!target) throw new Error('MEMBER_NOT_FOUND');
       if (target.user?.bot) throw new Error('BOT_NOT_ALLOWED');
@@ -149,8 +233,8 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       await gm.logGroupEvent(message.guild, 'member_add', { groupId: group.id, userId: targetId }, message.author.id);
       await reply(message, 'تمت إضافة العضو.'); return true;
     }
-    if (command === 'ازالة' || command === 'إزالة' || command === 'remove') {
-      if (!targetId) throw new Error('MENTION_REQUIRED');
+    if (memberPickerAction(command) === 'remove') {
+      if (!targetId) return Boolean(await openMemberPicker(message, group, 'remove'));
       if (String(group.owner_id) === String(targetId)) throw new Error('OWNER_PROTECTED');
       const wasManager = group.managerIds.includes(String(targetId));
       if (wasManager && String(group.owner_id) !== String(message.author.id) && !system) throw new Error('MANAGER_PROTECTED');
@@ -258,4 +342,4 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
   }
   return true;
 }
-module.exports = { handleInternalMessage, leaveGroupMember };
+module.exports = { handleInternalMessage, handleMemberPickerInteraction, leaveGroupMember };
