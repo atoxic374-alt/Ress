@@ -1,6 +1,7 @@
 const gm = require('./groupManager');
 const { renderMembers, renderInfo } = require('./groupRenderer');
 const { PermissionsBitField } = require('discord.js');
+const { responsePayload } = require('./groupResponses');
 
 const COMMANDS = new Set(['تحكم', 'control', 'تعديل', 'edit', 'عقوبه', 'عقوبة', 'punish', 'صلاحية', 'permission', 'مسح', 'clear', 'اعضاء', 'أعضاء', 'members', 'اضافة', 'إضافة', 'add', 'ازالة', 'إزالة', 'remove', 'منع', 'block', 'سماح', 'allow', 'قروبي', 'my-group', 'مسؤول', 'manager']);
 
