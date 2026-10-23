@@ -288,8 +288,7 @@ async function addMember(guildId, groupId, userId, actorId) { return withLock(`m
     const currentMembers = new Set([String(group.owner_id), ...group.memberIds]);
     if (currentMembers.size >= Number((await getSettings(guildId)).maxMembers || 10)) throw new Error('GROUP_FULL');
   }
-  // Repair legacy rows that omitted the owner from member_ids_json while writing membership.
-  const members = new Set([String(group.owner_id), ...group.memberIds]); members.add(safeUserId);
+  const members = new Set(group.memberIds); members.add(safeUserId);
   await updateGroup(guildId, groupId, { member_ids_json: JSON.stringify([...members]), updated_at: Date.now() }, actorId);
   return [...members];
 }); }
