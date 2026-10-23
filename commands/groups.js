@@ -1575,13 +1575,21 @@ function registerInteractionHandler(client) {
     const settings = await cachedSettings(guild.id).catch(() => null);
     if (!settings?.enabled) return;
     const groups = await cachedGroups(guild.id);
-    if (groups.some(group =>
+    const eligible = groups.some(group =>
       (group.memberIds.includes(String(user.id)) || String(group.owner_id) === String(user.id) || group.managerIds.includes(String(user.id)))
       && (settings.countAllChannels || gm.channelBelongs(group, sourceMessage.channelId))
-    )) {
-      const emojiKey = reaction.emoji?.id || reaction.emoji?.name || 'unknown';
-      const eventId = `${sourceMessage.id}:${emojiKey}`;
-      await gm.recordActivity(guild.id, user.id, 'reactions', 1, sourceMessage.channelId, eventId).catch(error => console.error('[groups] reaction points failed:', error?.message || error));
+    );
+    if (!eligible) {
+      const isMember = groups.some(group => group.memberIds.includes(String(user.id)) || String(group.owner_id) === String(user.id) || group.managerIds.includes(String(user.id)));
+      await logActivitySkip(guild.id, user.id, null, 'reactions', isMember ? 'channel_out_of_scope' : 'member_not_eligible', { channelId: sourceMessage.channelId, messageId: sourceMessage.id }).catch(() => {});
+      return;
+    }
+    const emojiKey = reaction.emoji?.id || reaction.emoji?.name || 'unknown';
+    const eventId = `${sourceMessage.id}:${emojiKey}`;
+    const awarded = await gm.recordActivity(guild.id, user.id, 'reactions', 1, sourceMessage.channelId, eventId).catch(error => { console.error('[groups] reaction points failed:', error?.message || error); return 0; });
+    if (!awarded) {
+      const diagnosis = await gm.explainActivity(guild.id, user.id, 'reactions', sourceMessage.channelId, 1).catch(() => null);
+      if (diagnosis && diagnosis.reason !== 'eligible') await logActivitySkip(guild.id, user.id, null, 'reactions', diagnosis.reason, { ...diagnosis, channelId: sourceMessage.channelId, messageId: sourceMessage.id }).catch(() => {});
     }
   });
 
@@ -1601,6 +1609,10 @@ function registerInteractionHandler(client) {
     const oldTracked = tracksChannel(oldState.channelId);
     const newTracked = tracksChannel(newState.channelId);
     const key = `${guildId}:${memberId}`;
+    if (newState.channelId && !newTracked && oldState.channelId !== newState.channelId) {
+      const isMember = groups.some(eligible);
+      await logActivitySkip(guildId, memberId, null, 'voice_ms', isMember ? 'channel_out_of_scope' : 'member_not_eligible', { channelId: newState.channelId }).catch(() => {});
+    }
     // With all-channel scope, moving between voice rooms remains one continuous session.
     // In group-only scope, leaving the group's configured voice room closes the session.
     if (oldTracked && !newTracked) {
