@@ -210,20 +210,23 @@ async function sendSetupPanel(channel, guild, settings) {
 }
 function controlPayload(guild) {
   const c = baseContainer(guild, 'إدارة القروبات', '');
-  const items = [
-    ['إنشاء', 'إنشاء قروب جديد', 'groups_admin:create', ButtonStyle.Secondary, '<:emoji_33:1465383525644501238>'],
-    ['استيراد', 'ربط عناصر Discord الموجودة بقروب', 'groups_admin:import', ButtonStyle.Secondary, '<:emoji_30:1465383419641856233>'],
-    ['معلومات', 'عرض تفاصيل القروب', 'groups_admin:info', ButtonStyle.Secondary, '<:emoji_33:1465383582292771025>'],
-    ['تعديل', 'تعديل إعدادات القروب', 'groups_admin:edit', ButtonStyle.Secondary, '<:emoji_35:1465383704993202452>'],
-    ['حذف', 'حذف قروب مُدار', 'groups_admin:delete', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>'],
-    ['تصفير', 'تصفير نقاط قروب واحد', 'groups_admin:reset', ButtonStyle.Danger, '<:emoji_34:1465383644339241073>'],
-    ['تصفير الكل', 'تصفير نقاط كل القروبات', 'groups_admin:resetall', ButtonStyle.Danger, '<:emoji_26:1465373714060415180>']
-  ];
-  for (const [label, description, id, style, emoji] of items) {
-    c.addSectionComponents(new SectionBuilder()
-      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${description}`))
-      .setButtonAccessory(button(id, label, style, emoji)));
-  }
+  const addRow = items => c.addActionRowComponents(new ActionRowBuilder().addComponents(items.map(([label, id, style, emoji]) => button(id, label, style, emoji))));
+  c.addTextDisplayComponents(new TextDisplayBuilder().setContent('### العمليات الأساسية'));
+  addRow([
+    ['إنشاء', 'groups_admin:create', ButtonStyle.Secondary, '<:emoji_33:1465383525644501238>'],
+    ['استيراد', 'groups_admin:import', ButtonStyle.Secondary, '<:emoji_30:1465383419641856233>'],
+    ['معلومات', 'groups_admin:info', ButtonStyle.Secondary, '<:emoji_33:1465383582292771025>']
+  ]);
+  addRow([
+    ['تعديل', 'groups_admin:edit', ButtonStyle.Secondary, '<:emoji_35:1465383704993202452>'],
+    ['حذف', 'groups_admin:delete', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>'],
+    ['تصفير', 'groups_admin:reset', ButtonStyle.Danger, '<:emoji_34:1465383644339241073>']
+  ]);
+  c.addTextDisplayComponents(new TextDisplayBuilder().setContent('### إجراء جماعي'));
+  // Keep this destructive action in its own final row. It must never appear
+  // beside the other controls, especially in RTL layouts where it can look
+  // detached on the left side of the panel.
+  addRow([['تصفير الكل', 'groups_admin:resetall', ButtonStyle.Danger, '<:emoji_26:1465373714060415180>']]);
   return componentsV2Payload(c);
 }
 async function sendAdminControlPanel(channel, guild) {
@@ -714,12 +717,10 @@ async function handleTopBonusConfirm(interaction, action, parts) {
   }
 }
 function memberGroupPayload(guild, groupId) {
-  const id = Number(groupId);
-  const c = baseContainer(guild, 'GROUP OVERVIEW', 'هذه لوحة قراءة للأعضاء. أدوات الإدارة متاحة من أمر تحكم للمالك ومسؤولي القروب فقط.');
-  c.addActionRowComponents(new ActionRowBuilder().addComponents(
-    button(`groups_member:info:${id}`, 'عرض معلومات القروب', ButtonStyle.Primary)
-  ));
-  return componentsV2Payload(c);
+  // The member-control channel is the public control surface for every group.
+  // Keep all actions behind currentManager() permission checks, but expose the
+  // complete control set here instead of publishing an information-only card.
+  return controlGroupPayload(guild, Number(groupId));
 }
 async function sendGroupPanel(channel, guild, groupId) {
   const payload = { ...memberGroupPayload(guild, groupId), allowedMentions: { parse: [] } };
@@ -2048,13 +2049,28 @@ async function applyGroupControl(interaction, action, scope, groupId) {
 function controlGroupPayload(guild, groupId) {
   const c = baseContainer(guild, 'GROUP CONTROLS', 'التحكم متاح لمالك القروب ومسؤوليه. الكتم والطرد والصلاحيات تتطلب الصلاحيات الإضافية.\nاكتب الأوامر مباشرة في قناة القروب دون بادئة.\n`تحكم` • `إضافة @عضو` • `إزالة @عضو` • `منع @عضو` • `سماح @عضو`\n`قروبي` • `أعضاء` • `مسؤول @عضو` (للمالك أو مسؤول النظام)');
   const id = Number(groupId);
-  const controls = [
-    ['lock', 'text', 'قفل النص'], ['unlock', 'text', 'فتح النص'], ['hide', 'text', 'إخفاء النص'], ['show', 'text', 'إظهار النص'], ['mute', 'text', 'كتم النص'],
-    ['unmute', 'text', 'فك كتم النص'], ['lock', 'voice', 'قفل الفويس'], ['unlock', 'voice', 'فتح الفويس'], ['hide', 'voice', 'إخفاء الفويس'], ['show', 'voice', 'إظهار الفويس'],
-    ['mute', 'voice', 'كتم الفويس'], ['unmute', 'voice', 'فك كتم الفويس'], ['kick', 'voice', 'فصل من الفويس'], ['allow', 'both', 'سماح'], ['deny', 'both', 'منع'],
-    ['rename', 'both', 'تغيير الاسم'], ['limit', 'voice', 'حد الفويس'], ['permission', 'both', 'الصلاحيات']
-  ];
-  for (let offset = 0; offset < controls.length; offset += 5) c.addActionRowComponents(new ActionRowBuilder().addComponents(controls.slice(offset, offset + 5).map(([action, scope, label]) => button(`groups_control:${action}:${id}:${scope}`, label, action === 'deny' || action === 'kick' ? ButtonStyle.Danger : ButtonStyle.Secondary))));
+  const addControlSection = (title, controls) => {
+    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ${title}`));
+    for (let offset = 0; offset < controls.length; offset += 3) {
+      c.addActionRowComponents(new ActionRowBuilder().addComponents(
+        controls.slice(offset, offset + 3).map(([action, scope, label]) =>
+          button(`groups_control:${action}:${id}:${scope}`, label, action === 'deny' || action === 'kick' ? ButtonStyle.Danger : ButtonStyle.Secondary)
+        )
+      ));
+    }
+  };
+  addControlSection('تحكم النص', [
+    ['lock', 'text', 'قفل النص'], ['unlock', 'text', 'فتح النص'], ['hide', 'text', 'إخفاء النص'],
+    ['show', 'text', 'إظهار النص'], ['mute', 'text', 'كتم النص'], ['unmute', 'text', 'فك كتم النص']
+  ]);
+  addControlSection('تحكم الصوت', [
+    ['lock', 'voice', 'قفل الفويس'], ['unlock', 'voice', 'فتح الفويس'], ['hide', 'voice', 'إخفاء الفويس'],
+    ['show', 'voice', 'إظهار الفويس'], ['mute', 'voice', 'كتم الفويس'], ['unmute', 'voice', 'فك كتم الفويس'],
+    ['kick', 'voice', 'فصل من الفويس'], ['limit', 'voice', 'حد الفويس']
+  ]);
+  addControlSection('الأعضاء والصلاحيات', [
+    ['allow', 'both', 'سماح'], ['deny', 'both', 'منع'], ['rename', 'both', 'تغيير الاسم'], ['permission', 'both', 'الصلاحيات']
+  ]);
   c.addSectionComponents(new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent('عرض تفاصيل القروب.')).setButtonAccessory(button(`groups_member:info:${id}`, 'MY GROUP')));
   return componentsV2Payload(c);
 }

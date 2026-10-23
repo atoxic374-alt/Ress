@@ -208,6 +208,10 @@ async function testDashboardPublishers() {
 
   const first = await groupCommand.sendMemberControlPanels(channel, guild);
   assert.deepEqual({ total: first.total, published: first.published, overview: first.overview }, { total: 1, published: 1, overview: true });
+  const memberControlJson = [...messages.values()]
+    .map(message => JSON.stringify(message.components || []))
+    .find(value => value.includes('groups_control:lock'));
+  assert.ok(memberControlJson?.includes('groups_control:permission') && memberControlJson.includes('groups_member:info'), 'member dashboard exposes the full group controls and info action');
   const afterFirstPublish = sends;
   const second = await groupCommand.sendMemberControlPanels(channel, guild);
   assert.deepEqual({ total: second.total, published: second.published, overview: second.overview }, { total: 1, published: 1, overview: true });

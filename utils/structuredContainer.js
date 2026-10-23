@@ -6,8 +6,10 @@ const {
     ThumbnailBuilder,
     MessageFlags
 } = require('discord.js');
+const colorManager = require('./colorManager');
 
 function colorToNumber(color, fallback = 0x5865f2) {
+    const safeFallback = Number.isInteger(fallback) && fallback >= 0 && fallback <= 0xffffff ? fallback : 0x5865f2;
     if (Number.isInteger(color) && color >= 0 && color <= 0xffffff) return color;
     if (color && typeof color === 'object') {
         if (Number.isInteger(color.value) && color.value >= 0 && color.value <= 0xffffff) return color.value;
@@ -15,23 +17,26 @@ function colorToNumber(color, fallback = 0x5865f2) {
             const red = Math.max(0, Math.min(255, Number(color.r)));
             const green = Math.max(0, Math.min(255, Number(color.g)));
             const blue = Math.max(0, Math.min(255, Number(color.b)));
-            return (red << 16) | (green << 8) | blue;
+            return ((red << 16) | (green << 8) | blue) >>> 0;
         }
     }
     const raw = String(color || '').trim();
     const rgbMatch = raw.match(/^rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/i);
     if (rgbMatch) {
-        return (Number(rgbMatch[1]) << 16) | (Number(rgbMatch[2]) << 8) | Number(rgbMatch[3]);
+        const red = Math.max(0, Math.min(255, Number(rgbMatch[1])));
+        const green = Math.max(0, Math.min(255, Number(rgbMatch[2])));
+        const blue = Math.max(0, Math.min(255, Number(rgbMatch[3])));
+        return ((red << 16) | (green << 8) | blue) >>> 0;
     }
     const value = raw.replace(/^#/, '').replace(/^0x/i, '');
-    if (!/^[0-9a-f]{1,6}$/i.test(value)) return fallback;
+    if (!/^[0-9a-f]{1,6}$/i.test(value)) return safeFallback;
     const parsed = Number.parseInt(value, 16);
-    return Number.isFinite(parsed) && parsed <= 0xffffff ? parsed : fallback;
+    return Number.isFinite(parsed) && parsed >= 0 && parsed <= 0xffffff ? parsed : safeFallback;
 }
 
 function createStructuredContainer({ title, description = '', footer = '', accentColor, thumbnailUrl = '' }) {
     const container = new ContainerBuilder()
-        .setAccentColor(colorToNumber(accentColor));
+        .setAccentColor(colorToNumber(accentColor ?? colorManager.getColor?.()));
 
     if (title || description) {
         const textComponents = [];
