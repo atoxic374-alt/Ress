@@ -2039,6 +2039,22 @@ async function handleInteraction(interaction, context = {}) {
         }
         return true;
       }
+      if (confirmAction === 'all-groups-points') {
+        const operation = rawGroupId === 'remove-points' ? 'remove-points' : 'add-points';
+        const amount = Number(rawUserId);
+        try {
+          if (!Number.isSafeInteger(amount) || amount <= 0 || amount > 1000000) throw new Error('INVALID_POINTS_ADJUSTMENT');
+          const result = await db.adjustAllGroupPoints(interaction.guild.id, operation === 'add-points' ? amount : -amount, interaction.user.id);
+          const verb = operation === 'add-points' ? 'إضافة' : 'إزالة';
+          await showPrivatePanel(interaction, buildActionResult('All Groups Points Updated',
+            `تمت ${verb} ${Math.abs(result.delta).toLocaleString()} نقطة بعد تأكيدك. عدد القروبات: ${result.groups.toLocaleString()}.`), true);
+          await publishAuditLogs(interaction.guild).catch(() => {});
+          scheduleRefresh(interaction.guild, true);
+        } catch (error) {
+          await showPrivatePanel(interaction, buildActionResult('Points Update Failed', 'تعذر تنفيذ العملية الجماعية؛ ربما تغيرت الأرصدة منذ المعاينة. راجع الأرصدة وحاول مرة أخرى.'), true);
+        }
+        return true;
+      }
       if (confirmAction === 'group-reset') {
         await settleVoiceBeforeReset(interaction.guild, groupId);
         const totals = await db.resetGroup(interaction.guild.id, groupId, interaction.user.id);
@@ -2436,12 +2452,19 @@ async function handleInteraction(interaction, context = {}) {
         }
         try {
           if (rawGroupId === 'all' && (operation === 'add-points' || operation === 'remove-points')) {
-            const result = await db.adjustAllGroupPoints(interaction.guild.id, operation === 'add-points' ? amount : -amount, interaction.user.id);
-            const verb = operation === 'add-points' ? 'إضافة' : 'إزالة';
-            await showPrivatePanel(interaction, buildActionResult('All Groups Points Updated',
-              `تمت ${verb} ${Math.abs(result.delta).toLocaleString()} نقطة موزعة على ${result.groups.toLocaleString()} قروب نشط.`), true);
-            await publishAuditLogs(interaction.guild).catch(() => {});
-            scheduleRefresh(interaction.guild, true);
+            const groups = await db.listGroups(interaction.guild.id, false);
+            const totals = await Promise.all(groups.map(async group => Number(await db.getGroupPoints(interaction.guild.id, group.id)) || 0));
+            const before = totals.reduce((sum, value) => sum + value, 0);
+            const requestedDelta = operation === 'add-points' ? amount : -amount;
+            const after = operation === 'add-points' ? before + amount * groups.length : Math.max(0, before - amount * groups.length);
+            const effectiveDelta = after - before;
+            await showPrivatePanel(interaction, {
+              content: `معاينة العملية الجماعية قبل التنفيذ\\nالقروبات المتأثرة: ${groups.length.toLocaleString()}\\nإجمالي النقاط قبل: ${before.toLocaleString()}\\nالتغيير المطلوب لكل قروب: ${requestedDelta > 0 ? '+' : ''}${requestedDelta.toLocaleString()}\\nالتغيير الفعلي التقديري: ${effectiveDelta >= 0 ? '+' : ''}${effectiveDelta.toLocaleString()}\\nإجمالي النقاط بعد: ${after.toLocaleString()}\\nراجع المعاينة ثم أكد التنفيذ.`,
+              components: [new ActionRowBuilder().addComponents(
+                button(`bonus:confirm:all-groups-points:${operation}:${amount}`, 'تأكيد العملية الجماعية', operation === 'remove-points' ? ButtonStyle.Danger : ButtonStyle.Success),
+                closeButton('إلغاء')
+              )]
+            }, true);
             return true;
           }
           if (operation === 'remove-group') {
