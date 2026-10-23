@@ -453,7 +453,8 @@ function structurePrivateResponse(payload) {
     ...payload,
     components: [container, ...(Array.isArray(payload.components) ? payload.components : [])],
     allowedMentions: payload.allowedMentions || { parse: [] },
-    flags: Number(payload.flags || 0) | MessageFlags.IsComponentsV2
+    flags: Number(payload.flags || 0) | MessageFlags.IsComponentsV2,
+    __bonusActionTitle: title
   };
   delete normalized.content;
   delete normalized.embeds;
@@ -492,7 +493,8 @@ async function showPrivatePanel(interaction, payload, update = false) {
   const boardMessage = isBonusBoardMessage(interaction.message);
   const shouldUpdateBoard = boardMessage && Array.isArray(payload.files) && payload.files.length > 0;
   payload = (!boardMessage || !shouldUpdateBoard) ? structurePrivateResponse(payload) : payload;
-  const completedResult = payload?.embeds?.[0]?.data?.title === 'Action Completed';
+  const completedResult = payload?.__bonusActionTitle === 'ACTION COMPLETED' || payload?.embeds?.[0]?.data?.title === 'Action Completed';
+  delete payload.__bonusActionTitle;
   if (update && completedResult && !boardMessage) {
     const resultPayload = { ...payload, ephemeral: true };
     delete resultPayload.components;
