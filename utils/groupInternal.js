@@ -1,6 +1,7 @@
 const gm = require('./groupManager');
 const { renderMembers, renderInfo } = require('./groupRenderer');
 const { PermissionsBitField } = require('discord.js');
+const { responsePayload } = require('./groupResponses');
 
 const COMMANDS = new Set(['تحكم', 'control', 'تعديل', 'edit', 'عقوبه', 'عقوبة', 'punish', 'صلاحية', 'permission', 'مسح', 'clear', 'اعضاء', 'أعضاء', 'members', 'اضافة', 'إضافة', 'add', 'ازالة', 'إزالة', 'remove', 'منع', 'block', 'سماح', 'allow', 'قروبي', 'my-group', 'مسؤول', 'manager']);
 
@@ -44,7 +45,7 @@ async function syncMember(group, guild, userId, add, { ignoreMissing = false } =
   }
   return member;
 }
-function reply(message, content) { return message.reply(content).catch(() => null); }
+function reply(message, content) { const payload = typeof content === 'string' ? responsePayload({ content }) : responsePayload(content); return message.reply(payload).catch(() => null); }
 async function restoreMembership(group, guildId, userId, wasManager, actorId) {
   await gm.addMember(guildId, group.id, userId, actorId);
   if (wasManager) await gm.setManagers(guildId, group.id, [...group.managerIds, String(userId)], actorId);

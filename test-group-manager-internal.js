@@ -185,8 +185,8 @@ async function testDashboardPublishers() {
 
   await groupCommand.sendAdminControlPanel(channel, guild);
   const adminComponents = JSON.stringify([...messages.values()][0]?.components || []);
-  assert.ok(adminComponents.includes('Group Management'), 'admin dashboard title is English');
-  assert.ok(adminComponents.includes('Delete') && adminComponents.includes('Reset All'));
+  assert.ok(adminComponents.includes('إدارة القروبات'), 'admin dashboard title is Arabic');
+  assert.ok(adminComponents.includes('حذف') && adminComponents.includes('تصفير الكل'));
   assert.doesNotMatch(adminComponents, /استخدم الأزرار لإدارة القروبات/);
   assert.ok(adminComponents.includes('1465336647477493894') && adminComponents.includes('1465373714060415180'), 'admin action buttons reuse matching role-panel emojis');
   assert.ok(adminComponents.indexOf('groups_admin:delete') < adminComponents.indexOf('groups_admin:reset'), 'Delete appears above Reset');
@@ -432,7 +432,7 @@ async function testDeleteCommandFlow() {
   await createCommand.execute(commandMessage, [], { client });
   const createPayloadJson = JSON.stringify(commandPayload);
   assert.equal(commandPayload.flags, require('discord.js').MessageFlags.IsComponentsV2, 'create command is sent as a Components V2 card');
-  assert.ok(createPayloadJson.includes('Create Group') && createPayloadJson.includes('افتح النموذج') && createPayloadJson.includes('https://cdn.example/guild.png'), 'create card is concise and includes a thumbnail');
+  assert.ok(createPayloadJson.includes('إنشاء قروب') && createPayloadJson.includes('افتح النموذج') && createPayloadJson.includes('https://cdn.example/guild.png'), 'create card is concise and includes a thumbnail');
   assert.ok(createPayloadJson.includes('group_create_launch:') && createPayloadJson.includes('"style":2'), 'create button is Secondary and owned by a collector');
   const createCustomId = createPayloadJson.match(/"custom_id":"([^"]+)"/)?.[1];
   assert.ok(createCustomId.startsWith('group_create_launch:') && !createCustomId.startsWith('groups_'), 'create collector custom ID is isolated from the central component router');
@@ -458,14 +458,14 @@ async function testDeleteCommandFlow() {
     reply: async content => { deniedReply = content; return content; }
   };
   await createCommand.execute(unauthorizedMessage, [], { client });
-  assert.equal(deniedReply, 'لا تملك الصلاحية.', 'create is restricted to group-system managers');
+  assert.equal(responseText(deniedReply), 'لا تملك الصلاحية.', 'create is restricted to group-system managers');
   await deleteCommand.execute(unauthorizedMessage, [], { client });
-  assert.equal(deniedReply, 'لا تملك الصلاحية.', 'delete is restricted to group-system managers');
+  assert.equal(responseText(deniedReply), 'لا تملك الصلاحية.', 'delete is restricted to group-system managers');
 
   const confirmDelete = makeInteraction(`groups_admin_confirm:delete:${groupId}`, 'button');
   assert.equal(await interactionRouter.route(confirmDelete), true);
   assert.equal((await gm.getGroup(guildId, groupId)).status, 'deleted');
-  assert.equal(confirmDelete.response.content, 'تم حذف القروب.');
+  assert.equal(responseText(confirmDelete.response), 'تم حذف القروب.');
   interactionRouter.clear();
 }
 
@@ -489,6 +489,20 @@ function makeParserGuild() {
       fetch: async userId => members.get(String(userId)) || null
     }
   };
+}
+
+function responseText(value) {
+  if (typeof value === 'string') return value;
+  const find = node => {
+    if (!node || typeof node !== 'object') return null;
+    if (typeof node.content === 'string') return node.content;
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) { for (const item of child) { const found = find(item); if (found !== null) return found; } }
+      else { const found = find(child); if (found !== null) return found; }
+    }
+    return null;
+  };
+  return find(value);
 }
 
 function parserMessage(guild, content) {
@@ -522,6 +536,14 @@ async function testMembershipLimitsAndBlockedUsers() {
     gm.addMember(guildId, groupId, USER_C, OWNER),
     error => error.message === 'GROUP_FULL',
     'maxMembers rejects a new member once the configured limit is reached'
+  );
+
+  const legacyGroupId = await insertGroup({ guildId: 'legacy-membership-guild', name: 'Legacy owner membership', ownerId: OWNER, memberIds: [] });
+  await gm.saveSettings('legacy-membership-guild', { maxMembers: 1 }, OWNER);
+  await assert.rejects(
+    gm.addMember('legacy-membership-guild', legacyGroupId, USER_A, OWNER),
+    error => error.message === 'GROUP_FULL',
+    'the owner counts toward maxMembers even when a legacy row omits the owner from member_ids_json'
   );
 
   const blockedGroupId = await insertGroup({ guildId: 'blocked-guild', name: 'Blocked' });
@@ -640,7 +662,7 @@ async function testInternalCommandParser() {
 
   const englishAdd = parserMessage(guild, `:add ${USER_A}`);
   assert.equal(await handleInternalMessage(englishAdd.message), true);
-  assert.deepEqual(englishAdd.replies, ['تمت إضافة العضو.']);
+  assert.equal(responseText(englishAdd.replies[0]), 'تمت إضافة العضو.');
   assert.deepEqual((await gm.getGroup(guildId, groupId)).memberIds, [OWNER, USER_A]);
 
   const barePermission = parserMessage(guild, 'صلاحية');
@@ -650,7 +672,7 @@ async function testInternalCommandParser() {
   const bareAdd = parserMessage(guild, `إضافة ${USER_A}`);
   assert.equal(await handleInternalMessage(bareAdd.message, { prefix: null }), true,
     'group commands accept bare command names without a colon or configured prefix');
-  assert.deepEqual(bareAdd.replies, ['تمت إضافة العضو.']);
+  assert.equal(responseText(bareAdd.replies[0]), 'تمت إضافة العضو.');
 
   // The same parser command is safe to repeat and does not duplicate membership.
   const repeatedAdd = parserMessage(guild, `:add ${USER_A}`);
@@ -687,7 +709,7 @@ async function testInternalCommandParser() {
 
   const punishWhileDisabled = parserMessage(guild, `:عقوبة ${USER_A}`);
   await handleInternalMessage(punishWhileDisabled.message);
-  assert.equal(punishWhileDisabled.replies[0], 'الصلاحيات الإضافية متوقفة.');
+  assert.equal(responseText(punishWhileDisabled.replies[0]), 'الصلاحيات الإضافية متوقفة.');
 
   await insertGroup({ guildId, name: 'Ambiguous channel', ownerId: USER_C, memberIds: [USER_C], textChannelId: 'parser-channel' });
   assert.equal(await gm.getGroupForChannel(guildId, 'parser-channel'), null, 'shared channel links are rejected rather than routing to the first group');
@@ -759,11 +781,11 @@ async function testTopBonusControls() {
   };
   const denied = mockGroupInteraction({ customId: 'groups_bonus:group-add', guild, userId: USER_B });
   await groupCommand.handleInteraction(denied);
-  assert.ok(denied.state.reply?.content?.includes('لا تملك صلاحية'), 'bonus controls are restricted to group-system managers');
+  assert.ok(responseText(denied.state.reply)?.includes('لا تملك صلاحية'), 'bonus controls are restricted to group-system managers');
 
   const deniedManage = mockGroupInteraction({ customId: 'groups_top:manage', guild, userId: USER_B });
   await groupCommand.handleInteraction(deniedManage);
-  assert.ok(deniedManage.state.reply?.content?.includes('لا تملك صلاحية'), 'Manage menu is restricted to group-system managers');
+  assert.ok(responseText(deniedManage.state.reply)?.includes('لا تملك صلاحية'), 'Manage menu is restricted to group-system managers');
   const manage = mockGroupInteraction({ customId: 'groups_top:manage', guild, channelId: 'top-bonus-channel' });
   await groupCommand.handleInteraction(manage);
   const manageJson = JSON.stringify(manage.state.reply?.components?.map(component => component.toJSON()));
@@ -861,7 +883,7 @@ async function testTopBonusControls() {
   await groupCommand.handleInteraction(myGroup);
   const myGroupJson = JSON.stringify(myGroup.state.editReply);
   assert.ok(myGroupJson.includes('groups_top:leave:' + groupId), 'My Group provides a Leave action');
-  assert.ok(myGroupJson.includes('Created:') && !myGroupJson.includes('تاريخ الإنشاء'), 'My Group uses structured text and an English date label');
+  assert.ok(myGroupJson.includes('تاريخ الإنشاء') && myGroupJson.includes('نقاط القروب'), 'group details use structured Arabic labels');
 
   const leaveRequest = mockGroupInteraction({ customId: `groups_top:leave:${groupId}`, guild, userId: USER_A, channelId: 'top-bonus-channel' });
   await groupCommand.handleInteraction(leaveRequest);

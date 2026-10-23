@@ -1,4 +1,4 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder, ChannelType, EmbedBuilder, LabelBuilder, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder, TextDisplayBuilder, SectionBuilder, ContainerBuilder, ThumbnailBuilder, UserSelectMenuBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder, ChannelType, LabelBuilder, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder, TextDisplayBuilder, SectionBuilder, ContainerBuilder, ThumbnailBuilder, UserSelectMenuBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
 const router = require('../utils/interactionRouter');
 const gm = require('../utils/groupManager');
 const colorManager = require('../utils/colorManager');
@@ -87,8 +87,8 @@ function setupPayloads(guild, settings) {
   const readiness = issues.length ? `الإعداد غير مكتمل (${issues.length}):\n${issues.slice(0, 6).map(setupIssueLabel).join('\n')}${issues.length > 6 ? '\n... استخدم زر تدقيق الإعداد لعرض الباقي.' : ''}` : 'الإعداد جاهز لإنشاء القروبات.';
   const summary = `Status : ${status}\nReadiness : ${readiness}\nSystem Managers : ${managerCount} عضو/رول\nChat Mode : ${chatMode}\nText Category : ${channelMention(settings.textCategoryId)}\nVoice Category : ${channelMention(settings.voiceCategoryId)}\nTop Channel : ${channelMention(settings.topChannelId)}\nAdmin Control Channel : ${channelMention(settings.adminControlChannelId)}\nMember Control Channel : ${channelMention(settings.memberControlChannelId)}\nMain Role : ${roleMention(settings.mainRoleId)}\nLeader Role : ${roleMention(settings.leaderRoleId)}\nManager Role : ${roleMention(settings.managerRoleId)}\nMusic Source : ${channelMention(settings.musicChannelId)}\nLog Channel : ${channelMention(settings.logChannelId)}\nPoints Scope : ${settings.countAllChannels ? 'كل الرومات' : 'رومات القروبات فقط'}\nExtra Permissions : ${settings.extraPermissions ? 'مفعلة' : 'متوقفة'}\nPoint Rules : اضغط على زر قواعد النقاط للتفاصيل`;
   const sections = [
-    ['System Toggle', 'تشغيل أو إيقاف نظام القروبات', 'groups_setup:toggle'],
-    ['System Managers', 'إضافة أو إزالة مسؤولي النظام', 'groups_setup:managers'],
+    ['حالة نظام القروبات', 'تشغيل أو إيقاف نظام القروبات', 'groups_setup:toggle'],
+    ['مسؤولو النظام', 'إضافة أو إزالة مسؤولي النظام', 'groups_setup:managers'],
     ['Chat Mode', 'ثريدات أو رومات مستقلة', 'groups_setup:chatmode'],
     ['Text Category', 'تحديد كاتوقري النص أو الثريدات', 'groups_setup:textcat'],
     ['Voice Category', 'تحديد كاتوقري الفويس', 'groups_setup:voicecat'],
@@ -101,18 +101,18 @@ function setupPayloads(guild, settings) {
     ['Leader Role', 'الرول الذي يأخذه مالك القروب', 'groups_setup:leaderrole'],
     ['Manager Role', 'الرول الذي يأخذه مسؤول القروب', 'groups_setup:managerrole'],
     ['Points Scope', 'كل الرومات أو رومات القروبات', 'groups_setup:scope'],
-    ['Extra Permissions', 'تفعيل المسح وأدوات الإدارة', 'groups_setup:extra'],
+    ['الصلاحيات الإضافية', 'تفعيل المسح وأدوات الإدارة', 'groups_setup:extra'],
     ['Point Rules', 'تخصيص قواعد نقاط القروبات', 'groups_setup:rules']
   ];
   const make = (title, items, includeSummary) => {
     const c = includeSummary
       ? baseContainer(guild, title, summary)
       : new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || '#5865F2'));
-    for (const [label, desc, id] of items) c.addSectionComponents(new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${desc}`)).setButtonAccessory(button(id, 'Open')));
+    for (const [label, desc, id] of items) c.addSectionComponents(new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${desc}`)).setButtonAccessory(button(id, 'فتح')));
     if (includeSummary) c.addActionRowComponents(new ActionRowBuilder().addComponents(button('groups_setup:audit', 'تدقيق الإعداد', ButtonStyle.Primary), button('groups_setup:clear', 'مسح قيمة', ButtonStyle.Secondary)));
     return componentsV2Payload(c);
   };
-  return [make('Group Settings', sections.slice(0, 8), true), make('', sections.slice(8), false)];
+  return [make('إعدادات القروبات', sections.slice(0, 8), true), make('', sections.slice(8), false)];
 }
 
 const setupPanels = new Map();
@@ -192,15 +192,15 @@ async function sendSetupPanel(channel, guild, settings) {
   try { return await work; } finally { setupPanelLocks.delete(key); }
 }
 function controlPayload(guild) {
-  const c = baseContainer(guild, 'Group Management', '');
+  const c = baseContainer(guild, 'إدارة القروبات', '');
   const items = [
-    ['Create', 'إنشاء قروب جديد', 'groups_admin:create', ButtonStyle.Secondary, '<:emoji_33:1465383525644501238>'],
-    ['Import', 'ربط عناصر Discord الموجودة بقروب', 'groups_admin:import', ButtonStyle.Secondary, '<:emoji_30:1465383419641856233>'],
-    ['Info', 'عرض تفاصيل القروب', 'groups_admin:info', ButtonStyle.Secondary, '<:emoji_33:1465383582292771025>'],
-    ['Change', 'تعديل إعدادات القروب', 'groups_admin:edit', ButtonStyle.Secondary, '<:emoji_35:1465383704993202452>'],
-    ['Delete', 'حذف قروب مُدار', 'groups_admin:delete', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>'],
-    ['Reset', 'تصفير نقاط قروب واحد', 'groups_admin:reset', ButtonStyle.Danger, '<:emoji_34:1465383644339241073>'],
-    ['Reset All', 'تصفير نقاط كل القروبات', 'groups_admin:resetall', ButtonStyle.Danger, '<:emoji_26:1465373714060415180>']
+    ['إنشاء', 'إنشاء قروب جديد', 'groups_admin:create', ButtonStyle.Secondary, '<:emoji_33:1465383525644501238>'],
+    ['استيراد', 'ربط عناصر Discord الموجودة بقروب', 'groups_admin:import', ButtonStyle.Secondary, '<:emoji_30:1465383419641856233>'],
+    ['معلومات', 'عرض تفاصيل القروب', 'groups_admin:info', ButtonStyle.Secondary, '<:emoji_33:1465383582292771025>'],
+    ['تعديل', 'تعديل إعدادات القروب', 'groups_admin:edit', ButtonStyle.Secondary, '<:emoji_35:1465383704993202452>'],
+    ['حذف', 'حذف قروب مُدار', 'groups_admin:delete', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>'],
+    ['تصفير', 'تصفير نقاط قروب واحد', 'groups_admin:reset', ButtonStyle.Danger, '<:emoji_34:1465383644339241073>'],
+    ['تصفير الكل', 'تصفير نقاط كل القروبات', 'groups_admin:resetall', ButtonStyle.Danger, '<:emoji_26:1465373714060415180>']
   ];
   for (const [label, description, id, style, emoji] of items) {
     c.addSectionComponents(new SectionBuilder()
@@ -223,10 +223,12 @@ async function sendAdminControlPanel(channel, guild) {
   return channel.send(payload);
 }
 function selectPayload(guild, title, description, customId, options) { const c=baseContainer(guild,title,description); const menu=new StringSelectMenuBuilder().setCustomId(customId).setPlaceholder('اختر خيارًا').setMinValues(1).setMaxValues(1).addOptions(options); c.addActionRowComponents(new ActionRowBuilder().addComponents(menu)); return componentsV2Payload(c); }
-async function reply(interaction, payload, ephemeral=true) { const data={...payload,allowedMentions:{parse:[]}}; if(interaction.deferred&&!interaction.replied)return interaction.editReply(data); if(interaction.replied)return interaction.followUp({...data,ephemeral}); return interaction.reply({...data,ephemeral}); }
-async function deny(interaction) { return reply(interaction,{content:'لا تملك صلاحية استخدام هذه العملية.'}); }
+const { responsePayload } = require('../utils/groupResponses');
+function replyMessage(message, payload) { return message.reply(responsePayload(typeof payload === 'string' ? { content: payload } : payload)); }
+async function reply(interaction, payload, ephemeral=true) { const data=responsePayload({...payload,allowedMentions:{parse:[]}}); if(interaction.deferred&&!interaction.replied)return interaction.editReply(data); if(interaction.replied)return interaction.followUp({...data,ephemeral}); return interaction.reply({...data,ephemeral}); }
+async function deny(interaction, message='لا تملك صلاحية استخدام هذه العملية.') { return reply(interaction,{content:message}); }
 function setupConfirmation(interaction, title, text) { const c = baseContainer(interaction.guild, title, `**- ${safe(text, 300)} **`); return componentsV2Payload(c); }
-async function checkSystem(interaction) { const settings=await gm.getSettings(interaction.guild.id); if(!gm.canManageSystem(interaction.client,settings,interaction.member)){await deny(interaction);return null;} return settings; }
+async function checkSystem(interaction) { const settings=await gm.getSettings(interaction.guild.id); if(!gm.canManageSystem(interaction.client,settings,interaction.member)){await deny(interaction,'هذه العملية مخصصة لمسؤولي نظام القروبات ومالك السيرفر.');return null;} return settings; }
 function musicResultMessage(result) { if(!result) return 'لم يتم تنفيذ الميوزك.'; if(result.ok) return result.alreadyPresent ? `بوت الأغاني ${result.musicBot.user.username} موجود بالفعل في الروم.` : `تم سحب بوت الأغاني ${result.musicBot.user.username} إلى الروم.`; const messages={MUSIC_CHANNEL_NOT_CONFIGURED:'لم يتم تحديد روم مصدر الميوزك.',INVALID_MUSIC_CHANNEL:'روم مصدر الميوزك غير صالح.',MUSIC_BOT_NOT_FOUND:'لم يتم العثور على بوت أغاني معروف في روم المصدر.',AMBIGUOUS_SOURCE_BOTS:'يوجد أكثر من بوت أغاني في المصدر؛ لم يتم اختيار بوت عشوائياً.',AMBIGUOUS_TARGET_BOTS:'يوجد أكثر من بوت أغاني في الروم الهدف؛ لم يتم تغيير أي بوت.',MISSING_PERMISSIONS:`صلاحيات البوت ناقصة : ${result.error||'غير معروفة'}`,MOVE_FAILED:'تعذر نقل بوت الأغاني حالياً.',TARGET_IS_MUSIC_CHANNEL:'الروم الهدف هو روم المصدر نفسه.'}; return messages[result.code]||'تعذر تنفيذ Music بأمان.'; }
 function isGroupMember(group, userId) {
   const id = String(userId || '');
@@ -241,13 +243,13 @@ function selectMemberGroup(groups, userId, channelId, requestedGroupId = null) {
 }
 function topGroupsButtons() {
   return [new ActionRowBuilder().addComponents(
-    button('groups_top:rank', 'My Rank', ButtonStyle.Primary),
-    button('groups_top:group', 'My Group', ButtonStyle.Secondary),
-    button('groups_top:manage', 'Manage', ButtonStyle.Secondary)
+    button('groups_top:rank', 'ترتيبي', ButtonStyle.Primary),
+    button('groups_top:group', 'قروبي', ButtonStyle.Secondary),
+    button('groups_top:manage', 'إدارة', ButtonStyle.Secondary)
   )];
 }
 function topManagePayload(guild) {
-  const c = baseContainer(guild, 'Manage', 'إدارة النقاط اليدوية للقروبات والأعضاء.');
+  const c = baseContainer(guild, 'إدارة', 'إدارة النقاط اليدوية للقروبات والأعضاء.');
   const actions = [
     ['Add Group Pts', 'groups_bonus:group-add', ButtonStyle.Success, '<:emoji_30:1465383419641856233>'],
     ['Remove Group Pts', 'groups_bonus:group-remove', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>'],
@@ -284,35 +286,35 @@ async function buildTopGroupsPayload(guild, { viewerId = null, channelId = null 
   const attachment = await renderTopGroups({ guild, groups, memberRowsByGroup, groupAvatars, selectedGroup, viewerId, accentColor: null });
   return { files: [attachment], components: topGroupsButtons(), allowedMentions: { parse: [] } };
 }
-function formatEnglishDate(value) {
+function formatGroupDate(value) {
   const date = new Date(Number(value));
-  if (!Number.isFinite(date.getTime())) return 'Unknown';
-  return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+  if (!Number.isFinite(date.getTime())) return 'غير معروف';
+  return new Intl.DateTimeFormat('ar', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
 }
 function myGroupPayload(guild, group, userId, memberPoints, roleName) {
   const status = String(group.status || 'active').toLowerCase();
-  const membership = String(group.owner_id) === String(userId) ? 'Owner'
-    : group.managerIds.includes(String(userId)) ? 'Manager' : 'Member';
-  const c = baseContainer(guild, 'My Group', safe(group.name, 100));
+  const membership = String(group.owner_id) === String(userId) ? 'المالك'
+    : group.managerIds.includes(String(userId)) ? 'مسؤول القروب' : 'عضو';
+  const c = baseContainer(guild, 'قروبي', safe(group.name, 100));
   c.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `### ${safe(group.name, 100)}\n**Your role:** ${membership}  •  **Status:** ${status}`
+    `### ${safe(group.name, 100)}\n**دورك:** ${membership}  •  **الحالة:** ${status === 'active' ? 'نشط' : status === 'orphaned' ? 'يحتاج تنظيفًا' : status}`
   ));
   c.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `### Group details\n**Owner:** <@${group.owner_id}>\n**Role:** ${safe(roleName || 'Not available', 100)}\n**Members:** ${Number(group.memberIds?.length || 0).toLocaleString('en-US')}`
+    `### تفاصيل القروب\n**المالك:** <@${group.owner_id}>\n**الرول:** ${safe(roleName || 'غير متاح', 100)}\n**الأعضاء:** ${Number(group.memberIds?.length || 0).toLocaleString('ar')}`
   ));
   c.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `### Points & dates\n**Group points:** ${Number(group.points || 0).toLocaleString('en-US')}\n**Your points:** ${Number(memberPoints?.points || 0).toLocaleString('en-US')}\n**Created:** ${formatEnglishDate(group.created_at)}`
+    `### النقاط والتواريخ\n**نقاط القروب:** ${Number(group.points || 0).toLocaleString('ar')}\n**نقاطك:** ${Number(memberPoints?.points || 0).toLocaleString('ar')}\n**تاريخ الإنشاء:** ${formatGroupDate(group.created_at)}`
   ));
   c.addActionRowComponents(new ActionRowBuilder().addComponents(
-    button(`groups_top:leave:${group.id}`, 'Leave', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>')
+    button(`groups_top:leave:${group.id}`, 'مغادرة القروب', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>')
   ));
   return componentsV2Payload(c);
 }
 function leaveGroupPrompt(guild, group) {
-  const c = baseContainer(guild, 'Confirm Leave', `You are about to leave **${safe(group.name, 100)}**. Your group role and private thread access will be removed.`);
+  const c = baseContainer(guild, 'تأكيد المغادرة', `أنت على وشك مغادرة **${safe(group.name, 100)}**. ستُزال رتبة القروب وصلاحية الوصول إلى الثريد الخاص به.`);
   c.addActionRowComponents(new ActionRowBuilder().addComponents(
-    button(`groups_top:leave-confirm:${group.id}`, 'Confirm Leave', ButtonStyle.Danger),
-    button(`groups_top:leave-cancel:${group.id}`, 'Cancel', ButtonStyle.Secondary)
+    button(`groups_top:leave-confirm:${group.id}`, 'تأكيد المغادرة', ButtonStyle.Danger),
+    button(`groups_top:leave-cancel:${group.id}`, 'إلغاء', ButtonStyle.Secondary)
   ));
   return componentsV2Payload(c);
 }
@@ -385,38 +387,38 @@ async function handleTopGroupsInteraction(interaction, action, parts = []) {
     return interaction.update(leaveGroupPrompt(interaction.guild, group));
   }
   if (action === 'leave-cancel') {
-    const c = baseContainer(interaction.guild, 'Leave Cancelled', 'لم يتم تغيير عضويتك.');
-    c.addActionRowComponents(new ActionRowBuilder().addComponents(button('groups_top:group', 'Back to My Group', ButtonStyle.Secondary)));
+    const c = baseContainer(interaction.guild, 'تم إلغاء المغادرة', 'لم يتم تغيير عضويتك.');
+    c.addActionRowComponents(new ActionRowBuilder().addComponents(button('groups_top:group', 'العودة إلى قروبي', ButtonStyle.Secondary)));
     return interaction.update(componentsV2Payload(c));
   }
   if (action === 'leave-confirm') {
     await interaction.deferUpdate();
     const group = await gm.getGroup(interaction.guild.id, Number(parts[0]));
     if (!group || group.status !== 'active' || !isGroupMember(group, interaction.user.id)) {
-      return reply(interaction, componentsV2Payload(baseContainer(interaction.guild, 'Leave Failed', 'لم تعد عضوًا في هذا القروب.')));
+      return reply(interaction, componentsV2Payload(baseContainer(interaction.guild, 'تعذرت المغادرة', 'لم تعد عضوًا في هذا القروب.')));
     }
     if (String(group.owner_id) === String(interaction.user.id)) {
-      return reply(interaction, componentsV2Payload(baseContainer(interaction.guild, 'Leave Failed', 'انقل ملكية القروب أولًا قبل المغادرة.')));
+      return reply(interaction, componentsV2Payload(baseContainer(interaction.guild, 'تعذرت المغادرة', 'انقل ملكية القروب أولًا قبل المغادرة.')));
     }
     try {
       const settings = await gm.getSettings(interaction.guild.id);
       await leaveGroupMember(interaction.guild, settings, group, interaction.user.id, interaction.user.id);
       activityCache.delete(String(interaction.guild.id));
       if (interaction.channel?.send) await sendTopGroupsPanel(interaction.channel, interaction.guild, { channelId: interaction.channelId }).catch(() => null);
-      return reply(interaction, componentsV2Payload(baseContainer(interaction.guild, 'Left Group', `تمت مغادرة **${safe(group.name, 100)}** وإزالة صلاحيات القروب.`)));
+      return reply(interaction, componentsV2Payload(baseContainer(interaction.guild, 'تمت المغادرة', `تمت مغادرة **${safe(group.name, 100)}** وإزالة صلاحيات القروب.`)));
     } catch (error) {
       console.error('[groups] member leave failed:', error?.message || error);
       const message = error.message === 'GROUP_ROLE_NOT_FOUND' ? 'رتبة القروب غير موجودة؛ لم يتم إكمال المغادرة.'
         : error.message === 'GROUP_THREAD_NOT_FOUND' ? 'ثريد القروب غير متاح؛ لم يتم إكمال المغادرة.'
           : 'تعذر إكمال المغادرة ومزامنة صلاحيات القروب.';
-      return reply(interaction, componentsV2Payload(baseContainer(interaction.guild, 'Leave Failed', message)));
+      return reply(interaction, componentsV2Payload(baseContainer(interaction.guild, 'تعذرت المغادرة', message)));
     }
   }
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   if (action === 'rank') {
     const groups = await gm.listGroups(interaction.guild.id);
     const group = selectMemberGroup(groups, interaction.user?.id, interaction.channelId);
-    if (!group) return interaction.editReply({ content: 'لا يوجد قروب مرتبط بعضويتك لعرض مركزه.', allowedMentions: { parse: [] } });
+    if (!group) return interaction.editReply(responsePayload({ content: 'لا يوجد قروب مرتبط بعضويتك لعرض مركزه.', allowedMentions: { parse: [] } }));
     const full = await gm.getGroup(interaction.guild.id, group.id);
     const sorted = [...groups].sort((a, b) => Number(b.points || 0) - Number(a.points || 0) || Number(a.id || 0) - Number(b.id || 0));
     const memberRows = await gm.listMemberPoints(interaction.guild.id, full.id, 1000).catch(() => []);
@@ -439,13 +441,13 @@ async function handleTopGroupsInteraction(interaction, action, parts = []) {
   if (action === 'group') {
     const groups = await gm.listGroups(interaction.guild.id);
     const group = selectMemberGroup(groups, interaction.user?.id, interaction.channelId);
-    if (!group) return interaction.editReply({ content: 'لا يوجد قروب مرتبط بعضويتك.', allowedMentions: { parse: [] } });
+    if (!group) return interaction.editReply(responsePayload({ content: 'لا يوجد قروب مرتبط بعضويتك.', allowedMentions: { parse: [] } }));
     const full = await gm.getGroup(interaction.guild.id, group.id);
     const role = full.role_id && (interaction.guild.roles.cache.get(String(full.role_id)) || await interaction.guild.roles.fetch(String(full.role_id)).catch(() => null));
     const memberPoints = await gm.getMemberPoints(interaction.guild.id, full.id, interaction.user.id).catch(() => null);
     return reply(interaction, myGroupPayload(interaction.guild, full, interaction.user.id, memberPoints, role?.name));
   }
-  return interaction.editReply({ content: 'الزر غير معروف.' });
+  return interaction.editReply(responsePayload({ content: 'الزر غير معروف.' }));
 }
 const TOP_BONUS_ACTIONS = new Set(['group-add', 'group-remove', 'all-add', 'all-remove', 'member-add', 'member-remove']);
 const usedTopBonusConfirmations = new Set();
@@ -477,8 +479,8 @@ function topBonusSelectionPayload(guild, action, groups, page = 0) {
   c.addActionRowComponents(new ActionRowBuilder().addComponents(select));
   if (pages > 1) {
     c.addActionRowComponents(new ActionRowBuilder().addComponents(
-      button(`groups_bonus_page:${action}:${currentPage - 1}`, 'Previous', ButtonStyle.Secondary).setDisabled(currentPage === 0),
-      button(`groups_bonus_page:${action}:${currentPage + 1}`, 'Next', ButtonStyle.Secondary).setDisabled(currentPage >= pages - 1)
+      button(`groups_bonus_page:${action}:${currentPage - 1}`, 'السابق', ButtonStyle.Secondary).setDisabled(currentPage === 0),
+      button(`groups_bonus_page:${action}:${currentPage + 1}`, 'التالي', ButtonStyle.Secondary).setDisabled(currentPage >= pages - 1)
     ));
   }
   return componentsV2Payload(c);
@@ -496,7 +498,7 @@ async function openTopBonusGroupPicker(interaction, action, page = 0, update = f
 function topBonusAmountModal(action, groupId, userId = null) {
   const modal = new ModalBuilder()
     .setCustomId(`groups_bonus_modal:${action}:${groupId}${userId ? `:${userId}` : ''}`)
-    .setTitle(action.endsWith('add') ? 'Add Bonus Points' : 'Remove Bonus Points');
+    .setTitle(action.endsWith('add') ? 'إضافة نقاط' : 'خصم نقاط');
   const amountLabel = action.startsWith('all-') ? 'النقاط لكل قروب' : 'عدد النقاط';
   const placeholder = action.startsWith('all-') ? 'مثال 100 نقطة لكل قروب' : 'مثال 100';
   modal.addLabelComponents(new LabelBuilder().setLabel(amountLabel).setTextInputComponent(
@@ -527,17 +529,17 @@ function pointsAdjustmentError(error) {
 async function openTopBonusConfirmation(interaction, action, group, amount, userId = null, current = 0) {
   const subject = action.startsWith('group-') ? `إجمالي القروب **${safe(group.name)}**` : `رصيد العضو <@${userId}> في **${safe(group.name)}**`;
   const after = current - amount;
-  const c = baseContainer(interaction.guild, 'Confirm Points Removal', `تأكيد خصم **${amount.toLocaleString()}** نقطة من ${subject}.\nالرصيد الحالي ${current.toLocaleString()} وبعد الخصم ${after.toLocaleString()}.`);
+  const c = baseContainer(interaction.guild, 'تأكيد خصم النقاط', `تأكيد خصم **${amount.toLocaleString()}** نقطة من ${subject}.\nالرصيد الحالي ${current.toLocaleString()} وبعد الخصم ${after.toLocaleString()}.`);
   c.addActionRowComponents(new ActionRowBuilder().addComponents(
-    button(`groups_bonus_confirm:${action}:${group.id}:${amount}${userId ? `:${userId}` : ''}`, 'Confirm', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>'),
-    button('groups_bonus:cancel', 'Cancel', ButtonStyle.Secondary)
+    button(`groups_bonus_confirm:${action}:${group.id}:${amount}${userId ? `:${userId}` : ''}`, 'تأكيد', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>'),
+    button('groups_bonus:cancel', 'إلغاء', ButtonStyle.Secondary)
   ));
   return reply(interaction, componentsV2Payload(c), true);
 }
 async function handleTopBonusButton(interaction, action) {
   if (action === 'cancel') {
     if (!consumeTopBonusConfirmation(interaction.message?.id)) return reply(interaction, { content: 'تم استخدام تأكيد الخصم أو إلغاؤه مسبقًا.' });
-    return interaction.update({ content: 'تم الإلغاء.', components: [], allowedMentions: { parse: [] } });
+    return interaction.update(responsePayload({ content: 'تم الإلغاء.', components: [], allowedMentions: { parse: [] } }));
   }
   if (action === 'all-add' || action === 'all-remove') {
     if (!await checkSystem(interaction)) return true;
@@ -610,10 +612,10 @@ async function handleTopBonusModal(interaction, action, parts) {
       const before = groups.reduce((total, group) => total + Math.max(0, Number(group.points) || 0), 0);
       const after = groups.reduce((total, group) => total + Math.max(0, Number(group.points || 0) - amount), 0);
       if (before === after) return reply(interaction, { content: pointsAdjustmentError(new Error('NO_POINTS_TO_REMOVE')) });
-      const c = baseContainer(interaction.guild, 'Confirm All Groups Points Removal', `تأكيد خصم حتى **${amount.toLocaleString()}** نقطة من كل قروب نشط.\nإجمالي النقاط الحالي ${before.toLocaleString()} وبعد الخصم ${after.toLocaleString()}.`);
+      const c = baseContainer(interaction.guild, 'تأكيد خصم نقاط القروبات', `تأكيد خصم حتى **${amount.toLocaleString()}** نقطة من كل قروب نشط.\nإجمالي النقاط الحالي ${before.toLocaleString()} وبعد الخصم ${after.toLocaleString()}.`);
       c.addActionRowComponents(new ActionRowBuilder().addComponents(
-        button(`groups_bonus_confirm:all-remove:${amount}`, 'Confirm', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>'),
-        button('groups_bonus:cancel', 'Cancel', ButtonStyle.Secondary)
+        button(`groups_bonus_confirm:all-remove:${amount}`, 'تأكيد', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>'),
+        button('groups_bonus:cancel', 'إلغاء', ButtonStyle.Secondary)
       ));
       return reply(interaction, componentsV2Payload(c), true);
     }
@@ -654,12 +656,12 @@ async function handleTopBonusConfirm(interaction, action, parts) {
   const amount = Number(isAllGroups ? rawGroupId : rawAmount);
   const userId = isAllGroups ? null : (rawUserId ? String(rawUserId) : null);
   if ((!isAllGroups && (!Number.isSafeInteger(groupId) || groupId <= 0)) || !Number.isSafeInteger(amount) || amount <= 0 || amount > 1000000) return reply(interaction, { content: 'بيانات الخصم غير صالحة.' });
-  await interaction.update({ content: 'جارٍ تنفيذ الخصم...', components: [], allowedMentions: { parse: [] } });
+  await interaction.update(responsePayload({ content: 'جارٍ تنفيذ الخصم...', components: [], allowedMentions: { parse: [] } }));
   try {
     const { content } = await performTopBonusAdjustment(interaction, settings, action, groupId, amount, userId);
-    return interaction.followUp({ content, ephemeral: true, allowedMentions: { parse: [] } });
+    return interaction.followUp(responsePayload({ content, ephemeral: true, allowedMentions: { parse: [] } }));
   } catch (error) {
-    return interaction.followUp({ content: pointsAdjustmentError(error), ephemeral: true, allowedMentions: { parse: [] } });
+    return interaction.followUp(responsePayload({ content: pointsAdjustmentError(error), ephemeral: true, allowedMentions: { parse: [] } }));
   }
 }
 async function sendGroupPanel(channel, guild, groupId) {
@@ -693,7 +695,10 @@ async function sendGroupPanel(channel, guild, groupId) {
     }
     rows.push(new ActionRowBuilder().addComponents(button(`groups_member:info:${id}`, 'قروبي')));
     try {
-      return await channel.send({ embeds: [new EmbedBuilder().setTitle('التحكم بالقروب').setDescription('استخدم الأزرار لإدارة القروب.').setColor(colorToNumber(colorManager.getColor?.() || '#5865F2'))], components: rows, allowedMentions: { parse: [] } });
+      const fallback = new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || '#5865F2'));
+      fallback.addTextDisplayComponents(new TextDisplayBuilder().setContent('## التحكم بالقروب\nاستخدم الأزرار لإدارة القروب.'));
+      fallback.addActionRowComponents(...rows);
+      return await channel.send({ components: [fallback], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } });
     } catch (fallbackError) {
       console.error(`تعذر إرسال لوحة القروب الاحتياطية ${groupId}:`, fallbackError?.stack || fallbackError?.message || fallbackError);
       return null;
@@ -879,7 +884,7 @@ async function handleSetup(interaction, action) {
     }
     const updated = await gm.saveSettings(interaction.guild.id, { enabled: !settings.enabled }, interaction.user.id);
     await refreshSetupPanel(interaction, updated);
-    return reply(interaction, setupConfirmation(interaction, 'System Toggle', `تم ${!settings.enabled ? 'تفعيل' : 'إيقاف'} نظام القروبات.`));
+    return reply(interaction, setupConfirmation(interaction, 'حالة نظام القروبات', `تم ${!settings.enabled ? 'تفعيل' : 'إيقاف'} نظام القروبات.`));
   }
   if (action === 'audit') {
     await hydrateSetupReferences(interaction.guild, settings);
@@ -908,7 +913,7 @@ async function handleSetup(interaction, action) {
     }
     const updated = await gm.saveSettings(interaction.guild.id, { extraPermissions: !settings.extraPermissions }, interaction.user.id);
     await refreshSetupPanel(interaction, updated);
-    return reply(interaction, setupConfirmation(interaction, 'Extra Permissions', `تم ${!settings.extraPermissions ? 'تفعيل' : 'تعطيل'} الصلاحيات الإضافية.`));
+    return reply(interaction, setupConfirmation(interaction, 'الصلاحيات الإضافية', `تم ${!settings.extraPermissions ? 'تفعيل' : 'تعطيل'} الصلاحيات الإضافية.`));
   }
   if (action === 'scope') return reply(interaction, selectPayload(interaction.guild, 'نطاق النقاط', 'اختر أين يتم احتساب تفاعل القروبات.', 'groups_setup_select:scope', [
     { label: 'رومات القروبات فقط', value: 'group', description: 'رومات نص وفويس القروبات فقط' },
@@ -916,7 +921,7 @@ async function handleSetup(interaction, action) {
   ]));
   if (['log', 'topchannel', 'adminchannel', 'memberchannel'].includes(action)) {
     const menu = new ChannelSelectMenuBuilder().setCustomId(`groups_setup_channel:${action}`).setPlaceholder('اختر رومًا نصيًا').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText);
-    const c = baseContainer(interaction.guild, 'Channel Settings', 'اختر رومًا نصيًا واحدًا.');
+    const c = baseContainer(interaction.guild, 'إعدادات القنوات', 'اختر رومًا نصيًا واحدًا.');
     c.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
     return reply(interaction, componentsV2Payload(c));
   }
@@ -935,7 +940,7 @@ async function handleSetup(interaction, action) {
   }
   if (action === 'rules') return reply(interaction, rulesPayload(interaction.guild, await gm.getRules(interaction.guild.id)));
   if (action === 'managers') return reply(interaction, managerSetupPayload(interaction.guild, settings));
-  return reply(interaction, setupConfirmation(interaction, 'Group Settings', 'تم تنفيذ إعداد القروبات.'));
+  return reply(interaction, setupConfirmation(interaction, 'إعدادات القروبات', 'تم تنفيذ إعداد القروبات.'));
 }
 async function handleSetupManager(interaction, action, parts = []) {
   if (action === 'remove' && interaction.isButton?.()) {
@@ -963,7 +968,7 @@ async function handleSetupManager(interaction, action, parts = []) {
     const removed = settings.systemUsers.length - systemUsers.length + settings.systemRoles.length - systemRoles.length;
     const updated = await gm.saveSettings(interaction.guild.id, { systemUsers, systemRoles }, interaction.user.id);
     await refreshSetupPanel(interaction, updated);
-    return reply(interaction, setupConfirmation(interaction, 'System Managers', removed ? `تمت إزالة ${removed} مسؤول.` : 'لم تتطابق المعرفات مع مسؤولين محفوظين.'));
+    return reply(interaction, setupConfirmation(interaction, 'مسؤولو النظام', removed ? `تمت إزالة ${removed} مسؤول.` : 'لم تتطابق المعرفات مع مسؤولين محفوظين.'));
   }
   const ids = interaction.values || [];
   if (!ids.length) return reply(interaction, { content: 'اختر عضوًا أو رتبة أولًا.' });
@@ -972,13 +977,13 @@ async function handleSetupManager(interaction, action, parts = []) {
     if (members.some(member => !member || member.user?.bot)) return reply(interaction, { content: 'لا يمكن إضافة بوت أو عضو غير موجود كمسؤول نظام.' });
     const updated = await gm.saveSettings(interaction.guild.id, { systemUsers: [...new Set([...settings.systemUsers, ...ids.map(String)])] }, interaction.user.id);
     await refreshSetupPanel(interaction, updated);
-    return reply(interaction, setupConfirmation(interaction, 'System Managers', `تم حفظ ${ids.length} عضو.`));
+    return reply(interaction, setupConfirmation(interaction, 'مسؤولو النظام', `تم حفظ ${ids.length} عضو.`));
   }
   if (action === 'add' && parts[0] === 'role') {
     if (ids.some(id => String(id) === String(interaction.guild.id) || !interaction.guild.roles.cache.has(String(id)))) return reply(interaction, { content: 'لا يمكن إضافة @everyone أو رتبة غير موجودة كمسؤول نظام.' });
     const updated = await gm.saveSettings(interaction.guild.id, { systemRoles: [...new Set([...settings.systemRoles, ...ids.map(String)])] }, interaction.user.id);
     await refreshSetupPanel(interaction, updated);
-    return reply(interaction, setupConfirmation(interaction, 'System Managers', `تم حفظ ${ids.length} رتبة.`));
+    return reply(interaction, setupConfirmation(interaction, 'مسؤولو النظام', `تم حفظ ${ids.length} رتبة.`));
   }
   return reply(interaction, { content: 'طلب مسؤولي النظام غير صالح.' });
 }
@@ -1010,7 +1015,7 @@ async function handleSetupSelection(interaction, prefix, action) {
     } else return reply(interaction, { content: 'الخيار المحدد غير صالح.' });
     const updated = await gm.saveSettings(interaction.guild.id, patch, interaction.user.id);
     await refreshSetupPanel(interaction, updated);
-    return reply(interaction, setupConfirmation(interaction, 'Group Settings', text));
+    return reply(interaction, setupConfirmation(interaction, 'إعدادات القروبات', text));
   }
   if (prefix === 'groups_setup_role') {
     if (!['mainrole', 'leaderrole', 'managerrole'].includes(action)) return reply(interaction, { content: 'نوع الرتبة غير صالح.' });
@@ -1060,7 +1065,7 @@ async function handleSetupSelection(interaction, prefix, action) {
   return false;
 }
 async function handleAdmin(interaction, action) { const settings=await checkSystem(interaction);if(!settings)return true; if(action==='create')return interaction.showModal(createGroupModal(interaction.user.id)); if(action==='delete'||action==='info'||action==='edit'||action==='reset'){const groups=(await gm.listGroups(interaction.guild.id,action==='delete')).filter(g=>g.status==='active'||(action==='delete'&&g.status==='orphaned')); if(!groups.length)return reply(interaction,{content:'لا توجد قروبات متاحة.'});const opts=groups.slice(0,25).map(g=>({label:safe(g.name,90),value:String(g.id),description:`${Number(g.points||0).toLocaleString()} points${g.status==='orphaned'?' • يحتاج تنظيف':''}`}));return reply(interaction,selectPayload(interaction.guild,action==='delete'?'حذف قروب':action==='reset'?'تصفير النقاط':'اختر قروبًا','اختر قروبًا واحدًا.',`groups_admin_select:${action}`,opts));}if(action==='resetall'){const c=baseContainer(interaction.guild,'تصفير كل النقاط','سيتم تصفير نقاط كل القروبات النشطة.');c.addActionRowComponents(new ActionRowBuilder().addComponents(button('groups_admin_confirm:resetall','تأكيد',ButtonStyle.Danger),button('groups_admin_cancel','إلغاء')));return reply(interaction,componentsV2Payload(c));}return true; }
-async function handleMember(interaction, action, groupId) { const settings=await gm.getSettings(interaction.guild.id); let group=groupId>0?await gm.getGroup(interaction.guild.id,groupId):null; if(!group){const groups=await gm.listGroups(interaction.guild.id);group=selectMemberGroup(groups,interaction.user.id,interaction.channelId);} if(!group||(!gm.canManageGroup(interaction.client,settings,group,interaction.member)&&!group.memberIds.includes(String(interaction.user.id))))return deny(interaction);if(action==='info'){const owner=await interaction.guild.members.fetch(group.owner_id).catch(()=>null);const managers=await Promise.all(group.managerIds.map(id=>interaction.guild.members.fetch(id).catch(()=>null)));const attachment=await renderInfo({guild:interaction.guild,group,owner,managers:managers.filter(Boolean),accentColor:null});return reply(interaction,{files:[attachment]});}return true;}
+async function handleMember(interaction, action, groupId) { const settings=await gm.getSettings(interaction.guild.id); let group=groupId>0?await gm.getGroup(interaction.guild.id,groupId):null; if(!group){const groups=await gm.listGroups(interaction.guild.id);group=selectMemberGroup(groups,interaction.user.id,interaction.channelId);} if(!group)return reply(interaction,{content:'لا يوجد قروب مرتبط بعضويتك في هذا السيرفر.'});if(!gm.canManageGroup(interaction.client,settings,group,interaction.member)&&!group.memberIds.includes(String(interaction.user.id)))return deny(interaction,'هذه اللوحة متاحة لأعضاء القروب ومالكه ومسؤوليه فقط.');if(action==='info'){const owner=await interaction.guild.members.fetch(group.owner_id).catch(()=>null);const managers=await Promise.all(group.managerIds.map(id=>interaction.guild.members.fetch(id).catch(()=>null)));const attachment=await renderInfo({guild:interaction.guild,group,owner,managers:managers.filter(Boolean),accentColor:null});return reply(interaction,{files:[attachment]});}return true;}
 async function handleRulesInteraction(interaction, action, parts = []) {
   const settings = await checkSystem(interaction);
   if (!settings) return true;
@@ -1126,11 +1131,11 @@ async function transferGroupOwner(interaction, groupId, ownerId) {
     return warnings.length ? `تم نقل الملكية، لكن يلزم مراجعة الرتب: ${warnings.join('؛ ')}.` : 'تم نقل الملكية.';
   });
 }
-async function handleInteraction(interaction) { const extended=await handleGroupExtensions(interaction); if(extended!==false)return extended; const [prefix,action,...parts]=String(interaction.customId||'').split(':'); if(prefix==='groups_top'&&['rank','group','manage','refresh','leave','leave-confirm','leave-cancel'].includes(action))return handleTopGroupsInteraction(interaction,action,parts); if(prefix==='groups_bonus')return handleTopBonusButton(interaction,action); if(prefix==='groups_bonus_select')return handleTopBonusSelection(interaction,action,parts); if(prefix==='groups_bonus_page')return handleTopBonusPage(interaction,action,parts); if(prefix==='groups_bonus_member_select')return handleTopBonusMemberSelection(interaction,action,parts); if(prefix==='groups_bonus_modal')return handleTopBonusModal(interaction,action,parts); if(prefix==='groups_bonus_confirm')return handleTopBonusConfirm(interaction,action,parts); if(prefix==='groups_rules_modal'){const metric=parts[0];const settings=await checkSystem(interaction);if(!settings)return true;const definition=RULE_METRICS.find(([key])=>key===metric);if(!definition)return reply(interaction,{content:'قاعدة النقاط غير معروفة.'});try{const rules=await gm.getRules(interaction.guild.id);const current=rules.find(rule=>String(rule.metric)===metric);const threshold=Number(interaction.fields.getTextInputValue('threshold'));const points=Number(interaction.fields.getTextInputValue('points'));await gm.setRule(interaction.guild.id,metric,threshold,points,Number(current?.enabled)===1,interaction.user.id);await gm.logGroupEvent(interaction.guild,'rule_update',{metric,threshold,points,enabled:Number(current?.enabled)===1},interaction.user.id);await refreshSetupPanel(interaction,settings);return reply(interaction,rulesPayload(interaction.guild,await gm.getRules(interaction.guild.id)));}catch(error){return reply(interaction,{content:`تعذر حفظ القاعدة : ${error.message}`});}} if(prefix==='groups_modal'){ if(action==='create') return createFromModal(interaction); if(action==='edit'){if(!await checkSystem(interaction))return true;const groupId=Number(parts[0]);const field=choose(parts[1],['name','description','color','emoji']);const group=await gm.getGroup(interaction.guild.id,groupId);if(!group||group.status!=='active')return reply(interaction,{content:'القروب غير موجود.'});await interaction.deferReply({flags:MessageFlags.Ephemeral});const value=safe(interaction.fields.getTextInputValue('value'),field==='description'?500:field==='name'?80:100).trim();if(field==='name')await renameGroupResources(interaction,group,'name',value);else{if(field==='color'&&!/^#[0-9a-f]{6}$/i.test(value))return reply(interaction,{content:'استخدم لونًا بصيغة ست خانات، مثل #5865F2.'});await gm.updateGroup(interaction.guild.id,groupId,{[field]:value,updated_at:Date.now()},interaction.user.id);}invalidateGroupCaches(interaction.guild.id);await gm.logGroupEvent?.(interaction.guild,'update',{groupId,field,value},interaction.user.id);return reply(interaction,{content:'تم تحديث القروب.'});} return false; } if(prefix==='groups_setup')return handleSetup(interaction,action); if(prefix==='groups_rules')return handleRulesInteraction(interaction,action,parts); if(prefix==='groups_admin')return handleAdmin(interaction,action); if(prefix==='groups_member')return handleMember(interaction,action,Number(parts[0])); if(prefix==='groups_setup_clear_select'){return handleSetupSelection(interaction,prefix,action);} if(prefix==='groups_setup_select'){return handleSetupSelection(interaction,prefix,action);} if(prefix==='groups_setup_role'){return handleSetupSelection(interaction,prefix,action);} if(prefix==='groups_setup_channel'){return handleSetupSelection(interaction,prefix,action);} if(prefix==='groups_setup_manager')return handleSetupManager(interaction,action,parts); if(prefix==='groups_admin_select'){const settings=await checkSystem(interaction);if(!settings)return true;const groupId=Number(interaction.values[0]);if(action==='reset'){await gm.resetPoints(interaction.guild.id,groupId,interaction.user.id);return reply(interaction,{content:'Group points reset.'});}if(action==='delete'){const group=await gm.getGroup(interaction.guild.id,groupId);const c=baseContainer(interaction.guild,'تأكيد الحذف',`القروب : **${safe(group?.name)}**\nسيتم حذف قنوات ورول القروب.`);c.addActionRowComponents(new ActionRowBuilder().addComponents(button(`groups_admin_confirm:delete:${groupId}`,'تأكيد',ButtonStyle.Danger),button('groups_admin_cancel','إلغاء')));return reply(interaction,componentsV2Payload(c));}if(action==='info'){const g=await gm.getGroup(interaction.guild.id,groupId);if(!g)return reply(interaction,{content:'القروب غير موجود.'});const owner=await interaction.guild.members.fetch(g.owner_id).catch(()=>null);const managers=await Promise.all(g.managerIds.map(id=>interaction.guild.members.fetch(id).catch(()=>null)));const attachment=await renderInfo({guild:interaction.guild,group:g,owner,managers:managers.filter(Boolean),accentColor:null});return reply(interaction,{files:[attachment]});}if(action==='edit'){return reply(interaction,selectPayload(interaction.guild,'Edit Group','اختر الحقل المطلوب.',`groups_edit_field:${groupId}`,[{label:'الاسم',value:'name'},{label:'الوصف',value:'description'},{label:'اللون',value:'color'},{label:'الإيموجي',value:'emoji'},{label:'المالك',value:'owner'}]));}} if(prefix==='groups_edit_field'){const groupId=Number(action);const field=choose(interaction.values?.[0],['name','description','color','emoji','owner']);if(!await checkSystem(interaction))return true;if(field==='owner'){const menu=new UserSelectMenuBuilder().setCustomId(`groups_edit_owner:${groupId}`).setPlaceholder('Choose new owner').setMinValues(1).setMaxValues(1);const c=baseContainer(interaction.guild,'نقل الملكية','اختر عضوًا حاليًا من القروب.');c.addActionRowComponents(new ActionRowBuilder().addComponents(menu));return reply(interaction,componentsV2Payload(c));}const modal=new ModalBuilder().setCustomId(`groups_modal:edit:${groupId}:${field}`).setTitle(`تعديل ${field}`);modal.addLabelComponents(new LabelBuilder().setLabel(field).setTextInputComponent(new TextInputBuilder().setCustomId('value').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(field==='description'?500:100)));return interaction.showModal(modal);} if(prefix==='groups_edit_owner'){if(!await checkSystem(interaction))return true;try{return reply(interaction,{content:await transferGroupOwner(interaction,Number(action),interaction.values?.[0])});}catch(error){const message=error.message==='OWNER_MUST_BE_MEMBER'?'يجب أن يكون المالك الجديد عضوًا نشطًا في القروب.':error.message==='USER_ALREADY_IN_GROUP'?'المالك المختار مرتبط بقروب نشط آخر.':'تعذر نقل الملكية.';return reply(interaction,{content:message});}} if(prefix==='groups_admin_confirm'){const settings=await checkSystem(interaction);if(!settings)return true;if(action==='resetall'){await gm.resetPoints(interaction.guild.id,null,interaction.user.id);return reply(interaction,{content:'تم تصفير نقاط كل القروبات.'});}if(action==='delete'){const deletedGroup=await gm.getGroup(interaction.guild.id,Number(parts[0]));try{await gm.deleteGroup(interaction.guild,Number(parts[0]),interaction.user.id);}catch(error){return reply(interaction,{content:error.message==='GROUP_DELETE_PARTIAL'?'تعذر حذف بعض عناصر القروب؛ تم حفظ حالته للتنظيف. أعد محاولة الحذف من لوحة الإدارة.':'تعذر حذف القروب.'});}await gm.logGroupEvent(interaction.guild,'delete',{groupId:Number(parts[0]),name:deletedGroup?.name||null},interaction.user.id);return reply(interaction,{content:'تم حذف القروب.'});}} if(prefix==='groups_admin_cancel')return reply(interaction,{content:'تم الإلغاء.'}); return false; }
+async function handleInteraction(interaction) { const extended=await handleGroupExtensions(interaction); if(extended!==false)return extended; const [prefix,action,...parts]=String(interaction.customId||'').split(':'); if(prefix==='groups_top'&&['rank','group','manage','refresh','leave','leave-confirm','leave-cancel'].includes(action))return handleTopGroupsInteraction(interaction,action,parts); if(prefix==='groups_bonus')return handleTopBonusButton(interaction,action); if(prefix==='groups_bonus_select')return handleTopBonusSelection(interaction,action,parts); if(prefix==='groups_bonus_page')return handleTopBonusPage(interaction,action,parts); if(prefix==='groups_bonus_member_select')return handleTopBonusMemberSelection(interaction,action,parts); if(prefix==='groups_bonus_modal')return handleTopBonusModal(interaction,action,parts); if(prefix==='groups_bonus_confirm')return handleTopBonusConfirm(interaction,action,parts); if(prefix==='groups_rules_modal'){const metric=parts[0];const settings=await checkSystem(interaction);if(!settings)return true;const definition=RULE_METRICS.find(([key])=>key===metric);if(!definition)return reply(interaction,{content:'قاعدة النقاط غير معروفة.'});try{const rules=await gm.getRules(interaction.guild.id);const current=rules.find(rule=>String(rule.metric)===metric);const threshold=Number(interaction.fields.getTextInputValue('threshold'));const points=Number(interaction.fields.getTextInputValue('points'));await gm.setRule(interaction.guild.id,metric,threshold,points,Number(current?.enabled)===1,interaction.user.id);await gm.logGroupEvent(interaction.guild,'rule_update',{metric,threshold,points,enabled:Number(current?.enabled)===1},interaction.user.id);await refreshSetupPanel(interaction,settings);return reply(interaction,rulesPayload(interaction.guild,await gm.getRules(interaction.guild.id)));}catch(error){return reply(interaction,{content:`تعذر حفظ القاعدة : ${error.message}`});}} if(prefix==='groups_modal'){ if(action==='create') return createFromModal(interaction); if(action==='edit'){if(!await checkSystem(interaction))return true;const groupId=Number(parts[0]);const field=choose(parts[1],['name','description','color','emoji']);const group=await gm.getGroup(interaction.guild.id,groupId);if(!group||group.status!=='active')return reply(interaction,{content:'القروب غير موجود.'});await interaction.deferReply({flags:MessageFlags.Ephemeral});const value=safe(interaction.fields.getTextInputValue('value'),field==='description'?500:field==='name'?80:100).trim();if(field==='name')await renameGroupResources(interaction,group,'name',value);else{if(field==='color'&&!/^#[0-9a-f]{6}$/i.test(value))return reply(interaction,{content:'استخدم لونًا بصيغة ست خانات، مثل #5865F2.'});await gm.updateGroup(interaction.guild.id,groupId,{[field]:value,updated_at:Date.now()},interaction.user.id);}invalidateGroupCaches(interaction.guild.id);await gm.logGroupEvent?.(interaction.guild,'update',{groupId,field,value},interaction.user.id);return reply(interaction,{content:'تم تحديث القروب.'});} return false; } if(prefix==='groups_setup')return handleSetup(interaction,action); if(prefix==='groups_rules')return handleRulesInteraction(interaction,action,parts); if(prefix==='groups_admin')return handleAdmin(interaction,action); if(prefix==='groups_member')return handleMember(interaction,action,Number(parts[0])); if(prefix==='groups_setup_clear_select'){return handleSetupSelection(interaction,prefix,action);} if(prefix==='groups_setup_select'){return handleSetupSelection(interaction,prefix,action);} if(prefix==='groups_setup_role'){return handleSetupSelection(interaction,prefix,action);} if(prefix==='groups_setup_channel'){return handleSetupSelection(interaction,prefix,action);} if(prefix==='groups_setup_manager')return handleSetupManager(interaction,action,parts); if(prefix==='groups_admin_select'){const settings=await checkSystem(interaction);if(!settings)return true;const groupId=Number(interaction.values[0]);if(action==='reset'){await gm.resetPoints(interaction.guild.id,groupId,interaction.user.id);return reply(interaction,{content:'تم تصفير نقاط القروب.'});}if(action==='delete'){const group=await gm.getGroup(interaction.guild.id,groupId);const c=baseContainer(interaction.guild,'تأكيد الحذف',`القروب : **${safe(group?.name)}**\nسيتم حذف قنوات ورول القروب.`);c.addActionRowComponents(new ActionRowBuilder().addComponents(button(`groups_admin_confirm:delete:${groupId}`,'تأكيد',ButtonStyle.Danger),button('groups_admin_cancel','إلغاء')));return reply(interaction,componentsV2Payload(c));}if(action==='info'){const g=await gm.getGroup(interaction.guild.id,groupId);if(!g)return reply(interaction,{content:'القروب غير موجود.'});const owner=await interaction.guild.members.fetch(g.owner_id).catch(()=>null);const managers=await Promise.all(g.managerIds.map(id=>interaction.guild.members.fetch(id).catch(()=>null)));const attachment=await renderInfo({guild:interaction.guild,group:g,owner,managers:managers.filter(Boolean),accentColor:null});return reply(interaction,{files:[attachment]});}if(action==='edit'){return reply(interaction,selectPayload(interaction.guild,'تعديل القروب','اختر الحقل المطلوب.',`groups_edit_field:${groupId}`,[{label:'الاسم',value:'name'},{label:'الوصف',value:'description'},{label:'اللون',value:'color'},{label:'الإيموجي',value:'emoji'},{label:'المالك',value:'owner'}]));}} if(prefix==='groups_edit_field'){const groupId=Number(action);const field=choose(interaction.values?.[0],['name','description','color','emoji','owner']);if(!await checkSystem(interaction))return true;if(field==='owner'){const menu=new UserSelectMenuBuilder().setCustomId(`groups_edit_owner:${groupId}`).setPlaceholder('اختر المالك الجديد').setMinValues(1).setMaxValues(1);const c=baseContainer(interaction.guild,'نقل الملكية','اختر عضوًا حاليًا من القروب.');c.addActionRowComponents(new ActionRowBuilder().addComponents(menu));return reply(interaction,componentsV2Payload(c));}const modal=new ModalBuilder().setCustomId(`groups_modal:edit:${groupId}:${field}`).setTitle(`تعديل ${field}`);modal.addLabelComponents(new LabelBuilder().setLabel(field).setTextInputComponent(new TextInputBuilder().setCustomId('value').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(field==='description'?500:100)));return interaction.showModal(modal);} if(prefix==='groups_edit_owner'){if(!await checkSystem(interaction))return true;try{return reply(interaction,{content:await transferGroupOwner(interaction,Number(action),interaction.values?.[0])});}catch(error){const message=error.message==='OWNER_MUST_BE_MEMBER'?'يجب أن يكون المالك الجديد عضوًا نشطًا في القروب.':error.message==='USER_ALREADY_IN_GROUP'?'المالك المختار مرتبط بقروب نشط آخر.':'تعذر نقل الملكية.';return reply(interaction,{content:message});}} if(prefix==='groups_admin_confirm'){const settings=await checkSystem(interaction);if(!settings)return true;if(action==='resetall'){await gm.resetPoints(interaction.guild.id,null,interaction.user.id);return reply(interaction,{content:'تم تصفير نقاط كل القروبات.'});}if(action==='delete'){const deletedGroup=await gm.getGroup(interaction.guild.id,Number(parts[0]));try{await gm.deleteGroup(interaction.guild,Number(parts[0]),interaction.user.id);}catch(error){return reply(interaction,{content:error.message==='GROUP_DELETE_PARTIAL'?'تعذر حذف بعض عناصر القروب؛ تم حفظ حالته للتنظيف. أعد محاولة الحذف من لوحة الإدارة.':'تعذر حذف القروب.'});}await gm.logGroupEvent(interaction.guild,'delete',{groupId:Number(parts[0]),name:deletedGroup?.name||null},interaction.user.id);return reply(interaction,{content:'تم حذف القروب.'});}} if(prefix==='groups_admin_cancel')return reply(interaction,{content:'تم الإلغاء.'}); return false; }
 function createLauncherPayload(guild, customId, disabled = false) {
-  const c = baseContainer(guild, 'Create Group', 'افتح النموذج لإنشاء القروب. بعد الإنشاء يصل دليل الأوامر لمالكه.');
+  const c = baseContainer(guild, 'إنشاء قروب', 'افتح النموذج لإنشاء القروب. بعد الإنشاء يصل دليل الأوامر لمالكه.');
   c.addActionRowComponents(new ActionRowBuilder().addComponents(
-    button(customId, 'Create', ButtonStyle.Secondary, '<:emoji_33:1465383525644501238>').setDisabled(disabled)
+    button(customId, 'إنشاء', ButtonStyle.Secondary, '<:emoji_33:1465383525644501238>').setDisabled(disabled)
   ));
   return componentsV2Payload(c);
 }
@@ -1147,15 +1152,15 @@ async function sendCreateCommandPanel(message) {
   });
   collector.on('collect', async interaction => {
     if (String(interaction.user?.id) !== String(message.author.id)) {
-      return interaction.reply({ content: 'هذا الزر متاح لمنشئ الأمر فقط.', ephemeral: true }).catch(() => null);
+      return interaction.reply(responsePayload({ content: 'هذا الزر متاح لمنشئ الأمر فقط.', ephemeral: true })).catch(() => null);
     }
-    if (busy || used) return interaction.reply({ content: 'تم استخدام هذا الزر أو أن الطلب قيد المعالجة.', ephemeral: true }).catch(() => null);
+    if (busy || used) return interaction.reply(responsePayload({ content: 'تم استخدام هذا الزر أو أن الطلب قيد المعالجة.', ephemeral: true })).catch(() => null);
     busy = true;
     try {
       const settings = await gm.getSettings(interaction.guild.id);
       if (!gm.canManageSystem(interaction.client, settings, interaction.member)) {
         busy = false;
-        return interaction.reply({ content: 'لا تملك صلاحية إدارة القروبات.', ephemeral: true });
+        return interaction.reply(responsePayload({ content: 'لا تملك صلاحية إدارة القروبات.', ephemeral: true }));
       }
       await interaction.showModal(createGroupModal(interaction.user.id));
       used = true;
@@ -1165,7 +1170,7 @@ async function sendCreateCommandPanel(message) {
       busy = false;
       console.error('[groups] create command collector failed:', error?.message || error);
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: 'تعذر فتح نموذج إنشاء القروب. أعد تنفيذ الأمر.', ephemeral: true }).catch(() => null);
+        await interaction.reply(responsePayload({ content: 'تعذر فتح نموذج إنشاء القروب. أعد تنفيذ الأمر.', ephemeral: true })).catch(() => null);
       }
     }
   });
@@ -1182,16 +1187,16 @@ async function execute(message, args, { client } = {}) {
   const canManage = gm.canManageSystem(client, settings, member);
 
   if (sub === 'setup' || sub === 'إعدادات') {
-    if (!canManage) return message.reply('لا تملك الصلاحية.');
+    if (!canManage) return replyMessage(message,'لا تملك الصلاحية.');
     return sendSetupPanel(message.channel, message.guild, settings);
   }
   if (sub === 'control' || sub === 'تحكم') {
-    if (!canManage) return message.reply('لا تملك الصلاحية.');
+    if (!canManage) return replyMessage(message,'لا تملك الصلاحية.');
     const target = settings.adminControlChannelId && message.guild.channels.cache.get(settings.adminControlChannelId);
     return sendAdminControlPanel(target || message.channel, message.guild);
   }
   if (['rules', 'قواعد'].includes(sub)) {
-    if (!canManage) return message.reply('لا تملك الصلاحية.');
+    if (!canManage) return replyMessage(message,'لا تملك الصلاحية.');
     if (!args[1]) return message.channel.send(rulesPayload(message.guild, await gm.getRules(message.guild.id)));
     const metricName = String(args[1]).toLowerCase();
     const metric = metricName === 'voice' ? 'voice_ms' : ['reaction', 'reactions'].includes(metricName) ? 'reactions' : 'messages';
@@ -1199,17 +1204,17 @@ async function execute(message, args, { client } = {}) {
     const points = Number(args[3] || 1);
     await gm.setRule(message.guild.id, metric, threshold, points, true, message.author.id);
     await gm.logGroupEvent(message.guild, 'rule_update', { metric, threshold, points, enabled: true }, message.author.id);
-    return message.reply(`تم حفظ القاعدة : ${metric} / ${threshold} / ${points}`);
+    return replyMessage(message,`تم حفظ القاعدة : ${metric} / ${threshold} / ${points}`);
   }
   if (['create', 'انشاء', 'إنشاء'].includes(sub)) {
-    if (!canManage) return message.reply('لا تملك الصلاحية.');
+    if (!canManage) return replyMessage(message,'لا تملك الصلاحية.');
     return sendCreateCommandPanel(message);
   }
   if (['delete', 'حذف'].includes(sub)) {
-    if (!canManage) return message.reply('لا تملك الصلاحية.');
+    if (!canManage) return replyMessage(message,'لا تملك الصلاحية.');
     const groups = (await gm.listGroups(message.guild.id, true))
       .filter(group => group.status === 'active' || group.status === 'orphaned');
-    if (!groups.length) return message.reply('لا توجد قروبات متاحة للحذف.');
+    if (!groups.length) return replyMessage(message,'لا توجد قروبات متاحة للحذف.');
 
     const target = args.slice(1).join(' ').trim();
     let choices = groups;
@@ -1224,7 +1229,7 @@ async function execute(message, args, { client } = {}) {
       if (!choices.length) {
         choices = groups.filter(group => String(group.name || '').toLocaleLowerCase().includes(normalizedTarget));
       }
-      if (!choices.length) return message.reply('لم أجد قروبًا مطابقًا للاسم أو المعرف المحدد.');
+      if (!choices.length) return replyMessage(message,'لم أجد قروبًا مطابقًا للاسم أو المعرف المحدد.');
     }
 
     const options = choices.slice(0, 25).map(group => ({
@@ -1250,7 +1255,7 @@ async function execute(message, args, { client } = {}) {
   }
   if (['members', 'اعضاء'].includes(sub)) {
     const group = selectMemberGroup(await gm.listGroups(message.guild.id), message.author.id, message.channel.id);
-    if (!group) return message.reply('لا يوجد قروب نشط.');
+    if (!group) return replyMessage(message,'لا يوجد قروب نشط.');
     const full = await gm.getGroup(message.guild.id, group.id);
     const rows = await gm.listMemberPoints(message.guild.id, group.id, 10);
     const members = await Promise.all(rows.map(async row => ({
@@ -1259,7 +1264,7 @@ async function execute(message, args, { client } = {}) {
     })));
     return message.channel.send({ files: [await renderMembers({ guild: message.guild, group: full, members, accentColor: null })] });
   }
-  return message.reply('استخدم أمر القروبات مع الخيارات: setup، control، create، delete، top، members أو rules.');
+  return replyMessage(message,'استخدم أمر القروبات مع الخيارات: setup، control، create، delete، top، members أو rules.');
 }
 const activityCache=new Map(); const settingsCache=new Map(); const voiceStarts=new Map(); const lastMessageAt=new Map();
 async function cachedGroups(guildId){const hit=activityCache.get(String(guildId));if(hit&&Date.now()-hit.at<30000)return hit.groups;const groups=await gm.listGroups(guildId);activityCache.set(String(guildId),{at:Date.now(),groups});return groups;}
@@ -1438,8 +1443,8 @@ async function dispatchInternalMessage(message, options = {}) {
         }
         const {group}=await currentManager(message,linked.id,true);
         const flow=newFlow(message.guild.id,message.author.id,'permission',group.id);
-        await message.reply({...scopePayload(message.guild,flow),allowedMentions:{parse:[]}});
-      } catch(error) { await message.reply({content:groupError(error),allowedMentions:{parse:[]}}).catch(()=>null); }
+        await replyMessage(message,{...scopePayload(message.guild,flow),allowedMentions:{parse:[]}});
+      } catch(error) { await replyMessage(message,{content:groupError(error),allowedMentions:{parse:[]}}).catch(()=>null); }
       return true;
     }
   }
