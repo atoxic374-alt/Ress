@@ -285,12 +285,13 @@ function selectMemberGroup(groups, userId, channelId, requestedGroupId = null) {
   return list.find(group => gm.channelBelongs(group, channelId) && isGroupMember(group, userId))
     || list.find(group => isGroupMember(group, userId)) || null;
 }
-function topGroupsButtons(canManage = false) {
+function topGroupsButtons(canManage = false, manageableGroupId = null) {
   const buttons = [
     button('groups_top:rank', 'MY RANK', ButtonStyle.Primary),
-    button('groups_top:group', 'MY GROUP', ButtonStyle.Secondary)
+    button('groups_top:group', 'MY GROUP', ButtonStyle.Secondary),
+    button('groups_top:manage', 'MANAGE', ButtonStyle.Secondary, '<:emoji_30:1465383419641856233>'),
+    button('groups_top:avatar', 'AVATAR', ButtonStyle.Secondary, '<:emoji_3:1465210427494502400>')
   ];
-  if (canManage) buttons.push(button('groups_top:manage', 'ADMIN', ButtonStyle.Secondary));
   return [new ActionRowBuilder().addComponents(buttons)];
 }
 function topManagePayload(guild) {
@@ -520,6 +521,26 @@ async function handleTopGroupsInteraction(interaction, action, parts = []) {
   if (action === 'manage') {
     if (!await checkSystem(interaction)) return true;
     return reply(interaction, topManagePayload(interaction.guild));
+  }
+  if (action === 'avatar') {
+    const groups = await gm.listGroups(interaction.guild.id);
+    const group = selectMemberGroup(groups, interaction.user.id, interaction.channelId);
+    if (!group || !gm.canManageGroup(interaction.client, await gm.getSettings(interaction.guild.id), group, interaction.member)) return reply(interaction, { content: 'تغيير Avatar متاح لمالك القروب أو مسؤوليه فقط.' });
+    const modal = new ModalBuilder().setCustomId(`groups_top:avatar-modal:${group.id}`).setTitle('EDIT GROUP AVATAR');
+    modal.addLabelComponents(new LabelBuilder().setLabel('رابط صورة أو إيموجي القروب').setTextInputComponent(new TextInputBuilder().setCustomId('value').setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(500).setPlaceholder('Discord CDN أو Custom Emoji، اتركه فارغًا للإزالة')));
+    return interaction.showModal(modal);
+  }
+  if (action === 'avatar-modal') {
+    const groupId = Number(parts[0]);
+    const group = await gm.getGroup(interaction.guild.id, groupId);
+    const settings = await gm.getSettings(interaction.guild.id);
+    if (!group || !gm.canManageGroup(interaction.client, settings, group, interaction.member)) return reply(interaction, { content: 'تغيير Avatar متاح لمالك القروب أو مسؤوليه فقط.' });
+    const rawValue = interaction.fields.getTextInputValue('value').trim();
+    const avatarUrl = normalizeGroupAvatar(rawValue);
+    if (rawValue && !avatarUrl) return reply(interaction, { content: 'أرسل رابط صورة من Discord CDN أو إيموجيًا مخصصًا صالحًا.' });
+    await gm.updateGroup(interaction.guild.id, groupId, { avatar_url: avatarUrl, updated_at: Date.now() }, interaction.user.id);
+    invalidateGroupCaches(interaction.guild.id);
+    return reply(interaction, { content: avatarUrl ? 'تم تحديث Avatar القروب؛ سيظهر في التوب عند التحديث القادم.' : 'تمت إزالة Avatar القروب والعودة للصورة الافتراضية.' });
   }
   if (action === 'transfer') {
     const group = await gm.getGroup(interaction.guild.id, Number(parts[0]));
@@ -1362,7 +1383,7 @@ async function handleInteraction(interaction) { const extended=await handleGroup
   const page=action==='next'?currentPage+1:action==='prev'?currentPage-1:currentPage;
   return interaction.update(responsePayload(await buildOurMembersPayload(interaction.guild,group,page)));
  }
- if(prefix==='groups_top'&&['rank','group','manage','refresh','leave','leave-confirm','leave-cancel','transfer','transfer-select'].includes(action))return handleTopGroupsInteraction(interaction,action,parts); if(prefix==='groups_bonus')return handleTopBonusButton(interaction,action); if(prefix==='groups_bonus_select')return handleTopBonusSelection(interaction,action,parts); if(prefix==='groups_bonus_page')return handleTopBonusPage(interaction,action,parts); if(prefix==='groups_bonus_member_select')return handleTopBonusMemberSelection(interaction,action,parts); if(prefix==='groups_bonus_modal')return handleTopBonusModal(interaction,action,parts); if(prefix==='groups_bonus_confirm')return handleTopBonusConfirm(interaction,action,parts); if(prefix==='groups_rules_modal'){const metric=parts[0];const settings=await checkSystem(interaction);if(!settings)return true;const definition=RULE_METRICS.find(([key])=>key===metric);if(!definition)return reply(interaction,{content:'قاعدة النقاط غير معروفة.'});try{const rules=await gm.getRules(interaction.guild.id);const current=rules.find(rule=>String(rule.metric)===metric);const threshold=Number(interaction.fields.getTextInputValue('threshold'));const points=Number(interaction.fields.getTextInputValue('points'));await gm.setRule(interaction.guild.id,metric,threshold,points,Number(current?.enabled)===1,interaction.user.id);await gm.logGroupEvent(interaction.guild,'rule_update',{metric,threshold,points,enabled:Number(current?.enabled)===1},interaction.user.id);await refreshSetupPanel(interaction,settings);return reply(interaction,rulesPayload(interaction.guild,await gm.getRules(interaction.guild.id)));}catch(error){const messages={INVALID_THRESHOLD:'الحد يجب أن يكون عددًا صحيحًا أكبر من صفر ولا يتجاوز مليارًا.',INVALID_POINTS:'النقاط لكل حد يجب أن تكون عددًا صحيحًا بين 1 و1,000,000.',INVALID_METRIC:'نوع قاعدة النقاط غير معروف.'};return reply(interaction,{title:'RULE UPDATE FAILED',content:messages[error.message]||'تعذر حفظ قاعدة النقاط. تحقق من القيم وحاول مرة أخرى.'});}} if(prefix==='groups_meta_edit'){
+ if(prefix==='groups_top'&&['rank','group','manage','avatar','avatar-modal','refresh','leave','leave-confirm','leave-cancel','transfer','transfer-select'].includes(action))return handleTopGroupsInteraction(interaction,action,parts); if(prefix==='groups_bonus')return handleTopBonusButton(interaction,action); if(prefix==='groups_bonus_select')return handleTopBonusSelection(interaction,action,parts); if(prefix==='groups_bonus_page')return handleTopBonusPage(interaction,action,parts); if(prefix==='groups_bonus_member_select')return handleTopBonusMemberSelection(interaction,action,parts); if(prefix==='groups_bonus_modal')return handleTopBonusModal(interaction,action,parts); if(prefix==='groups_bonus_confirm')return handleTopBonusConfirm(interaction,action,parts); if(prefix==='groups_rules_modal'){const metric=parts[0];const settings=await checkSystem(interaction);if(!settings)return true;const definition=RULE_METRICS.find(([key])=>key===metric);if(!definition)return reply(interaction,{content:'قاعدة النقاط غير معروفة.'});try{const rules=await gm.getRules(interaction.guild.id);const current=rules.find(rule=>String(rule.metric)===metric);const threshold=Number(interaction.fields.getTextInputValue('threshold'));const points=Number(interaction.fields.getTextInputValue('points'));await gm.setRule(interaction.guild.id,metric,threshold,points,Number(current?.enabled)===1,interaction.user.id);await gm.logGroupEvent(interaction.guild,'rule_update',{metric,threshold,points,enabled:Number(current?.enabled)===1},interaction.user.id);await refreshSetupPanel(interaction,settings);return reply(interaction,rulesPayload(interaction.guild,await gm.getRules(interaction.guild.id)));}catch(error){const messages={INVALID_THRESHOLD:'الحد يجب أن يكون عددًا صحيحًا أكبر من صفر ولا يتجاوز مليارًا.',INVALID_POINTS:'النقاط لكل حد يجب أن تكون عددًا صحيحًا بين 1 و1,000,000.',INVALID_METRIC:'نوع قاعدة النقاط غير معروف.'};return reply(interaction,{title:'RULE UPDATE FAILED',content:messages[error.message]||'تعذر حفظ قاعدة النقاط. تحقق من القيم وحاول مرة أخرى.'});}} if(prefix==='groups_meta_edit'){
   const field=choose(action,['name','description','emoji','color','avatar']);
   try { await currentManager(interaction, Number(parts[0])); }
   catch (error) { return reply(interaction,{content:groupError(error)}); }

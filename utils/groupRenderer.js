@@ -330,7 +330,7 @@ async function renderTopGroups({ guild, groups = [], memberRowsByGroup = {}, gro
       roundRect(ctx, x + 45, y + 280, cardW - 90, 3, 2, `rgba(${r},${g},${b},.65)`);
     } else {
       ctx.textAlign = 'center'; ctx.fillStyle = '#7F8CA1'; ctx.font = '25px Cairo, sans-serif';
-      ctx.fillText('لا يوجد قروب في هذا المركز', x + cardW / 2, y + 160);
+      text(ctx, 'لا يوجد قروب في هذا المركز', x + cardW / 2, y + 160, cardW - 30);
     }
   }
 
