@@ -160,7 +160,7 @@ function testSetupValidation() {
 async function testDashboardPublishers() {
   const guildId = 'dashboard-publisher-guild';
   await insertGroup({ guildId, name: 'Member panel group' });
-  const guild = { id: guildId, client: { user: { id: 'dashboard-bot' } }, iconURL: () => 'https://cdn.discordapp.com/icons/123456789012345678/abcdef.png' };
+  const guild = { id: guildId, ownerId: OWNER, client: { user: { id: 'dashboard-bot' } }, iconURL: () => 'https://cdn.discordapp.com/icons/123456789012345678/abcdef.png' };
   const messages = new Map();
   let sends = 0;
   let edits = 0;
@@ -185,8 +185,8 @@ async function testDashboardPublishers() {
 
   await groupCommand.sendAdminControlPanel(channel, guild);
   const adminComponents = JSON.stringify([...messages.values()][0]?.components || []);
-  assert.ok(adminComponents.includes('إدارة القروبات'), 'admin dashboard title is Arabic');
-  assert.ok(adminComponents.includes('حذف') && adminComponents.includes('تصفير الكل'));
+  assert.ok(adminComponents.includes('GROUP ADMINISTRATION'), 'admin dashboard title is English');
+  assert.ok(adminComponents.includes('Delete') && adminComponents.includes('Reset All'));
   assert.doesNotMatch(adminComponents, /استخدم الأزرار لإدارة القروبات/);
   assert.ok(adminComponents.includes('1465336647477493894') && adminComponents.includes('1465373714060415180'), 'admin action buttons reuse matching role-panel emojis');
   assert.ok(adminComponents.indexOf('groups_admin:delete') < adminComponents.indexOf('groups_admin:reset'), 'Delete appears above Reset');
@@ -199,9 +199,9 @@ async function testDashboardPublishers() {
   };
   collectButtons(JSON.parse(JSON.stringify(adminPayload.components[0])));
   assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:create')?.style, 2, 'ordinary management buttons use Secondary styling');
-  assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:delete')?.style, 4, 'Delete remains Danger');
-  assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:reset')?.style, 4, 'Reset remains Danger');
-  assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:resetall')?.style, 4, 'Reset All remains Danger');
+  assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:delete')?.style, 2, 'Delete uses the neutral panel style');
+  assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:reset')?.style, 2, 'Reset uses the neutral panel style');
+  assert.equal(adminButtons.find(item => item.custom_id === 'groups_admin:resetall')?.style, 2, 'Reset All uses the neutral panel style');
   await groupCommand.sendAdminControlPanel(channel, guild);
   assert.equal(sends, 1, 'admin panel is updated instead of duplicated');
   assert.equal(edits, 1);
@@ -887,7 +887,7 @@ async function testTopBonusControls() {
   await groupCommand.handleInteraction(myGroup);
   const myGroupJson = JSON.stringify(myGroup.state.editReply);
   assert.ok(myGroupJson.includes('groups_top:leave:' + groupId), 'My Group provides a Leave action');
-  assert.ok(myGroupJson.includes('تاريخ الإنشاء') && myGroupJson.includes('نقاط القروب'), 'group details use structured Arabic labels');
+  assert.ok(myGroupJson.includes('Created At :') && myGroupJson.includes('Group Points :'), 'group details use structured English labels');
 
   const leaveRequest = mockGroupInteraction({ customId: `groups_top:leave:${groupId}`, guild, userId: USER_A, channelId: 'top-bonus-channel' });
   await groupCommand.handleInteraction(leaveRequest);

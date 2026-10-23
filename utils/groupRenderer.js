@@ -296,8 +296,6 @@ async function renderTopGroups({ guild, groups = [], memberRowsByGroup = {}, gro
   avatar(ctx, guildImg, 1460, 104, 48, accent, guild?.name || 'G');
   ctx.textAlign = 'right'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 46px Cairo, sans-serif';
   text(ctx, 'TOP GROUPS', 1375, 86, 1070);
-  ctx.fillStyle = '#AAB4C5'; ctx.font = '22px Cairo, sans-serif';
-  text(ctx, 'أفضل 10 قروبات حسب النقاط  •  تتحدث تلقائيًا كل 30 ثانية', 1375, 128, 1070);
 
   const sorted = asArray(groups).map((group, index) => ({
     ...group,
@@ -334,20 +332,14 @@ async function renderTopGroups({ guild, groups = [], memberRowsByGroup = {}, gro
     }
   }
 
-  const selected = selectedGroup ? sorted.find(row => String(row.id) === String(selectedGroup.id)) || selectedGroup : null;
-  const selectedRows = selected ? normalizeRows(memberRowsByGroup?.[String(selected.id)] || selected.members || []) : [];
-  const viewerIndex = viewerId == null ? -1 : selectedRows.findIndex(row => String(row.id) === String(viewerId));
-  const viewerRow = viewerIndex >= 0 ? selectedRows[viewerIndex] : null;
   roundRect(ctx, 62, 870, 1476, 135, 22, 'rgba(255,255,255,.045)', `rgba(${r},${g},${b},.38)`);
-  ctx.textAlign = 'right'; ctx.fillStyle = accent; ctx.font = 'bold 23px Cairo, sans-serif';
-  text(ctx, selected ? `قروبك  •  ${selected.name || 'قروب'}` : viewerId == null ? 'استعراض ترتيبك الشخصي' : 'ترتيبك في القروب', 1498, 912, 1380);
-  ctx.fillStyle = '#F4F6FA'; ctx.font = 'bold 25px Cairo, sans-serif';
-  const rankText = viewerId == null ? 'My Rank وMy Group لبياناتك الخاصة  •  Manage لمسؤولي النظام.'
-    : viewerRow ? `ترتيبك ${viewerIndex + 1}  •  ${number(viewerRow.points).toLocaleString('ar-SA')} نقطة  •  ${number(viewerRow.messages).toLocaleString('ar-SA')} رسالة`
-      : selected ? 'لا توجد نقاط مسجلة لك في هذا القروب حتى الآن.' : 'لا يوجد قروب مرتبط بعضويتك.';
-  text(ctx, rankText, 1498, 956, 1380);
-  ctx.fillStyle = '#7F8CA1'; ctx.font = '17px Cairo, sans-serif';
-  text(ctx, `يعرض ${top10.length} من أصل ${sorted.length} قروبًا نشطًا`, 1498, 988, 1380);
+  const [cr, cg, cb] = rgb(accent);
+  ctx.save();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.shadowColor = `rgba(${cr},${cg},${cb},.95)`; ctx.shadowBlur = 22;
+  ctx.fillStyle = accent; ctx.font = 'bold 30px Cairo, sans-serif';
+  ctx.fillText(`ACTIVE GROUPS  ${top10.length} / ${sorted.length}`, 800, 937);
+  ctx.restore();
   return new AttachmentBuilder(canvas.toBuffer('image/png'), { name: `top-groups-${guild?.id || 'view'}.png` });
 }
 async function renderMyRank({ guild, group, groupRank = 0, totalGroups = 0, memberRows = [], viewerId, groupAvatar = null, ownerName = 'Unknown', accentColor = null } = {}) {
@@ -369,9 +361,9 @@ async function renderMyRank({ guild, group, groupRank = 0, totalGroups = 0, memb
   roundRect(ctx, 65, 165, 1370, 470, 28, 'rgba(255,255,255,.045)', `rgba(${r},${g},${b},.42)`);
   avatar(ctx, groupImage, 1195, 390, 116, accent, group?.name || 'G');
   ctx.textAlign = 'right'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 43px Cairo, sans-serif';
-  text(ctx, group?.name || 'Group', 1040, 277, 760);
+  text(ctx, `GROUP NAME : ${group?.name || 'Group'}`, 1040, 277, 760);
   ctx.fillStyle = '#AAB4C5'; ctx.font = '22px Cairo, sans-serif';
-  text(ctx, `Owned by ${ownerName || 'Unknown'}`, 1040, 320, 760);
+  text(ctx, `OWNER : ${ownerName || 'Unknown'}`, 1040, 320, 760);
 
   const rankColor = Number(groupRank) === 1 ? '#F2C94C' : Number(groupRank) === 2 ? '#D7E1EA' : Number(groupRank) === 3 ? '#CD8A5A' : accent;
   roundRect(ctx, 150, 245, 390, 300, 24, 'rgba(8,12,19,.72)', `${rankColor}99`);
@@ -383,9 +375,9 @@ async function renderMyRank({ guild, group, groupRank = 0, totalGroups = 0, memb
   ctx.fillText(`out of ${number(totalGroups).toLocaleString('en-US')} groups`, 345, 475);
 
   const stats = [
-    ['GROUP POINTS', number(group?.points).toLocaleString('en-US')],
-    ['MEMBERS', (group ? new Set([String(group.owner_id || ''), ...(group.memberIds || []).map(String), ...(group.managerIds || []).map(String)].filter(Boolean)).size : 0).toLocaleString('en-US')],
-    ['GROUP ID', String(group?.id ?? '—')]
+    ['GROUP POINTS :', number(group?.points).toLocaleString('en-US')],
+    ['MEMBERS :', (group ? new Set([String(group.owner_id || ''), ...(group.memberIds || []).map(String), ...(group.managerIds || []).map(String)].filter(Boolean)).size : 0).toLocaleString('en-US')],
+    ['GROUP ID :', String(group?.id ?? '—')]
   ];
   stats.forEach(([label, value], index) => {
     const x = 80 + index * 455;
@@ -399,7 +391,7 @@ async function renderMyRank({ guild, group, groupRank = 0, totalGroups = 0, memb
   const mine = myIndex >= 0 ? rows[myIndex] : null;
   roundRect(ctx, 80, 825, 1340, 95, 18, 'rgba(255,255,255,.045)', `rgba(${r},${g},${b},.32)`);
   ctx.textAlign = 'right'; ctx.fillStyle = accent; ctx.font = 'bold 21px Cairo, sans-serif';
-  text(ctx, 'YOUR CONTRIBUTION TO THIS GROUP', 1380, 862, 1220);
+  text(ctx, 'YOUR CONTRIBUTION TO THIS GROUP :', 1380, 862, 1220);
   ctx.fillStyle = '#F4F6FA'; ctx.font = 'bold 23px Cairo, sans-serif';
   const personal = mine
     ? `Member rank #${myIndex + 1}  •  ${number(mine.points).toLocaleString('en-US')} points  •  ${number(mine.messages).toLocaleString('en-US')} messages`

@@ -1,4 +1,4 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder, ChannelType, LabelBuilder, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder, TextDisplayBuilder, SectionBuilder, ContainerBuilder, ThumbnailBuilder, UserSelectMenuBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder, ChannelType, LabelBuilder, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder, TextDisplayBuilder, SectionBuilder, SeparatorBuilder, ContainerBuilder, ThumbnailBuilder, UserSelectMenuBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
 const router = require('../utils/interactionRouter');
 const gm = require('../utils/groupManager');
 const colorManager = require('../utils/colorManager');
@@ -209,24 +209,21 @@ async function sendSetupPanel(channel, guild, settings) {
   try { return await work; } finally { setupPanelLocks.delete(key); }
 }
 function controlPayload(guild) {
-  const c = baseContainer(guild, 'إدارة القروبات', '');
-  const addRow = items => c.addActionRowComponents(new ActionRowBuilder().addComponents(items.map(([label, id, style, emoji]) => button(id, label, style, emoji))));
-  c.addTextDisplayComponents(new TextDisplayBuilder().setContent('### العمليات الأساسية'));
-  addRow([
-    ['إنشاء', 'groups_admin:create', ButtonStyle.Secondary, '<:emoji_33:1465383525644501238>'],
-    ['استيراد', 'groups_admin:import', ButtonStyle.Secondary, '<:emoji_30:1465383419641856233>'],
-    ['معلومات', 'groups_admin:info', ButtonStyle.Secondary, '<:emoji_33:1465383582292771025>']
-  ]);
-  addRow([
-    ['تعديل', 'groups_admin:edit', ButtonStyle.Secondary, '<:emoji_35:1465383704993202452>'],
-    ['حذف', 'groups_admin:delete', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>'],
-    ['تصفير', 'groups_admin:reset', ButtonStyle.Danger, '<:emoji_34:1465383644339241073>']
-  ]);
-  c.addTextDisplayComponents(new TextDisplayBuilder().setContent('### إجراء جماعي'));
-  // Keep this destructive action in its own final row. It must never appear
-  // beside the other controls, especially in RTL layouts where it can look
-  // detached on the left side of the panel.
-  addRow([['تصفير الكل', 'groups_admin:resetall', ButtonStyle.Danger, '<:emoji_26:1465373714060415180>']]);
+  const c = baseContainer(guild, 'GROUP ADMINISTRATION', '');
+  const items = [
+    ['Create', 'Create a new group.', 'groups_admin:create', '<:emoji_33:1465383525644501238>'],
+    ['Add', 'Add existing Discord channels and roles to a group.', 'groups_admin:import', '<:emoji_30:1465383419641856233>'],
+    ['Information', 'View group details and members.', 'groups_admin:info', '<:emoji_33:1465383582292771025>'],
+    ['Edit', 'Edit group settings.', 'groups_admin:edit', '<:emoji_35:1465383704993202452>'],
+    ['Delete', 'Delete a managed group.', 'groups_admin:delete', '<:emoji_21:1465336647477493894>'],
+    ['Reset', 'Reset activity points for one group.', 'groups_admin:reset', '<:emoji_34:1465383644339241073>'],
+    ['Reset All', 'Reset activity points for all active groups.', 'groups_admin:resetall', '<:emoji_26:1465373714060415180>']
+  ];
+  for (const [label, description, id, emoji] of items) {
+    c.addSectionComponents(new SectionBuilder()
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${label}**\n${description}`))
+      .setButtonAccessory(button(id, label, ButtonStyle.Secondary, emoji)));
+  }
   return componentsV2Payload(c);
 }
 async function sendAdminControlPanel(channel, guild) {
@@ -261,12 +258,13 @@ function selectMemberGroup(groups, userId, channelId, requestedGroupId = null) {
   return list.find(group => gm.channelBelongs(group, channelId) && isGroupMember(group, userId))
     || list.find(group => isGroupMember(group, userId)) || null;
 }
-function topGroupsButtons() {
-  return [new ActionRowBuilder().addComponents(
-    button('groups_top:rank', 'ترتيبي', ButtonStyle.Primary),
-    button('groups_top:group', 'MY GROUP', ButtonStyle.Secondary),
-    button('groups_top:manage', 'إدارة', ButtonStyle.Secondary)
-  )];
+function topGroupsButtons(canManage = false) {
+  const buttons = [
+    button('groups_top:rank', 'MY RANK', ButtonStyle.Primary),
+    button('groups_top:group', 'MY GROUP', ButtonStyle.Secondary)
+  ];
+  if (canManage) buttons.push(button('groups_top:manage', 'ADMIN', ButtonStyle.Secondary));
+  return [new ActionRowBuilder().addComponents(buttons)];
 }
 function topManagePayload(guild) {
   const c = baseContainer(guild, 'BONUS POINTS MANAGEMENT', 'إدارة نقاط البونص اليدوية للقروبات والأعضاء. هذا النظام منفصل عن نقاط نشاط القروبات.');
@@ -288,6 +286,11 @@ function topManagePayload(guild) {
 async function buildTopGroupsPayload(guild, { viewerId = null, channelId = null } = {}) {
   const groups = await gm.listGroups(guild.id);
   const selectedGroup = selectMemberGroup(groups, viewerId, channelId);
+  const settings = await gm.getSettings(guild.id);
+  const viewer = viewerId && String(viewerId) === String(guild.ownerId)
+    ? { id: String(viewerId) }
+    : viewerId ? await guild.members?.fetch?.(String(viewerId)).catch(() => null) : null;
+  const canManage = Boolean(viewer && (String(viewer.id) === String(guild.ownerId) || gm.canManageSystem(guild.client, settings, viewer)));
   const sorted = [...groups].sort((a, b) => Number(b.points || 0) - Number(a.points || 0) || Number(a.id || 0) - Number(b.id || 0));
   const targetGroups = sorted.slice(0, 10);
   if (selectedGroup && !targetGroups.some(group => String(group.id) === String(selectedGroup.id))) targetGroups.push(selectedGroup);
@@ -307,30 +310,30 @@ async function buildTopGroupsPayload(guild, { viewerId = null, channelId = null 
   // Keep this dashboard as a legacy image message: unlike interactive
   // confirmations, the image already contains the presentation and should not
   // be wrapped in an extra Components V2 container.
-  return { title: 'TOP GROUPS', content: 'ترتيب القروبات حسب نقاط النشاط. تتحدث اللوحة تلقائيًا كل 30 ثانية.', files: [attachment], components: topGroupsButtons(), allowedMentions: { parse: [] } };
+  return { title: 'TOP GROUPS', content: 'Group ranking by activity points. Updates automatically every 30 seconds.', files: [attachment], components: topGroupsButtons(canManage), allowedMentions: { parse: [] } };
 }
 function formatGroupDate(value) {
   const date = new Date(Number(value));
-  if (!Number.isFinite(date.getTime())) return 'غير معروف';
-  return new Intl.DateTimeFormat('ar', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+  if (!Number.isFinite(date.getTime())) return 'Unknown';
+  return new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
 }
 function myGroupPayload(guild, group, userId, memberPoints, roleName) {
   const status = String(group.status || 'active').toLowerCase();
-  const membership = String(group.owner_id) === String(userId) ? 'المالك'
-    : group.managerIds.includes(String(userId)) ? 'مسؤول القروب' : 'عضو';
+  const membership = String(group.owner_id) === String(userId) ? 'Owner'
+    : group.managerIds.includes(String(userId)) ? 'Group Manager' : 'Member';
   const c = baseContainer(guild, 'MY GROUP', safe(group.name, 100));
   c.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `### ${safe(group.name, 100)}\n**دورك:** ${membership}  •  **الحالة:** ${status === 'active' ? 'نشط' : status === 'orphaned' ? 'يحتاج تنظيفًا' : status}`
+    `### ${safe(group.name, 100)}\n**Role :** ${membership}   •   **Status :** ${status === 'active' ? 'Active' : status === 'orphaned' ? 'Needs cleanup' : status}`
   ));
   c.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `### تفاصيل القروب\n**المالك:** <@${group.owner_id}>\n**الرول:** ${safe(roleName || 'غير متاح', 100)}\n**الأعضاء:** ${new Set([String(group.owner_id || ''), ...(group.memberIds || []).map(String), ...(group.managerIds || []).map(String)].filter(Boolean)).size.toLocaleString('ar')}`
+    `### GROUP DETAILS\n**Owner :** <@${group.owner_id}>\n**Role :** ${safe(roleName || 'Unavailable', 100)}\n**Members :** ${new Set([String(group.owner_id || ''), ...(group.memberIds || []).map(String), ...(group.managerIds || []).map(String)].filter(Boolean)).size.toLocaleString('en-US')}`
   ));
   c.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `### النقاط والتواريخ\n**نقاط القروب:** ${Number(group.points || 0).toLocaleString('ar')}\n**نقاطك:** ${Number(memberPoints?.points || 0).toLocaleString('ar')}\n**تاريخ الإنشاء:** ${formatGroupDate(group.created_at)}`
+    `### POINTS & DATES\n**Group Points :** ${Number(group.points || 0).toLocaleString('en-US')}\n**Your Points :** ${Number(memberPoints?.points || 0).toLocaleString('en-US')}\n**Created At :** ${formatGroupDate(group.created_at)}`
   ));
   const groupActions = [];
   if (String(group.owner_id) === String(userId)) groupActions.push(button(`groups_top:transfer:${group.id}`, 'TRANSFER OWNERSHIP', ButtonStyle.Primary));
-  groupActions.push(button(`groups_top:leave:${group.id}`, 'مغادرة القروب', ButtonStyle.Danger, '<:emoji_21:1465336647477493894>'));
+  groupActions.push(button(`groups_top:leave:${group.id}`, 'LEAVE GROUP', ButtonStyle.Secondary, '<:emoji_23:1485476405151268904>'));
   c.addActionRowComponents(new ActionRowBuilder().addComponents(groupActions));
   return componentsV2Payload(c);
 }
@@ -781,7 +784,7 @@ async function sendMemberOverviewPanel(channel, guild, groupCount) {
 function groupCommandGuideText(group, settings) {
   const lines = [
     `دليل الأوامر : ${safe(group?.name || 'قروب', 80)}`,
-    'اكتب الأمر في بداية الرسالة مباشرة دون أي بادئة. الأوامر الحساسة تتطلب كلمة تأكيد منفصلة.',
+    'اكتب الأمر في بداية الرسالة مباشرة دون أي بادئة. الأوامر الحساسة محمية بصلاحيات القروب وصلاحيات البوت.',
     '',
     '**للمالك والمسؤولين**',
     '• `تحكم` لفتح لوحة التحكم.',
@@ -796,12 +799,12 @@ function groupCommandGuideText(group, settings) {
     '• `أعضاء` لعرض صورة ترتيب الأعضاء ونقاطهم.',
     '• `أوامر` لعرض هذا الدليل مرة أخرى.',
     '',
-    '**للمالك أو مسؤول النظام فقط**',
+    '**للمالك فقط**',
     '• `مسؤول @عضو` لإضافة مسؤول للقروب بعد إضافته كعضو.',
     '• `مسؤول إزالة @عضو` لإزالة مسؤول من القروب.'
   ];
   if (settings?.extraPermissions) {
-    lines.push('', '**عند تفعيل الصلاحيات الإضافية**', '• `مسح تأكيد` لمسح الرسائل الحديثة بعد التأكد من الصلاحيات.', '• `عقوبة @عضو` ثم أضف كلمة `تأكيد` لتطبيق عقوبة 10 دقائق على عضو غير محمي.');
+    lines.push('', '**عند تفعيل الصلاحيات الإضافية**', '• `مسح` لمسح آخر 100 رسالة في روم القروب.', '• `عقوبة @عضو` لتطبيق Timeout لمدة 10 دقائق على عضو غير محمي.');
   }
   return lines.join('\n');
 }
@@ -1875,7 +1878,7 @@ function groupError(error) {
     GROUP_NOT_FOUND: 'القروب غير موجود أو لم يعد نشطاً.', NO_PERMISSION: 'ليس لديك صلاحية مالك/مسؤول لهذا القروب.',
     EXTRA_DISABLED: 'الصلاحيات الإضافية متوقفة؛ يجب تفعيلها من إعدادات القروبات أولًا.',
     FLOW_EXPIRED: 'انتهت هذه القائمة أو استُخدمت؛ افتح قائمة جديدة.', FLOW_OWNER: 'هذه القائمة تخص مستخدماً آخر.',
-    INVALID_SELECTION: 'اختيار غير صالح؛ افتح القائمة مجدداً.', MEMBER_NOT_FOUND: 'العضو غير موجود في السيرفر.',
+    INVALID_SELECTION: 'اختيار غير صالح؛ افتح القائمة مجدداً.', MEMBER_NOT_FOUND: 'العضو غير موجود في السيرفر.', NO_VOICE_MEMBERS: 'لا يوجد أعضاء حاليًا داخل روم القروب الصوتي لفصلهم.',
     TARGET_PROTECTED: 'لا يمكن تقييد مالك القروب أو مسؤوليه أو مديري النظام أو البوت.',
     CHANNEL_NOT_FOUND: 'قناة القروب المحددة غير موجودة أو نوعها غير صالح.',
     SHARED_CHANNEL: 'القناة/أب الثريد مشترك؛ لا يمكن تغيير صلاحياته دون التأثير على قروب أو ثريد آخر.',
@@ -2043,50 +2046,86 @@ async function applyGroupControl(interaction, action, scope, groupId) {
     // Install access exceptions before denying @everyone, otherwise a non-admin bot can lock itself out.
     edits.unshift(...protectionEdits);
     await applyChannelEdits(edits, `Group ${scope} ${action} by ${interaction.user.id}`, () => gm.audit(interaction.guild.id, interaction.user.id, group.id, `control_${action}`, { scope, channelId: channel.id }));
-    return `تم ${action} لقناة ${scope} الخاصة بالقروب فقط.`;
+    const actionLabel = { lock: 'قفل', unlock: 'فتح', hide: 'إخفاء', show: 'إظهار', mute: 'كتم', unmute: 'فك الكتم' }[action] || action;
+    const scopeLabel = scope === 'voice' ? 'روم الفويس' : 'الروم';
+    return `تم ${actionLabel} ${scopeLabel} الخاص بالقروب فقط.`;
   });
 }
 function controlGroupPayload(guild, groupId) {
-  const c = baseContainer(guild, 'GROUP CONTROLS', 'التحكم متاح لمالك القروب ومسؤوليه. الكتم والطرد والصلاحيات تتطلب الصلاحيات الإضافية.\nاكتب الأوامر مباشرة في قناة القروب دون بادئة.\n`تحكم` • `إضافة @عضو` • `إزالة @عضو` • `منع @عضو` • `سماح @عضو`\n`قروبي` • `أعضاء` • `مسؤول @عضو` (للمالك أو مسؤول النظام)');
+  const c = baseContainer(guild, 'GROUP CONTROL');
   const id = Number(groupId);
+  const emoji = {
+    open: '<:emoji_15:1485476015688908830>',
+    unlock: '<:emoji_15:1485476015688908830>',
+    lock: '<:emoji_18:1485476234199826472>',
+    show: '<:emoji_17:1485476188091580446>',
+    hide: '<:emoji_17:1485476100774821938>',
+    mute: '<:emoji_28:1485476660055638146>',
+    unmute: '<:emoji_30:1485476749889503334>',
+    rename: '<:emoji_5:1484364982094266428>',
+    limit: '<:emoji_19:1485476294966640781>',
+    allow: '<:emoji_21:1485476368740519986>',
+    deny: '<:emoji_23:1485476405151268904>',
+    kick: '<:emoji_33:1485476862619680788>',
+    permission: '<:emoji_21:1485476329171320855>'
+  };
   const addControlSection = (title, controls) => {
+    c.addSeparatorComponents(new SeparatorBuilder());
     c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ${title}`));
     for (let offset = 0; offset < controls.length; offset += 3) {
       c.addActionRowComponents(new ActionRowBuilder().addComponents(
         controls.slice(offset, offset + 3).map(([action, scope, label]) =>
-          button(`groups_control:${action}:${id}:${scope}`, label, action === 'deny' || action === 'kick' ? ButtonStyle.Danger : ButtonStyle.Secondary)
+          button(`groups_control:${action}:${id}:${scope}`, label, ButtonStyle.Secondary, emoji[action])
         )
       ));
     }
   };
-  addControlSection('تحكم النص', [
-    ['lock', 'text', 'قفل النص'], ['unlock', 'text', 'فتح النص'], ['hide', 'text', 'إخفاء النص'],
-    ['show', 'text', 'إظهار النص'], ['mute', 'text', 'كتم النص'], ['unmute', 'text', 'فك كتم النص']
+  addControlSection('ROOM CONTROL', [
+    ['lock', 'text', 'Lock Room'], ['unlock', 'text', 'Open Room'], ['hide', 'text', 'Hide Room'],
+    ['show', 'text', 'Show Room'], ['mute', 'text', 'Mute'], ['unmute', 'text', 'Unmute']
   ]);
-  addControlSection('تحكم الصوت', [
-    ['lock', 'voice', 'قفل الفويس'], ['unlock', 'voice', 'فتح الفويس'], ['hide', 'voice', 'إخفاء الفويس'],
-    ['show', 'voice', 'إظهار الفويس'], ['mute', 'voice', 'كتم الفويس'], ['unmute', 'voice', 'فك كتم الفويس'],
-    ['kick', 'voice', 'فصل من الفويس'], ['limit', 'voice', 'حد الفويس']
+  addControlSection('VOICE CONTROL', [
+    ['lock', 'voice', 'Lock Voice'], ['unlock', 'voice', 'Open Voice'], ['hide', 'voice', 'Hide Voice'],
+    ['show', 'voice', 'Show Voice'], ['mute', 'voice', 'Mute'], ['unmute', 'voice', 'Unmute'],
+    ['kick', 'voice', 'Kick'], ['limit', 'voice', 'Limit']
   ]);
-  addControlSection('الأعضاء والصلاحيات', [
-    ['allow', 'both', 'سماح'], ['deny', 'both', 'منع'], ['rename', 'both', 'تغيير الاسم'], ['permission', 'both', 'الصلاحيات']
+  addControlSection('MEMBERS & ACCESS', [
+    ['allow', 'both', 'Allow'], ['deny', 'both', 'Deny'], ['rename', 'both', 'Rename'], ['permission', 'both', 'Permissions']
   ]);
-  c.addSectionComponents(new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent('عرض تفاصيل القروب.')).setButtonAccessory(button(`groups_member:info:${id}`, 'MY GROUP')));
+  c.addSeparatorComponents(new SeparatorBuilder());
+  c.addSectionComponents(new SectionBuilder().addTextDisplayComponents(new TextDisplayBuilder().setContent('GROUP INFORMATION')).setButtonAccessory(button(`groups_member:info:${id}`, 'MY GROUP', ButtonStyle.Secondary, emoji.permission)));
   return componentsV2Payload(c);
 }
 function flowSelect(guild, flow, title, description, options) { return selectPayload(guild, title, description, flowId(flow), options); }
 function entitySelect(guild, flow, title, description, menu) {
   const c = baseContainer(guild, title, description);
   c.addActionRowComponents(new ActionRowBuilder().addComponents(menu.setCustomId(flowId(flow)).setMinValues(1).setMaxValues(1)));
-  c.addActionRowComponents(new ActionRowBuilder().addComponents(button(`groups_flow:${flow.token}:cancel`, 'إلغاء')));
+  c.addActionRowComponents(new ActionRowBuilder().addComponents(button(`groups_flow:${flow.token}:cancel`, 'CANCEL')));
   return componentsV2Payload(c);
 }
+async function voiceMemberSelect(interaction, flow) {
+  const group = await gm.getGroup(interaction.guild.id, flow.groupId);
+  const ids = [...new Set([group?.owner_id, ...(group?.memberIds || []), ...(group?.managerIds || [])].filter(Boolean).map(String))];
+  const members = (await Promise.all(ids.map(id => interaction.guild.members.fetch(id).catch(() => null))))
+    .filter(member => member?.voice?.channelId === String(group?.voice_channel_id));
+  if (!members.length) throw new Error('NO_VOICE_MEMBERS');
+  const visibleMembers = members.slice(0, 25);
+  flow.memberFilterIds = visibleMembers.map(member => String(member.id));
+  const menu = new StringSelectMenuBuilder()
+    .setPlaceholder('اختر عضوًا موجودًا في الفويس')
+    .addOptions(visibleMembers.map(member => ({
+      label: safe(member.displayName || member.user?.username || member.id, 100),
+      value: String(member.id),
+      description: 'في روم القروب الصوتي'
+    })));
+  return entitySelect(interaction.guild, flow, 'KICK VOICE MEMBER', 'اختر عضوًا من الموجودين حاليًا في روم القروب الصوتي لفصله من الروم فقط.', menu);
+}
 function scopePayload(guild, flow) {
-  return flowSelect(guild, flow, 'روم القروب', 'اختر قناة القروب فقط.', [{ label: 'النص أو أب الثريد', value: 'text' }, { label: 'الصوت', value: 'voice' }, { label: 'النص والفويس', value: 'both' }]);
+  return flowSelect(guild, flow, 'SELECT ROOM SCOPE', 'اختر نطاق القنوات الذي سيُطبق عليه الإجراء.', [{ label: 'Text Room / Thread', value: 'text', description: 'الروم النصي أو الثريد المرتبط.' }, { label: 'Voice Room', value: 'voice', description: 'الروم الصوتي المرتبط.' }, { label: 'Text + Voice', value: 'both', description: 'الروم النصي والصوتي معًا.' }]);
 }
 function confirmFlowPayload(guild, flow, description) {
   const c = baseContainer(guild, 'CONFIRM GROUP ACTION', description);
-  c.addActionRowComponents(new ActionRowBuilder().addComponents(button(flowId(flow), 'تأكيد', ButtonStyle.Success), button(`groups_flow:${flow.token}:cancel`, 'إلغاء')));
+  c.addActionRowComponents(new ActionRowBuilder().addComponents(button(flowId(flow), 'CONFIRM', ButtonStyle.Success), button(`groups_flow:${flow.token}:cancel`, 'CANCEL')));
   return componentsV2Payload(c);
 }
 async function showRenameModal(interaction, groupId, scope) {
@@ -2094,8 +2133,8 @@ async function showRenameModal(interaction, groupId, scope) {
   const { group } = await currentManager(interaction, groupId);
   const flow = newFlow(interaction.guild.id, interaction.user.id, 'rename', group.id);
   flow.scope = scope; flow.step = 'submit';
-  const modal = new ModalBuilder().setCustomId(flowId(flow)).setTitle('تغيير اسم روم القروب');
-  modal.addLabelComponents(new LabelBuilder().setLabel('الاسم الجديد').setTextInputComponent(new TextInputBuilder().setCustomId('value').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(80).setValue(safe(group.name, 80))));
+  const modal = new ModalBuilder().setCustomId(flowId(flow)).setTitle('RENAME GROUP ROOM');
+  modal.addLabelComponents(new LabelBuilder().setLabel('New name').setTextInputComponent(new TextInputBuilder().setCustomId('value').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(80).setValue(safe(group.name, 80)).setPlaceholder('أدخل الاسم الجديد')));
   return interaction.showModal(modal);
 }
 async function renameGroupResources(context, group, scope, rawName) {
@@ -2202,7 +2241,9 @@ async function applyUserControl(interaction, flow, userId) {
       throw error;
     }
     invalidateGroupCaches(interaction.guild.id);
-    return `تم ${flow.action} للعضو في ${flow.scope} فقط؛ لم تتغير صلاحيات رتب السيرفر.`;
+    const actionLabel = flow.action === 'allow' ? 'السماح' : 'المنع';
+    const scopeLabel = flow.scope === 'voice' ? 'روم الفويس' : flow.scope === 'text' ? 'الروم' : 'الروم النصي والصوتي';
+    return `تم ${actionLabel} للعضو في ${scopeLabel} فقط؛ لم تتغير صلاحيات رتب السيرفر.`;
   });
 }
 async function applyPermission(interaction, flow) {
@@ -2244,10 +2285,14 @@ async function applyPermission(interaction, flow) {
       if (changedThread) await (wasThreadMember ? thread.members.add(targetId) : thread.members.remove(targetId)).catch(() => { error.groupRollbackFailed = true; });
       throw error;
     }
-    return `تم ${flow.mode} لـ ${flow.permission} على قناة القروب فقط.`;
+    const modeLabel = { allow: 'السماح', deny: 'المنع', inherit: 'إزالة الاستثناء' }[flow.mode] || flow.mode;
+    return `تم ${modeLabel} لصلاحية ${flow.permission} على قنوات القروب فقط.`;
   });
 }
-function permissionOptions(flow) { return SAFE_PERMISSIONS[flow.scope].map(flag => ({ label: flag, value: flag })); }
+function permissionOptions(flow) {
+  const labels = { ViewChannel: 'View Room', SendMessages: 'Send Messages', SendMessagesInThreads: 'Send in Threads', ReadMessageHistory: 'Read History', AddReactions: 'Add Reactions', AttachFiles: 'Attach Files', EmbedLinks: 'Embed Links', Connect: 'Connect', Speak: 'Speak', Stream: 'Stream', UseVAD: 'Use Voice Activity' };
+  return SAFE_PERMISSIONS[flow.scope].map(flag => ({ label: labels[flag] || flag, value: flag, description: `صلاحية ${labels[flag] || flag} داخل قنوات القروب.` }));
+}
 async function validateImport(guild, flow, settings, includeMembers = false) {
   const groups = (await gm.listGroups(guild.id, true)).filter(g => g.status !== 'deleted');
   const linkedIds = [flow.textId, flow.threadId, flow.voiceId].filter(Boolean);
@@ -2385,31 +2430,31 @@ async function advanceImport(interaction, flow, settings) {
 async function advancePermission(interaction, flow) {
   if (flow.step === 'scope') {
     flow.scope = choose(oneValue(interaction), ['text', 'voice', 'both']); flow.step = 'target';
-    return flowSelect(interaction.guild, flow, 'هدف الصلاحية', 'الصلاحية على قناة القروب فقط؛ لا يمكن اختيار رتب إدارية أو صلاحيات سيرفر.', [{ label: 'رول القروب', value: 'role' }, { label: 'عضو واحد', value: 'member' }]);
+    return flowSelect(interaction.guild, flow, 'PERMISSION TARGET', 'اختر تطبيق الصلاحية على رول القروب أو عضو واحد فقط.', [{ label: 'Group Role', value: 'role', description: 'تطبيقها على رول القروب.' }, { label: 'Member', value: 'member', description: 'تطبيقها على عضو محدد.' }]);
   }
   if (flow.step === 'target') {
     flow.targetKind = choose(oneValue(interaction), ['role', 'member']);
     if (flow.targetKind === 'member') {
       flow.step = 'member';
-      return entitySelect(interaction.guild, flow, 'عضو الصلاحية', 'اختر عضواً موجوداً. لا يمكن تقييد المالك أو المسؤولين.', new UserSelectMenuBuilder().setPlaceholder('اختر عضوًا'));
+      return entitySelect(interaction.guild, flow, 'PERMISSION MEMBER', 'اختر عضوًا موجودًا. لا يمكن تقييد المالك أو المسؤولين.', new UserSelectMenuBuilder().setPlaceholder('اختر عضوًا'));
     }
     flow.step = 'flag';
-    return flowSelect(interaction.guild, flow, 'صلاحية الروم', 'اختر صلاحية آمنة واحدة فقط.', permissionOptions(flow));
+    return flowSelect(interaction.guild, flow, 'SELECT PERMISSION', 'اختر صلاحية آمنة واحدة فقط داخل روم القروب.', permissionOptions(flow));
   }
   if (flow.step === 'member') {
     flow.targetId = oneValue(interaction);
     const { settings, group } = await currentManager(interaction, flow.groupId, true);
     await targetMember(interaction, settings, group, flow.targetId);
     flow.step = 'flag';
-    return flowSelect(interaction.guild, flow, 'صلاحية الروم', 'اختر صلاحية آمنة واحدة فقط.', permissionOptions(flow));
+    return flowSelect(interaction.guild, flow, 'SELECT PERMISSION', 'اختر صلاحية آمنة واحدة فقط داخل روم القروب.', permissionOptions(flow));
   }
   if (flow.step === 'flag') {
     flow.permission = choose(oneValue(interaction), SAFE_PERMISSIONS[flow.scope]); flow.step = 'mode';
-    return flowSelect(interaction.guild, flow, 'نوع الصلاحية', 'سماح = إعطاء، منع = حظر، توريث = إزالة الاستثناء فقط.', [{ label: 'سماح', value: 'allow' }, { label: 'منع', value: 'deny' }, { label: 'توريث / إزالة الاستثناء', value: 'inherit' }]);
+    return flowSelect(interaction.guild, flow, 'SELECT PERMISSION MODE', 'اختر سماحًا أو منعًا أو إزالة الاستثناء والعودة للوضع الافتراضي.', [{ label: 'Allow', value: 'allow', description: 'السماح بهذه الصلاحية.' }, { label: 'Deny', value: 'deny', description: 'منع هذه الصلاحية.' }, { label: 'Inherit', value: 'inherit', description: 'إزالة الاستثناء.' }]);
   }
   if (flow.step === 'mode') {
     flow.mode = choose(oneValue(interaction), ['allow', 'deny', 'inherit']); flow.step = 'confirm';
-    return confirmFlowPayload(interaction.guild, flow, `Scope: ${flow.scope}\nTarget: ${flow.targetKind === 'role' ? 'رول القروب' : `<@${flow.targetId}>`}\nPermission: ${flow.permission}\nMode: ${flow.mode}\nلن تتغير أي صلاحيات خارج قناة القروب.`);
+    return confirmFlowPayload(interaction.guild, flow, `النطاق : ${flow.scope}\nالهدف : ${flow.targetKind === 'role' ? 'رول القروب' : `<@${flow.targetId}>`}\nالصلاحية : ${flow.permission}\nالوضع : ${flow.mode}\nلن تتغير أي صلاحيات خارج قنوات القروب.`);
   }
   if (flow.step === 'confirm') {
     if (!interaction.isButton?.()) throw new Error('INVALID_SELECTION');
@@ -2437,8 +2482,8 @@ async function handleGroupExtensions(interaction) {
       if (action === 'limit') {
         await currentManager(interaction, groupId);
         flow = newFlow(interaction.guild.id, interaction.user.id, 'limit', groupId); flow.step = 'submit';
-        const modal = new ModalBuilder().setCustomId(flowId(flow)).setTitle('حد فويس القروب');
-        modal.addLabelComponents(new LabelBuilder().setLabel('من 0 إلى 99 (0 = بدون حد)').setTextInputComponent(new TextInputBuilder().setCustomId('value').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(2)));
+        const modal = new ModalBuilder().setCustomId(flowId(flow)).setTitle('SET VOICE LIMIT');
+        modal.addLabelComponents(new LabelBuilder().setLabel('Voice limit').setTextInputComponent(new TextInputBuilder().setCustomId('value').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(2).setPlaceholder('من 0 إلى 99، اكتب 0 لإزالة الحد')));
         return interaction.showModal(modal);
       }
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -2449,7 +2494,7 @@ async function handleGroupExtensions(interaction) {
       }
       if (action === 'rename') {
         flow = newFlow(interaction.guild.id, interaction.user.id, 'rename', groupId);
-        return interaction.editReply(flowSelect(interaction.guild, flow, 'تغيير الاسم', 'اختر اسم القروب أو إحدى قنواته.', [{ label: 'اسم القروب وأسماء النص والفويس', value: 'name' }, { label: 'اسم النص أو الثريد فقط', value: 'text' }, { label: 'اسم الفويس فقط', value: 'voice' }]));
+        return interaction.editReply(flowSelect(interaction.guild, flow, 'RENAME CHANNELS', 'اختر ما تريد إعادة تسميته، ثم أدخل الاسم الجديد.', [{ label: 'Group + Text + Voice', value: 'name', description: 'تغيير اسم القروب والروم النصي والصوتي.' }, { label: 'Text Room / Thread', value: 'text', description: 'تغيير اسم الروم النصي أو الثريد فقط.' }, { label: 'Voice Room', value: 'voice', description: 'تغيير اسم الروم الصوتي فقط.' }]));
       }
       if (action === 'permission') {
         flow = newFlow(interaction.guild.id, interaction.user.id, 'permission', groupId);
@@ -2459,7 +2504,7 @@ async function handleGroupExtensions(interaction) {
       flow = newFlow(interaction.guild.id, interaction.user.id, 'userControl', groupId); flow.action = action;
       if (action === 'kick') {
         flow.scope = 'voice'; flow.step = 'member';
-        return interaction.editReply(entitySelect(interaction.guild, flow, 'فصل عضو من فويس القروب', 'فصل عضو من روم القروب فقط، وليس من السيرفر.', new UserSelectMenuBuilder().setPlaceholder('عضو في فويس القروب')));
+        return interaction.editReply(await voiceMemberSelect(interaction, flow));
       }
       return interaction.editReply(scopePayload(interaction.guild, flow));
     }
@@ -2517,13 +2562,16 @@ async function handleGroupExtensions(interaction) {
       } else if (flow.kind === 'userControl') {
         if (step === 'scope') {
           flow.scope = choose(oneValue(interaction), ['text', 'voice', 'both']); flow.step = 'member';
-          payload = entitySelect(interaction.guild, flow, `Group ${flow.action}`, 'اختر العضو؛ سيُعدل استثناء العضو على قناة القروب فقط.', new UserSelectMenuBuilder().setPlaceholder('اختر عضوًا من السيرفر'));
+          payload = entitySelect(interaction.guild, flow, `${flow.action.toUpperCase()} MEMBER`, 'اختر عضوًا من السيرفر لتطبيق الإجراء على قنوات القروب فقط.', new UserSelectMenuBuilder().setPlaceholder('اختر عضوًا'));
         } else if (step === 'member') {
           flow.targetId = oneValue(interaction);
+          if (flow.memberFilterIds && !flow.memberFilterIds.includes(String(flow.targetId))) throw new Error('INVALID_SELECTION');
           const { settings, group } = await currentManager(interaction, flow.groupId, true);
           await targetMember(interaction, settings, group, flow.targetId, flow.action !== 'allow');
           flow.step = 'confirm';
-          payload = confirmFlowPayload(interaction.guild, flow, `Action: ${flow.action}\nScope: ${flow.scope}\nMember: <@${flow.targetId}>`);
+          const actionLabel = flow.action === 'allow' ? 'السماح' : flow.action === 'deny' ? 'المنع' : 'الفصل';
+          const scopeLabel = flow.scope === 'voice' ? 'روم الفويس' : flow.scope === 'text' ? 'الروم' : 'الروم النصي والصوتي';
+          payload = confirmFlowPayload(interaction.guild, flow, `الإجراء : ${actionLabel}\nالنطاق : ${scopeLabel}\nالعضو : <@${flow.targetId}>`);
         } else if (step === 'confirm' && interaction.isButton?.()) {
           const result = await applyUserControl(interaction, flow, flow.targetId);
           forgetFlow(flow);

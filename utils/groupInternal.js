@@ -94,7 +94,8 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
   let command = String(words.shift() || '').toLowerCase();
   if (command === 'تعديل' && String(words[0] || '') === 'القروب') { command = 'تعديل'; words.shift(); }
   if (!COMMANDS.has(command)) return false;
-  // Commands are prefix-free; destructive actions require an explicit confirmation word.
+  // Commands are prefix-free; destructive actions remain protected by the
+  // existing role, group-membership, and bot-permission checks.
   let group = await gm.getGroupForChannel(message.guild.id, message.channel.id);
   if (!group || group.status !== 'active') {
     if (hasPrefix) { await reply(message, 'هذا الشات غير مرتبط بقروب نشط.'); return true; }
@@ -196,7 +197,9 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
     }
     if (command === 'مسؤول' || command === 'manager') {
       if (!targetId) throw new Error('MENTION_REQUIRED');
-      if (String(group.owner_id) !== String(message.author.id) && !system) throw new Error('OWNER_ONLY');
+      // Only the group owner can appoint or remove group managers. System
+      // managers may administer the system, but cannot change this group role.
+      if (String(group.owner_id) !== String(message.author.id)) throw new Error('OWNER_ONLY');
       const target = await message.guild.members.fetch(targetId).catch(() => null);
       if (!target || target.user?.bot) throw new Error('MEMBER_NOT_FOUND');
       const remove = ['remove', 'ازالة', 'إزالة'].includes(String(words[0] || '').toLowerCase());
@@ -213,7 +216,6 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
     }
     if (command === 'مسح' || command === 'clear') {
       if (!settings.extraPermissions) throw new Error('EXTRA_DISABLED');
-      if (!words.some(word => ['تأكيد', 'أكد', 'confirm'].includes(String(word).toLowerCase()))) { await reply(message, 'للتأكيد اكتب: مسح تأكيد. لن تُحذف أي رسالة قبل كتابة كلمة التأكيد.'); return true; }
       const fetched = await message.channel.messages.fetch({ limit: 100 });
       await message.channel.bulkDelete(fetched, true);
       const done = await reply(message, 'تم مسح الرسائل.');
@@ -222,7 +224,6 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
     }
     if (command === 'عقوبه' || command === 'عقوبة' || command === 'punish') {
       if (!settings.extraPermissions) throw new Error('EXTRA_DISABLED');
-      if (!words.some(word => ['تأكيد', 'أكد', 'confirm'].includes(String(word).toLowerCase()))) { await reply(message, 'للتأكيد اكتب: عقوبة @عضو تأكيد. مدة العقوبة 10 دقائق، ولن تُطبق قبل كلمة التأكيد.'); return true; }
       if (!targetId) throw new Error('MENTION_REQUIRED');
       const target = await message.guild.members.fetch(targetId).catch(() => null);
       if (!target || target.user?.bot) throw new Error('MEMBER_NOT_FOUND');
