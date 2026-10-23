@@ -1400,6 +1400,67 @@ class DatabaseManager {
         }
     }
 
+    // Backward-compatible activity API used by older activity/tops commands.
+    async getPeriodActivityStats(userId, period = 'weekly', guildId = null) {
+        try {
+            const normalizedPeriod = String(period || 'weekly').toLowerCase();
+            if (normalizedPeriod === 'daily' || normalizedPeriod === 'day') {
+                return await this.getDailyStats(userId, guildId);
+            }
+            if (normalizedPeriod === 'monthly' || normalizedPeriod === 'month') {
+                return await this.getMonthlyStats(userId, guildId);
+            }
+            if (normalizedPeriod === 'total' || normalizedPeriod === 'all' || normalizedPeriod === 'lifetime') {
+                const totals = await this.get(`
+                    SELECT total_voice_time AS voiceTime,
+                           total_messages AS messages,
+                           total_reactions AS reactions,
+                           total_voice_joins AS voiceJoins
+                    FROM user_totals
+                    WHERE user_id = ?
+                `, [userId]);
+                return {
+                    voiceTime: totals?.voiceTime || 0,
+                    messages: totals?.messages || 0,
+                    reactions: totals?.reactions || 0,
+                    voiceJoins: totals?.voiceJoins || 0,
+                    activeDays: 0
+                };
+            }
+
+            const now = moment().tz('Asia/Riyadh');
+            const periodStart = normalizedPeriod === 'yearly' || normalizedPeriod === 'year'
+                ? now.clone().startOf('year').format('YYYY-MM-DD')
+                : now.clone().startOf('week').format('YYYY-MM-DD');
+            const source = guildId
+                ? `(SELECT date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ? AND user_id = ?
+                   UNION ALL SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)`
+                : '(SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)';
+            const params = guildId ? [guildId, userId, userId, periodStart] : [userId, periodStart];
+            const stats = await this.get(`
+                SELECT SUM(voice_time) AS voiceTime,
+                       SUM(messages) AS messages,
+                       SUM(reactions) AS reactions,
+                       SUM(voice_joins) AS voiceJoins,
+                       COUNT(DISTINCT CASE
+                           WHEN voice_time > 0 OR messages > 0 OR reactions > 0 OR voice_joins > 0
+                           THEN date END) AS activeDays
+                FROM ${source}
+                WHERE date >= ?
+            `, params);
+            return {
+                voiceTime: stats?.voiceTime || 0,
+                messages: stats?.messages || 0,
+                reactions: stats?.reactions || 0,
+                voiceJoins: stats?.voiceJoins || 0,
+                activeDays: stats?.activeDays || 0
+            };
+        } catch (error) {
+            console.error('❌ خطأ في جلب إحصائيات الفترة:', error);
+            return { voiceTime: 0, messages: 0, reactions: 0, voiceJoins: 0, activeDays: 0 };
+        }
+    }
+
     // تنظيف البيانات القديمة (حذف الجلسات التفصيلية فقط، الاحتفاظ بالإجماليات)
     async cleanupOldData(daysToKeep = 60) {
         try {
