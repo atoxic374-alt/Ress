@@ -1786,6 +1786,13 @@ async function applyUserControl(interaction, flow, userId) {
       return 'تم فصل العضو من روم القروب فقط (ليس طرداً من السيرفر).';
     }
     choose(flow.action, ['allow', 'deny']);
+    if (flow.action === 'deny' && (String(group.owner_id) === String(target.id) || group.managerIds.includes(String(target.id)))) {
+      throw new Error('TARGET_PROTECTED');
+    }
+    if (flow.action === 'allow' && flow.scope === 'both') {
+      const linkedGroups = await gm.listGroups(interaction.guild.id);
+      if (linkedGroups.some(item => item.id !== group.id && (String(item.owner_id) === String(target.id) || item.memberIds.includes(String(target.id)) || item.managerIds.includes(String(target.id)))) throw new Error('USER_ALREADY_IN_GROUP');
+    }
     const channels = await groupChannels(interaction.guild, group, flow.scope);
     const allowed = flow.action === 'allow';
     const thread = flow.scope !== 'voice' && group.thread_id ? await channelById(interaction.guild, group.thread_id) : null;
