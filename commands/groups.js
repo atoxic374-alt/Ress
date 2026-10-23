@@ -323,9 +323,16 @@ const topPanelLocks = new Map();
 const TOP_BOARD_REFRESH_MS = 30_000;
 const topPanelRefreshTimers = new Map();
 function scheduleTopPanelRefresh(channel, guild, options = {}) {
-  const key = String(channel?.id || guild?.id || 'top-groups');
-  if (topPanelRefreshTimers.has(key)) return;
+  // One timer per guild: a new configured channel replaces the old timer instead of leaking intervals.
+  const key = String(guild?.id || channel?.id || 'top-groups');
+  const previous = topPanelRefreshTimers.get(key);
+  if (previous) clearInterval(previous);
   const timer = setInterval(() => {
+    if (!channel || channel.deleted || !channel.isTextBased?.()) {
+      clearInterval(timer);
+      if (topPanelRefreshTimers.get(key) === timer) topPanelRefreshTimers.delete(key);
+      return;
+    }
     sendTopGroupsPanel(channel, guild, options).catch(error => {
       console.error('[groups] automatic top-board refresh failed:', error?.message || error);
     });
