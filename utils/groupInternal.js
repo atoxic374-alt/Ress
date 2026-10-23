@@ -203,8 +203,8 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       await reply(message, 'تم تحديث مسؤولي القروب.'); return true;
     }
     if (command === 'مسح' || command === 'clear') {
-      if (!words.some(word => ['تأكيد', 'أكد', 'confirm'].includes(String(word).toLowerCase()))) { await reply(message, 'للتأكيد اكتب: مسح تأكيد. لن تُحذف أي رسالة قبل كتابة كلمة التأكيد.'); return true; }
       if (!settings.extraPermissions) throw new Error('EXTRA_DISABLED');
+      if (!words.some(word => ['تأكيد', 'أكد', 'confirm'].includes(String(word).toLowerCase()))) { await reply(message, 'للتأكيد اكتب: مسح تأكيد. لن تُحذف أي رسالة قبل كتابة كلمة التأكيد.'); return true; }
       const fetched = await message.channel.messages.fetch({ limit: 100 });
       await message.channel.bulkDelete(fetched, true);
       const done = await reply(message, 'تم مسح الرسائل.');
@@ -212,8 +212,8 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       return true;
     }
     if (command === 'عقوبه' || command === 'عقوبة' || command === 'punish') {
-      if (!words.some(word => ['تأكيد', 'أكد', 'confirm'].includes(String(word).toLowerCase()))) { await reply(message, 'للتأكيد اكتب: عقوبة @عضو تأكيد. مدة العقوبة 10 دقائق، ولن تُطبق قبل كلمة التأكيد.'); return true; }
       if (!settings.extraPermissions) throw new Error('EXTRA_DISABLED');
+      if (!words.some(word => ['تأكيد', 'أكد', 'confirm'].includes(String(word).toLowerCase()))) { await reply(message, 'للتأكيد اكتب: عقوبة @عضو تأكيد. مدة العقوبة 10 دقائق، ولن تُطبق قبل كلمة التأكيد.'); return true; }
       if (!targetId) throw new Error('MENTION_REQUIRED');
       const target = await message.guild.members.fetch(targetId).catch(() => null);
       if (!target || target.user?.bot) throw new Error('MEMBER_NOT_FOUND');
