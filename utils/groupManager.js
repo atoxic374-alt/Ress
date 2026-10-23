@@ -285,9 +285,11 @@ async function addMember(guildId, groupId, userId, actorId) { return withLock(`m
   if (!alreadyMember) {
     const otherGroups = await dbManager.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status = 'active' AND id <> ?", [String(guildId), Number(groupId)]);
     if (otherGroups.map(hydrate).some(other => String(other.owner_id) === safeUserId || other.memberIds.includes(safeUserId) || other.managerIds.includes(safeUserId))) throw new Error('USER_ALREADY_IN_GROUP');
-    if (group.memberIds.length >= Number((await getSettings(guildId)).maxMembers || 10)) throw new Error('GROUP_FULL');
+    const currentMembers = new Set([String(group.owner_id), ...group.memberIds]);
+    if (currentMembers.size >= Number((await getSettings(guildId)).maxMembers || 10)) throw new Error('GROUP_FULL');
   }
-  const members = new Set(group.memberIds); members.add(safeUserId);
+  // Repair legacy rows that omitted the owner from member_ids_json while writing membership.
+  const members = new Set([String(group.owner_id), ...group.memberIds]); members.add(safeUserId);
   await updateGroup(guildId, groupId, { member_ids_json: JSON.stringify([...members]), updated_at: Date.now() }, actorId);
   return [...members];
 }); }
