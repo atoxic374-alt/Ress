@@ -119,6 +119,8 @@ async function handleMemberPickerInteraction(interaction) {
     const group = await gm.getGroup(interaction.guild.id, Number(groupIdRaw));
     if (!group || group.status !== 'active') throw new Error('GROUP_NOT_FOUND');
     if (!gm.canManageGroup(interaction.client, settings, group, interaction.member)) throw new Error('NO_PERMISSION');
+    const isSystemManager = gm.canManageSystem(interaction.client, settings, interaction.member);
+    const isGroupOwner = String(group.owner_id) === String(interaction.user.id);
     const success = [], skipped = [], failed = [];
     for (const userId of [...new Set((interaction.values || []).map(String))].slice(0, 25)) {
       const member = await interaction.guild.members.fetch(userId).catch(() => null);
@@ -136,6 +138,7 @@ async function handleMemberPickerInteraction(interaction) {
           if (!already) { skipped.push(`<@${userId}> : ليس عضوًا في القروب`); continue; }
           if (String(group.owner_id) === userId) { failed.push(`<@${userId}> : لا يمكن إزالة المالك`); continue; }
           const wasManager = group.managerIds.includes(userId);
+          if (wasManager && !isGroupOwner && !isSystemManager) { failed.push(`<@${userId}> : لا يمكن لمدير القروب إزالة مدير آخر`); continue; }
           await gm.removeMember(interaction.guild.id, group.id, userId, interaction.user.id);
           try { await syncMember(group, interaction.guild, userId, false); await syncManagerRole(interaction.guild, settings, userId); }
           catch (error) { await restoreMembership(group, interaction.guild.id, userId, wasManager, interaction.user.id).catch(() => { error.groupRollbackFailed = true; }); throw error; }
