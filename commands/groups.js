@@ -1473,8 +1473,10 @@ function registerInteractionHandler(client) {
         const voiceStarted = voiceStarts.get(voiceKey);
         if (voiceStarted) await gm.recordActivity(newMember.guild.id, newMember.id, 'voice_ms', Date.now() - voiceStarted, group.voice_channel_id).catch(() => {});
         voiceStarts.delete(voiceKey);
-        await gm.removeMember(newMember.guild.id, group.id, newMember.id, 'role_removed').catch(() => {});
-        await gm.logGroupEvent(newMember.guild, 'member_remove', { groupId: group.id, userId: newMember.id, reason: 'role_removed' }, null);
+        const roleRemovalSettings = await gm.getSettings(newMember.guild.id);
+        await leaveGroupMember(newMember.guild, roleRemovalSettings, group, newMember.id, 'role_removed').catch(async error => {
+          await gm.audit(newMember.guild.id, null, group.id, 'role_membership_sync_failed', { userId: newMember.id, message: String(error?.message || error).slice(0, 200) }).catch(() => null);
+        });
         const owner = await newMember.guild.members.fetch(group.owner_id).catch(() => null);
         for (const managerId of group.managerIds) {
           const manager = await newMember.guild.members.fetch(managerId).catch(() => null);
