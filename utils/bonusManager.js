@@ -623,6 +623,22 @@ function createBonusManager(dbManager) {
     return value?.active === true && (value.endsAt == null || Number(value.endsAt) > Date.now()) ? value : null;
   }
 
+  async function previewAdjustAllGroupPoints(guildId, delta) {
+    const safeDelta = Number(delta);
+    if (!Number.isSafeInteger(safeDelta) || safeDelta === 0 || Math.abs(safeDelta) > MAX_POINTS_PER_EVENT) throw new Error('INVALID_POINTS_ADJUSTMENT');
+    const groups = await dbManager.all('SELECT id FROM bonus_groups WHERE guild_id = ? AND archived_at IS NULL ORDER BY id ASC', [String(guildId)]);
+    const rows = [];
+    for (const group of groups) {
+      const currentRow = await dbManager.get('SELECT points FROM bonus_group_point_balances WHERE guild_id = ? AND group_id = ?', [String(guildId), Number(group.id)]);
+      const membersRow = await dbManager.get('SELECT COALESCE(SUM(points), 0) AS points FROM bonus_balances WHERE guild_id = ? AND group_id = ?', [String(guildId), Number(group.id)]);
+      const adjustmentsRow = await dbManager.get('SELECT COALESCE(SUM(delta), 0) AS points FROM bonus_group_adjustments WHERE guild_id = ? AND group_id = ? AND active = 1', [String(guildId), Number(group.id)]);
+      const before = Number(currentRow?.points || 0) + Number(membersRow?.points || 0) + Number(adjustmentsRow?.points || 0);
+      const actualDelta = safeDelta > 0 ? safeDelta : -Math.min(Math.abs(safeDelta), Math.max(0, before));
+      rows.push({ groupId: Number(group.id), before, delta: actualDelta, after: before + actualDelta });
+    }
+    return { groups: rows.length, before: rows.reduce((sum, row) => sum + row.before, 0), delta: rows.reduce((sum, row) => sum + row.delta, 0), after: rows.reduce((sum, row) => sum + row.after, 0), rows };
+  }
+
   async function adjustAllGroupPoints(guildId, delta, actorId) {
     const safeDelta = Number(delta);
     if (!Number.isSafeInteger(safeDelta) || safeDelta === 0 || Math.abs(safeDelta) > MAX_POINTS_PER_EVENT) throw new Error('INVALID_POINTS_ADJUSTMENT');
@@ -1013,7 +1029,7 @@ function createBonusManager(dbManager) {
     readConfig, saveConfig, audit, listAuditLog, listGroups, getRules, setRule, disableRule, addGroup, resolveTargetGroup,
     getRoleGrantHistory, recordRoleChanges, seedRoleGrantHistory,
     syncAssignment, addActivity, setMultiplier, clearMultiplier, setGlobalMultiplier, clearGlobalMultiplier, getGlobalMultiplier, listActiveUserMultipliers, getActiveGroupMultiplier,
-    adjustGroupPoints, adjustAllGroupPoints, adjustUserPoints, resetGroup, listGroupResetSnapshots, restoreGroupReset, resetUser, updateGroup, archiveGroup, expireGraceBalances,
+    adjustGroupPoints, adjustAllGroupPoints, previewAdjustAllGroupPoints, adjustUserPoints, resetGroup, listGroupResetSnapshots, restoreGroupReset, resetUser, updateGroup, archiveGroup, expireGraceBalances,
     getLeaderboard, getLeaderboardSummary, getGroupPoints, getBalance, getAccountingAudit, isReady
   };
 }
