@@ -271,7 +271,7 @@ function controlPayload(guild) {
   const c = baseContainer(guild, 'GROUP ADMINISTRATION', '');
   const items = [
     ['Create', 'ابدأ إنشاء قروب جديد من النموذج.', 'groups_admin:create', '<:emoji_33:1465383525644501238>', ButtonStyle.Secondary],
-    ['Add', 'إضافة رومات ورولات موجودة.', 'groups_admin:import', '<:emoji_30:1465383419641856233>', ButtonStyle.Secondary],
+    ['Add', 'إنشاء أو ربط موارد القروب من رول موجود.', 'groups_admin:add', '<:emoji_30:1465383419641856233>', ButtonStyle.Secondary],
     ['Info', 'عرض معلومات القروب وأعضائه.', 'groups_admin:info', '<:emoji_33:1465383582292771025>', ButtonStyle.Secondary],
     ['Edit', 'تعديل إعدادات القروب.', 'groups_admin:edit', '<:emoji_35:1465383704993202452>', ButtonStyle.Secondary],
     ['Delete', 'حذف القروب.', 'groups_admin:delete', '<:emoji_21:1465336647477493894>', ButtonStyle.Danger],
@@ -1699,6 +1699,7 @@ async function reconcileGroupMembership(guild, actorId = null) {
   const groups = (await gm.listGroups(guild.id, true)).filter(group => group.status !== 'deleted');
   const issues = [];
   const botCache = new Map();
+  const settings = await gm.getSettings(guild.id);
   const isBotId = async userId => {
     const id = String(userId);
     if (botCache.has(id)) return botCache.get(id);
@@ -1709,7 +1710,18 @@ async function reconcileGroupMembership(guild, actorId = null) {
     botCache.set(id, result);
     return result;
   };
-  for (const group of groups) {
+  for (const originalGroup of groups) {
+    let group = originalGroup;
+    const resourceRole = group.role_id ? (guild.roles.cache.get(String(group.role_id)) || await guild.roles.fetch(String(group.role_id)).catch(() => null)) : null;
+    const resourceText = group.text_channel_id ? await channelById(guild, group.text_channel_id) : null;
+    const resourceVoice = group.voice_channel_id ? await channelById(guild, group.voice_channel_id) : null;
+    const resourceThread = group.thread_id ? await channelById(guild, group.thread_id) : null;
+    const missingResource = !resourceRole || !resourceText || resourceText.type !== ChannelType.GuildText || !resourceVoice || resourceVoice.type !== ChannelType.GuildVoice || (settings.chatMode === 'threads' && (!resourceThread || !resourceThread.isThread?.()));
+    if (missingResource && group.status === 'active') {
+      await gm.audit(guild.id, actorId, group.id, 'group_resource_drift_detected', { roleMissing: !resourceRole, textMissing: !resourceText, threadMissing: settings.chatMode === 'threads' && !resourceThread, voiceMissing: !resourceVoice }).catch(() => {});
+      await restoreGroupResources(guild, group, 'reconcile_missing_resource').catch(error => console.error('[groups] resource reconciliation failed:', guild.id, group.id, error?.message || error));
+      continue;
+    }
     const expected = [...new Set([String(group.owner_id), ...group.memberIds, ...group.managerIds].filter(Boolean))];
     const role = group.role_id ? (guild.roles.cache.get(String(group.role_id)) || await guild.roles.fetch(String(group.role_id)).catch(() => null)) : null;
     if (!role) {
@@ -1719,12 +1731,26 @@ async function reconcileGroupMembership(guild, actorId = null) {
         if (await isBotId(userId)) continue;
         let member = guild.members.cache.get(userId) || null;
         if (!member && !role.members.has(userId)) member = await guild.members.fetch(userId).catch(() => null);
-        if (member && !member.roles.cache.has(role.id)) issues.push({ groupId: group.id, groupName: group.name, type: 'member_missing_role', userId, detail: 'عضو محفوظ في قاعدة البيانات ولا يحمل رتبة القروب.' });
+        if (member && !member.roles.cache.has(role.id)) {
+          issues.push({ groupId: group.id, groupName: group.name, type: 'member_missing_role', userId, detail: 'عضو محفوظ في قاعدة البيانات ولا يحمل رتبة القروب.' });
+          if (role.editable) await member.roles.add(role, 'Repair managed group membership').catch(error => console.warn('[groups] membership role repair failed:', userId, error?.message || error));
+        }
         else if (!member && !role.members.has(userId)) issues.push({ groupId: group.id, groupName: group.name, type: 'member_not_found', userId, detail: 'العضو محفوظ في قاعدة البيانات لكنه غير موجود أو تعذر جلبه من السيرفر.' });
       }
       for (const [userId] of role.members) {
         if (await isBotId(userId)) continue;
         if (!expected.includes(String(userId))) issues.push({ groupId: group.id, groupName: group.name, type: 'role_member_not_in_db', userId, detail: 'عضو يحمل رتبة القروب لكنه غير موجود في قائمة العضوية المحفوظة.' });
+      }
+      const roleMemberIds = new Set([...role.members.keys()].map(String));
+      const staleMembers = group.memberIds.filter(userId => !roleMemberIds.has(String(userId)) && String(userId) !== String(group.owner_id));
+      const staleManagers = group.managerIds.filter(userId => !roleMemberIds.has(String(userId)));
+      const roleAddedMembers = [...roleMemberIds].filter(userId => !expected.includes(userId) && !group.blockedIds.includes(userId));
+      if (staleMembers.length || staleManagers.length || roleAddedMembers.length) {
+        const nextMembers = [...new Set([...group.memberIds.filter(id => !staleMembers.includes(id)), ...roleAddedMembers])];
+        const nextManagers = group.managerIds.filter(id => !staleManagers.includes(id));
+        group = await gm.updateGroup(guild.id, group.id, { member_ids_json: JSON.stringify(nextMembers), manager_ids_json: JSON.stringify(nextManagers), updated_at: Date.now() }, actorId);
+        await gm.audit(guild.id, actorId, group.id, 'membership_reconciled', { removedMembers: staleMembers, removedManagers: staleManagers, addedMembers: roleAddedMembers }).catch(() => {});
+        expected = [...new Set([String(group.owner_id), ...group.memberIds, ...group.managerIds].filter(Boolean))];
       }
     }
     if (group.thread_id) {
@@ -1739,6 +1765,10 @@ async function reconcileGroupMembership(guild, actorId = null) {
           const actual = new Set();
           for (const [userId, threadMember] of threadMembers) if (!(threadMember?.user?.bot) && !(await isBotId(userId))) actual.add(String(userId));
           for (const userId of expected) if (!(await isBotId(userId)) && !actual.has(userId)) issues.push({ groupId: group.id, groupName: group.name, type: 'member_missing_thread', userId, detail: 'عضو محفوظ في قاعدة البيانات لكنه ليس عضوًا في الثريد.' });
+          const missingThreadMembers = expected.filter(userId => !actual.has(userId));
+          await runWithConcurrency(missingThreadMembers, 4, async userId => {
+            if (!(await restoreThreadMember(thread, userId))) await gm.audit(guild.id, actorId, group.id, 'group_thread_member_repair_failed', { userId }).catch(() => {});
+          });
           for (const userId of actual) if (!expected.includes(userId)) issues.push({ groupId: group.id, groupName: group.name, type: 'thread_member_not_in_db', userId, detail: 'عضو في الثريد غير موجود في قائمة العضوية المحفوظة.' });
         }
       }
@@ -2301,7 +2331,7 @@ async function groupChannels(guild, group, scope) {
   }
   const me = guild.members.me || await guild.members.fetchMe();
   for (const channel of channels) {
-    if (!channel.permissionsFor(me)?.has([PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ManageRoles])) throw new Error('MISSING_PERMISSIONS');
+    if (!channel.permissionsFor(me)?.has([PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ManageChannels])) throw new Error('MISSING_PERMISSIONS');
   }
   return channels;
 }
@@ -2744,16 +2774,12 @@ async function validateImport(guild, flow, settings, includeMembers = false) {
   return { role, owner, text, thread, voice, members };
 }
 async function addImportThreadMembers(thread, members) {
-  if (!thread || !members.length) return;
+  if (!thread || !members.length) return [];
   const failed = [];
   await runWithConcurrency(members, 4, async userId => {
     if (!(await restoreThreadMember(thread, userId))) failed.push(String(userId));
   });
-  if (failed.length) {
-    const error = new Error('THREAD_MEMBERS_ADD_FAILED');
-    error.userIds = failed;
-    throw error;
-  }
+  return failed;
 }
 function importThreadPayload(guild, flow) {
   const offset = (flow.page || 0) * 25;
@@ -2769,29 +2795,59 @@ function importThreadPayload(guild, flow) {
 async function saveImportedGroup(interaction, flow) {
   return groupOperation(`import:${interaction.guild.id}`, async () => {
     const settings = await currentSystem(interaction);
-    const { role, owner, text, thread, voice, members } = await validateImport(interaction.guild, flow, settings, true);
-    await addImportThreadMembers(thread, members);
-    const groupName = safe(thread?.name || role.name.replace(/^Group[・\s]+/, '') || text.name, 80).trim();
-    if (!groupName) throw new Error('NAME_REQUIRED');
-    await gm.schema();
-    const groupId = await dbManager.transaction(async tx => {
-      const existing = await tx.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status != 'deleted'", [interaction.guild.id]);
-      const assetIds = [text.id, thread?.id, voice.id].filter(Boolean);
-      for (const row of existing) {
-        let priorMembers = [], priorManagers = [];
-        try { priorMembers = JSON.parse(row.member_ids_json || '[]'); priorManagers = JSON.parse(row.manager_ids_json || '[]'); } catch { throw new Error('ASSET_LINKED'); }
-        if (row.role_id === role.id || assetIds.some(id => [row.text_channel_id, row.thread_id, row.voice_channel_id].includes(id)) || members.some(id => [row.owner_id, ...priorMembers, ...priorManagers].includes(id))) throw new Error('ASSET_LINKED');
-        if (row.status === 'active' && row.name === groupName) throw new Error('NAME_EXISTS');
+    const created = [];
+    try {
+      let { role, owner } = await validateImport(interaction.guild, flow, settings, false);
+      if (!role || !owner) throw new Error('MEMBER_NOT_FOUND');
+      if (!flow.textId) {
+        const resources = await createImportTextResources(interaction.guild, flow, settings, role);
+        created.push(resources.text);
+        if (resources.thread) created.push(resources.thread);
+      } else if (flow.createThread && !flow.threadId) {
+        const text = await channelById(interaction.guild, flow.textId);
+        if (!text || text.type !== ChannelType.GuildText) throw new Error('CHANNEL_NOT_FOUND');
+        if ((await threadChoices(text)).length) throw new Error('SHARED_CHANNEL');
+        const thread = await text.threads.create({ name: importGroupName(role), type: ChannelType.PrivateThread, invitable: false, reason: 'Create group thread from admin Add' });
+        flow.threadId = thread.id;
+        created.push(thread);
       }
-      const now = Date.now();
-      const result = await tx.run(`INSERT INTO managed_groups(guild_id,name,description,owner_id,manager_ids_json,member_ids_json,blocked_ids_json,role_id,text_channel_id,thread_id,voice_channel_id,color,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [interaction.guild.id, groupName, '', owner.id, '[]', JSON.stringify(members), '[]', role.id, text.id, thread?.id || null, voice.id, role.hexColor || '#5865F2', now, now]);
-      const importedId = result.id ?? result.lastID;
-      if (!Number.isSafeInteger(importedId) || importedId <= 0) throw new Error('GROUP_NOT_FOUND');
-      await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [interaction.guild.id, importedId, interaction.user.id, 'group_import', JSON.stringify({ roleId: role.id, ownerId: owner.id, textId: text.id, threadId: thread?.id || null, voiceId: voice.id, members: members.length }), now]);
-      return importedId;
-    }, 'group-import');
-    invalidateGroupCaches(interaction.guild.id);
-    return `تم إنشاء وربط القروب **${safe(groupName)}** (#${groupId}) مع الرول وإضافة ${members.length} عضوًا من أعضاء الرول.`;
+      if (!flow.voiceId) {
+        const voice = await createImportVoiceResource(interaction.guild, flow, settings, role);
+        created.push(voice);
+      }
+      const assets = await validateImport(interaction.guild, flow, settings, true);
+      const { text, thread, voice, members } = assets;
+      const groupName = importGroupName(role);
+      if (!groupName) throw new Error('NAME_REQUIRED');
+      const existingNames = await gm.listGroups(interaction.guild.id, true);
+      if (existingNames.some(item => item.status === 'active' && String(item.name).toLowerCase() === groupName.toLowerCase())) throw new Error('NAME_EXISTS');
+      await text.permissionOverwrites.edit(role.id, { ViewChannel: true, SendMessages: true, SendMessagesInThreads: true, ReadMessageHistory: true }, { reason: 'Apply imported group text permissions' });
+      await voice.permissionOverwrites.edit(role.id, { ViewChannel: true, Connect: true, Speak: true }, { reason: 'Apply imported group voice permissions' });
+      await gm.schema();
+      const groupId = await dbManager.transaction(async tx => {
+        const existing = await tx.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status != 'deleted'", [interaction.guild.id]);
+        const assetIds = [text.id, thread?.id, voice.id].filter(Boolean);
+        for (const row of existing) {
+          let priorMembers = [], priorManagers = [];
+          try { priorMembers = JSON.parse(row.member_ids_json || '[]'); priorManagers = JSON.parse(row.manager_ids_json || '[]'); } catch { throw new Error('ASSET_LINKED'); }
+          if (row.role_id === role.id || assetIds.some(id => [row.text_channel_id, row.thread_id, row.voice_channel_id].includes(id)) || members.some(id => [row.owner_id, ...priorMembers, ...priorManagers].includes(id))) throw new Error('ASSET_LINKED');
+          if (row.status === 'active' && row.name === groupName) throw new Error('NAME_EXISTS');
+        }
+        const now = Date.now();
+        const result = await tx.run(`INSERT INTO managed_groups(guild_id,name,description,owner_id,manager_ids_json,member_ids_json,blocked_ids_json,role_id,text_channel_id,thread_id,voice_channel_id,color,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [interaction.guild.id, groupName, '', owner.id, '[]', JSON.stringify(members), '[]', role.id, text.id, thread?.id || null, voice.id, role.hexColor || '#5865F2', now, now]);
+        const importedId = result.id ?? result.lastID;
+        if (!Number.isSafeInteger(importedId) || importedId <= 0) throw new Error('GROUP_NOT_FOUND');
+        await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [interaction.guild.id, importedId, interaction.user.id, 'group_add', JSON.stringify({ roleId: role.id, ownerId: owner.id, textId: text.id, threadId: thread?.id || null, voiceId: voice.id, members: members.length }), now]);
+        return importedId;
+      }, 'group-add');
+      const failedMembers = await addImportThreadMembers(thread, members);
+      if (failedMembers.length) await gm.audit(interaction.guild.id, interaction.user.id, groupId, 'group_thread_members_restore_failed', { userIds: failedMembers }).catch(() => {});
+      invalidateGroupCaches(interaction.guild.id);
+      return `تم إنشاء وربط القروب **${safe(groupName)}** (#${groupId}) مع الرول وإضافة ${members.length - failedMembers.length} من ${members.length} عضوًا.${failedMembers.length ? ` تعذرت إضافة ${failedMembers.length} عضوًا للثريد وسيتم تسجيلها للمراجعة.` : ''}`;
+    } catch (error) {
+      for (const resource of created.reverse()) await resource?.delete?.('Rollback failed group Add').catch(() => {});
+      throw error;
+    }
   });
 }
 async function advanceImport(interaction, flow, settings) {
@@ -2827,11 +2883,8 @@ async function advanceImport(interaction, flow, settings) {
     return entitySelect(interaction.guild, flow, 'استيراد : قناة الفويس', 'اختر قناة القروب الصوتي أو اضغط «لا يوجد» لإنشائها باسم الرول.', new ChannelSelectMenuBuilder().setChannelTypes(ChannelType.GuildVoice).setPlaceholder('قناة فويس القروب الموجود'), 'no-voice');
   }
   if (flow.step === 'no-thread') {
-    const role = await interaction.guild.roles.fetch(flow.roleId).catch(() => null);
-    const text = await channelById(interaction.guild, flow.textId);
-    if (!role || !text || text.type !== ChannelType.GuildText) throw new Error('CHANNEL_NOT_FOUND');
-    const thread = await text.threads.create({ name: importGroupName(role), type: ChannelType.PrivateThread, invitable: false, reason: 'Create group thread from admin Add' });
-    flow.threadId = thread.id;
+    flow.createThread = true;
+    flow.threadId = null;
     flow.step = 'voice';
     return entitySelect(interaction.guild, flow, 'استيراد : قناة الفويس', 'اختر قناة القروب الصوتي أو اضغط «لا يوجد» لإنشائها باسم الرول.', new ChannelSelectMenuBuilder().setChannelTypes(ChannelType.GuildVoice).setPlaceholder('قناة فويس القروب الموجود'), 'no-voice');
   }
@@ -2844,9 +2897,9 @@ async function advanceImport(interaction, flow, settings) {
     return entitySelect(interaction.guild, flow, 'استيراد : قناة الفويس', 'اختر قناة القروب الصوتي أو اضغط «لا يوجد» لإنشائها باسم الرول.', new ChannelSelectMenuBuilder().setChannelTypes(ChannelType.GuildVoice).setPlaceholder('قناة فويس القروب الموجود'), 'no-voice');
   }
   if (flow.step === 'no-text') {
-    const role = await interaction.guild.roles.fetch(flow.roleId).catch(() => null);
-    if (!role) throw new Error('INVALID_ROLE');
-    await createImportTextResources(interaction.guild, flow, settings, role);
+    flow.createText = true;
+    flow.textId = null;
+    flow.threadId = null;
     flow.step = 'voice';
     return entitySelect(interaction.guild, flow, 'استيراد : قناة الفويس', 'اختر قناة القروب الصوتي أو اضغط «لا يوجد» لإنشائها باسم الرول.', new ChannelSelectMenuBuilder().setChannelTypes(ChannelType.GuildVoice).setPlaceholder('قناة فويس القروب الموجود'), 'no-voice');
   }
@@ -2857,12 +2910,12 @@ async function advanceImport(interaction, flow, settings) {
     return confirmFlowPayload(interaction.guild, flow, `Role: <@&${assets.role.id}>\nOwner: <@${assets.owner.id}>\nText: <#${assets.text.id}>\nThread: ${assets.thread ? `<#${assets.thread.id}>` : 'لا يوجد'}\nVoice: <#${assets.voice.id}>\nMembers: ${assets.members.length}\nسيتم ربط الرول وإنشاء القروب وإضافة جميع أعضائه.`);
   }
   if (flow.step === 'no-voice') {
-    const role = await interaction.guild.roles.fetch(flow.roleId).catch(() => null);
-    if (!role) throw new Error('INVALID_ROLE');
-    await createImportVoiceResource(interaction.guild, flow, settings, role);
-    const assets = await validateImport(interaction.guild, flow, settings, true);
+    flow.createVoice = true;
+    flow.voiceId = null;
     flow.step = 'confirm';
-    return confirmFlowPayload(interaction.guild, flow, `Role: <@&${assets.role.id}>\nOwner: <@${assets.owner.id}>\nText: <#${assets.text.id}>\nThread: ${assets.thread ? `<#${assets.thread.id}>` : 'لا يوجد'}\nVoice: <#${assets.voice.id}>\nMembers: ${assets.members.length}\nسيتم ربط الرول وإضافة جميع أعضائه للقروب.`);
+    const role = await interaction.guild.roles.fetch(flow.roleId).catch(() => null);
+    const owner = await interaction.guild.members.fetch(flow.ownerId).catch(() => null);
+    return confirmFlowPayload(interaction.guild, flow, `Role: <@&${role?.id || flow.roleId}>\nOwner: <@${owner?.id || flow.ownerId}>\nسيتم إنشاء الموارد الناقصة، ربط الرول، وإضافة جميع أعضائه للقروب.`);
   }
   if (flow.step === 'confirm') {
     if (!interaction.isButton?.()) throw new Error('INVALID_SELECTION');
@@ -2911,7 +2964,7 @@ async function advancePermission(interaction, flow) {
 }
 async function handleGroupExtensions(interaction) {
   const [prefix, action, groupIdRaw, scope] = String(interaction.customId || '').split(':');
-  if (!['groups_control', 'groups_flow'].includes(prefix) && !(prefix === 'groups_admin' && action === 'import')) return false;
+  if (!['groups_control', 'groups_flow'].includes(prefix) && !(prefix === 'groups_admin' && ['add', 'import'].includes(action))) return false;
   let flow;
   try {
     if (!interaction.guild) throw new Error('NO_PERMISSION');

@@ -136,6 +136,10 @@ async function schema() {
       await dbManager.run(`ALTER TABLE managed_groups ADD COLUMN avatar_url TEXT`);
     }
     await dbManager.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_groups_active_name ON managed_groups(guild_id, name) WHERE status = 'active'`);
+    await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_managed_groups_role_lookup ON managed_groups(guild_id, role_id, status)`);
+    await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_managed_groups_text_lookup ON managed_groups(guild_id, text_channel_id, status)`);
+    await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_managed_groups_thread_lookup ON managed_groups(guild_id, thread_id, status)`);
+    await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_managed_groups_voice_lookup ON managed_groups(guild_id, voice_channel_id, status)`);
     await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_managed_groups_guild_status ON managed_groups(guild_id, status, points DESC)`);
     await dbManager.run(`CREATE TABLE IF NOT EXISTS group_audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, group_id INTEGER, actor_id TEXT, action TEXT NOT NULL, details_json TEXT DEFAULT '{}', created_at INTEGER NOT NULL)`);
     await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_group_audit_log_lookup ON group_audit_log(guild_id, group_id, created_at DESC)`);
