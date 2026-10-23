@@ -695,7 +695,10 @@ async function sendGroupPanel(channel, guild, groupId) {
     }
     rows.push(new ActionRowBuilder().addComponents(button(`groups_member:info:${id}`, 'قروبي')));
     try {
-      return await channel.send({ embeds: [new EmbedBuilder().setTitle('التحكم بالقروب').setDescription('استخدم الأزرار لإدارة القروب.').setColor(colorToNumber(colorManager.getColor?.() || '#5865F2'))], components: rows, allowedMentions: { parse: [] } });
+      const fallback = new ContainerBuilder().setAccentColor(colorToNumber(colorManager.getColor?.() || '#5865F2'));
+      fallback.addTextDisplayComponents(new TextDisplayBuilder().setContent('## التحكم بالقروب\nاستخدم الأزرار لإدارة القروب.'));
+      fallback.addActionRowComponents(...rows);
+      return await channel.send({ components: [fallback], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } });
     } catch (fallbackError) {
       console.error(`تعذر إرسال لوحة القروب الاحتياطية ${groupId}:`, fallbackError?.stack || fallbackError?.message || fallbackError);
       return null;
