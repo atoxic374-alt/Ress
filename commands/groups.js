@@ -1277,7 +1277,7 @@ async function sendCreateCommandPanel(message) {
   });
   return sent;
 }
-async function execute(message, args, { client } = {}) {
+async function execute(message, args, { client, prefix } = {}) {
   if (!message.guild) return;
   const settings = await gm.getSettings(message.guild.id);
   const member = message.member;
@@ -1299,7 +1299,7 @@ async function execute(message, args, { client } = {}) {
       `Group system : ${settings.enabled ? 'Enabled' : 'Disabled'}`,
       `Active groups : ${active}`,
       `This channel : ${linkedGroup ? `Linked to group #${linkedGroup.id} (${safe(linkedGroup.name, 60)})` : 'Not linked to an active group'}`,
-      `Message prefix : ${String(options?.prefix ?? ':')}`,
+      `Message prefix : ${String(prefix ?? ':')}`,
       `Next step : ${!dispatcherLoaded ? 'Restart/redeploy the current bot build.' : !database?.isInitialized || database?.isDegraded ? 'Check database startup logs and persistent storage.' : !settings.enabled ? 'Enable the group system from setup.' : 'If commands still do not respond, inspect bot.js messageCreate logs and confirm the running deployment contains this commit.'}`
     ];
     const payload = baseContainer(message.guild, 'GROUP SYSTEM DIAGNOSTICS', lines.join('\\n'));
