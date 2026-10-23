@@ -115,7 +115,7 @@ async function testCreateGroupRoleDefaults() {
   const group = await gm.createGroup(guild, { name: 'نسور الشمال', ownerId: OWNER }, ACTOR);
   assert.equal(roleOptions.length, 1);
   assert.equal(roleOptions[0].name, 'نسور الشمال', 'group role name matches the group name without a prefix');
-  assert.equal(Object.prototype.hasOwnProperty.call(roleOptions[0], 'color'), false, 'Discord assigns the default role color');
+  assert.equal(roleOptions[0].color, '#5865F2', 'group roles use the configured default color');
   assert.equal(group.role_id, 'new-group-role');
   global.groupRoleGrantBypass?.clear?.();
 }
@@ -224,7 +224,7 @@ async function testDashboardPublishers() {
   assert.equal(topPayload.files.length, 1, 'top groups is rendered as an attached image');
   assert.equal(topPayload.components.length, 1, 'top board has one compact navigation row');
   const topButtonIds = topPayload.components.flatMap(row => row.toJSON().components).map(component => component.custom_id);
-  assert.deepEqual(topButtonIds, ['groups_top:rank', 'groups_top:group', 'groups_top:manage']);
+  assert.deepEqual(topButtonIds, ['groups_top:rank', 'groups_top:group', 'groups_top:manage', 'groups_top:avatar']);
   assert.equal(topButtonIds.includes('groups_top:refresh'), false, 'the top board no longer exposes a manual refresh button');
   assert.equal(topPayload.flags, undefined, 'top image is not a Components V2 container');
 

@@ -5,6 +5,7 @@
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
+    "test:syntax": "node --check commands/groups.js && node --check utils/groupManager.js && node --check utils/groupInternal.js && node --check utils/groupRenderer.js && node --check utils/groupResponses.js && node --check utils/database.js && node --check utils/database-archiver.js && node --check utils/interactionRouter.js",
     "test:bonus": "node test-bonus-system.js",
     "test:check": "node test-check-activity.js",
     "test:groups": "node test-group-manager-internal.js && node test-group-responses.js"

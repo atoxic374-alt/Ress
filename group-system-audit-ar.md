@@ -7,37 +7,15 @@
 
 ## الخلاصة التنفيذية
 
-النظام يحتوي على تصميم جيد نسبيًا من ناحية فصل منطق القروبات في `utils/groupManager.js` و`utils/groupInternal.js`، واستخدام معاملات SQLite، أقفال منطقية، سجل تدقيق، وآلية rollback جزئي عند فشل عمليات Discord. لكن توجد مشكلة حرجة تمنع تحميل النظام بالكامل، إضافة إلى عدم صلاحية اختبارات القروبات الحالية كإشارة نجاح، ومواطن ضغط واضحة عند نمو عدد القروبات/الأعضاء.
+النظام يحتوي على تصميم جيد نسبيًا من ناحية فصل منطق القروبات في `utils/groupManager.js` و`utils/groupInternal.js`، واستخدام معاملات SQLite، أقفال منطقية، سجل تدقيق، وآلية rollback جزئي عند فشل عمليات Discord. فحص الصياغة في النسخة الحالية ينجح، لكن ما زالت توجد مخاطر اتساق وتزامن، واختبارات غير قابلة للتشغيل في بيئة ناقصة الاعتمادات، ومواطن ضغط واضحة عند نمو عدد القروبات/الأعضاء.
 
-**الحالة الحالية لا تعتبر قابلة للتشغيل بأمان حتى يتم إصلاح خطأ الصياغة في `commands/groups.js:2115`.** لا يوجد تعديل على نسخة المستودع الأصلية ضمن هذا التدقيق.
+**الحالة الحالية لا تعتبر مكتملة الإنتاجية قبل تقوية التزامن والـretention والـreconciliation.** خطأ الصياغة القديم لم يعد موجودًا في النسخة الحالية؛ `node --check commands/groups.js` ينجح.
 
 ## النتائج حسب الأولوية
 
-### P0 — مانع تشغيل مؤكد: خطأ صياغة يمنع تحميل ملف القروبات
+### P0 — لا يوجد مانع صياغة في النسخة الحالية
 
-**المكان:** `commands/groups.js:2115` داخل `applyUserControl`.
-
-السطر الحالي يحتوي قوسًا زائدًا قبل `throw`:
-
-```js
-if (linkedGroups.some(item => item.id !== group.id && (String(item.owner_id) === String(target.id) || item.memberIds.includes(String(target.id)) || item.managerIds.includes(String(target.id)))) throw new Error('USER_ALREADY_IN_GROUP');
-```
-
-تشغيل `node --check commands/groups.js` يفشل بـ `SyntaxError: Unexpected token 'throw'`. وبما أن `commands/groups.js` يُستورد أثناء تشغيل البوت والاختبارات، فإن مسارات القروبات لن تُحمّل أصلًا.
-
-**الإصلاح المقترح:** تحويل الشرط إلى كتلة واضحة ومتوازنة:
-
-```js
-if (linkedGroups.some(item =>
-  item.id !== group.id && (
-    String(item.owner_id) === String(target.id) ||
-    item.memberIds.includes(String(target.id)) ||
-    item.managerIds.includes(String(target.id))
-  )
-)) {
-  throw new Error('USER_ALREADY_IN_GROUP');
-}
-```
+تمت إعادة فحص `commands/groups.js` والملفات الأساسية باستخدام `node --check`، ونجحت. الملاحظة القديمة عن `Unexpected token 'throw'` لا تنطبق على commit الحالي، ويجب عدم اعتبارها عيبًا قائمًا.
 
 ### P1 — اختبارات القروبات غير متسقة مع التنفيذ
 

@@ -131,7 +131,10 @@ async function schema() {
       color TEXT DEFAULT '#5865F2', emoji TEXT, avatar_url TEXT, points INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'active',
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, archived_at INTEGER
     )`);
-    await dbManager.run(`ALTER TABLE managed_groups ADD COLUMN avatar_url TEXT`).catch(() => {});
+    const managedGroupColumns = await dbManager.all('PRAGMA table_info(managed_groups)');
+    if (!managedGroupColumns.some(column => String(column.name) === 'avatar_url')) {
+      await dbManager.run(`ALTER TABLE managed_groups ADD COLUMN avatar_url TEXT`);
+    }
     await dbManager.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_groups_active_name ON managed_groups(guild_id, name) WHERE status = 'active'`);
     await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_managed_groups_guild_status ON managed_groups(guild_id, status, points DESC)`);
     await dbManager.run(`CREATE TABLE IF NOT EXISTS group_audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, group_id INTEGER, actor_id TEXT, action TEXT NOT NULL, details_json TEXT DEFAULT '{}', created_at INTEGER NOT NULL)`);
@@ -597,8 +600,6 @@ async function recordActivity(guildId, userId, metric, amount, channelId = null,
         await tx.run("UPDATE managed_groups SET points = points + ?, updated_at = ? WHERE guild_id = ? AND id = ? AND status = 'active'", [delta, now, String(guildId), Number(group.id)]);
         await tx.run(`INSERT INTO group_points_ledger(guild_id,group_id,user_id,metric,activity_amount,points_delta,member_before,member_after,group_before,group_after,reason,event_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, [String(guildId), Number(group.id), String(userId), safeMetric, increment, delta, memberPoints, memberPoints + delta, groupPoints, groupPoints + delta, 'activity_award', normalizedEventId, now]);
         awarded += delta;
-      } else {
-        await tx.run(`INSERT INTO group_points_ledger(guild_id,group_id,user_id,metric,activity_amount,points_delta,member_before,member_after,group_before,group_after,reason,event_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, [String(guildId), Number(group.id), String(userId), safeMetric, increment, 0, memberPoints, memberPoints, groupPoints, groupPoints, requestedDelta > 0 ? 'points_cap_reached' : 'threshold_not_reached', normalizedEventId, Date.now()]);
       }
     }
     return awarded;
@@ -658,6 +659,22 @@ async function listPointsLedger(guildId, { groupId = null, userId = null, limit 
   const safeLimit = Math.max(1, Math.min(100, Number(limit) || 25));
   const safeOffset = Math.max(0, Number(offset) || 0);
   return dbManager.all(`SELECT * FROM group_points_ledger WHERE ${filters.join(' AND ')} ORDER BY id DESC LIMIT ? OFFSET ?`, [...params, safeLimit, safeOffset]);
+}
+async function pruneGroupHistory({ ledgerDays = 180, auditDays = 365, eventDays = 90 } = {}) {
+  await schema();
+  const now = Date.now();
+  const days = value => Math.max(1, Math.min(3650, Number(value) || 1));
+  const cutoffs = {
+    ledger: now - days(ledgerDays) * 24 * 60 * 60 * 1000,
+    audit: now - days(auditDays) * 24 * 60 * 60 * 1000,
+    events: now - days(eventDays) * 24 * 60 * 60 * 1000
+  };
+  return dbManager.transaction(async tx => {
+    const ledger = await tx.run('DELETE FROM group_points_ledger WHERE created_at < ?', [cutoffs.ledger]);
+    const audit = await tx.run('DELETE FROM group_audit_log WHERE created_at < ?', [cutoffs.audit]);
+    const events = await tx.run('DELETE FROM group_activity_events WHERE created_at < ?', [cutoffs.events]);
+    return { ledger: Number(ledger?.changes || 0), audit: Number(audit?.changes || 0), events: Number(events?.changes || 0), cutoffs };
+  }, 'group-history-retention');
 }
 async function upsertVoiceSession(guildId, userId, channelId, checkpointAt = Date.now()) {
   await schema();
@@ -729,39 +746,50 @@ async function deleteGroup(guild, groupId, actorId) {
     const deleteBypassKey = `${guild.id}:${groupId}`;
     global.groupResourceDeleteBypass.add(deleteBypassKey);
     const releaseDeleteBypass = () => global.groupResourceDeleteBypass.delete(deleteBypassKey);
-    setTimeout(releaseDeleteBypass, 30_000).unref?.();
-    const group = await getGroup(guild.id, groupId);
-    if (!group) throw new Error('GROUP_NOT_FOUND');
-    if (group.status === 'deleted') return true;
-    const failed = [];
-    for (const id of [group.thread_id, group.text_channel_id, group.voice_channel_id].filter(Boolean)) {
-      const channel = guild.channels.cache.get(id) || await guild.channels.fetch(id).catch(error => {
-        if (error?.code !== 10003 && error?.status !== 404) failed.push({ type: 'channel_fetch', id });
-        return null;
-      });
-      if (channel) await channel.delete('Delete managed group').catch(() => failed.push({ type: 'channel', id }));
-    }
-    const role = group.role_id && (guild.roles.cache.get(group.role_id) || await guild.roles.fetch(group.role_id).catch(error => {
-      if (error?.code !== 10011 && error?.status !== 404) failed.push({ type: 'role_fetch', id: group.role_id });
-      return null;
-    }));
-    if (role) await role.delete('Delete managed group').catch(() => failed.push({ type: 'role', id: group.role_id }));
-    const now = Date.now();
-    if (failed.length) {
-      releaseDeleteBypass();
-      await dbManager.transaction(async tx => {
-        await tx.run("UPDATE managed_groups SET status = 'orphaned', updated_at = ? WHERE guild_id = ? AND id = ?", [now, String(guild.id), Number(groupId)]);
-        await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [String(guild.id), Number(groupId), actorId ? String(actorId) : null, 'group_delete_incomplete', JSON.stringify({ failed }), now]);
-      }, 'group-delete-incomplete');
-      throw new Error('GROUP_DELETE_PARTIAL');
-    }
-    await dbManager.transaction(async tx => {
-      await tx.run("UPDATE managed_groups SET status = 'deleted', archived_at = ?, updated_at = ? WHERE guild_id = ? AND id = ?", [now, now, String(guild.id), Number(groupId)]);
-      await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [String(guild.id), Number(groupId), actorId ? String(actorId) : null, 'group_delete', '{}', now]);
-    }, 'group-delete');
-    releaseDeleteBypass();
-    // Remove global leader/manager roles only when the deleted group was their last entitlement.
+    const timeout = setTimeout(releaseDeleteBypass, 30_000);
+    timeout.unref?.();
     try {
+      const group = await getGroup(guild.id, groupId);
+      if (!group) throw new Error('GROUP_NOT_FOUND');
+      if (group.status === 'deleted') return true;
+      const resources = [
+        ['thread', group.thread_id], ['text_channel', group.text_channel_id],
+        ['voice_channel', group.voice_channel_id], ['role', group.role_id]
+      ].filter(([, id]) => id);
+      const resourceStatus = Object.fromEntries(resources.map(([type, id]) => [type, { id: String(id), state: 'pending' }]));
+      const failed = [];
+      for (const [type, id] of resources) {
+        const isRole = type === 'role';
+        const collection = isRole ? guild.roles : guild.channels;
+        const resource = collection.cache.get(String(id)) || await collection.fetch(String(id)).catch(error => {
+          const missing = isRole ? error?.code === 10011 : error?.code === 10003;
+          resourceStatus[type].state = missing ? 'missing' : 'fetch_failed';
+          if (!missing) failed.push({ type: `${type}_fetch`, id: String(id), message: String(error?.message || error).slice(0, 200) });
+          return null;
+        });
+        if (!resource) continue;
+        try {
+          await resource.delete('Delete managed group');
+          resourceStatus[type].state = 'deleted';
+        } catch (error) {
+          resourceStatus[type].state = 'delete_failed';
+          failed.push({ type, id: String(id), message: String(error?.message || error).slice(0, 200) });
+        }
+      }
+      const now = Date.now();
+      if (failed.length) {
+        await dbManager.transaction(async tx => {
+          await tx.run("UPDATE managed_groups SET status = 'orphaned', updated_at = ? WHERE guild_id = ? AND id = ?", [now, String(guild.id), Number(groupId)]);
+          await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [String(guild.id), Number(groupId), actorId ? String(actorId) : null, 'group_delete_incomplete', JSON.stringify({ failed, resources: resourceStatus, retryable: true }), now]);
+        }, 'group-delete-incomplete');
+        throw new Error('GROUP_DELETE_PARTIAL');
+      }
+      await dbManager.transaction(async tx => {
+        await tx.run("UPDATE managed_groups SET status = 'deleted', archived_at = ?, updated_at = ? WHERE guild_id = ? AND id = ?", [now, now, String(guild.id), Number(groupId)]);
+        await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [String(guild.id), Number(groupId), actorId ? String(actorId) : null, 'group_delete', JSON.stringify({ resources: resourceStatus }), now]);
+      }, 'group-delete');
+      // Remove global leader/manager roles only when the deleted group was their last entitlement.
+      try {
       const settings = await getSettings(guild.id);
       const remaining = await listGroups(guild.id);
       const roleCleanup = new Map();
@@ -777,7 +805,11 @@ async function deleteGroup(guild, groupId, actorId) {
     } catch (error) {
       await audit(guild.id, actorId, groupId, 'group_role_cleanup_incomplete', { message: String(error?.message || error).slice(0, 300) }).catch(() => null);
     }
-    return true;
+      return true;
+    } finally {
+      clearTimeout(timeout);
+      releaseDeleteBypass();
+    }
   });
 }
-module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, logGroupEvent, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, explainActivity, listMemberPoints, listPointsLedger, upsertVoiceSession, listVoiceSessions, deleteVoiceSession, getMemberPoints, createGroup, deleteGroup };
+module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, logGroupEvent, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, explainActivity, listMemberPoints, listPointsLedger, pruneGroupHistory, upsertVoiceSession, listVoiceSessions, deleteVoiceSession, getMemberPoints, createGroup, deleteGroup };

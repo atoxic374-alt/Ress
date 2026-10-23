@@ -305,6 +305,28 @@ class DatabaseArchiver {
         }
     }
 
+    async pruneGroupHistory() {
+        const mainDb = new sqlite3.Database(this.mainDbPath);
+        const now = Date.now();
+        const cutoff = days => now - days * 24 * 60 * 60 * 1000;
+        try {
+            const results = {};
+            for (const [name, table, days] of [
+                ['ledger', 'group_points_ledger', 180],
+                ['audit', 'group_audit_log', 365],
+                ['events', 'group_activity_events', 90]
+            ]) {
+                const exists = await this.get(mainDb, "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?", [table]);
+                if (!exists) { results[name] = 0; continue; }
+                const result = await this.run(mainDb, `DELETE FROM ${table} WHERE created_at < ?`, [cutoff(days)]);
+                results[name] = Number(result?.changes || 0);
+            }
+            return results;
+        } finally {
+            mainDb.close();
+        }
+    }
+
     async getDatabaseStats() {
         try {
             const stats = {
@@ -399,6 +421,13 @@ class DatabaseArchiver {
         console.log('='.repeat(50));
         
         const result = await this.deleteMonthlyData();
+        let groupHistory = null;
+        try {
+            groupHistory = await this.pruneGroupHistory();
+            console.log(`✅ تنظيف سجلات القروبات: ledger=${groupHistory.ledger}, audit=${groupHistory.audit}, events=${groupHistory.events}`);
+        } catch (error) {
+            console.error('❌ تعذر تنظيف سجلات القروبات:', error);
+        }
         
         if (result.success) {
             await this.compressMainDatabase();
@@ -406,7 +435,7 @@ class DatabaseArchiver {
 
         console.log('='.repeat(50) + '\n');
         
-        return result;
+        return { ...result, groupHistory };
     }
 }
 

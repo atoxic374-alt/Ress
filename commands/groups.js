@@ -12,6 +12,7 @@ const aliases = ['group', 'قروب', 'قروبات'];
 let registered = false;
 const locks = new Set();
 const pendingGroupEmoji = new Map();
+const orphanCleanupNextAt = new Map();
 function safe(s, n=100) { return String(s||'').replace(/[\u0000-\u001f]/g,'').slice(0,n); }
 function normalizeGroupAvatar(value) {
   const input = String(value || '').trim();
@@ -409,6 +410,7 @@ const topPanelLocks = new Map();
 const TOP_BOARD_REFRESH_MS = 30_000;
 const topPanelRefreshTimers = new Map();
 const topPanelRefreshChannels = new Map();
+const topPanelMessageIds = new Map();
 const groupRoleSyncLocks = new Set();
 const groupResourceLocks = new Map();
 
@@ -520,20 +522,30 @@ async function sendTopGroupsPanel(channel, guild, options = {}) {
   if (topPanelLocks.has(key)) return topPanelLocks.get(key);
   const work = (async () => {
     const payload = await buildTopGroupsPayload(guild, { ...options, channelId: options.channelId || channel?.id });
-    const messages = await channel?.messages?.fetch?.({ limit: 50 }).catch(() => null);
     const botId = guild?.client?.user?.id;
-    const existing = messages && [...messages.values()]
-      .filter(message => (!botId || message.author?.id === botId) && JSON.stringify(message.components || []).includes('groups_top:'))
-      .sort((a, b) => Number(a.createdTimestamp || 0) - Number(b.createdTimestamp || 0)).pop();
+    let existing = null;
+    const knownMessageId = topPanelMessageIds.get(key);
+    if (knownMessageId) {
+      const fetched = await channel?.messages?.fetch?.(knownMessageId).catch(() => null);
+      existing = fetched?.edit ? fetched : null;
+    }
+    if (!existing) {
+      const messages = await channel?.messages?.fetch?.({ limit: 50 }).catch(() => null);
+      existing = messages && [...messages.values()]
+        .filter(message => (!botId || message.author?.id === botId) && JSON.stringify(message.components || []).includes('groups_top:'))
+        .sort((a, b) => Number(a.createdTimestamp || 0) - Number(b.createdTimestamp || 0)).pop();
+    }
     if (existing?.edit && !isComponentsV2Message(existing)) {
       const edited = await existing.edit(payload).catch(() => null);
       if (edited) {
+        if (edited.id) topPanelMessageIds.set(key, String(edited.id));
         scheduleTopPanelRefresh(channel, guild, options);
         return edited;
       }
     }
     const sent = await channel.send(payload);
-    if (existing?.delete) await existing.delete().catch(() => null);
+    if (sent.id) topPanelMessageIds.set(key, String(sent.id));
+    if (existing?.delete) await Promise.resolve(existing.delete()).catch(() => null);
     scheduleTopPanelRefresh(channel, guild, options);
     return sent;
   })();
@@ -1377,27 +1389,43 @@ async function transferGroupOwner(interaction, groupId, ownerId) {
     // Keep the former owner as a regular member so they can explicitly leave afterward.
     const nextMembers = [...new Set([...group.memberIds, oldOwnerId, targetId])].filter(id => id !== targetId || id === oldOwnerId);
     const nextBlocked = group.blockedIds.filter(id => id !== targetId);
-    await gm.updateGroup(interaction.guild.id, group.id, {
-      owner_id: targetId,
-      manager_ids_json: JSON.stringify(nextManagers),
-      member_ids_json: JSON.stringify(nextMembers),
-      blocked_ids_json: JSON.stringify(nextBlocked),
-      updated_at: Date.now()
-    }, interaction.user.id);
-    invalidateGroupCaches(interaction.guild.id);
     const warnings = [];
     const leader = settings.leaderRoleId && (interaction.guild.roles.cache.get(settings.leaderRoleId) || await interaction.guild.roles.fetch(settings.leaderRoleId).catch(() => null));
-    if (settings.leaderRoleId && !leader) warnings.push('تعذر العثور على رتبة المالك');
-    if (leader) {
-      if (!newOwner.roles.cache.has(leader.id)) await newOwner.roles.add(leader, 'TRANSFER GROUP OWNERSHIP').catch(() => warnings.push('تعذر إضافة رتبة المالك للمالك الجديد'));
-      const oldOwner = await interaction.guild.members.fetch(oldOwnerId).catch(() => null);
-      const otherGroups = await gm.listGroups(interaction.guild.id);
-      if (oldOwner && !otherGroups.some(item => String(item.owner_id) === oldOwnerId)) await oldOwner.roles.remove(leader, 'TRANSFER GROUP OWNERSHIP').catch(() => warnings.push('تعذر إزالة رتبة المالك من المالك السابق'));
+    if (settings.leaderRoleId && !leader) throw new Error('OWNER_ROLE_NOT_FOUND');
+    const oldOwner = await interaction.guild.members.fetch(oldOwnerId).catch(() => null);
+    const otherGroups = await gm.listGroups(interaction.guild.id);
+    const oldOwnerNeedsLeaderRemoval = Boolean(leader && oldOwner && !otherGroups.some(item => Number(item.id) !== Number(group.id) && String(item.owner_id) === oldOwnerId));
+    const targetIsManagerElsewhere = otherGroups.some(item => Number(item.id) !== Number(group.id) && item.managerIds.includes(targetId));
+    const managerRole = settings.managerRoleId && (interaction.guild.roles.cache.get(settings.managerRoleId) || await interaction.guild.roles.fetch(settings.managerRoleId).catch(() => null));
+    if (settings.managerRoleId && group.managerIds.includes(targetId) && !managerRole) throw new Error('MANAGER_ROLE_NOT_FOUND');
+    const targetHadLeader = Boolean(leader && newOwner.roles.cache.has(leader.id));
+    const oldOwnerHadLeader = Boolean(leader && oldOwner?.roles.cache.has(leader.id));
+    const targetHadManager = Boolean(managerRole && newOwner.roles.cache.has(managerRole.id));
+    let targetLeaderAdded = false;
+    let oldLeaderRemoved = false;
+    let targetManagerRemoved = false;
+    try {
+      // Apply external role changes first. If one fails, the DB still describes the old owner.
+      if (leader && !targetHadLeader) { await newOwner.roles.add(leader, 'TRANSFER GROUP OWNERSHIP'); targetLeaderAdded = true; }
+      if (leader && oldOwnerNeedsLeaderRemoval && oldOwnerHadLeader) { await oldOwner.roles.remove(leader, 'TRANSFER GROUP OWNERSHIP'); oldLeaderRemoved = true; }
+      if (managerRole && group.managerIds.includes(targetId) && !targetIsManagerElsewhere && targetHadManager) { await newOwner.roles.remove(managerRole, 'Owner promoted from group manager'); targetManagerRemoved = true; }
+      await gm.updateGroup(interaction.guild.id, group.id, {
+        owner_id: targetId,
+        manager_ids_json: JSON.stringify(nextManagers),
+        member_ids_json: JSON.stringify(nextMembers),
+        blocked_ids_json: JSON.stringify(nextBlocked),
+        updated_at: Date.now()
+      }, interaction.user.id);
+    } catch (error) {
+      if (targetManagerRemoved && managerRole) await newOwner.roles.add(managerRole, 'Rollback incomplete ownership transfer').catch(() => {});
+      if (oldLeaderRemoved && leader && oldOwner) await oldOwner.roles.add(leader, 'Rollback incomplete ownership transfer').catch(() => {});
+      if (targetLeaderAdded && leader) await newOwner.roles.remove(leader, 'Rollback incomplete ownership transfer').catch(() => {});
+      throw error;
     }
+    invalidateGroupCaches(interaction.guild.id);
     if (settings.managerRoleId && group.managerIds.includes(targetId)) {
-      const managerRole = interaction.guild.roles.cache.get(settings.managerRoleId) || await interaction.guild.roles.fetch(settings.managerRoleId).catch(() => null);
       const stillManager = (await gm.listGroups(interaction.guild.id)).some(item => item.managerIds.includes(targetId));
-      if (managerRole && !stillManager) await newOwner.roles.remove(managerRole, 'Owner promoted from group manager').catch(() => warnings.push('تعذر إزالة رتبة مسؤول القروب من المالك الجديد'));
+      if (managerRole && stillManager && !targetIsManagerElsewhere) warnings.push('بقيت رتبة مسؤول القروب لأن العضو ما زال مسؤولًا في قروب آخر');
     }
     await gm.logGroupEvent(interaction.guild, 'owner', { groupId: group.id, from: oldOwnerId, to: targetId, warnings }, interaction.user.id);
     return warnings.length ? `تم نقل الملكية، لكن يلزم مراجعة الرتب: ${warnings.join('؛ ')}.` : 'تم نقل الملكية.';
@@ -1635,7 +1663,7 @@ async function execute(message, args, { client, prefix } = {}) {
 const activityCache=new Map(); const settingsCache=new Map(); const voiceStarts=new Map(); const voiceChannels=new Map(); const lastMessageAt=new Map(); const lastSkipAuditAt=new Map();
 const reconciliationSignatures = new Map();
 async function reconcileGroupMembership(guild, actorId = null) {
-  const groups = await gm.listGroups(guild.id);
+  const groups = (await gm.listGroups(guild.id, true)).filter(group => group.status !== 'deleted');
   const issues = [];
   const botCache = new Map();
   const isBotId = async userId => {
@@ -1702,6 +1730,15 @@ async function reconcileGroupMembership(guild, actorId = null) {
         await gm.audit(guild.id, actorId, group.id, 'membership_reconciliation_clean', { resolved: true }).catch(() => {});
       }
     }
+  }
+  for (const group of groups.filter(item => item.status === 'orphaned')) {
+    const key = `${guild.id}:${group.id}`;
+    const now = Date.now();
+    if (now - Number(group.updated_at || 0) < 5 * 60 * 1000 || now < Number(orphanCleanupNextAt.get(key) || 0)) continue;
+    orphanCleanupNextAt.set(key, now + 10 * 60 * 1000);
+    await gm.deleteGroup(guild, group.id, actorId).then(() => orphanCleanupNextAt.delete(key)).catch(error => {
+      console.warn('[groups] orphaned group cleanup retry failed:', guild.id, group.id, error?.message || error);
+    });
   }
   return { groups: groups.length, issues };
 }
@@ -1770,7 +1807,7 @@ function registerInteractionHandler(client) {
       }
     };
     run().catch(error => console.error('[groups] membership reconciliation run failed:', error?.message || error));
-    const timer = setInterval(run, 30 * 60 * 1000);
+    const timer = setInterval(run, 60 * 60 * 1000);
     timer.unref?.();
   };
   if (client.isReady?.()) startReconciliation();
@@ -1990,11 +2027,21 @@ function registerInteractionHandler(client) {
 
   client.on('channelDelete', channel => {
     const guildId = String(channel?.guild?.id || '');
+    topPanelMessageIds.delete(String(channel?.id || ''));
     if (!guildId || topPanelRefreshChannels.get(guildId) !== String(channel.id)) return;
     const timer = topPanelRefreshTimers.get(guildId);
     if (timer) clearInterval(timer);
     topPanelRefreshTimers.delete(guildId);
     topPanelRefreshChannels.delete(guildId);
+  });
+
+  client.on('guildDelete', guild => {
+    const guildId = String(guild?.id || '');
+    const timer = topPanelRefreshTimers.get(guildId);
+    if (timer) clearInterval(timer);
+    topPanelRefreshTimers.delete(guildId);
+    topPanelRefreshChannels.delete(guildId);
+    for (const key of [...topPanelMessageIds.keys()]) if (key === guildId || key.startsWith(`${guildId}:`)) topPanelMessageIds.delete(key);
   });
 
   client.on('guildMemberUpdate', async (oldMember, newMember) => {
@@ -2139,7 +2186,7 @@ function groupError(error) {
     INVALID_LIMIT: 'الحد الصوتي عدد صحيح من 0 إلى 99 (0 = بلا حد).',
     NOT_IN_GROUP_VOICE: 'العضو ليس في قناة هذا القروب؛ لن يتم فصله من أي قناة أخرى.',
     MISSING_PERMISSIONS: 'البوت لا يملك الصلاحيات المطلوبة في قناة القروب.',
-    GROUP_FULL: 'عدد الأعضاء يتجاوز الحد المحدد للقروبات.', ACTION_BUSY: 'يوجد إجراء جارٍ لهذا القروب، حاول مجدداً.',
+    GROUP_FULL: 'عدد الأعضاء يتجاوز الحد المحدد للقروبات.', ACTION_BUSY: 'يوجد إجراء جارٍ لهذا القروب، حاول مجدداً.', OWNER_ROLE_NOT_FOUND: 'رتبة مالك القروب غير موجودة؛ لم يتم نقل الملكية.', MANAGER_ROLE_NOT_FOUND: 'رتبة مسؤول القروب غير موجودة؛ لم يتم نقل الملكية.',
     THREAD_ARCHIVED: 'الثريد مؤرشف؛ افتحه من Discord قبل منح عضو الوصول إليه.'
   };
   if (String(error?.message).includes('UNIQUE constraint failed')) return messages.NAME_EXISTS;
