@@ -1566,6 +1566,7 @@ async function dispatchInternalMessage(message, options = {}) {
     return true;
   }
   return false;
+}
 
 // Group-scoped controls. Never edit guild roles, categories, or a shared thread parent.
 const { PermissionsBitField, OverwriteType } = require('discord.js');
