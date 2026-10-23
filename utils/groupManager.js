@@ -493,11 +493,19 @@ async function listMemberPoints(guildId, groupId, limit = 10) {
   const safeLimit = Math.max(1, Math.min(1000, Number(limit) || 10));
   const group = await getGroup(guildId, groupId);
   if (!group || group.status !== 'active') return [];
-  const currentMembers = new Set([String(group.owner_id), ...group.memberIds, ...group.managerIds]);
-  const memberIds = [...currentMembers];
+  const memberIds = [...new Set([String(group.owner_id), ...group.memberIds, ...group.managerIds])];
   if (!memberIds.length) return [];
   const placeholders = memberIds.map(() => '?').join(', ');
-  return dbManager.all(`SELECT * FROM group_member_points WHERE guild_id = ? AND group_id = ? AND user_id IN (${placeholders}) ORDER BY points DESC, updated_at ASC LIMIT ?`, [String(guildId), Number(groupId), ...memberIds, safeLimit]);
+  const rows = await dbManager.all(`SELECT * FROM group_member_points WHERE guild_id = ? AND group_id = ? AND user_id IN (${placeholders})`, [String(guildId), Number(groupId), ...memberIds]);
+  const byUser = new Map(rows.map(row => [String(row.user_id), row]));
+  // Every current member gets a row, even before their first counted activity.
+  return memberIds.map(userId => byUser.get(userId) || {
+    guild_id: String(guildId), group_id: Number(groupId), user_id: userId,
+    points: 0, messages: 0, voice_ms: 0, reactions: 0, updated_at: 0
+  }).sort((a, b) => Number(b.points || 0) - Number(a.points || 0)
+    || Number(b.messages || 0) - Number(a.messages || 0)
+    || String(a.user_id).localeCompare(String(b.user_id), 'en', { numeric: true }))
+    .slice(0, safeLimit);
 }
 async function getMemberPoints(guildId, groupId, userId) {
   await schema();
