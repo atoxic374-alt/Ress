@@ -1,6 +1,6 @@
 const {
   ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder,
-  AuditLogEvent, ChannelType, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder,
+  AuditLogEvent, ChannelType, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder, Routes,
   TextInputBuilder, TextInputStyle, UserSelectMenuBuilder, PermissionsBitField,
   ContainerBuilder, TextDisplayBuilder, MessageFlags
 } = require('discord.js');
@@ -504,6 +504,23 @@ function normalizeComponentsV2Payload(payload) {
   return normalized;
 }
 
+async function editPrivateV2Message(interaction, payload) {
+  if (!interaction?.client?.rest?.patch || !interaction?.token) throw new Error('BONUS_V2_EDIT_UNAVAILABLE');
+  if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
+  const components = (Array.isArray(payload.components) ? payload.components : [])
+    .map(component => typeof component?.toJSON === 'function' ? component.toJSON() : component);
+  const body = {
+    flags: MessageFlags.IsComponentsV2,
+    components,
+    allowed_mentions: payload.allowedMentions || { parse: [] }
+  };
+  if (Array.isArray(payload.attachments)) body.attachments = payload.attachments;
+  return interaction.client.rest.patch(
+    Routes.webhookMessage(interaction.applicationId || interaction.client.application?.id, interaction.token, '@original'),
+    { body }
+  );
+}
+
 async function buildAuditPayload(guild, page = 0) {
   const filter = auditFilterState.get(String(guild.id)) || {};
   const result = await getManager().listAuditLog(guild.id, { page, limit: 10, ...filter });
@@ -534,6 +551,7 @@ async function buildAuditPayload(guild, page = 0) {
 async function showPrivatePanel(interaction, payload, update = false) {
   if (update && interaction?.message) rememberPreviousPanel(interaction);
   const boardMessage = isBonusBoardMessage(interaction.message);
+  const currentV2 = isComponentsV2Message(interaction.message);
   const shouldUpdateBoard = boardMessage && Array.isArray(payload.files) && payload.files.length > 0;
   payload = (!boardMessage || !shouldUpdateBoard) ? structurePrivateResponse(payload) : payload;
   const completedResult = payload?.__bonusActionTitle === 'ACTION COMPLETED' || payload?.embeds?.[0]?.data?.title === 'Action Completed';
@@ -547,7 +565,8 @@ async function showPrivatePanel(interaction, payload, update = false) {
     const originalPayload = await buildHome(interaction.guild);
     if (interaction.deferred || interaction.replied) {
       await interaction.followUp(resultPayload).catch(() => {});
-      await interaction.editReply(originalPayload).catch(() => {});
+      if (currentV2 && !originalPayload.files?.length) await editPrivateV2Message(interaction, convertEmbedsToPrivateV2({ ...originalPayload, flags: MessageFlags.IsComponentsV2 })).catch(() => {});
+      else await interaction.editReply(originalPayload).catch(() => {});
     } else {
       await interaction.update(originalPayload).catch(() => {});
       await interaction.followUp(resultPayload).catch(() => {});
@@ -579,7 +598,8 @@ async function showPrivatePanel(interaction, payload, update = false) {
       if (Array.isArray(cleanPayload.files) && cleanPayload.files.length) activeBoardPanels.delete(String(interaction.guild?.id));
       else activeBoardPanels.set(String(interaction.guild?.id), Date.now() + 10 * 60 * 1000);
     }
-    if (interaction.deferred || interaction.replied) await interaction.editReply(cleanPayload);
+    if (currentV2 && !cleanPayload.files?.length) await editPrivateV2Message(interaction, cleanPayload);
+    else if (interaction.deferred || interaction.replied) await interaction.editReply(cleanPayload);
     else await interaction.update(cleanPayload);
     return;
   }
