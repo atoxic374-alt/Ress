@@ -1437,10 +1437,20 @@ class DatabaseManager {
     // واجهة متوافقة مع أوامر التوب والتفاعل القديمة والجديدة.
     async getPeriodActivityStats(userId, period = 'weekly', guildId = null) {
         try {
-            const normalizedPeriod = String(period || 'weekly').toLowerCase();
-            const categoryNames = new Set(['voice', 'chat', 'reactions', 'joins']);
-            if (categoryNames.has(String(userId).toLowerCase())) {
-                const category = String(userId).toLowerCase();
+            let normalizedPeriod = String(period || 'weekly').toLowerCase();
+            const categoryAliases = {
+                voice: 'voice', voice_time: 'voice', voice_time_ms: 'voice',
+                chat: 'chat', message: 'chat', messages: 'chat',
+                reaction: 'reactions', reactions: 'reactions',
+                join: 'joins', joins: 'joins', voice_joins: 'joins'
+            };
+            let category = categoryAliases[String(userId).toLowerCase()];
+            if (!category && categoryAliases[normalizedPeriod]) {
+                // دعم التوقيع القديم: getPeriodActivityStats(period, category, guildId)
+                category = categoryAliases[normalizedPeriod];
+                normalizedPeriod = String(userId || 'weekly').toLowerCase();
+            }
+            if (category) {
                 const metric = { voice: 'voice_time', chat: 'messages', reactions: 'reactions', joins: 'voice_joins' }[category];
                 const isTotal = ['total', 'all', 'lifetime'].includes(normalizedPeriod);
                 const now = moment().tz('Asia/Riyadh');
@@ -1480,7 +1490,7 @@ class DatabaseManager {
             return await this.getWeeklyStats(userId, guildId);
         } catch (error) {
             console.error('❌ خطأ في جلب إحصائيات الفترة:', error);
-            const categoryRequest = ['voice', 'chat', 'reactions', 'joins'].includes(String(userId).toLowerCase());
+            const categoryRequest = Boolean(categoryAliases[String(userId).toLowerCase()] || categoryAliases[String(period).toLowerCase()]);
             return categoryRequest ? [] : { voiceTime: 0, messages: 0, reactions: 0, voiceJoins: 0, activeDays: 0 };
         }
     }
