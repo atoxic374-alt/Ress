@@ -16,6 +16,12 @@ function groupHasUser(group, userId) {
   const id = String(userId);
   return String(group.owner_id) === id || group.memberIds.includes(id) || group.managerIds.includes(id);
 }
+function groupThumbnail(guild, group = null) {
+  return group?.avatar_url
+    || guild?.iconURL?.({ extension: 'png', size: 128 })
+    || guild?.client?.user?.displayAvatarURL?.({ extension: 'png', size: 128 })
+    || null;
+}
 async function syncMember(group, guild, userId, add, { ignoreMissing = false } = {}) {
   const member = await guild.members.fetch(String(userId)).catch(() => null);
   if (!member) throw new Error('MEMBER_NOT_FOUND');
@@ -97,7 +103,7 @@ async function openMemberPicker(message, group, action) {
   const description = action === 'add'
     ? 'ابحث عن الأعضاء واختر حتى 25 عضوًا لإضافتهم دفعة واحدة إلى القروب.'
     : 'ابحث عن الأعضاء واختر حتى 25 عضوًا لإزالتهم دفعة واحدة من القروب.';
-  return reply(message, responsePayload({ title, content: description, components: [new ActionRowBuilder().addComponents(menu)] }));
+  return reply(message, responsePayload({ title, content: description, thumbnail: groupThumbnail(message.guild, group), components: [new ActionRowBuilder().addComponents(menu)] }));
 }
 async function handleMemberPickerInteraction(interaction) {
   const parts = String(interaction.customId || '').split(':');
@@ -105,11 +111,11 @@ async function handleMemberPickerInteraction(interaction) {
   const [, action, groupIdRaw, token] = parts;
   const flow = memberPickerFlows.get(token);
   if (!flow || flow.expires <= Date.now() || flow.guildId !== String(interaction.guild?.id)) {
-    await interaction.reply(responsePayload({ title: 'PICKER EXPIRED', content: 'انتهت صلاحية قائمة الأعضاء؛ أعد كتابة الأمر لفتح قائمة جديدة.' })).catch(() => {});
+    await interaction.reply(responsePayload({ title: 'PICKER EXPIRED', content: 'انتهت صلاحية قائمة الأعضاء؛ أعد كتابة الأمر لفتح قائمة جديدة.', thumbnail: groupThumbnail(interaction.guild) })).catch(() => {});
     return true;
   }
   if (flow.actorId !== String(interaction.user?.id)) {
-    await interaction.reply(responsePayload({ title: 'ACCESS DENIED', content: 'هذه القائمة مخصصة للشخص الذي فتحها.' })).catch(() => {});
+    await interaction.reply(responsePayload({ title: 'ACCESS DENIED', content: 'هذه القائمة مخصصة للشخص الذي فتحها.', thumbnail: groupThumbnail(interaction.guild) })).catch(() => {});
     return true;
   }
   if (!interaction.isUserSelectMenu?.()) return true;
@@ -151,10 +157,10 @@ async function handleMemberPickerInteraction(interaction) {
     if (success.length) lines.push('', `**تم التنفيذ:** ${success.join('، ')}`);
     if (skipped.length) lines.push('', `**تم التجاوز:** ${skipped.join('، ')}`);
     if (failed.length) lines.push('', `**فشل:** ${failed.join('، ')}`);
-    await interaction.reply(responsePayload({ title: action === 'add' ? 'MEMBERS ADDED' : 'MEMBERS REMOVED', content: lines.join('\n') })).catch(() => {});
+    await interaction.reply(responsePayload({ title: action === 'add' ? 'MEMBERS ADDED' : 'MEMBERS REMOVED', content: lines.join('\n'), thumbnail: groupThumbnail(interaction.guild, group) })).catch(() => {});
   } catch (error) {
     const content = error.message === 'NO_PERMISSION' ? 'لا تملك صلاحية إدارة أعضاء هذا القروب.' : error.message === 'GROUP_NOT_FOUND' ? 'القروب غير موجود أو غير نشط.' : 'تعذر تنفيذ العملية الجماعية.';
-    await interaction.reply(responsePayload({ title: 'REQUEST FAILED', content })).catch(() => {});
+    await interaction.reply(responsePayload({ title: 'REQUEST FAILED', content, thumbnail: groupThumbnail(interaction.guild) })).catch(() => {});
   }
   return true;
 }

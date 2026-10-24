@@ -1517,8 +1517,6 @@ async function transferGroupOwner(interaction, groupId, ownerId) {
     const targetId = String(ownerId || '');
     if (!group || group.status !== 'active' || !group.memberIds.includes(targetId)) throw new Error('OWNER_MUST_BE_MEMBER');
     if (String(group.owner_id) === targetId) return 'العضو هو مالك القروب الحالي بالفعل.';
-    const groups = await gm.listGroups(interaction.guild.id);
-    if (groups.some(item => item.id !== group.id && (String(item.owner_id) === targetId || item.memberIds.includes(targetId) || item.managerIds.includes(targetId)))) throw new Error('USER_ALREADY_IN_GROUP');
     const newOwner = await interaction.guild.members.fetch(targetId).catch(() => null);
     if (!newOwner || newOwner.user.bot) throw new Error('MEMBER_NOT_FOUND');
     const oldOwnerId = String(group.owner_id);
@@ -2829,17 +2827,6 @@ async function applyUserControl(interaction, flow, userId) {
     choose(flow.action, ['allow', 'deny']);
     if (flow.action === 'deny' && (String(group.owner_id) === String(target.id) || group.managerIds.includes(String(target.id)))) {
       throw new Error('TARGET_PROTECTED');
-    }
-    if (flow.action === 'allow' && flow.scope === 'both') {
-      const linkedGroups = await gm.listGroups(interaction.guild.id);
-      const alreadyLinked = linkedGroups.some(item =>
-        item.id !== group.id && (
-          String(item.owner_id) === String(target.id) ||
-          item.memberIds.includes(String(target.id)) ||
-          item.managerIds.includes(String(target.id))
-        )
-      );
-      if (alreadyLinked) throw new Error('USER_ALREADY_IN_GROUP');
     }
     const channels = await groupChannels(interaction.guild, group, flow.scope);
     const allowed = flow.action === 'allow';

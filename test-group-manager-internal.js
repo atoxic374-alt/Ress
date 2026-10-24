@@ -693,7 +693,7 @@ async function testInternalCommandParser() {
   assert.deepEqual((await gm.getGroup(guildId, groupId)).memberIds, [OWNER, USER_A]);
 
   const anotherGroupId = await insertGroup({ guildId, name: 'Other group', ownerId: USER_B, memberIds: [USER_B] });
-  await assert.rejects(gm.addMember(guildId, groupId, USER_B, OWNER), error => error.message === 'USER_ALREADY_IN_GROUP');
+  assert.deepEqual(await gm.addMember(guildId, groupId, USER_B, OWNER), [OWNER, USER_A, USER_B]);
   assert.equal((await gm.getGroup(guildId, anotherGroupId)).owner_id, USER_B);
 
   const addManager = parserMessage(guild, `:مسؤول ${USER_A}`);

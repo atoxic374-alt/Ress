@@ -368,13 +368,8 @@ async function addMember(guildId, groupId, userId, actorId) { return withLock(`m
   const group = await getGroup(guildId, groupId);
   if (!group || group.status !== 'active') throw new Error('GROUP_NOT_FOUND');
   if (group.blockedIds.includes(safeUserId)) throw new Error('USER_BLOCKED');
-  const alreadyMember = group.memberIds.includes(safeUserId) || String(group.owner_id) === safeUserId;
-  if (!alreadyMember) {
-    const otherGroups = await dbManager.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status = 'active' AND id <> ?", [String(guildId), Number(groupId)]);
-    if (otherGroups.map(hydrate).some(other => String(other.owner_id) === safeUserId || other.memberIds.includes(safeUserId) || other.managerIds.includes(safeUserId))) throw new Error('USER_ALREADY_IN_GROUP');
-    // Group membership is intentionally unlimited. Keep the setting for
-    // backward-compatible configuration reads, but never block a valid member.
-  }
+  // A member may belong to multiple groups. Membership is intentionally
+  // independent per group; only the target group's blocked list is enforced.
   const members = new Set(group.memberIds); members.add(safeUserId);
   await updateGroup(guildId, groupId, { member_ids_json: JSON.stringify([...members]), updated_at: Date.now() }, actorId);
   // Keep the current leaderboard clean while the member is away, but restore
