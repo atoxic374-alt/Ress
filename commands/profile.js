@@ -7,10 +7,11 @@ const { getCustomProfile } = require('./myprofile.js');
 const { isUserBlocked } = require('./block.js');
 const { isChannelBlocked } = require('./chatblock.js');
 const colorManager = require('../utils/colorManager.js');
+const { getLiveVoiceDuration } = require('../utils/activityTime.js');
 
 const name = 'profile';
 const aliases = ['id'];
-const { getUserLevel, updateUserLevel, updateLastNotified } = require('../utils/database.js');
+const { getDatabase, getUserLevel, updateUserLevel, updateLastNotified } = require('../utils/database.js');
 const { ensureCairoFontsRegistered } = require('../utils/cairoFont');
 
 // دالة لإرسال إشعار الترقية
@@ -91,47 +92,22 @@ async function sendLevelUpNotification(client, userId, oldVoiceLevel, newVoiceLe
 
 // Database paths
 const { getDatabasePath } = require('../utils/storagePaths');
-const mainDbPath = getDatabasePath('discord_bot.db');
 const streakDbPath = getDatabasePath('streak.db');
 
 ensureCairoFontsRegistered();
 
 // Helper function to get data from main database
-function getMainDbData(userId) {
-    return new Promise((resolve, reject) => {
-        const db = new sqlite3.Database(mainDbPath);
-        
-        db.get(`SELECT total_messages, total_voice_time, total_reactions FROM user_totals WHERE user_id = ?`, 
-            [userId], 
-            (err, row) => {
-                db.close();
-                if (err) {
-                    reject(err);
-                } else {
-                    let stats = row || { total_messages: 0, total_voice_time: 0, total_reactions: 0 };
-                    
-                    // حساب الوقت الحي إذا كان العضو في روم صوتي حالياً
-                    if (global.client && global.client.voiceSessions && global.client.voiceSessions.has(userId)) {
-                        const session = global.client.voiceSessions.get(userId);
-                        const AFK_LIMIT = 24 * 60 * 60 * 1000;
-                        const STAGE_CHANNEL_TYPE = 13;
-                        if (session && !session.isAFK) {
-                            const sessionChannel = global.client.channels?.cache?.get(session.channelId);
-                            if (!sessionChannel || sessionChannel.type !== STAGE_CHANNEL_TYPE) {
-                                const sessionStart = session.startTime || session.sessionStartTime || Date.now();
-                                const liveStart = session.lastTrackedTime || sessionStart;
-                                const cappedNow = Math.min(Date.now(), sessionStart + AFK_LIMIT);
-                                const liveDuration = Math.max(0, cappedNow - liveStart);
-                                stats.total_voice_time = (stats.total_voice_time || 0) + liveDuration;
-                            }
-                        }
-                    }
-                    
-                    resolve(stats);
-                }
-            }
-        );
-    });
+async function getMainDbData(userId) {
+    const db = getDatabase();
+    const row = await db.get(
+        `SELECT total_messages, total_voice_time, total_reactions FROM user_totals WHERE user_id = ?`,
+        [userId]
+    );
+    const stats = row || { total_messages: 0, total_voice_time: 0, total_reactions: 0 };
+    // استخدم قاعدة البيانات ودالة الوقت الحي نفسيهما في تواجدي والتوب.
+    stats.total_voice_time = Number(stats.total_voice_time || 0)
+        + getLiveVoiceDuration(global.client, userId, 0, Date.now());
+    return stats;
 }
 
 // Helper function to get streak data
@@ -154,42 +130,25 @@ function getStreakData(guildId, userId) {
 }
 
 // Helper function to get total rank (from user_totals - the real leaderboard)
-function getTotalRank(userId) {
-    return new Promise((resolve, reject) => {
-        const db = new sqlite3.Database(mainDbPath);
-        
-        // Get voice rank from total voice time
+async function getTotalRank(userId) {
+    const db = getDatabase();
+    const [voiceRows, chatRows] = await Promise.all([
         db.all(`
             SELECT user_id, total_voice_time as voice_time
             FROM user_totals 
             WHERE total_voice_time > 0
             ORDER BY total_voice_time DESC
-        `, [], (err, voiceRows) => {
-            if (err) {
-                db.close();
-                reject(err);
-                return;
-            }
-            
-            const voiceRank = voiceRows.findIndex(u => u.user_id === userId) + 1;
-            
-            // Get chat rank from total messages
-            db.all(`
+        `),
+        db.all(`
                 SELECT user_id, total_messages as messages
                 FROM user_totals 
                 WHERE total_messages > 0
                 ORDER BY total_messages DESC
-            `, [], (err, chatRows) => {
-                db.close();
-                if (err) {
-                    reject(err);
-                } else {
-                    const chatRank = chatRows.findIndex(u => u.user_id === userId) + 1;
-                    resolve({ voiceRank, chatRank });
-                }
-            });
-        });
-    });
+        `)
+    ]);
+    const voiceRank = voiceRows.findIndex(user => String(user.user_id) === String(userId)) + 1;
+    const chatRank = chatRows.findIndex(user => String(user.user_id) === String(userId)) + 1;
+    return { voiceRank, chatRank };
 }
 
 // Calculate level and XP from voice time
@@ -227,12 +186,11 @@ function formatVoiceTime(minutes) {
     const hours = Math.floor((minutes % 1440) / 60);
     const mins = Math.floor(minutes % 60);
     
-    if (days > 0) {
-        return `${days.toLocaleString()}d ${hours}h`;
-    } else if (hours > 0) {
-        return `${hours}h ${mins}m`;
-    }
-    return `${mins}m`;
+    const parts = [];
+    if (days > 0) parts.push(`${days.toLocaleString()}d`);
+    if (hours > 0) parts.push(`${hours}h`);
+    if (mins > 0 || parts.length === 0) parts.push(`${mins}m`);
+    return parts.join(' ');
 }
 
 // Format large numbers
