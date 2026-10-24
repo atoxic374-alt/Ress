@@ -318,6 +318,22 @@ function selectMemberGroup(groups, userId, channelId, requestedGroupId = null) {
   return list.find(group => gm.channelBelongs(group, channelId) && isGroupMember(group, userId))
     || list.find(group => isGroupMember(group, userId)) || null;
 }
+function groupPickerPayload(guild, action, groups) {
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`groups_top:pick:${action}`)
+    .setPlaceholder('اختر القروب المطلوب')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(groups.slice(0, 25).map(group => ({
+      label: safe(group.name || `Group ${group.id}`, 100),
+      value: String(group.id),
+      description: `القروب : ${safe(group.name || 'غير معروف', 80)}`,
+      emoji: group.emoji || '<:emoji_18:1485476234199826472>'
+    })));
+  const c = baseContainer(guild, action === 'rank' ? 'MY RANK' : 'MY GROUP', 'لديك أكثر من قروب. اختر القروب المطلوب :');
+  c.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
+  return componentsV2Payload(c);
+}
 function topGroupsButtons(canManage = false, manageableGroupId = null) {
   const buttons = [
     button('groups_top:rank', 'MY RANK', ButtonStyle.Secondary, '<:emoji_17:1485476100774821938>'),
@@ -694,6 +710,7 @@ async function sendTopGroupsPanel(channel, guild, options = {}) {
   try { return await work; } finally { topPanelLocks.delete(key); }
 }
 async function handleTopGroupsInteraction(interaction, action, parts = []) {
+  const viewAction = action === 'pick' ? String(parts[0] || '') : action;
   if (action === 'refresh') {
     await interaction.deferUpdate();
     if (isComponentsV2Message(interaction.message)) {
@@ -783,10 +800,16 @@ async function handleTopGroupsInteraction(interaction, action, parts = []) {
     }
   }
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  if (action === 'rank') {
+  if (viewAction === 'rank' || viewAction === 'group') {
     const groups = await gm.listGroups(interaction.guild.id);
-    const group = selectMemberGroup(groups, interaction.user?.id, interaction.channelId);
-    if (!group) return interaction.editReply(responsePayload({ content: 'لا يوجد قروب مرتبط بعضويتك لعرض مركزه.', allowedMentions: { parse: [] } }));
+    const memberGroups = groups.filter(group => isGroupMember(group, interaction.user?.id));
+    if (action !== 'pick' && memberGroups.length > 1) {
+      return interaction.editReply(groupPickerPayload(interaction.guild, viewAction, memberGroups));
+    }
+    const selectedGroupId = action === 'pick' ? interaction.values?.[0] : null;
+    const group = selectMemberGroup(groups, interaction.user?.id, interaction.channelId, selectedGroupId);
+    if (!group) return interaction.editReply(responsePayload({ content: viewAction === 'rank' ? 'لا يوجد قروب مرتبط بعضويتك لعرض مركزه.' : 'لا يوجد قروب مرتبط بعضويتك.', allowedMentions: { parse: [] } }));
+    if (viewAction === 'rank') {
     const full = await gm.getGroup(interaction.guild.id, group.id);
     const sorted = [...groups].sort((a, b) => Number(b.points || 0) - Number(a.points || 0) || Number(a.id || 0) - Number(b.id || 0));
     const memberRows = await gm.listMemberPoints(interaction.guild.id, full.id, 1000).catch(() => []);
@@ -805,11 +828,7 @@ async function handleTopGroupsInteraction(interaction, action, parts = []) {
       accentColor: null
     });
     return interaction.editReply(responsePayload({ title: 'MY GROUP RANK', content: 'ترتيب قروبك ونقاطه مقارنة ببقية القروبات.', files: [attachment], allowedMentions: { parse: [] } }));
-  }
-  if (action === 'group') {
-    const groups = await gm.listGroups(interaction.guild.id);
-    const group = selectMemberGroup(groups, interaction.user?.id, interaction.channelId);
-    if (!group) return interaction.editReply(responsePayload({ content: 'لا يوجد قروب مرتبط بعضويتك.', allowedMentions: { parse: [] } }));
+    }
     const full = await gm.getGroup(interaction.guild.id, group.id);
     const role = full.role_id && (interaction.guild.roles.cache.get(String(full.role_id)) || await interaction.guild.roles.fetch(String(full.role_id)).catch(() => null));
     const memberPoints = await gm.getMemberPoints(interaction.guild.id, full.id, interaction.user.id).catch(() => null);
@@ -1592,7 +1611,7 @@ async function handleInteraction(interaction) { const extended=await handleGroup
   const page=action==='next'?currentPage+1:action==='prev'?currentPage-1:currentPage;
   return interaction.update(responsePayload(await buildOurMembersPayload(interaction.guild,group,page)));
  }
- if(prefix==='groups_top'&&['rank','group','manage','avatar','avatar-modal','refresh','leave','leave-confirm','leave-cancel','transfer','transfer-select'].includes(action))return handleTopGroupsInteraction(interaction,action,parts); if(prefix==='groups_bonus')return handleTopBonusButton(interaction,action); if(prefix==='groups_bonus_select')return handleTopBonusSelection(interaction,action,parts); if(prefix==='groups_bonus_page')return handleTopBonusPage(interaction,action,parts); if(prefix==='groups_bonus_member_select')return handleTopBonusMemberSelection(interaction,action,parts); if(prefix==='groups_bonus_modal')return handleTopBonusModal(interaction,action,parts); if(prefix==='groups_bonus_confirm')return handleTopBonusConfirm(interaction,action,parts); if(prefix==='groups_rules_modal'){const metric=parts[0];const settings=await checkSystem(interaction);if(!settings)return true;const definition=RULE_METRICS.find(([key])=>key===metric);if(!definition)return reply(interaction,{content:'قاعدة النقاط غير معروفة.'});try{const rules=await gm.getRules(interaction.guild.id);const current=rules.find(rule=>String(rule.metric)===metric);const threshold=Number(interaction.fields.getTextInputValue('threshold'));const points=Number(interaction.fields.getTextInputValue('points'));await gm.setRule(interaction.guild.id,metric,threshold,points,Number(current?.enabled)===1,interaction.user.id);await gm.logGroupEvent(interaction.guild,'rule_update',{metric,threshold,points,enabled:Number(current?.enabled)===1},interaction.user.id);await refreshSetupPanel(interaction,settings);return reply(interaction,rulesPayload(interaction.guild,await gm.getRules(interaction.guild.id)));}catch(error){const messages={INVALID_THRESHOLD:'الحد يجب أن يكون عددًا صحيحًا أكبر من صفر ولا يتجاوز مليارًا.',INVALID_POINTS:'النقاط لكل حد يجب أن تكون عددًا صحيحًا بين 1 و1,000,000.',INVALID_METRIC:'نوع قاعدة النقاط غير معروف.'};return reply(interaction,{title:'RULE UPDATE FAILED',content:messages[error.message]||'تعذر حفظ قاعدة النقاط. تحقق من القيم وحاول مرة أخرى.'});}} if(prefix==='groups_meta_edit'){
+ if(prefix==='groups_top'&&['rank','group','pick','manage','avatar','avatar-modal','refresh','leave','leave-confirm','leave-cancel','transfer','transfer-select'].includes(action))return handleTopGroupsInteraction(interaction,action,parts); if(prefix==='groups_bonus')return handleTopBonusButton(interaction,action); if(prefix==='groups_bonus_select')return handleTopBonusSelection(interaction,action,parts); if(prefix==='groups_bonus_page')return handleTopBonusPage(interaction,action,parts); if(prefix==='groups_bonus_member_select')return handleTopBonusMemberSelection(interaction,action,parts); if(prefix==='groups_bonus_modal')return handleTopBonusModal(interaction,action,parts); if(prefix==='groups_bonus_confirm')return handleTopBonusConfirm(interaction,action,parts); if(prefix==='groups_rules_modal'){const metric=parts[0];const settings=await checkSystem(interaction);if(!settings)return true;const definition=RULE_METRICS.find(([key])=>key===metric);if(!definition)return reply(interaction,{content:'قاعدة النقاط غير معروفة.'});try{const rules=await gm.getRules(interaction.guild.id);const current=rules.find(rule=>String(rule.metric)===metric);const threshold=Number(interaction.fields.getTextInputValue('threshold'));const points=Number(interaction.fields.getTextInputValue('points'));await gm.setRule(interaction.guild.id,metric,threshold,points,Number(current?.enabled)===1,interaction.user.id);await gm.logGroupEvent(interaction.guild,'rule_update',{metric,threshold,points,enabled:Number(current?.enabled)===1},interaction.user.id);await refreshSetupPanel(interaction,settings);return reply(interaction,rulesPayload(interaction.guild,await gm.getRules(interaction.guild.id)));}catch(error){const messages={INVALID_THRESHOLD:'الحد يجب أن يكون عددًا صحيحًا أكبر من صفر ولا يتجاوز مليارًا.',INVALID_POINTS:'النقاط لكل حد يجب أن تكون عددًا صحيحًا بين 1 و1,000,000.',INVALID_METRIC:'نوع قاعدة النقاط غير معروف.'};return reply(interaction,{title:'RULE UPDATE FAILED',content:messages[error.message]||'تعذر حفظ قاعدة النقاط. تحقق من القيم وحاول مرة أخرى.'});}} if(prefix==='groups_meta_edit'){
   const field=choose(action,['name','description','emoji','color','avatar']);
   try { await currentManager(interaction, Number(parts[0])); }
   catch (error) { return reply(interaction,{content:groupError(error)}); }
