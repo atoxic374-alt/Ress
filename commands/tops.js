@@ -2,7 +2,7 @@ const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, 
 const colorManager = require('../utils/colorManager.js');
 const { isUserBlocked } = require('./block.js');
 const { isChannelBlocked } = require('./chatblock.js');
-const { getDatabase } = require('../utils/database.js');
+const { getDatabase, initializeDatabase } = require('../utils/database.js');
 const moment = require('moment-timezone');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
@@ -482,6 +482,13 @@ async function execute(message, args, { client }) {
         return;
     }
 
+    try {
+        await initializeDatabase();
+    } catch (error) {
+        console.error('تعذر تهيئة قاعدة البيانات قبل أمر التوب:', error);
+        await message.channel.send('❌ قاعدة البيانات غير متاحة حالياً').catch(() => {});
+        return;
+    }
     const db = getDatabase();
     if (!db || !db.isInitialized) {
         await message.channel.send('❌ قاعدة البيانات غير متاحة');

@@ -2,7 +2,7 @@ const { EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle, ModalBuilder
 const colorManager = require('../utils/colorManager.js');
 const { isUserBlocked } = require('./block.js');
 const { isChannelBlocked } = require('./chatblock.js');
-const { getDatabase } = require('../utils/database.js');
+const { getDatabase, initializeDatabase } = require('../utils/database.js');
 const moment = require('moment-timezone');
 const { buildTopSummaryImage } = require('../utils/topSummaryRenderer.js');
 const { getGuildBannerHexFast } = require('../utils/guildBannerColor.js');
@@ -253,6 +253,7 @@ async function execute(message, args, { client }) {
 async function showActivityStats(message, user, member, period = 'weekly', client) {
     let progressMessage = null;
     try {
+        await initializeDatabase();
         const dbManager = getDatabase();
         if (!dbManager || !dbManager.isInitialized) {
             await message.channel.send('❌ قاعدة البيانات غير متاحة');
