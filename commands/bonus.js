@@ -469,6 +469,29 @@ function structurePrivateResponse(payload) {
   return normalized;
 }
 
+function isComponentsV2Message(message) {
+  if (message?.flags?.has?.(MessageFlags.IsComponentsV2)) return true;
+  const rawFlags = typeof message?.flags === 'number' ? message.flags : message?.flags?.bitfield;
+  return (Number(rawFlags || 0) & MessageFlags.IsComponentsV2) !== 0;
+}
+
+function convertEmbedsToPrivateV2(payload) {
+  if (!payload?.embeds?.length) return payload;
+  const lines = [];
+  for (const rawEmbed of payload.embeds) {
+    const embed = typeof rawEmbed?.toJSON === 'function' ? rawEmbed.toJSON() : (rawEmbed?.data || rawEmbed || {});
+    if (embed.title) lines.push(`## ${String(embed.title).slice(0, 200)}`);
+    if (embed.description) lines.push(String(embed.description).slice(0, 3500));
+    for (const field of Array.isArray(embed.fields) ? embed.fields : []) {
+      if (field?.name || field?.value) lines.push(`**${String(field.name || 'Details').slice(0, 200)}**\n${String(field.value || '').slice(0, 1024)}`);
+    }
+    if (embed.footer?.text) lines.push(`-# ${String(embed.footer.text).slice(0, 300)}`);
+  }
+  const normalized = { ...payload, content: [payload.content, ...lines].filter(Boolean).join('\n\n') };
+  delete normalized.embeds;
+  return structurePrivateResponse(normalized);
+}
+
 function normalizeComponentsV2Payload(payload) {
   if (!payload || (Number(payload.flags || 0) & MessageFlags.IsComponentsV2) === 0) return payload;
   const normalized = { ...payload };
@@ -532,7 +555,12 @@ async function showPrivatePanel(interaction, payload, update = false) {
     return;
   }
   if (update && (interaction.message || interaction.deferred || interaction.replied) && (!boardMessage || shouldUpdateBoard)) {
-    const cleanPayload = normalizeComponentsV2Payload({ ...payload });
+    let nextPayload = { ...payload };
+    if (isComponentsV2Message(interaction.message) && nextPayload.embeds?.length) {
+      nextPayload.flags = Number(nextPayload.flags || 0) | MessageFlags.IsComponentsV2;
+      nextPayload = convertEmbedsToPrivateV2(nextPayload);
+    }
+    const cleanPayload = normalizeComponentsV2Payload(nextPayload);
     delete cleanPayload.ephemeral;
     const currentContent = String(interaction.message?.content || '');
     const currentCounter = currentContent.match(/^\*\*[^\n]*(?:Groups|Points)[^\n]*\*\*/)?.[0];
