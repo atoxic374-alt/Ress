@@ -446,7 +446,11 @@ async function withDiscordRetry(work, attempts = 3) {
 }
 async function restoreThreadMember(thread, userId) {
   if (!thread?.members?.add) return false;
-  try { await withDiscordRetry(() => thread.members.add(String(userId)), 3); return true; }
+  try {
+    if (thread.archived && thread.setArchived) await withDiscordRetry(() => thread.setArchived(false, 'Sync managed group thread access'), 3);
+    await withDiscordRetry(() => thread.members.add(String(userId)), 3);
+    return true;
+  }
   catch (error) { console.error('[groups] failed to restore thread member:', thread.id, userId, error?.message || error); return false; }
 }
 
@@ -477,7 +481,7 @@ async function restoreGroupRole(guild, group, forceMissing = false) {
 function groupChannelOverwrites(guild, roleId) {
   return [
     { id: guild.roles.everyone.id, deny: ['ViewChannel'] },
-    { id: roleId, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory', 'Connect', 'Speak'] }
+    { id: roleId, allow: ['ViewChannel', 'SendMessages', 'SendMessagesInThreads', 'ReadMessageHistory', 'Connect', 'Speak'] }
   ];
 }
 
@@ -502,8 +506,10 @@ async function restoreGroupResources(guild, sourceGroup, trigger = 'resource_del
       text = await withDiscordRetry(() => guild.channels.create({ name: settings.chatMode === 'threads' ? 'groups-chat' : `📝・${String(group.name || 'Group').slice(0, 90)}`, type: ChannelType.GuildText, parent: settings.textCategoryId || undefined, permissionOverwrites: groupChannelOverwrites(guild, roleResult.role.id), reason: 'Restore deleted managed group text channel' }));
       patch.text_channel_id = text.id;
       thread = null;
-    } else if (!text.permissionOverwrites.cache.get(roleResult.role.id)) {
-      await text.permissionOverwrites.set(groupChannelOverwrites(guild, roleResult.role.id), 'Restore managed group permissions').catch(() => {});
+    } else {
+      await text.permissionOverwrites.edit(roleResult.role.id, {
+        ViewChannel: true, SendMessages: true, SendMessagesInThreads: true, ReadMessageHistory: true
+      }, { reason: 'Restore managed group text permissions' }).catch(() => {});
     }
     if (settings.chatMode === 'threads') {
       if (!thread || !thread.isThread?.() || !thread.members) {
@@ -516,12 +522,15 @@ async function restoreGroupResources(guild, sourceGroup, trigger = 'resource_del
     if (!voice || voice.type !== ChannelType.GuildVoice) {
       voice = await withDiscordRetry(() => guild.channels.create({ name: String(group.name || 'Group').slice(0, 100), type: ChannelType.GuildVoice, parent: settings.voiceCategoryId || undefined, permissionOverwrites: groupChannelOverwrites(guild, roleResult.role.id), reason: 'Restore deleted managed group voice channel' }));
       patch.voice_channel_id = voice.id;
-    } else if (!voice.permissionOverwrites.cache.get(roleResult.role.id)) {
-      await voice.permissionOverwrites.set(groupChannelOverwrites(guild, roleResult.role.id), 'Restore managed group permissions').catch(() => {});
+    } else {
+      await voice.permissionOverwrites.edit(roleResult.role.id, {
+        ViewChannel: true, Connect: true, Speak: true
+      }, { reason: 'Restore managed group voice permissions' }).catch(() => {});
     }
     group = await gm.updateGroup(guild.id, group.id, { ...patch, sync_state: 'ready' }, null);
     const failedThreadMembers = [];
-    const memberIds = groupResourceMemberIds(group);
+    const roleMemberIds = roleResult.role.members ? [...roleResult.role.members.keys()] : [];
+    const memberIds = [...new Set([...groupResourceMemberIds(group), ...roleMemberIds].filter(Boolean).map(String))];
     await runWithConcurrency(memberIds, 4, async userId => {
       const member = await guild.members.fetch(userId).catch(() => null);
       if (member && !member.user?.bot) await member.roles.add(roleResult.role, 'Restore managed group membership').catch(() => {});
@@ -1774,11 +1783,25 @@ async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
       await gm.runtimeLog(guild.id, group.id, 'settings_drift', 'warning', { fields: settingsDrift }).catch(() => {});
       issues.push({ groupId: group.id, groupName: group.name, type: 'settings_drift', detail: `الموارد لا تطابق إعدادات الكاتاقوري: ${settingsDrift.join(', ')}` });
     }
-    const expected = [...new Set([String(group.owner_id), ...group.memberIds, ...group.managerIds].filter(Boolean))];
+    let expected = [...new Set([String(group.owner_id), ...group.memberIds, ...group.managerIds].filter(Boolean))];
     const role = group.role_id ? (guild.roles.cache.get(String(group.role_id)) || await guild.roles.fetch(String(group.role_id)).catch(() => null)) : null;
     if (!role) {
       issues.push({ groupId: group.id, groupName: group.name, type: 'role_missing', detail: 'رتبة القروب غير موجودة أو لا يمكن الوصول إليها.' });
     } else {
+      if (resourceText?.permissionOverwrites) {
+        await resourceText.permissionOverwrites.edit(role.id, {
+          ViewChannel: true, SendMessages: true, SendMessagesInThreads: true, ReadMessageHistory: true
+        }, { reason: 'Synchronize managed group text permissions' }).catch(error => {
+          issues.push({ groupId: group.id, groupName: group.name, type: 'text_permissions_sync_failed', detail: String(error?.message || error).slice(0, 200) });
+        });
+      }
+      if (resourceVoice?.permissionOverwrites) {
+        await resourceVoice.permissionOverwrites.edit(role.id, {
+          ViewChannel: true, Connect: true, Speak: true
+        }, { reason: 'Synchronize managed group voice permissions' }).catch(error => {
+          issues.push({ groupId: group.id, groupName: group.name, type: 'voice_permissions_sync_failed', detail: String(error?.message || error).slice(0, 200) });
+        });
+      }
       for (const userId of expected) {
         if (await isBotId(userId)) continue;
         let member = guild.members.cache.get(userId) || null;
