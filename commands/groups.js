@@ -468,13 +468,23 @@ async function syncGroupThreadMembers(guild, group, thread, role = null) {
 }
 
 async function consolidateThreadGroupChats(guild, settings, groups) {
-  if (settings.chatMode !== 'threads' || !groups.length) return;
+  if (settings.chatMode !== 'threads') return;
   const linkedParentIds = [...new Set(groups.map(group => String(group.text_channel_id || '')).filter(Boolean))];
-  const parents = [];
+  const parentsById = new Map();
+  const fetchedChannels = await guild.channels.fetch().catch(() => guild.channels.cache);
+  for (const channel of fetchedChannels.values()) {
+    if (channel?.type === ChannelType.GuildText
+      && String(channel.name || '').toLowerCase() === 'groups-chat'
+      && (!settings.textCategoryId || String(channel.parentId || '') === String(settings.textCategoryId))) {
+      parentsById.set(channel.id, channel);
+    }
+  }
   for (const id of linkedParentIds) {
     const channel = guild.channels.cache.get(id) || await guild.channels.fetch(id).catch(() => null);
-    if (channel?.type === ChannelType.GuildText) parents.push(channel);
+    if (channel?.type === ChannelType.GuildText) parentsById.set(channel.id, channel);
   }
+  const parents = [...parentsById.values()];
+  if (!parents.length && !groups.length) return;
   let canonical = parents[0] || null;
   if (!canonical) {
     canonical = await withDiscordRetry(() => guild.channels.create({
