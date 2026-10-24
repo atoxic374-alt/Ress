@@ -167,7 +167,7 @@ async function handleMemberPickerInteraction(interaction) {
 }
 async function restoreMembership(group, guildId, userId, wasManager, actorId) {
   await gm.addMember(guildId, group.id, userId, actorId);
-  if (wasManager) await gm.setManagers(guildId, group.id, [...group.managerIds, String(userId)], actorId);
+  if (wasManager) await gm.setManagers(guildId, group.id, [...group.managerIds, String(userId)], group.owner_id);
 }
 async function syncManagerRole(guild, settings, userId, { ignoreMissing = false } = {}) {
   if (!settings.managerRoleId) return;

@@ -407,6 +407,7 @@ async function removeMember(guildId, groupId, userId, actorId) { return withLock
 async function setManagers(guildId, groupId, managerIds, actorId) { return withLock(`members:${guildId}`, async () => {
   const group = await getGroup(guildId, groupId);
   if (!group) throw new Error('GROUP_NOT_FOUND');
+  if (String(actorId || '') !== String(group.owner_id)) throw new Error('OWNER_ONLY');
   const allowed = ids(managerIds).filter(id => group.memberIds.includes(id) && id !== String(group.owner_id));
   await updateGroup(guildId, groupId, { manager_ids_json: JSON.stringify(allowed), updated_at: Date.now() }, actorId);
   return allowed;
