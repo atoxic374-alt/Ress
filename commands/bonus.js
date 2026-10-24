@@ -469,6 +469,18 @@ function structurePrivateResponse(payload) {
   return normalized;
 }
 
+function normalizeComponentsV2Payload(payload) {
+  if (!payload || (Number(payload.flags || 0) & MessageFlags.IsComponentsV2) === 0) return payload;
+  const normalized = { ...payload };
+  // Discord rejects legacy message fields when Components V2 is enabled,
+  // including fields that reach the REST payload as undefined.
+  delete normalized.content;
+  delete normalized.embeds;
+  delete normalized.poll;
+  delete normalized.stickerIds;
+  return normalized;
+}
+
 async function buildAuditPayload(guild, page = 0) {
   const filter = auditFilterState.get(String(guild.id)) || {};
   const result = await getManager().listAuditLog(guild.id, { page, limit: 10, ...filter });
@@ -520,7 +532,7 @@ async function showPrivatePanel(interaction, payload, update = false) {
     return;
   }
   if (update && (interaction.message || interaction.deferred || interaction.replied) && (!boardMessage || shouldUpdateBoard)) {
-    const cleanPayload = { ...payload };
+    const cleanPayload = normalizeComponentsV2Payload({ ...payload });
     delete cleanPayload.ephemeral;
     const currentContent = String(interaction.message?.content || '');
     const currentCounter = currentContent.match(/^\*\*[^\n]*(?:Groups|Points)[^\n]*\*\*/)?.[0];
