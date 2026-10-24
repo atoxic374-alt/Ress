@@ -717,7 +717,7 @@ async function createGroup(guild, { name, description = '', ownerId, color = '#5
     const existingRows = await dbManager.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status = 'active'", [guild.id]);
     const existing = existingRows.map(hydrate).find(group => String(group.owner_id) === String(owner.id) || group.memberIds.includes(String(owner.id)) || group.managerIds.includes(String(owner.id)));
     if (existing) throw new Error(String(existing.owner_id) === String(owner.id) ? 'OWNER_ALREADY_HAS_GROUP' : 'USER_ALREADY_IN_GROUP');
-    const now = Date.now(); let role = null; let text = null; let thread = null; let voice = null; let leaderRole = null; let leaderRoleAdded = false; let createdGroupId = null; const created = [];
+    const now = Date.now(); let role = null; let text = null; let thread = null; let voice = null; let leaderRole = null; let leaderRoleAdded = false; let createdGroupId = null; let reusedSharedText = false; const created = [];
     try {
       role = await guild.roles.create({ name: groupName.slice(0, 100), color: color || '#5865F2', reason: 'Create managed group' }); created.push(['role', role]);
       if (settings.mainRoleId) {
@@ -735,11 +735,20 @@ async function createGroup(guild, { name, description = '', ownerId, color = '#5
         if (!leaderRole) throw new Error('LEADER_ROLE_INVALID');
         if (!owner.roles.cache.has(leaderRole.id)) { await owner.roles.add(leaderRole, 'Managed group leader role'); leaderRoleAdded = true; }
       }
-      if (settings.chatMode === GROUP_CHAT_MODES.THREADS) { text = await guild.channels.create({ name: 'groups-chat', type: ChannelType.GuildText, parent: settings.textCategoryId, reason: 'Create managed groups thread parent' }); created.push(['channel', text]); thread = await text.threads.create({ name: groupName.slice(0, 100), type: ChannelType.PrivateThread, invitable: false, reason: 'Create managed group thread' }); created.push(['thread', thread]); await thread.members.add(owner.id); }
+      if (settings.chatMode === GROUP_CHAT_MODES.THREADS) {
+        const sharedTextId = existingRows.map(row => row.text_channel_id).find(Boolean);
+        text = sharedTextId && (guild.channels.cache.get(String(sharedTextId)) || await guild.channels.fetch(String(sharedTextId)).catch(() => null));
+        if (text?.type === ChannelType.GuildText) reusedSharedText = true;
+        else text = await guild.channels.create({ name: 'groups-chat', type: ChannelType.GuildText, parent: settings.textCategoryId, reason: 'Create shared managed groups thread parent' });
+        if (!reusedSharedText) created.push(['channel', text]);
+        thread = await text.threads.create({ name: groupName.slice(0, 100), type: ChannelType.PrivateThread, invitable: false, reason: 'Create managed group thread' });
+        created.push(['thread', thread]); await thread.members.add(owner.id);
+      }
       else { text = await guild.channels.create({ name: `📝・${groupName.slice(0, 90)}`, type: ChannelType.GuildText, parent: settings.textCategoryId, reason: 'Create managed group text channel' }); created.push(['channel', text]); }
       voice = await guild.channels.create({ name: groupName.slice(0, 100), type: ChannelType.GuildVoice, parent: settings.voiceCategoryId, reason: 'Create managed group voice channel' }); created.push(['voice', voice]);
       const overwrites = [{ id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] }, { id: role.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.SendMessagesInThreads, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.Speak] }];
-      await text.permissionOverwrites.set(overwrites, 'Secure managed group text space').catch(error => { throw Object.assign(new Error('GROUP_TEXT_PERMISSIONS_FAILED'), { cause: error }); });
+      if (reusedSharedText) await text.permissionOverwrites.edit(role.id, { ViewChannel: true, SendMessages: true, SendMessagesInThreads: true, ReadMessageHistory: true }, { reason: 'Add managed group role to shared group chat' }).catch(error => { throw Object.assign(new Error('GROUP_TEXT_PERMISSIONS_FAILED'), { cause: error }); });
+      else await text.permissionOverwrites.set(overwrites, 'Secure managed group text space').catch(error => { throw Object.assign(new Error('GROUP_TEXT_PERMISSIONS_FAILED'), { cause: error }); });
       await voice.permissionOverwrites.set(overwrites, 'Secure managed group voice space').catch(error => { throw Object.assign(new Error('GROUP_VOICE_PERMISSIONS_FAILED'), { cause: error }); });
       const row = await dbManager.run(`INSERT INTO managed_groups(guild_id,name,description,owner_id,manager_ids_json,member_ids_json,blocked_ids_json,role_id,text_channel_id,thread_id,voice_channel_id,color,emoji,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [guild.id, groupName, String(description).slice(0, 1000), owner.id, '[]', JSON.stringify([owner.id]), '[]', role.id, text.id, thread?.id || null, voice.id, color || '#5865F2', emoji, now, now]);
       createdGroupId = row.id ?? row.lastID;

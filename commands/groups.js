@@ -454,6 +454,69 @@ async function restoreThreadMember(thread, userId) {
   catch (error) { console.error('[groups] failed to restore thread member:', thread.id, userId, error?.message || error); return false; }
 }
 
+async function syncGroupThreadMembers(guild, group, thread, role = null) {
+  if (!thread?.members?.add) return [];
+  const roleMemberIds = role?.members ? [...role.members.keys()] : [];
+  const memberIds = [...new Set([...groupResourceMemberIds(group), ...roleMemberIds].filter(Boolean).map(String))];
+  const failed = [];
+  await runWithConcurrency(memberIds, 4, async userId => {
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (member?.user?.bot) return;
+    if (!(await restoreThreadMember(thread, userId))) failed.push(userId);
+  });
+  return failed;
+}
+
+async function consolidateThreadGroupChats(guild, settings, groups) {
+  if (settings.chatMode !== 'threads' || !groups.length) return;
+  const linkedParentIds = [...new Set(groups.map(group => String(group.text_channel_id || '')).filter(Boolean))];
+  const parents = [];
+  for (const id of linkedParentIds) {
+    const channel = guild.channels.cache.get(id) || await guild.channels.fetch(id).catch(() => null);
+    if (channel?.type === ChannelType.GuildText) parents.push(channel);
+  }
+  let canonical = parents[0] || null;
+  if (!canonical) {
+    canonical = await withDiscordRetry(() => guild.channels.create({
+      name: 'groups-chat', type: ChannelType.GuildText, parent: settings.textCategoryId || undefined,
+      permissionOverwrites: [{ id: guild.roles.everyone.id, deny: ['ViewChannel'] }],
+      reason: 'Create shared managed group chat parent'
+    }));
+  }
+  const textPermission = { ViewChannel: true, SendMessages: true, SendMessagesInThreads: true, ReadMessageHistory: true };
+  const managedThreadIds = new Set(groups.map(group => String(group.thread_id || '')).filter(Boolean));
+  for (const group of groups) {
+    const role = group.role_id && (guild.roles.cache.get(String(group.role_id)) || await guild.roles.fetch(String(group.role_id)).catch(() => null));
+    if (role) await canonical.permissionOverwrites.edit(role.id, textPermission, { reason: 'Sync shared managed group chat permissions' }).catch(() => {});
+    let thread = group.thread_id && (guild.channels.cache.get(String(group.thread_id)) || await guild.channels.fetch(String(group.thread_id)).catch(() => null));
+    const oldParentId = String(group.text_channel_id || '');
+    if (!thread?.isThread?.() || thread.parentId !== canonical.id) {
+      const replacement = await withDiscordRetry(() => canonical.threads.create({
+        name: String(group.name || 'Group').slice(0, 100), type: ChannelType.PrivateThread, invitable: false,
+        reason: 'Move managed group thread to shared group chat'
+      }));
+      if (thread?.isThread?.()) {
+        managedThreadIds.delete(thread.id);
+        await thread.delete('Replace managed group thread in shared group chat').catch(() => {});
+      }
+      thread = replacement;
+      managedThreadIds.add(thread.id);
+      await gm.updateGroup(guild.id, group.id, { text_channel_id: canonical.id, thread_id: thread.id, updated_at: Date.now() }, null);
+    } else if (oldParentId !== canonical.id) {
+      await gm.updateGroup(guild.id, group.id, { text_channel_id: canonical.id, updated_at: Date.now() }, null);
+    }
+    const failed = await syncGroupThreadMembers(guild, group, thread, role);
+    if (failed.length) await gm.audit(guild.id, null, group.id, 'group_thread_member_sync_failed', { userIds: failed }).catch(() => {});
+  }
+  for (const parent of parents) {
+    if (parent.id === canonical.id) continue;
+    const remainingThreads = await threadChoices(parent).catch(() => []);
+    const hasUnmanagedThreads = remainingThreads.some(thread => !managedThreadIds.has(thread.id));
+    if (!hasUnmanagedThreads) await parent.delete('Remove duplicate managed group chat parent').catch(() => {});
+    else console.warn('[groups] kept duplicate group-chat parent because it contains unmanaged threads:', parent.id);
+  }
+}
+
 async function runWithConcurrency(items, concurrency, worker) {
   const queue = [...items];
   const workers = Array.from({ length: Math.min(Math.max(1, concurrency), queue.length || 1) }, async () => {
@@ -1732,14 +1795,19 @@ const reconciliationSignatures = new Map();
 const reconciliationLocks = new Map();
 const reconciliationCursors = new Map();
 async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
-  const allGroups = (await gm.listGroups(guild.id, true)).filter(group => group.status !== 'deleted');
+  let allGroups = (await gm.listGroups(guild.id, true)).filter(group => group.status !== 'deleted');
   const cursorKey = String(guild.id);
   const start = allGroups.length ? Number(reconciliationCursors.get(cursorKey) || 0) % allGroups.length : 0;
-  const groups = allGroups.length > 25 ? [...allGroups.slice(start), ...allGroups.slice(0, start)].slice(0, 25) : allGroups;
+  let groups = allGroups.length > 25 ? [...allGroups.slice(start), ...allGroups.slice(0, start)].slice(0, 25) : allGroups;
   if (allGroups.length) reconciliationCursors.set(cursorKey, (start + groups.length) % allGroups.length);
   const issues = [];
   const botCache = new Map();
   const settings = await gm.getSettings(guild.id);
+  await consolidateThreadGroupChats(guild, settings, allGroups).catch(error => {
+    console.error('[groups] shared group-chat consolidation failed:', guild.id, error?.message || error);
+  });
+  allGroups = (await gm.listGroups(guild.id, true)).filter(group => group.status !== 'deleted');
+  groups = allGroups.length > 25 ? [...allGroups.slice(start), ...allGroups.slice(0, start)].slice(0, 25) : allGroups;
   const isBotId = async userId => {
     const id = String(userId);
     if (botCache.has(id)) return botCache.get(id);
@@ -2408,7 +2476,9 @@ async function threadChoices(parent) {
 }
 async function assertExclusive(guild, group, channel) {
   const others = (await gm.listGroups(guild.id, true)).filter(g => g.status !== 'deleted' && Number(g.id) !== Number(group.id));
-  if (others.some(g => gm.channelBelongs(g, channel.id))) throw new Error('SHARED_CHANNEL');
+  const sharedThreadParent = channel.type === ChannelType.GuildText
+    && others.some(g => String(g.text_channel_id || '') === String(channel.id));
+  if (others.some(g => gm.channelBelongs(g, channel.id)) && !sharedThreadParent) throw new Error('SHARED_CHANNEL');
   // Threads inherit overwrites from their parent. Only a dedicated, linked parent is safe.
   if (channel.type === ChannelType.GuildText && channel.threads) {
     const threads = await threadChoices(channel);
