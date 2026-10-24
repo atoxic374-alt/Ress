@@ -2572,9 +2572,10 @@ client.on('messageReactionAdd', async (reaction, user) => {
   }
   try {
     if (!(await prepareReaction(reaction))) return;
-    const { getDatabase } = require('./utils/database');
-    const dbManager = getDatabase();
-    if (!dbManager?.isInitialized) return;
+    const database = require('./utils/database');
+    await database.initializeDatabase();
+    const dbManager = database.getDatabase();
+    if (!dbManager?.isInitialized) throw new Error('ACTIVITY_DATABASE_NOT_INITIALIZED');
     const { trackUserActivity } = require('./utils/userStatsCollector');
     await trackUserActivity(user.id, 'reaction', {
       guildId: reaction.message.guild.id,
@@ -2926,10 +2927,9 @@ client.on('messageCreate', async message => {
   // تتبع النشاط للمستخدمين العاديين (معالج واحد فقط)
   if (message.guild) {
     try {
-      const { getDatabase } = require('./utils/database');
-      const dbManager = getDatabase();
-
-      // التحقق من أن قاعدة البيانات مهيأة
+      const database = require('./utils/database');
+      await database.initializeDatabase();
+      const dbManager = database.getDatabase();
       if (dbManager && dbManager.isInitialized) {
         const { trackUserActivity } = require('./utils/userStatsCollector');
         await trackUserActivity(message.author.id, 'message', {
