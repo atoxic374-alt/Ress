@@ -408,6 +408,8 @@ module.exports = {
                     candidateMention: `<@${candidateId}>`,
                     requesterId: interaction.user.id,
                     requesterMention: `<@${interaction.user.id}>`,
+                    messageId: sentMessage.id,
+                    channelId: sentMessage.channelId || applicationChannel.id,
                     createdAt: new Date().toISOString(),
                     userStats: userStats
                 };

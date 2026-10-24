@@ -911,6 +911,49 @@ function loadAdminRoles() {
     }
 }
 
+function containsApplicationComponent(components, applicationId) {
+    const approveId = `admin_approve_${applicationId}`;
+    const rejectId = `admin_reject_modal_trigger_${applicationId}`;
+    const visit = value => {
+        if (!value || typeof value !== 'object') return false;
+        const customId = String(value.customId || value.custom_id || '');
+        if (customId === approveId || customId === rejectId) return true;
+        return Object.values(value).some(child => Array.isArray(child)
+            ? child.some(visit)
+            : visit(child));
+    };
+    return visit(components);
+}
+
+async function hasLiveAdminPendingApplicationMessage(guild, applicationId, application) {
+    if (!guild || !applicationId || !application?.candidateId) return false;
+    const settings = readJSONFile(DATA_FILES.adminApplications, {})?.settings || {};
+    const channelId = String(application.channelId || settings.applicationChannel || '');
+    if (!channelId) return false;
+    const channel = guild.channels.cache.get(channelId) || await guild.channels.fetch(channelId).catch(() => null);
+    if (!channel?.messages?.fetch) return false;
+    if (application.messageId) {
+        const message = await channel.messages.fetch(String(application.messageId)).catch(() => null);
+        if (message && containsApplicationComponent(message.components, applicationId)) return true;
+    }
+    const messages = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+    return [...(messages?.values?.() || [])].some(message => {
+        if (message.author?.bot === false) return false;
+        const mentionsCandidate = String(message.content || '').includes(`<@${application.candidateId}>`)
+            || message.embeds?.some(embed => JSON.stringify(embed).includes(String(application.candidateId)));
+        return mentionsCandidate && containsApplicationComponent(message.components, applicationId);
+    });
+}
+
+async function hasAnyLiveAdminPendingApplicationMessage(guild, pendingApplications, userId) {
+    const entries = Object.entries(pendingApplications || {}).filter(([, application]) =>
+        String(application?.candidateId || '') === String(userId));
+    for (const [applicationId, application] of entries) {
+        if (await hasLiveAdminPendingApplicationMessage(guild, applicationId, application)) return true;
+    }
+    return false;
+}
+
 const memberRefreshInFlight = new Map();
 
 function releaseMemberRefreshSlot() {
@@ -3457,9 +3500,7 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
                     .filter(Boolean));
                 const applications = readJSONFile(DATA_FILES.adminApplications, {});
                 const pendingApplications = applications?.pendingApplications || {};
-                const hasPendingApplication = Object.values(pendingApplications).some(application =>
-                    String(application?.candidateId || '') === String(userId)
-                );
+                const hasPendingApplication = await hasAnyLiveAdminPendingApplicationMessage(newMember.guild, pendingApplications, userId);
                 if (hasPendingApplication && adminRoleIds.size > 0) {
                     for (const [roleId, role] of addedRoles) {
                         const bypassKey = `${newMember.guild.id}_${userId}_${roleId}`;
@@ -3789,7 +3830,7 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
                         }
 
                         // فحص إذا كان العضو لديه طلب معلق
-                        const hasPending = adminApps.pendingApplications && Object.values(adminApps.pendingApplications).some(app => app.candidateId === userId);
+                        const hasPending = await hasAnyLiveAdminPendingApplicationMessage(newMember.guild, adminApps.pendingApplications, userId);
                         
                         // فحص إذا كان العضو مرفوضاً (كولداون نشط)
                         const cooldown = adminApps.rejectedCooldowns?.[userId];
