@@ -1439,6 +1439,48 @@ class DatabaseManager {
         try {
             const normalizedPeriod = String(period || 'weekly').toLowerCase();
             const categoryNames = new Set(['voice', 'chat', 'reactions', 'joins']);
+            // توقيع tops.js الحالي: getPeriodActivityStats(period, null, guildId)
+            // يعيد صفاً لكل مستخدم مع جميع مقاييس النشاط.
+            if (period === null && ['daily', 'day', 'weekly', 'week', 'monthly', 'month', 'total', 'all', 'lifetime'].includes(String(userId).toLowerCase())) {
+                const requestedPeriod = String(userId).toLowerCase();
+                if (['total', 'all', 'lifetime'].includes(requestedPeriod)) {
+                    const rows = await this.all(`
+                        SELECT user_id, total_voice_time AS voiceTime, total_messages AS messages,
+                               total_reactions AS reactions, total_voice_joins AS voiceJoins
+                        FROM user_totals
+                        WHERE total_voice_time > 0 OR total_messages > 0
+                           OR total_reactions > 0 OR total_voice_joins > 0
+                    `);
+                    return (rows || []).map(row => ({ ...row,
+                        user_id: String(row.user_id),
+                        voiceTime: Number(row.voiceTime || 0), messages: Number(row.messages || 0),
+                        reactions: Number(row.reactions || 0), voiceJoins: Number(row.voiceJoins || 0)
+                    }));
+                }
+                const now = moment().tz('Asia/Riyadh');
+                const startDate = ['daily', 'day'].includes(requestedPeriod)
+                    ? now.format('YYYY-MM-DD')
+                    : ['monthly', 'month'].includes(requestedPeriod)
+                        ? now.clone().startOf('month').format('YYYY-MM-DD')
+                        : now.clone().startOf('week').format('YYYY-MM-DD');
+                const dateClause = ['daily', 'day'].includes(requestedPeriod) ? 'date = ?' : 'date >= ?';
+                const source = guildId
+                    ? `(SELECT user_id, date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ?
+                        UNION ALL SELECT user_id, date, voice_time, messages, reactions, voice_joins FROM daily_activity)`
+                    : 'daily_activity';
+                const params = guildId ? [String(guildId), startDate] : [startDate];
+                const rows = await this.all(`
+                    SELECT user_id, COALESCE(SUM(voice_time), 0) AS voiceTime,
+                           COALESCE(SUM(messages), 0) AS messages, COALESCE(SUM(reactions), 0) AS reactions,
+                           COALESCE(SUM(voice_joins), 0) AS voiceJoins
+                    FROM ${source} WHERE ${dateClause} GROUP BY user_id
+                `, params);
+                return (rows || []).map(row => ({ ...row,
+                    user_id: String(row.user_id),
+                    voiceTime: Number(row.voiceTime || 0), messages: Number(row.messages || 0),
+                    reactions: Number(row.reactions || 0), voiceJoins: Number(row.voiceJoins || 0)
+                }));
+            }
             if (categoryNames.has(String(userId).toLowerCase())) {
                 const category = String(userId).toLowerCase();
                 const metricByCategory = {
