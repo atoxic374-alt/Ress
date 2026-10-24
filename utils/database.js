@@ -612,6 +612,109 @@ class DatabaseManager {
                 created_at INTEGER NOT NULL
             )`,
             `CREATE INDEX IF NOT EXISTS idx_bonus_audit_guild_time ON bonus_audit_log(guild_id, created_at DESC)`,
+            // مخطط نظام القروبات الأساسي؛ groupManager.schema() يبقى متوافقًا معه.
+            `CREATE TABLE IF NOT EXISTS group_system_settings (
+                guild_id TEXT PRIMARY KEY,
+                settings_json TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )`,
+            `CREATE TABLE IF NOT EXISTS group_operation_locks (
+                lock_key TEXT PRIMARY KEY,
+                owner_token TEXT NOT NULL,
+                locked_until INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )`,
+            `CREATE TABLE IF NOT EXISTS managed_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                owner_id TEXT NOT NULL,
+                manager_ids_json TEXT NOT NULL DEFAULT '[]',
+                member_ids_json TEXT NOT NULL DEFAULT '[]',
+                blocked_ids_json TEXT NOT NULL DEFAULT '[]',
+                role_id TEXT,
+                text_channel_id TEXT,
+                thread_id TEXT,
+                voice_channel_id TEXT,
+                color TEXT DEFAULT '#5865F2',
+                emoji TEXT,
+                avatar_url TEXT,
+                points INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'active',
+                sync_state TEXT NOT NULL DEFAULT 'ready',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                archived_at INTEGER
+            )`,
+            `CREATE TABLE IF NOT EXISTS group_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                group_id INTEGER,
+                actor_id TEXT,
+                action TEXT NOT NULL,
+                details_json TEXT DEFAULT '{}',
+                created_at INTEGER NOT NULL
+            )`,
+            `CREATE TABLE IF NOT EXISTS group_runtime_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                group_id INTEGER,
+                operation TEXT NOT NULL,
+                level TEXT NOT NULL,
+                details_json TEXT DEFAULT '{}',
+                created_at INTEGER NOT NULL
+            )`,
+            `CREATE TABLE IF NOT EXISTS group_points_rules (
+                guild_id TEXT NOT NULL,
+                metric TEXT NOT NULL,
+                threshold INTEGER NOT NULL,
+                points INTEGER NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, metric)
+            )`,
+            `CREATE TABLE IF NOT EXISTS group_member_points (
+                guild_id TEXT NOT NULL,
+                group_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                points INTEGER NOT NULL DEFAULT 0,
+                messages INTEGER NOT NULL DEFAULT 0,
+                voice_ms INTEGER NOT NULL DEFAULT 0,
+                reactions INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, group_id, user_id)
+            )`,
+            `CREATE TABLE IF NOT EXISTS group_activity_events (
+                guild_id TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, event_id)
+            )`,
+            `CREATE TABLE IF NOT EXISTS group_points_ledger (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                group_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                metric TEXT NOT NULL,
+                activity_amount INTEGER NOT NULL DEFAULT 0,
+                points_delta INTEGER NOT NULL DEFAULT 0,
+                member_before INTEGER NOT NULL DEFAULT 0,
+                member_after INTEGER NOT NULL DEFAULT 0,
+                group_before INTEGER NOT NULL DEFAULT 0,
+                group_after INTEGER NOT NULL DEFAULT 0,
+                reason TEXT NOT NULL,
+                event_id TEXT,
+                created_at INTEGER NOT NULL
+            )`,
+            `CREATE TABLE IF NOT EXISTS group_voice_sessions (
+                guild_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                checkpoint_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            )`,
             `CREATE TABLE IF NOT EXISTS bonus_migrations (
                 migration_key TEXT PRIMARY KEY,
                 applied_at INTEGER NOT NULL
@@ -751,7 +854,18 @@ class DatabaseManager {
             'CREATE INDEX IF NOT EXISTS idx_user_totals_last_activity ON user_totals(last_activity)',
             'CREATE INDEX IF NOT EXISTS idx_message_channels_user_id ON message_channels(user_id)',
             'CREATE INDEX IF NOT EXISTS idx_guild_message_channels_user ON guild_message_channels(guild_id, user_id, message_count)',
-            'CREATE INDEX IF NOT EXISTS idx_user_levels_user_id ON user_levels(user_id)'
+            'CREATE INDEX IF NOT EXISTS idx_user_levels_user_id ON user_levels(user_id)',
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_groups_active_name ON managed_groups(guild_id, name) WHERE status = \'active\'',
+            'CREATE INDEX IF NOT EXISTS idx_managed_groups_role_lookup ON managed_groups(guild_id, role_id, status)',
+            'CREATE INDEX IF NOT EXISTS idx_managed_groups_text_lookup ON managed_groups(guild_id, text_channel_id, status)',
+            'CREATE INDEX IF NOT EXISTS idx_managed_groups_thread_lookup ON managed_groups(guild_id, thread_id, status)',
+            'CREATE INDEX IF NOT EXISTS idx_managed_groups_voice_lookup ON managed_groups(guild_id, voice_channel_id, status)',
+            'CREATE INDEX IF NOT EXISTS idx_managed_groups_guild_status ON managed_groups(guild_id, status, points DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_group_audit_log_lookup ON group_audit_log(guild_id, group_id, created_at DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_group_audit_log_time ON group_audit_log(guild_id, created_at DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_group_member_points_user ON group_member_points(guild_id, user_id, group_id)',
+            'CREATE INDEX IF NOT EXISTS idx_group_points_ledger_lookup ON group_points_ledger(guild_id, group_id, created_at DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_group_activity_events_created ON group_activity_events(guild_id, created_at)'
         ];
 
         for (const sql of indexes) {
