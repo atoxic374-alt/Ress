@@ -320,8 +320,8 @@ function selectMemberGroup(groups, userId, channelId, requestedGroupId = null) {
 }
 function topGroupsButtons(canManage = false, manageableGroupId = null) {
   const buttons = [
-    button('groups_top:rank', 'MY RANK', ButtonStyle.Secondary, '🏆'),
-    button('groups_top:group', 'MY GROUP', ButtonStyle.Secondary, '👥'),
+    button('groups_top:rank', 'MY RANK', ButtonStyle.Secondary, '<:emoji_17:1485476100774821938>'),
+    button('groups_top:group', 'MY GROUP', ButtonStyle.Secondary, '<:emoji_18:1485476234199826472>'),
     button('groups_top:manage', 'MANAGE', ButtonStyle.Secondary, '<:emoji_30:1465383419641856233>'),
     button('groups_top:avatar', 'AVATAR', ButtonStyle.Secondary, '<:emoji_3:1465210427494502400>')
   ];
@@ -371,7 +371,8 @@ async function buildTopGroupsPayload(guild, { viewerId = null, channelId = null 
   // Keep this dashboard as a legacy image message: unlike interactive
   // confirmations, the image already contains the presentation and should not
   // be wrapped in an extra Components V2 container.
-  return { title: 'TOP GROUPS', content: 'Group ranking by activity points. Updates automatically every 30 seconds.', files: [attachment], components: topGroupsButtons(canManage), allowedMentions: { parse: [] } };
+  const nextRefresh = Math.ceil((Date.now() + TOP_BOARD_REFRESH_MS) / 1000);
+  return { title: 'TOP GROUPS', content: `Group ranking by activity points.\nRefresh in : <t:${nextRefresh}:R>`, files: [attachment], components: topGroupsButtons(canManage), allowedMentions: { parse: [] } };
 }
 function formatGroupDate(value) {
   const date = new Date(Number(value));
@@ -745,12 +746,12 @@ async function handleTopGroupsInteraction(interaction, action, parts = []) {
     if (String(group.owner_id) === String(interaction.user.id)) {
       return reply(interaction, { content: 'انقل ملكية القروب أولًا قبل المغادرة.' });
     }
-    return interaction.update(leaveGroupPrompt(interaction.guild, group));
+    return reply(interaction, leaveGroupPrompt(interaction.guild, group), true);
   }
   if (action === 'leave-cancel') {
     const c = baseContainer(interaction.guild, 'LEAVE CANCELLED', 'لم يتم تغيير عضويتك.');
     c.addActionRowComponents(new ActionRowBuilder().addComponents(button('groups_top:group', 'العودة إلى قروبي', ButtonStyle.Secondary)));
-    return interaction.update(componentsV2Payload(c));
+    return reply(interaction, componentsV2Payload(c), true);
   }
   if (action === 'leave-confirm') {
     await interaction.deferUpdate();
@@ -765,7 +766,6 @@ async function handleTopGroupsInteraction(interaction, action, parts = []) {
       const settings = await gm.getSettings(interaction.guild.id);
       await leaveGroupMember(interaction.guild, settings, group, interaction.user.id, interaction.user.id);
       activityCache.delete(String(interaction.guild.id));
-      if (interaction.channel?.send) await sendTopGroupsPanel(interaction.channel, interaction.guild, { channelId: interaction.channelId }).catch(() => null);
       return reply(interaction, componentsV2Payload(baseContainer(interaction.guild, 'LEFT GROUP', `تمت مغادرة **${safe(group.name, 100)}** وإزالة صلاحيات القروب.`)));
     } catch (error) {
       console.error('[groups] member leave failed:', error?.message || error);

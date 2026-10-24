@@ -262,14 +262,11 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
           new ButtonBuilder().setCustomId(`groups_top:leave:${group.id}`).setLabel('LEAVE GROUP').setStyle(ButtonStyle.Danger)
         ));
       }
-      await message.reply(responsePayload({
-        title: 'MY GROUP',
-        content: `بيانات القروب **${String(group.name || 'Group').slice(0, 100)}**. استخدم الزر أسفل الصورة لمغادرة القروب.`,
-        thumbnail: groupThumbnail(message.guild, group),
+      await message.reply({
         files: [await renderInfo({ guild: message.guild, group, owner, managers: managers.filter(Boolean), accentColor: null })],
         components,
         allowedMentions: { parse: [] }
-      })).catch(() => {});
+      }).catch(() => {});
       return true;
     }
     if (command === 'اعضاء' || command === 'أعضاء' || command === 'members') {
