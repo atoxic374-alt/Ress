@@ -1,8 +1,7 @@
 const {
   ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ChannelSelectMenuBuilder,
-  AuditLogEvent, ChannelType, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder, Routes,
+  AuditLogEvent, ChannelType, ModalBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder,
   TextInputBuilder, TextInputStyle, UserSelectMenuBuilder, PermissionsBitField,
-  ContainerBuilder, TextDisplayBuilder, MessageFlags
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
@@ -410,118 +409,47 @@ function buildPublicSettingsRows() {
   ];
 }
 
-function structurePrivateResponse(payload) {
-  if (!payload?.content || payload.embeds?.length || payload.files?.length || payload.attachments?.length) return payload;
-  const raw = String(payload.content).trim();
-  if (!raw) return payload;
-  const lines = raw.split(/\n+/).map(line => line.trim()).filter(Boolean);
-  const first = lines.shift() || raw;
+function structurePrivateResponse(payload = {}) {
+  const normalized = { ...payload };
   const responseTitles = {
-    success: 'ACTION COMPLETED',
-    failure: 'ACTION FAILED',
-    permission: 'ACCESS DENIED',
-    confirmation: 'CONFIRMATION REQUIRED',
-    cancelled: 'ACTION CANCELLED',
-    empty: 'NO RESULTS',
-    info: 'BONUS UPDATE'
+    success: 'ACTION COMPLETED', failure: 'ACTION FAILED', permission: 'ACCESS DENIED',
+    confirmation: 'CONFIRMATION REQUIRED', cancelled: 'ACTION CANCELLED',
+    empty: 'NO RESULTS', info: 'BONUS UPDATE'
   };
-  const responseType = Object.prototype.hasOwnProperty.call(responseTitles, payload.responseType) ? payload.responseType : 'info';
-  const semanticTitle = responseTitles[responseType];
-  const title = String(payload.title || semanticTitle).toUpperCase();
-  const fields = [];
-  const fieldNames = {
-    'الإجمالي الحالي': 'Current Total', 'بعد الإزالة': 'After Removal', 'رصيده الحالي': 'Current Balance',
-    'رصيده بعد الإزالة': 'Balance After Removal', 'المنفذ': 'Actor', 'العضو': 'Target User',
-    'القروب': 'Group', 'الرول': 'Role', 'المالك': 'Owner', 'المدة': 'Duration', 'الحالة': 'Status'
-  };
-  for (const [index, line] of lines.entries()) {
-    const separator = line.match(/^([^:：]{1,80})[:：]\s*(.+)$/);
-    const rawName = separator ? separator[1].trim() : `Details ${index + 1}`;
-    fields.push({ name: fieldNames[rawName] || rawName, value: (separator ? separator[2] : line).slice(0, 1024), inline: false });
+  const responseType = Object.prototype.hasOwnProperty.call(responseTitles, normalized.responseType)
+    ? normalized.responseType : 'info';
+  const rawContent = typeof normalized.content === 'string' ? normalized.content.trim() : '';
+  if (!normalized.embeds?.length && rawContent) {
+    const lines = rawContent.split(/\n+/).map(line => line.trim()).filter(Boolean);
+    const first = lines.shift() || rawContent;
+    const title = String(normalized.title || responseTitles[responseType]).toUpperCase();
+    const embed = colorManager.createEmbed().setTitle(title).setDescription(first.slice(0, 4096));
+    if (lines.length) embed.addFields({ name: 'Details', value: lines.join('\n').slice(0, 1024), inline: false });
+    normalized.embeds = [embed];
   }
-  const mentions = [...raw.matchAll(/<@!?\d+>|<@&\d+>|<#\d+>/g)].map(match => match[0]);
-  if (responseType === 'success') {
-    if (mentions.length) fields.unshift({ name: 'Target', value: [...new Set(mentions)].join(' • '), inline: true });
-    if (/إيقاف|disabled|deactivated/i.test(raw)) fields.push({ name: 'Status', value: 'Disabled', inline: true });
-    else if (/تفعيل|activated|enabled/i.test(raw)) fields.push({ name: 'Status', value: 'Enabled', inline: true });
-    else if (/تحديث|updated|saved|اعتماد|نشر|published/i.test(raw)) fields.push({ name: 'Status', value: 'Updated', inline: true });
-    if (/دبل|double/i.test(raw)) fields.push({ name: 'Feature', value: 'Double Bonus ×2', inline: true });
-  }
-  const description = first.slice(0, 3500);
-  const container = new ContainerBuilder().addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`## ${title}\n${description || 'تمت معالجة الطلب.'}`)
-  );
-  if (fields.length) {
-    const details = fields.slice(0, 25).map(field => `**${field.name}**\n${field.value}`).join('\n\n').slice(0, 3900);
-    if (details) container.addTextDisplayComponents(new TextDisplayBuilder().setContent(details));
-  }
-  const normalized = {
-    ...payload,
-    components: [container, ...(Array.isArray(payload.components) ? payload.components : [])],
-    allowedMentions: payload.allowedMentions || { parse: [] },
-    flags: Number(payload.flags || 0) | MessageFlags.IsComponentsV2,
-    __bonusActionTitle: responseType === 'success' ? 'ACTION COMPLETED' : semanticTitle
-  };
+  delete normalized.flags;
   delete normalized.title;
   delete normalized.content;
-  delete normalized.embeds;
   delete normalized.responseType;
+  if (responseType === 'success') normalized.__bonusActionTitle = 'ACTION COMPLETED';
   return normalized;
 }
 
 function isComponentsV2Message(message) {
-  if (message?.flags?.has?.(MessageFlags.IsComponentsV2)) return true;
+  if (message?.flags?.has?.(32768)) return true;
   const rawFlags = typeof message?.flags === 'number' ? message.flags : message?.flags?.bitfield;
-  return (Number(rawFlags || 0) & MessageFlags.IsComponentsV2) !== 0;
+  return (Number(rawFlags || 0) & 32768) !== 0;
 }
 
-function convertEmbedsToPrivateV2(payload) {
-  if (!payload?.embeds?.length) return payload;
-  const lines = [];
-  for (const rawEmbed of payload.embeds) {
-    const embed = typeof rawEmbed?.toJSON === 'function' ? rawEmbed.toJSON() : (rawEmbed?.data || rawEmbed || {});
-    if (embed.title) lines.push(`## ${String(embed.title).slice(0, 200)}`);
-    if (embed.description) lines.push(String(embed.description).slice(0, 3500));
-    for (const field of Array.isArray(embed.fields) ? embed.fields : []) {
-      if (field?.name || field?.value) lines.push(`**${String(field.name || 'Details').slice(0, 200)}**\n${String(field.value || '').slice(0, 1024)}`);
-    }
-    if (embed.footer?.text) lines.push(`-# ${String(embed.footer.text).slice(0, 300)}`);
-  }
-  const normalized = { ...payload, content: [payload.content, ...lines].filter(Boolean).join('\n\n') };
-  delete normalized.embeds;
-  return structurePrivateResponse(normalized);
-}
-
-function normalizeComponentsV2Payload(payload) {
-  if (!payload || (Number(payload.flags || 0) & MessageFlags.IsComponentsV2) === 0) return payload;
-  const normalized = { ...payload };
-  // Discord rejects legacy message fields when Components V2 is enabled,
-  // including fields that reach the REST payload as undefined.
-  delete normalized.content;
-  delete normalized.embeds;
-  delete normalized.poll;
-  delete normalized.stickerIds;
+function legacyPanelPayload(payload = {}) {
+  const normalized = structurePrivateResponse(payload);
+  delete normalized.__bonusActionTitle;
+  delete normalized.ephemeral;
   return normalized;
 }
 
-async function editPrivateV2Message(interaction, payload) {
-  if (!interaction?.client?.rest?.patch || !interaction?.token) throw new Error('BONUS_V2_EDIT_UNAVAILABLE');
-  if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
-  const components = (Array.isArray(payload.components) ? payload.components : [])
-    .map(component => typeof component?.toJSON === 'function' ? component.toJSON() : component);
-  const body = {
-    flags: MessageFlags.IsComponentsV2,
-    components,
-    allowed_mentions: payload.allowedMentions || { parse: [] }
-  };
-  if (Array.isArray(payload.attachments)) body.attachments = payload.attachments;
-  return interaction.client.rest.patch(
-    Routes.webhookMessage(interaction.applicationId || interaction.client.application?.id, interaction.token, '@original'),
-    { body }
-  );
-}
-
 async function buildAuditPayload(guild, page = 0) {
+
   const filter = auditFilterState.get(String(guild.id)) || {};
   const result = await getManager().listAuditLog(guild.id, { page, limit: 10, ...filter });
   const fields = result.rows.map((row, index) => {
@@ -551,63 +479,48 @@ async function buildAuditPayload(guild, page = 0) {
 async function showPrivatePanel(interaction, payload, update = false) {
   if (update && interaction?.message) rememberPreviousPanel(interaction);
   const boardMessage = isBonusBoardMessage(interaction.message);
-  const currentV2 = isComponentsV2Message(interaction.message);
   const shouldUpdateBoard = boardMessage && Array.isArray(payload.files) && payload.files.length > 0;
   payload = (!boardMessage || !shouldUpdateBoard) ? structurePrivateResponse(payload) : payload;
   const completedResult = payload?.__bonusActionTitle === 'ACTION COMPLETED' || payload?.embeds?.[0]?.data?.title === 'Action Completed';
   delete payload.__bonusActionTitle;
+
   if (update && completedResult && !boardMessage) {
-    const resultPayload = { ...payload, ephemeral: true };
-    if ((Number(resultPayload.flags || 0) & MessageFlags.IsComponentsV2) !== 0) {
-      // Keep the V2 container while removing action buttons from the completed result.
-      resultPayload.components = (Array.isArray(resultPayload.components) ? resultPayload.components : []).slice(0, 1);
-    } else delete resultPayload.components;
-    const originalPayload = await buildHome(interaction.guild);
+    const resultPayload = { ...legacyPanelPayload(payload), ephemeral: true };
+    const originalPayload = legacyPanelPayload(await buildHome(interaction.guild));
+    if (isComponentsV2Message(interaction.message)) {
+      if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(() => {});
+      await interaction.deleteReply().catch(() => {});
+      await interaction.followUp(resultPayload).catch(() => {});
+      return;
+    }
     if (interaction.deferred || interaction.replied) {
       await interaction.followUp(resultPayload).catch(() => {});
-      if (currentV2 && !originalPayload.files?.length) await editPrivateV2Message(interaction, convertEmbedsToPrivateV2({ ...originalPayload, flags: MessageFlags.IsComponentsV2 })).catch(() => {});
-      else await interaction.editReply(originalPayload).catch(() => {});
+      await interaction.editReply(originalPayload).catch(() => {});
     } else {
       await interaction.update(originalPayload).catch(() => {});
       await interaction.followUp(resultPayload).catch(() => {});
     }
     return;
   }
+
   if (update && (interaction.message || interaction.deferred || interaction.replied) && (!boardMessage || shouldUpdateBoard)) {
-    let nextPayload = { ...payload };
-    if (isComponentsV2Message(interaction.message) && nextPayload.embeds?.length) {
-      nextPayload.flags = Number(nextPayload.flags || 0) | MessageFlags.IsComponentsV2;
-      nextPayload = convertEmbedsToPrivateV2(nextPayload);
+    const cleanPayload = legacyPanelPayload(payload);
+    if (isComponentsV2Message(interaction.message)) {
+      if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(() => {});
+      await interaction.deleteReply().catch(() => {});
+      await interaction.followUp({ ...cleanPayload, ephemeral: true }).catch(() => {});
+      return;
     }
-    const cleanPayload = normalizeComponentsV2Payload(nextPayload);
-    delete cleanPayload.ephemeral;
-    const currentContent = String(interaction.message?.content || '');
-    const currentCounter = currentContent.match(/^\*\*[^\n]*(?:Groups|Points)[^\n]*\*\*/)?.[0];
-    if (currentCounter) {
-      const content = String(cleanPayload.content || '');
-      const newCounter = content.match(/^\*\*[^\n]*(?:Groups|Points)[^\n]*\*\*/)?.[0];
-      const nextContent = content.replace(/^\*\*[^\n]*(?:Groups|Points)[^\n]*\*\*\n?/, '');
-      cleanPayload.content = [newCounter || currentCounter, nextContent].filter(Boolean).join('\n');
-    }
-    if (!('files' in cleanPayload) && !('attachments' in cleanPayload) && interaction.message?.attachments?.size) {
-      cleanPayload.attachments = Array.from(interaction.message.attachments.values(), attachment => ({
-        id: attachment.id, filename: attachment.name, description: attachment.description || undefined
-      }));
-    }
-    if (isBonusBoardMessage(interaction.message)) {
-      if (Array.isArray(cleanPayload.files) && cleanPayload.files.length) activeBoardPanels.delete(String(interaction.guild?.id));
-      else activeBoardPanels.set(String(interaction.guild?.id), Date.now() + 10 * 60 * 1000);
-    }
-    if (currentV2 && !cleanPayload.files?.length) await editPrivateV2Message(interaction, cleanPayload);
-    else if (interaction.deferred || interaction.replied) await interaction.editReply(cleanPayload);
+    if (interaction.deferred || interaction.replied) await interaction.editReply(cleanPayload);
     else await interaction.update(cleanPayload);
     return;
   }
+  const nextPayload = legacyPanelPayload(payload);
   if (interaction.deferred || interaction.replied) {
-    await interaction.followUp({ ...payload, ephemeral: true });
+    await interaction.followUp({ ...nextPayload, ephemeral: true });
     return;
   }
-  await interaction.reply({ ...payload, ephemeral: true });
+  await interaction.reply({ ...nextPayload, ephemeral: true });
 }
 
 function buildManagerPayload(guild, config, actorId, responsibilityPage = 0) {
@@ -1270,14 +1183,12 @@ async function handleInteraction(interaction, context = {}) {
     if (action === 'close') {
       const previous = takePreviousPanel(interaction);
       const payload = previous || { content: ' ', embeds: [], components: [], attachments: [] };
-      if (interaction.deferred || interaction.replied) await interaction.editReply(payload).catch(() => {});
-      else await interaction.update(payload).catch(() => {});
+      await showPrivatePanel(interaction, payload, true);
       return true;
     }
     if (action === 'public-close') {
       const payload = { content: ' ', embeds: [], components: [] };
-      if (interaction.deferred || interaction.replied) await interaction.editReply(payload).catch(() => {});
-      else await interaction.update(payload).catch(() => {});
+      await showPrivatePanel(interaction, payload, true);
       return true;
     }
 
@@ -1302,8 +1213,7 @@ async function handleInteraction(interaction, context = {}) {
     if (action === 'top-page') {
       const page = Math.max(0, Number(parts[0]) || 0);
       const payload = await buildBoardPayload(interaction.guild, '', page);
-      if (interaction.deferred || interaction.replied) await interaction.editReply(payload);
-      else await interaction.update(payload);
+      await showPrivatePanel(interaction, payload, true);
       return true;
     }
 
@@ -2329,8 +2239,7 @@ async function handleInteraction(interaction, context = {}) {
         return true;
       }
       const payload = await buildAdminTopPayload(interaction.guild);
-      if (interaction.deferred || interaction.replied) await interaction.editReply(payload);
-      else await interaction.update(payload);
+      await showPrivatePanel(interaction, payload, true);
       adminTopLastRenderAt.set(String(interaction.guild.id), Date.now());
       return true;
     }
