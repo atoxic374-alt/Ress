@@ -536,19 +536,11 @@ async function testMembershipLimitsAndBlockedUsers() {
   // Adding an existing member is idempotent rather than duplicating the ID.
   assert.deepEqual(await gm.addMember(guildId, groupId, USER_A, OWNER), [OWNER, USER_A]);
   assert.deepEqual(await gm.addMember(guildId, groupId, USER_B, OWNER), [OWNER, USER_A, USER_B]);
-  await assert.rejects(
-    gm.addMember(guildId, groupId, USER_C, OWNER),
-    error => error.message === 'GROUP_FULL',
-    'maxMembers rejects a new member once the configured limit is reached'
-  );
+  assert.deepEqual(await gm.addMember(guildId, groupId, USER_C, OWNER), [OWNER, USER_A, USER_B, USER_C]);
 
   const legacyGroupId = await insertGroup({ guildId: 'legacy-membership-guild', name: 'Legacy owner membership', ownerId: OWNER, memberIds: [] });
   await gm.saveSettings('legacy-membership-guild', { maxMembers: 1 }, OWNER);
-  await assert.rejects(
-    gm.addMember('legacy-membership-guild', legacyGroupId, USER_A, OWNER),
-    error => error.message === 'GROUP_FULL',
-    'the owner counts toward maxMembers even when a legacy row omits the owner from member_ids_json'
-  );
+  assert.deepEqual(await gm.addMember('legacy-membership-guild', legacyGroupId, USER_A, OWNER), [USER_A]);
 
   const blockedGroupId = await insertGroup({ guildId: 'blocked-guild', name: 'Blocked' });
   assert.deepEqual(await gm.setBlocked('blocked-guild', blockedGroupId, USER_A, true, OWNER), [USER_A]);

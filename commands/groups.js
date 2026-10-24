@@ -2835,7 +2835,6 @@ async function applyUserControl(interaction, flow, userId) {
     const allowed = flow.action === 'allow';
     const thread = flow.scope !== 'voice' && group.thread_id ? await channelById(interaction.guild, group.thread_id) : null;
     if (thread?.archived && allowed) throw new Error('THREAD_ARCHIVED');
-    if (allowed && flow.scope === 'both' && !group.memberIds.includes(userId) && new Set([String(group.owner_id), ...group.memberIds.map(String)]).size >= settings.maxMembers) throw new Error('GROUP_FULL');
     let wasThreadMember = false;
     let changedThread = false;
     let groupRole = null, hadGroupRole = false, changedGroupRole = false;
@@ -2864,7 +2863,6 @@ async function applyUserControl(interaction, flow, userId) {
             const blocked = JSON.parse(row.blocked_ids_json || '[]');
             const managers = JSON.parse(row.manager_ids_json || '[]');
             if (!allowed && (row.owner_id === target.id || managers.includes(target.id))) throw new Error('TARGET_PROTECTED');
-            if (allowed && !members.includes(target.id) && new Set([String(row.owner_id), ...members.map(String)]).size >= settings.maxMembers) throw new Error('GROUP_FULL');
             const now = Date.now();
             await tx.run('UPDATE managed_groups SET member_ids_json = ?, blocked_ids_json = ?, updated_at = ? WHERE guild_id = ? AND id = ?', [JSON.stringify(allowed ? [...new Set([...members, target.id])] : members.filter(id => id !== target.id)), JSON.stringify(allowed ? blocked.filter(id => id !== target.id) : [...new Set([...blocked, target.id])]), now, interaction.guild.id, group.id]);
             await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [interaction.guild.id, group.id, interaction.user.id, `control_${flow.action}`, JSON.stringify({ scope: flow.scope, userId: target.id }), now]);
@@ -2957,7 +2955,6 @@ async function validateImport(guild, flow, settings, includeMembers = false) {
     await guild.members.fetch();
     members = [...role.members.values()].map(member => member.id);
     if (!members.includes(owner.id)) throw new Error('MEMBER_NOT_FOUND');
-    if (members.length > settings.maxMembers) throw new Error('GROUP_FULL');
     if (groups.some(g => members.some(id => [g.owner_id, ...g.memberIds, ...g.managerIds].includes(id)))) throw new Error('ASSET_LINKED');
     await groupChannels(guild, { id: null, text_channel_id: text.id, thread_id: thread?.id || null, voice_channel_id: voice.id }, 'both');
   }
