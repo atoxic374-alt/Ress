@@ -256,7 +256,20 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       if (!groupHasUser(group, message.author.id) && !system) return Boolean(await reply(message, 'أنت لست عضوًا في القروب.'));
       const owner = await message.guild.members.fetch(group.owner_id).catch(() => null);
       const managers = await Promise.all(group.managerIds.map(id => message.guild.members.fetch(id).catch(() => null)));
-      await message.reply({ files: [await renderInfo({ guild: message.guild, group, owner, managers: managers.filter(Boolean), accentColor: null })], allowedMentions: { parse: [] } }).catch(() => {});
+      const components = [];
+      if (String(group.owner_id) !== String(message.author.id)) {
+        components.push(new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`groups_top:leave:${group.id}`).setLabel('LEAVE GROUP').setStyle(ButtonStyle.Danger)
+        ));
+      }
+      await message.reply(responsePayload({
+        title: 'MY GROUP',
+        content: `بيانات القروب **${String(group.name || 'Group').slice(0, 100)}**. استخدم الزر أسفل الصورة لمغادرة القروب.`,
+        thumbnail: groupThumbnail(message.guild, group),
+        files: [await renderInfo({ guild: message.guild, group, owner, managers: managers.filter(Boolean), accentColor: null })],
+        components,
+        allowedMentions: { parse: [] }
+      })).catch(() => {});
       return true;
     }
     if (command === 'اعضاء' || command === 'أعضاء' || command === 'members') {
