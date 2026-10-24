@@ -1794,6 +1794,7 @@ const activityCache=new Map(); const settingsCache=new Map(); const voiceStarts=
 const reconciliationSignatures = new Map();
 const reconciliationLocks = new Map();
 const reconciliationCursors = new Map();
+const pendingRoleGuardChecks = new Map();
 async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
   let allGroups = (await gm.listGroups(guild.id, true)).filter(group => group.status !== 'deleted');
   const cursorKey = String(guild.id);
@@ -1884,16 +1885,16 @@ async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
         if (await isBotId(userId)) continue;
         if (!expected.includes(String(userId))) issues.push({ groupId: group.id, groupName: group.name, type: 'role_member_not_in_db', userId, detail: 'عضو يحمل رتبة القروب لكنه غير موجود في قائمة العضوية المحفوظة.' });
       }
+      // Database membership is authoritative. Discord role caches can lag or be
+      // incomplete, so never remove a saved member or silently enroll a role
+      // holder during reconciliation. Missing roles are repaired above; explicit
+      // leave/block actions are responsible for removals.
       const roleMemberIds = new Set([...role.members.keys()].map(String));
-      const staleMembers = group.memberIds.filter(userId => !roleMemberIds.has(String(userId)) && String(userId) !== String(group.owner_id));
-      const staleManagers = group.managerIds.filter(userId => !roleMemberIds.has(String(userId)));
-      const roleAddedMembers = [...roleMemberIds].filter(userId => !expected.includes(userId) && !group.blockedIds.includes(userId));
-      if (staleMembers.length || staleManagers.length || roleAddedMembers.length) {
-        const nextMembers = [...new Set([...group.memberIds.filter(id => !staleMembers.includes(id)), ...roleAddedMembers])];
-        const nextManagers = group.managerIds.filter(id => !staleManagers.includes(id));
-        group = await gm.updateGroup(guild.id, group.id, { member_ids_json: JSON.stringify(nextMembers), manager_ids_json: JSON.stringify(nextManagers), updated_at: Date.now() }, actorId);
-        await gm.audit(guild.id, actorId, group.id, 'membership_reconciled', { removedMembers: staleMembers, removedManagers: staleManagers, addedMembers: roleAddedMembers }).catch(() => {});
-        expected = [...new Set([String(group.owner_id), ...group.memberIds, ...group.managerIds].filter(Boolean))];
+      for (const userId of roleMemberIds) {
+        if (await isBotId(userId)) continue;
+        if (!expected.includes(userId) && !group.blockedIds.includes(userId)) {
+          issues.push({ groupId: group.id, groupName: group.name, type: 'role_member_not_in_db', userId, detail: 'عضو يحمل رتبة القروب لكنه غير موجود في قائمة العضوية المحفوظة؛ تم إبقاء الرتبة لحين التحقق الآمن.' });
+        }
       }
     }
     if (group.thread_id) {
@@ -1912,7 +1913,7 @@ async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
           await runWithConcurrency(missingThreadMembers, 4, async userId => {
             if (!(await restoreThreadMember(thread, userId))) await gm.audit(guild.id, actorId, group.id, 'group_thread_member_repair_failed', { userId }).catch(() => {});
           });
-          const extraThreadMembers = [...actual].filter(userId => !expected.includes(userId));
+          const extraThreadMembers = [...actual].filter(userId => group.blockedIds.includes(userId));
           for (const userId of extraThreadMembers) issues.push({ groupId: group.id, groupName: group.name, type: 'thread_member_not_in_db', userId, detail: 'عضو في الثريد غير موجود في قائمة العضوية المحفوظة.' });
           await runWithConcurrency(extraThreadMembers, 4, async userId => {
             try { await withDiscordRetry(() => thread.members.remove(userId), 3); }
@@ -1971,6 +1972,9 @@ function pruneRuntimeCaches(client) {
   }
   for (const map of [voiceStarts, voiceChannels, lastMessageAt, lastSkipAuditAt]) {
     for (const key of map.keys()) if (!keepGuildKey(key)) map.delete(key);
+  }
+  for (const [key, timer] of pendingRoleGuardChecks) {
+    if (!keepGuildKey(key)) { clearTimeout(timer); pendingRoleGuardChecks.delete(key); }
   }
 }
 async function logActivitySkip(guildId, userId, groupId, metric, reason, details = {}) {
@@ -2293,14 +2297,25 @@ function registerInteractionHandler(client) {
       const leaveBypass = global.groupLeaveRoleBypass?.has(`${newMember.guild.id}:${newMember.id}:${group.role_id}`);
       const isLinked = group.memberIds.includes(String(newMember.id)) || String(group.owner_id) === String(newMember.id) || group.managerIds.includes(String(newMember.id));
       if (has && !had && !isLinked && !bypass) {
-        await newMember.roles.remove(group.role_id, 'Unapproved group role assignment').catch(() => {});
-        await gm.audit(newMember.guild.id, null, group.id, 'role_guard_removed', { userId: newMember.id, roleId: group.role_id });
-        await gm.logGroupEvent(newMember.guild, 'update', { groupId: group.id, reason: 'role_guard_removed', userId: newMember.id, roleId: group.role_id }, null);
+        const pendingKey = `${newMember.guild.id}:${newMember.id}:${group.id}`;
+        if (!pendingRoleGuardChecks.has(pendingKey)) {
+          const timer = setTimeout(async () => {
+            pendingRoleGuardChecks.delete(pendingKey);
+            const latest = await gm.getGroup(newMember.guild.id, group.id).catch(() => null);
+            const stillLinked = latest && (latest.memberIds.includes(String(newMember.id)) || String(latest.owner_id) === String(newMember.id) || latest.managerIds.includes(String(newMember.id)));
+            if (stillLinked) return;
+            await newMember.roles.remove(group.role_id, 'Unapproved group role assignment').catch(() => {});
+            await gm.audit(newMember.guild.id, null, group.id, 'role_guard_removed', { userId: newMember.id, roleId: group.role_id, delayedVerification: true });
+            await gm.logGroupEvent(newMember.guild, 'update', { groupId: group.id, reason: 'role_guard_removed', userId: newMember.id, roleId: group.role_id }, null);
+          }, 15000);
+          timer.unref?.();
+          pendingRoleGuardChecks.set(pendingKey, timer);
+        }
       }
       if (!has && had && leaveBypass) continue;
       if (!has && had && isLinked) {
         try {
-          await restoreGroupResources(newMember.guild, group, `member_role_removed:${newMember.id}`);
+          await newMember.roles.add(group.role_id, 'Restore managed group membership');
           await gm.audit(newMember.guild.id, null, group.id, 'member_role_restored', { userId: newMember.id, roleId: group.role_id });
           await gm.logGroupEvent(newMember.guild, 'update', { groupId: group.id, reason: 'member_role_restored', userId: newMember.id, roleId: group.role_id }, null);
           await newMember.send(`Group protection\nتمت إعادة رتبة القروب تلقائيًا لأنك عضو مسجل في القروب **${safe(group.name)}**.\nThe group role was restored automatically because you are a registered group member.`).catch(() => {});
