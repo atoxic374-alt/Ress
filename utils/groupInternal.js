@@ -235,17 +235,10 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
   // existing role, group-membership, and bot-permission checks.
   let group = await gm.getGroupForChannel(message.guild.id, message.channel.id);
   if (!group || group.status !== 'active') {
-    if (hasPrefix) { await reply(message, 'هذا الشات غير مرتبط بقروب نشط.'); return true; }
-    const channelScopedCommands = new Set([
-      'منع', 'block', 'سماح', 'allow', 'اضافة', 'إضافة', 'add',
-      'ازالة', 'إزالة', 'remove', 'مسؤول', 'manager', 'عقوبه', 'عقوبة', 'punish',
-      'مسح', 'clear', 'تعديل', 'edit', 'صلاحية', 'permission'
-    ]);
-    if (channelScopedCommands.has(command)) {
-      await reply(message, 'هذا الأمر يحتاج قناة أو ثريد قروب نشطًا. افتح لوحة القروب باستخدام setup أو groups، ثم نفّذ الأمر داخل قناة القروب المرتبطة.');
-      return true;
-    }
-    return false;
+    // Group commands are intentionally scoped to a linked group channel/thread.
+    // Consume them silently elsewhere so ordinary channels never receive a
+    // confusing "open a group thread" response.
+    return true;
   }
   const settings = await gm.getSettings(message.guild.id);
   const privileged = gm.canManageGroup(message.client, settings, group, message.member);

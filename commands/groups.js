@@ -2395,13 +2395,7 @@ async function dispatchInternalMessage(message, options = {}) {
   if (command === 'صلاحية' || command === 'permission') {
     try {
       const linked = await gm.getGroupForChannel(message.guild.id, message.channel.id);
-      if (!linked) {
-        if (!hasPrefix) {
-          await replyMessage(message, { content: 'لا توجد قناة قروب مرتبطة بهذا المكان. افتح أمر صلاحية داخل قناة القروب المرتبطة.', allowedMentions: { parse: [] } }).catch(() => null);
-          return true;
-        }
-        throw new Error('GROUP_NOT_FOUND');
-      }
+      if (!linked) return true;
       const { group } = await currentManager(message, linked.id, true);
       const flow = newFlow(message.guild.id, message.author.id, 'permission', group.id);
       await replyMessage(message, { ...scopePayload(message.guild, flow), allowedMentions: { parse: [] } });
