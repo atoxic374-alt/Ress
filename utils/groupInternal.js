@@ -412,7 +412,7 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       MANAGER_MUST_BE_MEMBER: 'يجب أن يكون المسؤول عضوًا في القروب.', MANAGER_PROTECTED: 'لا يمكن لمدير القروب إزالة مدير آخر أو منعه؛ استخدم مسار إدارة المسؤولين بصلاحية المالك.', EXTRA_DISABLED: 'الصلاحيات الإضافية متوقفة.',
       MEMBER_NOT_FOUND: 'العضو غير موجود في السيرفر.', GROUP_ROLE_NOT_FOUND: 'رتبة القروب المرتبطة غير موجودة.',
       GROUP_THREAD_NOT_FOUND: 'ثريد القروب المرتبط غير موجود.', USER_BLOCKED: 'هذا العضو ممنوع من القروب.',
-      USER_ALREADY_IN_GROUP: 'العضو مرتبط بقروب آخر بالفعل.', GROUP_FULL: 'وصل القروب إلى الحد الأقصى للأعضاء.',
+      USER_ALREADY_IN_GROUP: 'العضو مرتبط بقروب آخر بالفعل.', USER_ALREADY_MANAGER: 'لا يمكن تعيين العضو مسؤولًا في أكثر من قروب.', GROUP_FULL: 'وصل القروب إلى الحد الأقصى للأعضاء.',
       BOT_NOT_ALLOWED: 'لا يمكن إضافة بوت كعضو في القروب.', TARGET_PROTECTED: 'لا يمكن معاقبة مالك القروب أو مسؤوليه أو مديري النظام.',
       TARGET_NOT_IN_GROUP: 'يمكن معاقبة أعضاء القروب فقط.', MISSING_MODERATE_MEMBERS: 'البوت لا يملك صلاحية Moderate Members.',
       TARGET_HIERARCHY: 'رتبة العضو أعلى من رتبة البوت أو مساوية لها.'

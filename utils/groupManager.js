@@ -409,6 +409,13 @@ async function setManagers(guildId, groupId, managerIds, actorId) { return withL
   if (!group) throw new Error('GROUP_NOT_FOUND');
   if (String(actorId || '') !== String(group.owner_id)) throw new Error('OWNER_ONLY');
   const allowed = ids(managerIds).filter(id => group.memberIds.includes(id) && id !== String(group.owner_id));
+  const otherRows = await dbManager.all("SELECT manager_ids_json FROM managed_groups WHERE guild_id = ? AND status = 'active' AND id <> ?", [String(guildId), Number(groupId)]);
+  const occupiedManagerIds = new Set();
+  for (const row of otherRows) {
+    try { for (const id of JSON.parse(row.manager_ids_json || '[]')) occupiedManagerIds.add(String(id)); } catch {}
+  }
+  const conflict = allowed.find(id => occupiedManagerIds.has(String(id)));
+  if (conflict) throw new Error('USER_ALREADY_MANAGER');
   await updateGroup(guildId, groupId, { manager_ids_json: JSON.stringify(allowed), updated_at: Date.now() }, actorId);
   return allowed;
 }); }
