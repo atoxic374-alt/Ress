@@ -47,6 +47,7 @@ async function syncMember(group, guild, userId, add, { ignoreMissing = false } =
     } else {
       if (thread && wasThreadMember) { await thread.members.remove(member.id); changedThread = true; }
       if (role && wasRoleMember) { await member.roles.remove(role, 'Managed group membership'); changedRole = true; }
+      await removeManagedMemberOverwrites(guild, group, member.id);
     }
   } catch (error) {
     if (changedThread) await (add ? thread.members.remove(member.id) : thread.members.add(member.id)).catch(() => { error.groupRollbackFailed = true; });
@@ -182,6 +183,19 @@ async function syncManagerRole(guild, settings, userId, { ignoreMissing = false 
   const hasRole = member.roles.cache.has(role.id);
   if (shouldHaveRole && !hasRole) await member.roles.add(role, 'Group manager role');
   else if (!shouldHaveRole && hasRole) await member.roles.remove(role, 'Group manager role');
+}
+async function removeManagedMemberOverwrites(guild, group, userId) {
+  const id = String(userId);
+  const groups = await gm.listGroups(guild.id);
+  const otherSharedTextMembership = groups.some(other =>
+    Number(other.id) !== Number(group.id)
+    && String(other.text_channel_id || '') === String(group.text_channel_id || '')
+    && groupHasUser(other, id)
+  );
+  const text = group.text_channel_id && (guild.channels.cache.get(String(group.text_channel_id)) || await guild.channels.fetch(String(group.text_channel_id)).catch(() => null));
+  const voice = group.voice_channel_id && (guild.channels.cache.get(String(group.voice_channel_id)) || await guild.channels.fetch(String(group.voice_channel_id)).catch(() => null));
+  if (text?.permissionOverwrites && !otherSharedTextMembership) await text.permissionOverwrites.delete(id, 'Remove managed group member text permissions').catch(() => null);
+  if (voice?.permissionOverwrites) await voice.permissionOverwrites.delete(id, 'Remove managed group member voice permissions').catch(() => null);
 }
 async function leaveGroupMember(guild, settings, group, userId, actorId = userId) {
   const id = String(userId);
