@@ -2,12 +2,11 @@ const { EmbedBuilder, ButtonBuilder, ActionRowBuilder, ButtonStyle, ModalBuilder
 const colorManager = require('../utils/colorManager.js');
 const { isUserBlocked } = require('./block.js');
 const { isChannelBlocked } = require('./chatblock.js');
-const { getDatabase } = require('../utils/database.js');
+const { getDatabase, initializeDatabase } = require('../utils/database.js');
 const moment = require('moment-timezone');
 const { buildTopSummaryImage } = require('../utils/topSummaryRenderer.js');
 const { getGuildBannerHexFast } = require('../utils/guildBannerColor.js');
 const topsCommand = require('./tops.js');
-const { getActivityPeriodStart, getLiveVoiceDuration: getSharedLiveVoiceDuration } = require('../utils/activityTime.js');
 
 const name = 'تفاعلي';
 const aliases = ['تواجدي', 'me'];
@@ -54,25 +53,25 @@ function formatRankValue(category, value) {
     return `${Math.floor(Number(value || 0) / 10)}xp`;
 }
 
-async function getActivityRanks(db, period, userId, guildId, voiceTimeValue = null) {
+async function getActivityRanks(db, period, userId, guildId) {
     const [voiceResult, chatResult] = await Promise.all([
         topsCommand.getUserRank(db, 'voice', period, userId, guildId),
         topsCommand.getUserRank(db, 'chat', period, userId, guildId)
     ]);
     return {
-        voice: !voiceResult.rank ? 'Unranked' : `#${voiceResult.rank}  •  ${formatRankValue('voice', Number.isFinite(voiceTimeValue) ? voiceTimeValue : voiceResult.value)}`,
+        voice: !voiceResult.rank ? 'Unranked' : `#${voiceResult.rank}  •  ${formatRankValue('voice', voiceResult.value)}`,
         chat: !chatResult.rank ? 'Unranked' : `#${chatResult.rank}  •  ${formatRankValue('chat', chatResult.value)}`
     };
 }
 async function buildActivityImage({ message, member, period, periodLabel, stats, activeDays, db, accentColor }) {
     const guildId = message.guild?.id;
-    const cacheKey = `${getActivityCacheKey(guildId, member.id, period)}:${Math.floor(Number(stats.voiceTime || 0) / 60000)}:${stats.messages || 0}:${stats.reactions || 0}:${stats.voiceJoins || 0}:${activeDays || 0}`;
+    const cacheKey = getActivityCacheKey(guildId, member.id, period);
     const now = Date.now();
     pruneActivityCache(now);
     const cached = activityCache.get(cacheKey);
     if (cached && now - cached.createdAt < ACTIVITY_CACHE_TTL_MS) return cached.image;
     const [ranks, topVoiceChannel = {}, topMessageChannel = {}] = await Promise.all([
-        getActivityRanks(db, period, member.id, guildId, Number(stats.voiceTime || 0)),
+        getActivityRanks(db, period, member.id, guildId),
         db.getMostActiveVoiceChannel(member.id, period, guildId),
         db.getMostActiveMessageChannel(member.id, guildId)
     ]);
@@ -153,8 +152,16 @@ function parseTimeInput(value) {
     return { hour, minute };
 }
 
-function getLiveVoiceDuration(userId, fromTimestamp = 0, now = Date.now()) {
-    return getSharedLiveVoiceDuration(global.client, userId, fromTimestamp, now);
+function getLiveVoiceDuration(userId, fromTimestamp) {
+    if (global.client && global.client.voiceSessions && global.client.voiceSessions.has(userId)) {
+        const session = global.client.voiceSessions.get(userId);
+        if (session && !session.isAFK) {
+            const liveStart = session.lastTrackedTime || session.startTime || session.sessionStartTime;
+            const effectiveStart = Math.max(liveStart, fromTimestamp || 0);
+            return Math.max(0, Date.now() - effectiveStart);
+        }
+    }
+    return 0;
 }
 
 function buildActivityComponents(userId, activePeriod, isAfterSelected, disabled = false) {
@@ -246,6 +253,7 @@ async function execute(message, args, { client }) {
 async function showActivityStats(message, user, member, period = 'weekly', client) {
     let progressMessage = null;
     try {
+        await initializeDatabase();
         const dbManager = getDatabase();
         if (!dbManager || !dbManager.isInitialized) {
             await message.channel.send('❌ قاعدة البيانات غير متاحة');
@@ -255,47 +263,60 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
         progressMessage = await message.channel.send('جارٍ تجهيز إحصائياتك...');
 
         let stats, periodLabel, activeDays;
-        const guildId = message.guild?.id;
-        const liveNow = Date.now();
-        const livePeriodStart = getActivityPeriodStart(period, liveNow);
-        const getPeriodStats = async selectedPeriod => {
-            const rows = await dbManager.getPeriodActivityStats(selectedPeriod, user.id, guildId);
-            return rows[0] || { voiceTime: 0, messages: 0, reactions: 0, voiceJoins: 0 };
-        };
         if (period === 'daily') {
-            const [periodStats, metadata] = await Promise.all([
-                getPeriodStats('daily'),
-                dbManager.getDailyStats(user.id, guildId)
-            ]);
-            stats = periodStats;
+            stats = await dbManager.getDailyStats(user.id, message.guild?.id);
             periodLabel = 'Daily Active';
-            activeDays = metadata.activeDays;
+            activeDays = stats.activeDays;
+            // إضافة الوقت الحي لليومي
+            const liveDuration = getLiveVoiceDuration(user.id, 0);
+            stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
         } else if (period === 'weekly') {
-            const [periodStats, weeklyActiveDays] = await Promise.all([
-                getPeriodStats('weekly'),
-                dbManager.getWeeklyActiveDays(user.id, guildId)
+            const [weeklyStats, weeklyActiveDays] = await Promise.all([
+                dbManager.getWeeklyStats(user.id, message.guild?.id),
+                dbManager.getWeeklyActiveDays(user.id, message.guild?.id)
             ]);
-            stats = periodStats;
+            stats = weeklyStats;
             periodLabel = 'Weekly Active';
             activeDays = weeklyActiveDays;
+            // إعادة تسمية المتغيرات للتناسق
+            stats.voiceTime = stats.weeklyTime;
+            stats.messages = stats.weeklyMessages;
+            stats.reactions = stats.weeklyReactions;
+            stats.voiceJoins = stats.weeklyVoiceJoins;
+            // إضافة الوقت الحي للأسبوعي
+            const liveDuration = getLiveVoiceDuration(user.id, 0);
+            stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
         } else if (period === 'monthly') {
-            const [periodStats, metadata] = await Promise.all([
-                getPeriodStats('monthly'),
-                dbManager.getMonthlyStats(user.id, guildId)
-            ]);
-            stats = periodStats;
+            stats = await dbManager.getMonthlyStats(user.id, message.guild?.id);
             periodLabel = 'Monthly Active';
-            activeDays = metadata.activeDays;
+            activeDays = stats.activeDays;
+            // إضافة تعويض للبيانات الشهرية
+            stats.voiceTime = stats.voiceTime || 0;
+            stats.messages = stats.messages || 0;
+            stats.reactions = stats.reactions || 0;
+            stats.voiceJoins = stats.voiceJoins || 0;
+            // إضافة الوقت الحي للشهري
+            const liveDuration = getLiveVoiceDuration(user.id, 0);
+            stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
         } else if (period === 'total') {
-            const [periodStats, totalActiveDays] = await Promise.all([
-                getPeriodStats('total'),
-                dbManager.getActiveDaysCount(user.id, 365, guildId)
+            // إحصائيات كليّة (غير قابلة للتصفير تلقائياً)
+            const [totals, totalActiveDays] = await Promise.all([
+                dbManager.getUserStats(user.id),
+                dbManager.getActiveDaysCount(user.id, 365, message.guild?.id)
             ]);
-            stats = periodStats;
+            stats = {
+                voiceTime: totals.totalVoiceTime || 0,
+                messages: totals.totalMessages || 0,
+                reactions: totals.totalReactions || 0,
+                voiceJoins: totals.totalVoiceJoins || 0
+            };
             periodLabel = 'Total Active';
+            // عدد أيام النشاط خلال السنة الماضية على الأقل
             activeDays = totalActiveDays || 0;
+            // إضافة الوقت الحي للكلي
+            const liveDuration = getLiveVoiceDuration(user.id, 0);
+            stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
         }
-        stats.voiceTime = (stats.voiceTime || 0) + getLiveVoiceDuration(user.id, livePeriodStart, liveNow);
 
         const activityImage = await buildActivityImage({ message, member, period, periodLabel, stats, activeDays, db: dbManager, accentColor: bannerAccentColor });
         const response = await progressMessage.edit({ content: '', files: [activityImage], components: buildActivityComponents(user.id, period, false) });
@@ -371,49 +392,53 @@ async function showActivityStats(message, user, member, period = 'weekly', clien
                     await response.edit({ components: buildActivityComponents(user.id, selectedActivityPeriod, false, true) });
                     // جلب الإحصائيات الجديدة
                     let stats, periodLabel, activeDays;
-                    const liveNow = Date.now();
-                    const guildId = interaction.guild?.id;
-                    const livePeriodStart = getActivityPeriodStart(newPeriod, liveNow);
-                    const getPeriodStats = async selectedPeriod => {
-                        const rows = await dbManager.getPeriodActivityStats(selectedPeriod, user.id, guildId);
-                        return rows[0] || { voiceTime: 0, messages: 0, reactions: 0, voiceJoins: 0 };
-                    };
+                    const liveDuration = getLiveVoiceDuration(user.id, 0);
                     if (newPeriod === 'daily') {
-                        const [periodStats, metadata] = await Promise.all([
-                            getPeriodStats('daily'),
-                            dbManager.getDailyStats(user.id, guildId)
-                        ]);
-                        stats = periodStats;
+                        stats = await dbManager.getDailyStats(user.id, interaction.guild?.id);
                         periodLabel = 'Daily Active';
-                        activeDays = metadata.activeDays;
+                        activeDays = stats.activeDays;
+                        // إضافة الوقت الحي
+                        stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
                     } else if (newPeriod === 'weekly') {
-                        const [periodStats, weeklyActiveDays] = await Promise.all([
-                            getPeriodStats('weekly'),
-                            dbManager.getWeeklyActiveDays(user.id, guildId)
+                        const [weeklyStats, weeklyActiveDays] = await Promise.all([
+                            dbManager.getWeeklyStats(user.id, interaction.guild?.id),
+                            dbManager.getWeeklyActiveDays(user.id, interaction.guild?.id)
                         ]);
-                        stats = periodStats;
+                        stats = weeklyStats;
                         periodLabel = 'Weekly Active';
                         activeDays = weeklyActiveDays;
+                        stats.voiceTime = stats.weeklyTime;
+                        stats.messages = stats.weeklyMessages;
+                        stats.reactions = stats.weeklyReactions;
+                        stats.voiceJoins = stats.weeklyVoiceJoins;
+                        // إضافة الوقت الحي
+                        stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
                     } else if (newPeriod === 'monthly') {
-                        const [periodStats, metadata] = await Promise.all([
-                            getPeriodStats('monthly'),
-                            dbManager.getMonthlyStats(user.id, guildId)
-                        ]);
-                        stats = periodStats;
+                        stats = await dbManager.getMonthlyStats(user.id, interaction.guild?.id);
                         periodLabel = 'Monthly Active';
-                        activeDays = metadata.activeDays;
+                        activeDays = stats.activeDays;
+                        stats.voiceTime = stats.voiceTime || 0;
+                        stats.messages = stats.messages || 0;
+                        stats.reactions = stats.reactions || 0;
+                        stats.voiceJoins = stats.voiceJoins || 0;
+                        // إضافة الوقت الحي
+                        stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
                     } else if (newPeriod === 'total') {
-                        const [periodStats, totalActiveDays] = await Promise.all([
-                            getPeriodStats('total'),
-                            dbManager.getActiveDaysCount(user.id, 365, guildId)
+                        const [totals, totalActiveDays] = await Promise.all([
+                            dbManager.getUserStats(user.id),
+                            dbManager.getActiveDaysCount(user.id, 365, interaction.guild?.id)
                         ]);
-                        stats = periodStats;
+                        stats = {
+                            voiceTime: totals.totalVoiceTime || 0,
+                            messages: totals.totalMessages || 0,
+                            reactions: totals.totalReactions || 0,
+                            voiceJoins: totals.totalVoiceJoins || 0
+                        };
                         periodLabel = 'Total Active';
                         activeDays = totalActiveDays || 0;
+                        stats.voiceTime = (stats.voiceTime || 0) + liveDuration;
                     }
-                    stats.voiceTime = (stats.voiceTime || 0) + getLiveVoiceDuration(user.id, livePeriodStart, liveNow);
                     invalidateActivityCache(message.guild?.id, user.id);
-                    topsCommand.invalidateTopsCache(message.guild?.id);
                     const activityImage = await buildActivityImage({ message, member, period: newPeriod, periodLabel, stats, activeDays, db: dbManager, accentColor: bannerAccentColor });
                     await response.edit({ files: [activityImage], components: buildActivityComponents(user.id, newPeriod, false, true) });
                     selectedActivityPeriod = newPeriod;

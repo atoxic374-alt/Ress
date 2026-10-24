@@ -2,9 +2,8 @@ const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, 
 const colorManager = require('../utils/colorManager.js');
 const { isUserBlocked } = require('./block.js');
 const { isChannelBlocked } = require('./chatblock.js');
-const { getDatabase } = require('../utils/database.js');
+const { getDatabase, initializeDatabase } = require('../utils/database.js');
 const moment = require('moment-timezone');
-const { getActivityPeriodStart, getLiveVoiceDuration } = require('../utils/activityTime.js');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
@@ -198,28 +197,67 @@ async function getUserRank(db, category, period, userId, guildId = null) {
     const cached = topRankCache.get(cacheKey);
     if (cached && now - cached.createdAt < TOP_CACHE_TTL_MS) return cached;
     try {
-        const metricByCategory = { voice: 'voiceTime', chat: 'messages', reactions: 'reactions', joins: 'voiceJoins' };
+        const metricByCategory = { voice: 'voice_time', chat: 'messages', reactions: 'reactions', joins: 'voice_joins' };
+        const totalMetricByCategory = { voice: 'total_voice_time', chat: 'total_messages', reactions: 'total_reactions', joins: 'total_voice_joins' };
         const metric = metricByCategory[category];
         if (!metric) return { rank: null, value: 0 };
-        const activityRows = await db.getPeriodActivityStats(period, null, guildId);
-        const scores = new Map();
-        for (const row of activityRows) {
-            const value = Number(row[metric] || 0);
-            if (value > 0) scores.set(String(row.user_id), value);
+        const nowMoment = moment().tz('Asia/Riyadh');
+        const nowMs = nowMoment.valueOf();
+        let periodFilter = '';
+        const params = [];
+        let periodStartMs = null;
+        if (period === 'daily') {
+            periodFilter = 'AND date = ?';
+            params.push(nowMoment.format('YYYY-MM-DD'));
+            periodStartMs = nowMoment.clone().startOf('day').valueOf();
+        } else if (period === 'weekly') {
+            periodFilter = 'AND date >= ?';
+            params.push(nowMoment.clone().startOf('week').format('YYYY-MM-DD'));
+            periodStartMs = nowMoment.clone().startOf('week').valueOf();
+        } else if (period === 'monthly') {
+            periodFilter = 'AND date >= ?';
+            params.push(nowMoment.clone().startOf('month').format('YYYY-MM-DD'));
+            periodStartMs = nowMoment.clone().startOf('month').valueOf();
         }
+        let activityQuery;
+        if (period === 'total') {
+            activityQuery = `SELECT user_id, ${totalMetricByCategory[category]} AS value FROM user_totals WHERE ${totalMetricByCategory[category]} > 0`;
+        } else {
+            const source = guildId
+                ? '(SELECT user_id, date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ? UNION ALL SELECT user_id, date, voice_time, messages, reactions, voice_joins FROM daily_activity)'
+                : 'daily_activity';
+            if (guildId) params.unshift(String(guildId));
+            activityQuery = `SELECT user_id, SUM(${metric}) AS value FROM ${source} WHERE ${metric} > 0 ${periodFilter} GROUP BY user_id`;
+        }
+        const liveEntries = [];
         if (category === 'voice' && global.client?.voiceSessions) {
-            const periodStart = getActivityPeriodStart(period, now);
-            for (const liveUserId of global.client.voiceSessions.keys()) {
-                const key = String(liveUserId);
-                const liveDuration = getLiveVoiceDuration(global.client, key, periodStart, now);
-                if (liveDuration > 0) scores.set(key, (scores.get(key) || 0) + liveDuration);
+            for (const [liveUserId, session] of global.client.voiceSessions.entries()) {
+                if (session?.isAFK) continue;
+                const liveStart = session.lastTrackedTime || session.startTime || session.sessionStartTime || nowMs;
+                const effectiveStart = periodStartMs ? Math.max(liveStart, periodStartMs) : liveStart;
+                const liveDuration = Math.max(0, nowMs - effectiveStart);
+                if (liveDuration > 0) liveEntries.push([String(liveUserId), liveDuration]);
             }
         }
-        const value = Number(scores.get(String(userId)) || 0);
-        const rank = scores.has(String(userId))
-            ? [...scores.values()].filter(score => score > value).length + 1
-            : null;
-        const entry = { rank, value, createdAt: now };
+        const liveQuery = liveEntries.length
+            ? liveEntries.map(() => 'SELECT ? AS user_id, ? AS value').join(' UNION ALL ')
+            : 'SELECT CAST(NULL AS TEXT) AS user_id, 0 AS value WHERE 0';
+        const liveParams = liveEntries.flat();
+        const query = `
+            WITH activity_scores AS (${activityQuery}),
+            live_scores AS (${liveQuery}),
+            scores AS (
+                SELECT user_id, SUM(value) AS value
+                FROM (SELECT user_id, value FROM activity_scores UNION ALL SELECT user_id, value FROM live_scores)
+                GROUP BY user_id
+            )
+            SELECT target.value AS value,
+                   (SELECT COUNT(*) + 1 FROM scores AS higher WHERE higher.value > target.value) AS rank
+            FROM scores AS target WHERE target.user_id = ?
+        `;
+        const result = await db.get(query, [...params, ...liveParams, String(userId)]);
+        const value = result ? Number(result.value || 0) : 0;
+        const entry = { rank: result ? Number(result.rank) : null, value, createdAt: now };
         topRankCache.set(cacheKey, entry);
         if (topRankCache.size > 5000) {
             for (const [key, item] of topRankCache) {
@@ -236,47 +274,161 @@ async function getUserRank(db, category, period, userId, guildId = null) {
 async function getTopUsers(db, category, period, limit = 50, guildId = null) {
     try {
         const cacheKey = `${String(guildId || 'global')}:${category}:${period}:${limit}`;
-        const now = Date.now();
-        pruneTopResultsCache(now);
+        const cacheNow = Date.now();
+        pruneTopResultsCache(cacheNow);
         const cached = topResultsCache.get(cacheKey);
-        if (cached && now - cached.createdAt < TOP_CACHE_TTL_MS) return cached.rows;
+        if (cached && cacheNow - cached.createdAt < TOP_CACHE_TTL_MS) return cached.rows;
+        const now = moment().tz('Asia/Riyadh');
+        const nowMs = now.valueOf();
+        let dateFilter = '';
+        let params = [];
+        let periodStartMs = null;
 
-        const metricByCategory = {
-            voice: 'voiceTime',
-            chat: 'messages',
-            reactions: 'reactions',
-            joins: 'voiceJoins'
-        };
-        const metric = metricByCategory[category];
-        if (!metric) return [];
-
-        const activityRows = await db.getPeriodActivityStats(period, null, guildId);
-        const scores = new Map();
-        for (const row of activityRows) {
-            const value = Number(row[metric] || 0);
-            if (value > 0) scores.set(String(row.user_id), value);
+        if (period === 'daily') {
+            const today = now.format('YYYY-MM-DD');
+            dateFilter = 'AND date = ?';
+            params.push(today);
+            periodStartMs = now.clone().startOf('day').valueOf();
+        } else if (period === 'weekly') {
+            const weekStart = now.clone().startOf('week').format('YYYY-MM-DD');
+            dateFilter = 'AND date >= ?';
+            params.push(weekStart);
+            periodStartMs = now.clone().startOf('week').valueOf();
+        } else if (period === 'monthly') {
+            const monthStart = now.clone().startOf('month').format('YYYY-MM-DD');
+            dateFilter = 'AND date >= ?';
+            params.push(monthStart);
+            periodStartMs = now.clone().startOf('month').valueOf();
         }
 
-        if (category === 'voice' && global.client?.voiceSessions) {
-            const periodStart = getActivityPeriodStart(period, now);
-            for (const liveUserId of global.client.voiceSessions.keys()) {
-                const userId = String(liveUserId);
-                const liveDuration = getLiveVoiceDuration(global.client, userId, periodStart, now);
-                if (liveDuration > 0) scores.set(userId, (scores.get(userId) || 0) + liveDuration);
+        let query = '';
+        const activitySource = guildId
+            ? `(SELECT user_id, date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ?
+               UNION ALL SELECT user_id, date, voice_time, messages, reactions, voice_joins FROM daily_activity)`
+            : 'daily_activity';
+
+        if (category === 'voice') {
+            if (period === 'total') {
+                query = `
+                    SELECT user_id, total_voice_time as value
+                    FROM user_totals
+                    WHERE total_voice_time > 0
+                    ORDER BY total_voice_time DESC
+                    LIMIT ?
+                `;
+                params = [limit];
+            } else {
+                query = `
+                    SELECT user_id, SUM(voice_time) as value
+                    FROM ${activitySource}
+                    WHERE voice_time > 0 ${dateFilter}
+                    GROUP BY user_id
+                    ORDER BY value DESC
+                    LIMIT ?
+                `;
+                params = guildId ? [guildId, ...params, limit] : [...params, limit];
+            }
+        } else if (category === 'chat') {
+            if (period === 'total') {
+                query = `
+                    SELECT user_id, total_messages as value
+                    FROM user_totals
+                    WHERE total_messages > 0
+                    ORDER BY total_messages DESC
+                    LIMIT ?
+                `;
+                params = [limit];
+            } else {
+                query = `
+                    SELECT user_id, SUM(messages) as value
+                    FROM ${activitySource}
+                    WHERE messages > 0 ${dateFilter}
+                    GROUP BY user_id
+                    ORDER BY value DESC
+                    LIMIT ?
+                `;
+                params = guildId ? [guildId, ...params, limit] : [...params, limit];
+            }
+        } else if (category === 'reactions') {
+            if (period === 'total') {
+                query = `
+                    SELECT user_id, total_reactions as value
+                    FROM user_totals
+                    WHERE total_reactions > 0
+                    ORDER BY total_reactions DESC
+                    LIMIT ?
+                `;
+                params = [limit];
+            } else {
+                query = `
+                    SELECT user_id, SUM(reactions) as value
+                    FROM ${activitySource}
+                    WHERE reactions > 0 ${dateFilter}
+                    GROUP BY user_id
+                    ORDER BY value DESC
+                    LIMIT ?
+                `;
+                params = guildId ? [guildId, ...params, limit] : [...params, limit];
+            }
+        } else if (category === 'joins') {
+            if (period === 'total') {
+                query = `
+                    SELECT user_id, total_voice_joins as value
+                    FROM user_totals
+                    WHERE total_voice_joins > 0
+                    ORDER BY total_voice_joins DESC
+                    LIMIT ?
+                `;
+                params = [limit];
+            } else {
+                query = `
+                    SELECT user_id, SUM(voice_joins) as value
+                    FROM ${activitySource}
+                    WHERE voice_joins > 0 ${dateFilter}
+                    GROUP BY user_id
+                    ORDER BY value DESC
+                    LIMIT ?
+                `;
+                params = guildId ? [guildId, ...params, limit] : [...params, limit];
             }
         }
 
-        const rows = [...scores.entries()]
-            .map(([user_id, value]) => ({ user_id, value }))
-            .sort((a, b) => b.value - a.value)
-            .slice(0, limit || 50);
-        topResultsCache.set(cacheKey, { rows, createdAt: now });
-        return rows;
+        let results = await db.all(query, params);
+        results = results || [];
+
+        // إضافة الوقت الحي للفويس في الترتيب (اليومي والأسبوعي والشهري والكلي)
+        if (category === 'voice' && global.client && global.client.voiceSessions) {
+            const updatedResults = [...results];
+            
+            for (const [userId, session] of global.client.voiceSessions.entries()) {
+                let liveDuration = 0;
+                if (!session.isAFK) {
+                    const liveStart = session.lastTrackedTime || session.startTime || session.sessionStartTime || nowMs;
+                    const effectiveStart = periodStartMs ? Math.max(liveStart, periodStartMs) : liveStart;
+                    liveDuration = Math.max(0, nowMs - effectiveStart);
+                }
+                const existingUser = updatedResults.find(r => r.user_id === userId);
+                
+                if (existingUser) {
+                    existingUser.value = (existingUser.value || 0) + liveDuration;
+                } else {
+                    updatedResults.push({ user_id: userId, value: liveDuration });
+                }
+            }
+
+            // إعادة الترتيب لضمان الدقة بعد الإضافة اللحظية
+            const rows = updatedResults.sort((a, b) => b.value - a.value).slice(0, limit || 50);
+            topResultsCache.set(cacheKey, { rows, createdAt: cacheNow });
+            return rows;
+        }
+        topResultsCache.set(cacheKey, { rows: results, createdAt: cacheNow });
+        return results;
     } catch (error) {
         console.error('خطأ في جلب أفضل المستخدمين:', error);
         return [];
     }
 }
+
 async function getStreakUsers(guildId) {
     try {
         if (!streakDb) {
@@ -330,6 +482,13 @@ async function execute(message, args, { client }) {
         return;
     }
 
+    try {
+        await initializeDatabase();
+    } catch (error) {
+        console.error('تعذر تهيئة قاعدة البيانات قبل أمر التوب:', error);
+        await message.channel.send('❌ قاعدة البيانات غير متاحة حالياً').catch(() => {});
+        return;
+    }
     const db = getDatabase();
     if (!db || !db.isInitialized) {
         await message.channel.send('❌ قاعدة البيانات غير متاحة');
