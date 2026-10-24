@@ -1434,68 +1434,54 @@ class DatabaseManager {
         }
     }
 
-    // جلب إحصائيات فترة موحدة لأوامر التفاعل والتوب
-    async getPeriodActivityStats(userId, period = 'daily', guildId = null) {
+    // واجهة متوافقة مع أوامر التوب والتفاعل القديمة والجديدة.
+    async getPeriodActivityStats(userId, period = 'weekly', guildId = null) {
         try {
-            // دعم التوقيع القديم getPeriodActivityStats(period, userId, guildId)
-            const periods = new Set(['daily', 'weekly', 'monthly', 'total']);
-            if (periods.has(String(userId)) && !periods.has(String(period))) {
-                [userId, period] = [period, userId];
-            }
-            period = periods.has(String(period)) ? String(period) : 'daily';
+            const normalizedPeriod = String(period || 'weekly').toLowerCase();
+            const categoryNames = new Set(['voice', 'chat', 'reactions', 'joins']);
+            if (categoryNames.has(String(userId).toLowerCase())) {
+                const category = String(userId).toLowerCase();
+                const metric = { voice: 'voice_time', chat: 'messages', reactions: 'reactions', joins: 'voice_joins' }[category];
+                const isTotal = ['total', 'all', 'lifetime'].includes(normalizedPeriod);
+                const now = moment().tz('Asia/Riyadh');
+                const params = [];
+                let dateFilter = '';
+                if (!isTotal) {
+                    const startDate = ['monthly', 'month'].includes(normalizedPeriod)
+                        ? now.clone().startOf('month').format('YYYY-MM-DD')
+                        : ['daily', 'day'].includes(normalizedPeriod)
+                            ? now.format('YYYY-MM-DD')
+                            : now.clone().startOf('week').format('YYYY-MM-DD');
+                    dateFilter = ['daily', 'day'].includes(normalizedPeriod) ? 'AND date = ?' : 'AND date >= ?';
+                    params.push(startDate);
+                }
 
-            if (period === 'total') {
-                const totals = await this.get(`
-                    SELECT total_voice_time AS voiceTime,
-                           total_messages AS messages,
-                           total_reactions AS reactions,
-                           total_voice_joins AS voiceJoins
-                    FROM user_totals
-                    WHERE user_id = ?
-                `, [userId]);
-                return {
-                    voiceTime: Number(totals?.voiceTime || 0),
-                    messages: Number(totals?.messages || 0),
-                    reactions: Number(totals?.reactions || 0),
-                    voiceJoins: Number(totals?.voiceJoins || 0),
-                    activeDays: Number(await this.getActiveDaysCount(userId, 365, guildId) || 0)
-                };
+                let rows;
+                if (isTotal) {
+                    const totalMetric = { voice: 'total_voice_time', chat: 'total_messages', reactions: 'total_reactions', joins: 'total_voice_joins' }[category];
+                    rows = await this.all(`SELECT user_id, ${totalMetric} AS value FROM user_totals WHERE ${totalMetric} > 0 ORDER BY value DESC`);
+                } else {
+                    const source = guildId
+                        ? `(SELECT user_id, date, voice_time, messages, reactions, voice_joins FROM guild_daily_activity WHERE guild_id = ?
+                            UNION ALL SELECT user_id, date, voice_time, messages, reactions, voice_joins FROM daily_activity)`
+                        : 'daily_activity';
+                    if (guildId) params.unshift(String(guildId));
+                    rows = await this.all(`SELECT user_id, SUM(${metric}) AS value FROM ${source} WHERE ${metric} > 0 ${dateFilter} GROUP BY user_id ORDER BY value DESC`, params);
+                }
+                return (rows || []).map(row => ({ ...row, userId: String(row.user_id), value: Number(row.value || 0) }));
             }
 
-            const now = moment().tz('Asia/Riyadh');
-            const startDate = period === 'daily'
-                ? now.format('YYYY-MM-DD')
-                : period === 'weekly'
-                    ? now.clone().startOf('week').format('YYYY-MM-DD')
-                    : now.clone().startOf('month').format('YYYY-MM-DD');
-            const source = guildId
-                ? `(SELECT date, voice_time, messages, reactions, voice_joins
-                      FROM guild_daily_activity WHERE guild_id = ? AND user_id = ?
-                    UNION ALL
-                    SELECT date, voice_time, messages, reactions, voice_joins
-                      FROM daily_activity WHERE user_id = ?)`
-                : '(SELECT date, voice_time, messages, reactions, voice_joins FROM daily_activity WHERE user_id = ?)';
-            const params = guildId ? [guildId, userId, userId, startDate] : [userId, startDate];
-            const stats = await this.get(`
-                SELECT COALESCE(SUM(voice_time), 0) AS voiceTime,
-                       COALESCE(SUM(messages), 0) AS messages,
-                       COALESCE(SUM(reactions), 0) AS reactions,
-                       COALESCE(SUM(voice_joins), 0) AS voiceJoins,
-                       COUNT(DISTINCT CASE WHEN voice_time > 0 OR messages > 0
-                                           OR reactions > 0 OR voice_joins > 0 THEN date END) AS activeDays
-                FROM ${source}
-                WHERE date >= ?
-            `, params);
-            return {
-                voiceTime: Number(stats?.voiceTime || 0),
-                messages: Number(stats?.messages || 0),
-                reactions: Number(stats?.reactions || 0),
-                voiceJoins: Number(stats?.voiceJoins || 0),
-                activeDays: Number(stats?.activeDays || 0)
-            };
+            if (['daily', 'day'].includes(normalizedPeriod)) return await this.getDailyStats(userId, guildId);
+            if (['monthly', 'month'].includes(normalizedPeriod)) return await this.getMonthlyStats(userId, guildId);
+            if (['total', 'all', 'lifetime'].includes(normalizedPeriod)) {
+                const totals = await this.get('SELECT total_voice_time AS voiceTime, total_messages AS messages, total_reactions AS reactions, total_voice_joins AS voiceJoins FROM user_totals WHERE user_id = ?', [userId]);
+                return { voiceTime: totals?.voiceTime || 0, messages: totals?.messages || 0, reactions: totals?.reactions || 0, voiceJoins: totals?.voiceJoins || 0, activeDays: 0 };
+            }
+            return await this.getWeeklyStats(userId, guildId);
         } catch (error) {
-            console.error('❌ خطأ في جلب إحصائيات فترة النشاط:', error);
-            return { voiceTime: 0, messages: 0, reactions: 0, voiceJoins: 0, activeDays: 0 };
+            console.error('❌ خطأ في جلب إحصائيات الفترة:', error);
+            const categoryRequest = ['voice', 'chat', 'reactions', 'joins'].includes(String(userId).toLowerCase());
+            return categoryRequest ? [] : { voiceTime: 0, messages: 0, reactions: 0, voiceJoins: 0, activeDays: 0 };
         }
     }
 
