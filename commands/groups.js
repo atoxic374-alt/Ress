@@ -652,6 +652,11 @@ function isComponentsV2Message(message) {
   return (Number(rawFlags || 0) & MessageFlags.IsComponentsV2) !== 0;
 }
 async function sendTopGroupsPanel(channel, guild, options = {}) {
+  const settings = await gm.getSettings(guild.id).catch(() => null);
+  const configuredChannelId = String(settings?.topChannelId || '');
+  if (!configuredChannelId || !channel?.id || String(channel.id) !== configuredChannelId || channel.isThread?.()) {
+    return null;
+  }
   const key = String(channel?.id || guild?.id || 'top-groups');
   if (topPanelLocks.has(key)) return topPanelLocks.get(key);
   const work = (async () => {
@@ -669,13 +674,15 @@ async function sendTopGroupsPanel(channel, guild, options = {}) {
         .filter(message => (!botId || message.author?.id === botId) && JSON.stringify(message.components || []).includes('groups_top:'))
         .sort((a, b) => Number(a.createdTimestamp || 0) - Number(b.createdTimestamp || 0)).pop();
     }
-    if (existing?.edit && !isComponentsV2Message(existing)) {
+    if (existing?.edit) {
       const edited = await existing.edit(payload).catch(() => null);
       if (edited) {
         if (edited.id) topPanelMessageIds.set(key, String(edited.id));
         scheduleTopPanelRefresh(channel, guild, options);
         return edited;
       }
+      // Never create a second panel when the configured panel already exists.
+      return existing;
     }
     const sent = await channel.send(payload);
     if (sent.id) topPanelMessageIds.set(key, String(sent.id));
