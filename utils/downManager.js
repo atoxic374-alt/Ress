@@ -442,6 +442,33 @@ class DownManager {
             .map(([downId, down]) => ({ downId, ...down }));
     }
 
+    // المصدر المركزي لكل الرولات التي يجب تعليقها أثناء الداون.
+    getSuspendedRoleIds(member, { roleId = null, responsibilityAssignments = [], relatedDowns = [] } = {}) {
+        const adminRoleIds = new Set(this.getAdminRoles().map(String));
+        const responsibilityRoleIds = new Set(
+            responsibilityAssignments
+                .flatMap(assignment => assignment?.roleIds || [])
+                .map(String)
+                .filter(Boolean)
+        );
+        const suspendedRoleIds = new Set();
+
+        for (const down of relatedDowns) {
+            if (down?.roleId) suspendedRoleIds.add(String(down.roleId));
+            for (const id of down?.suspendedRoleIds || []) suspendedRoleIds.add(String(id));
+        }
+        if (roleId) suspendedRoleIds.add(String(roleId));
+
+        for (const role of member?.roles?.cache?.values?.() || []) {
+            const id = String(role.id);
+            if (adminRoleIds.has(id) || responsibilityRoleIds.has(id)) {
+                suspendedRoleIds.add(id);
+            }
+        }
+
+        return [...suspendedRoleIds];
+    }
+
     async getDownResponsibilitySnapshot(member, userId, guildId, roleId, activeDowns = this.getActiveDowns()) {
         const vacationManager = require('./vacationManager');
         const relatedDowns = this.getRelatedActiveDowns(userId, guildId, activeDowns);
@@ -466,22 +493,15 @@ class DownManager {
             responsibilityAssignments = vacationManager.captureResponsibilityAssignments(responsibilities, userId);
         }
 
-        const adminRoleIds = new Set(this.getAdminRoles().map(String));
-        const responsibilityRoleIds = new Set(responsibilityAssignments.flatMap(item => item.roleIds || []).map(String));
-        const suspendedRoleIds = new Set(relatedDowns.map(down => String(down.roleId || '')).filter(Boolean));
-        for (const role of member.roles.cache.values()) {
-            if (adminRoleIds.has(String(role.id)) || responsibilityRoleIds.has(String(role.id))) {
-                suspendedRoleIds.add(String(role.id));
-            }
-        }
-        if (roleId) suspendedRoleIds.add(String(roleId));
-        for (const down of capturedDowns) {
-            for (const id of down.suspendedRoleIds || []) suspendedRoleIds.add(String(id));
-        }
+        const suspendedRoleIds = this.getSuspendedRoleIds(member, {
+            roleId,
+            responsibilityAssignments,
+            relatedDowns: [...relatedDowns, ...capturedDowns]
+        });
 
         return {
             responsibilityAssignments,
-            suspendedRoleIds: [...suspendedRoleIds],
+            suspendedRoleIds,
             responsibilitySnapshotCaptured: true
         };
     }
@@ -1234,15 +1254,24 @@ class DownManager {
                     down.responsibilitiesRemoved = true;
                 }
 
-                const adminRoleIds = new Set(this.getAdminRoles().map(String));
+                const relatedDowns = this.getRelatedActiveDowns(
+                    down.userId,
+                    guild.id,
+                    activeDowns
+                );
+                const suspendedRoleIds = this.getSuspendedRoleIds(member, {
+                    roleId: down.roleId,
+                    responsibilityAssignments: assignmentsToSuspend,
+                    relatedDowns: [down, ...relatedDowns]
+                });
                 const rolesToRemove = member.roles.cache.filter(role =>
-                    adminRoleIds.has(String(role.id))
+                    suspendedRoleIds.includes(String(role.id))
                 );
                 if (!rolesToRemove.size) continue;
 
                 for (const role of rolesToRemove.values()) {
                     if (this.isBotRestoring(guild.id, member.id, role.id)) continue;
-                    await member.roles.remove(role, 'فحص تكاملي تلقائي: حماية جميع الرولات الإدارية أثناء الداون');
+                    await member.roles.remove(role, 'فحص تكاملي تلقائي: حماية رولات الداون والمسؤوليات');
                     fixedCount++;
                     console.log(`🔒 Integrity check removed admin role ${role.name} from ${member.displayName}`);
                 }
@@ -1251,10 +1280,10 @@ class DownManager {
                     const logChannel = await guild.channels.fetch(settings.logChannel).catch(() => null);
                     if (logChannel) {
                         await this.sendDownLog(logChannel, {
-                            title: 'Admin Role Protection',
-                            details: `**Member:** <@${member.id}>\n**Admin Roles:** ${rolesToRemove.map(role => `<@&${role.id}>`).join(', ').slice(0, 900)}\n**Down Ends:** ${down.endTime ? `<t:${Math.floor(down.endTime / 1000)}:R>` : 'Permanent'}`,
+                            title: 'Down Role Protection',
+                            details: `**Member:** <@${member.id}>\n**Protected Roles:** ${rolesToRemove.map(role => `<@&${role.id}>`).join(', ').slice(0, 900)}\n**Down Ends:** ${down.endTime ? `<t:${Math.floor(down.endTime / 1000)}:R>` : 'Permanent'}`,
                             thumbnailURL: member.displayAvatarURL({ dynamic: true, size: 256 }),
-                            footer: 'Down Log • Admin Role Protection'
+                            footer: 'Down Log • Down and Responsibility Role Protection'
                         }).catch(() => null);
                     }
                 }

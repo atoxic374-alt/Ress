@@ -718,8 +718,8 @@ async function createGroup(guild, { name, description = '', ownerId, color = '#5
   try {
   return await withLock(`create:${guild.id}:${owner.id}`, async () => {
     const existingRows = await dbManager.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status = 'active'", [guild.id]);
-    const existing = existingRows.map(hydrate).find(group => String(group.owner_id) === String(owner.id) || group.memberIds.includes(String(owner.id)) || group.managerIds.includes(String(owner.id)));
-    if (existing) throw new Error(String(existing.owner_id) === String(owner.id) ? 'OWNER_ALREADY_HAS_GROUP' : 'USER_ALREADY_IN_GROUP');
+    const ownedGroup = existingRows.map(hydrate).find(group => String(group.owner_id) === String(owner.id));
+    if (ownedGroup) throw new Error('OWNER_ALREADY_HAS_GROUP');
     const now = Date.now(); let role = null; let text = null; let thread = null; let voice = null; let leaderRole = null; let leaderRoleAdded = false; let createdGroupId = null; let reusedSharedText = false; const created = [];
     try {
       role = await guild.roles.create({ name: groupName.slice(0, 100), color: color || '#5865F2', reason: 'Create managed group' }); created.push(['role', role]);
