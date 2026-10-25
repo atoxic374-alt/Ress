@@ -497,13 +497,23 @@ async function migrateDuplicateGroupThread(thread, canonical) {
     reason: 'Migrate thread from duplicate groups-chat parent'
   }));
   let members = [];
+  let memberFetchFailed = false;
   try {
     const collection = await thread.members?.fetch?.();
+    if (!collection) memberFetchFailed = true;
     members = collection ? [...collection.keys()] : [];
-  } catch {}
-  await runWithConcurrency(members, 4, async userId => { await restoreThreadMember(replacement, userId); });
+  } catch { memberFetchFailed = true; }
+  const failed = [];
+  await runWithConcurrency(members, 4, async userId => {
+    if (!(await restoreThreadMember(replacement, userId))) failed.push(userId);
+  });
+  if (memberFetchFailed || failed.length || !replacement.isThread?.() || String(replacement.parentId) !== String(canonical.id)) {
+    await replacement.delete('Rollback incomplete duplicate thread migration').catch(() => {});
+    throw new Error(`THREAD_TRANSFER_INCOMPLETE:${failed.length}`);
+  }
   if (thread.archived) await replacement.setArchived?.(true, 'Preserve archived state after groups-chat migration').catch(() => {});
-  await thread.delete('Remove duplicate groups-chat thread after migration').catch(() => null);
+  try { await thread.delete('Remove duplicate groups-chat thread after migration'); }
+  catch (error) { if (Number(error?.code) !== 10003) { await replacement.delete('Rollback failed duplicate thread migration').catch(() => {}); throw error; } }
   return replacement;
 }
 
@@ -534,40 +544,49 @@ async function consolidateThreadGroupChats(guild, settings, groups) {
   if (!parents.length && !groups.length) return;
   let canonical = parents[0] || null;
   if (!canonical) {
-    canonical = await withDiscordRetry(() => guild.channels.create({
-      name: 'groups-chat', type: ChannelType.GuildText, parent: settings.textCategoryId || undefined,
-      permissionOverwrites: [{ id: guild.roles.everyone.id, deny: ['ViewChannel'] }],
-      reason: 'Create shared managed group chat parent'
-    }));
+    canonical = (await gm.getOrCreateSharedGroupChat(guild, settings)).text;
   }
   const textPermission = { ViewChannel: true, SendMessages: true, SendMessagesInThreads: true, ReadMessageHistory: true };
   const managedThreadIds = new Set(groups.map(group => String(group.thread_id || '')).filter(Boolean));
-  for (const group of groups) {
+  await runWithConcurrency(groups, 4, async group => {
     const role = group.role_id && (guild.roles.cache.get(String(group.role_id)) || await guild.roles.fetch(String(group.role_id)).catch(() => null));
     if (role) await canonical.permissionOverwrites.edit(role.id, textPermission, { reason: 'Sync shared managed group chat permissions' }).catch(() => {});
     let thread = group.thread_id && (guild.channels.cache.get(String(group.thread_id)) || await guild.channels.fetch(String(group.thread_id)).catch(() => null));
     const oldParentId = String(group.text_channel_id || '');
     if (!thread?.isThread?.() || thread.parentId !== canonical.id) {
+      const oldThread = thread?.isThread?.() ? thread : null;
       const replacement = await withDiscordRetry(() => canonical.threads.create({
         name: String(group.name || 'Group').slice(0, 100), type: ChannelType.PrivateThread, invitable: false,
         reason: 'Move managed group thread to shared group chat'
       }));
-      if (thread?.isThread?.()) {
-        managedThreadIds.delete(thread.id);
-        await thread.delete('Replace managed group thread in shared group chat').catch(() => {});
+      try {
+        const failed = await syncGroupThreadMembers(guild, group, replacement, role);
+        if (failed.length || !replacement.isThread?.() || String(replacement.parentId) !== String(canonical.id)) throw new Error(`THREAD_TRANSFER_INCOMPLETE:${failed.length}`);
+        await gm.updateGroup(guild.id, group.id, { text_channel_id: canonical.id, thread_id: replacement.id, updated_at: Date.now() }, null);
+        if (oldThread) {
+          try { await oldThread.delete('Replace managed group thread in shared group chat'); }
+          catch (error) { if (Number(error?.code) !== 10003) throw error; }
+          managedThreadIds.delete(oldThread.id);
+        }
+        thread = replacement;
+        managedThreadIds.add(thread.id);
+      } catch (error) {
+        await replacement.delete('Rollback incomplete managed thread migration').catch(() => {});
+        throw error;
       }
-      thread = replacement;
-      managedThreadIds.add(thread.id);
-      await gm.updateGroup(guild.id, group.id, { text_channel_id: canonical.id, thread_id: thread.id, updated_at: Date.now() }, null);
     } else if (oldParentId !== canonical.id) {
       await gm.updateGroup(guild.id, group.id, { text_channel_id: canonical.id, updated_at: Date.now() }, null);
     }
     const failed = await syncGroupThreadMembers(guild, group, thread, role);
     if (failed.length) await gm.audit(guild.id, null, group.id, 'group_thread_member_sync_failed', { userIds: failed }).catch(() => {});
-  }
+  });
   for (const parent of parents) {
     if (parent.id === canonical.id) continue;
-    const remainingThreads = await threadChoices(parent).catch(() => []);
+    const remainingThreads = await threadChoices(parent).catch(() => null);
+    if (!Array.isArray(remainingThreads)) {
+      console.warn('[groups] kept duplicate group-chat parent because its threads could not be verified:', parent.id);
+      continue;
+    }
     let migrationFailed = false;
     for (const thread of remainingThreads) {
       try {
@@ -582,8 +601,14 @@ async function consolidateThreadGroupChats(guild, settings, groups) {
         console.error('[groups] failed to migrate duplicate group-chat thread:', parent.id, thread.id, error?.message || error);
       }
     }
-    if (!migrationFailed) await parent.delete('Remove duplicate groups-chat parent after thread migration').catch(() => {});
-    else console.warn('[groups] kept duplicate group-chat parent because a thread could not be migrated:', parent.id);
+    const remainingAfterMigration = !migrationFailed ? await threadChoices(parent).catch(() => null) : null;
+    if (!migrationFailed && Array.isArray(remainingAfterMigration) && remainingAfterMigration.length === 0) {
+      await parent.delete('Remove duplicate groups-chat parent after verified thread migration').catch(error => {
+        console.warn('[groups] failed to delete verified duplicate group-chat parent:', parent.id, error?.message || error);
+      });
+    } else {
+      console.warn('[groups] kept duplicate group-chat parent because migration verification failed or threads remain:', parent.id);
+    }
   }
 }
 
@@ -637,7 +662,8 @@ async function restoreGroupResources(guild, sourceGroup, trigger = 'resource_del
     let thread = group.thread_id && (guild.channels.cache.get(group.thread_id) || await guild.channels.fetch(group.thread_id).catch(() => null));
     if (!text || text.type !== ChannelType.GuildText) {
       text = settings.chatMode === 'threads' ? await findSharedGroupChat(guild, settings) : null;
-      if (!text) text = await withDiscordRetry(() => guild.channels.create({ name: settings.chatMode === 'threads' ? 'groups-chat' : `📝・${String(group.name || 'Group').slice(0, 90)}`, type: ChannelType.GuildText, parent: settings.textCategoryId || undefined, permissionOverwrites: groupChannelOverwrites(guild, roleResult.role.id), reason: 'Restore deleted managed group text channel' }));
+      if (!text && settings.chatMode === 'threads') throw new Error('SHARED_GROUP_CHAT_UNAVAILABLE');
+      if (!text) text = await withDiscordRetry(() => guild.channels.create({ name: `📝・${String(group.name || 'Group').slice(0, 90)}`, type: ChannelType.GuildText, parent: settings.textCategoryId || undefined, permissionOverwrites: groupChannelOverwrites(guild, roleResult.role.id), reason: 'Restore deleted managed group text channel' }));
       patch.text_channel_id = text.id;
       thread = null;
       if (settings.chatMode === 'threads') await text.permissionOverwrites.edit(roleResult.role.id, {
@@ -2816,26 +2842,7 @@ function importGroupName(role) {
   return safe(String(role?.name || '').replace(/^Group[・\s]+/i, ''), 80).trim() || 'Group';
 }
 async function findSharedGroupChat(guild, settings) {
-  const groups = await gm.listGroups(guild.id);
-  const candidates = new Map();
-  for (const group of groups) {
-    if (!group.text_channel_id) continue;
-    const channel = await channelById(guild, group.text_channel_id);
-    if (channel?.type === ChannelType.GuildText) candidates.set(channel.id, channel);
-  }
-  const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
-  for (const channel of [...channels.values()]
-    .filter(channel => channel?.type === ChannelType.GuildText
-      && String(channel.name || '').toLowerCase() === 'groups-chat'
-      && (!settings.textCategoryId || String(channel.parentId || '') === String(settings.textCategoryId)))) {
-    candidates.set(channel.id, channel);
-  }
-  const scored = await Promise.all([...candidates.values()].map(async channel => ({
-    channel,
-    threadCount: (await threadChoices(channel).catch(() => [])).length
-  })));
-  scored.sort((a, b) => b.threadCount - a.threadCount || String(a.channel.id).localeCompare(String(b.channel.id)));
-  return scored[0]?.channel || null;
+  return (await gm.getOrCreateSharedGroupChat(guild, settings)).text;
 }
 async function createImportTextResources(guild, flow, settings, role) {
   const name = importGroupName(role);
@@ -2843,9 +2850,10 @@ async function createImportTextResources(guild, flow, settings, role) {
   try {
     let text = settings.chatMode === 'threads' ? await findSharedGroupChat(guild, settings) : null;
     let createdText = false;
+    if (!text && settings.chatMode === 'threads') throw new Error('SHARED_GROUP_CHAT_UNAVAILABLE');
     if (!text) {
       text = await guild.channels.create({
-        name: settings.chatMode === 'threads' ? 'groups-chat' : `📝・${name}`.slice(0, 100),
+        name: `📝・${name}`.slice(0, 100),
         type: ChannelType.GuildText,
         parent: settings.textCategoryId || undefined,
         permissionOverwrites: groupChannelOverwrites(guild, role.id),

@@ -171,6 +171,34 @@ async function withLock(key, operation) {
   await previous.catch(() => {});
   try { return await operation(); } finally { release(); if (locks.get(key) === current) locks.delete(key); }
 }
+async function getOrCreateSharedGroupChat(guild, settings) {
+  if (settings?.chatMode !== GROUP_CHAT_MODES.THREADS) throw new Error('THREAD_CHAT_MODE_REQUIRED');
+  return withLock(`group-chat:${guild.id}`, async () => {
+    const candidates = new Map();
+    const rows = await dbManager.all("SELECT text_channel_id, thread_id FROM managed_groups WHERE guild_id = ? AND status != 'deleted' AND text_channel_id IS NOT NULL", [guild.id]);
+    for (const row of rows) {
+      const channel = guild.channels.cache.get(String(row.text_channel_id)) || await guild.channels.fetch(String(row.text_channel_id)).catch(() => null);
+      if (channel?.type === ChannelType.GuildText && (String(channel.name || '').toLowerCase() === 'groups-chat' || row.thread_id)) candidates.set(channel.id, channel);
+    }
+    const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
+    for (const channel of channels.values()) {
+      if (channel?.type === ChannelType.GuildText && String(channel.name || '').toLowerCase() === 'groups-chat'
+        && (!settings.textCategoryId || String(channel.parentId || '') === String(settings.textCategoryId))) candidates.set(channel.id, channel);
+    }
+    const scored = await Promise.all([...candidates.values()].map(async channel => ({
+      channel,
+      count: (await channel.threads?.fetchActive?.().catch(() => ({ threads: new Map() })))?.threads?.size || 0
+    })));
+    scored.sort((a, b) => b.count - a.count || String(a.channel.id).localeCompare(String(b.channel.id)));
+    if (scored[0]?.channel) return { text: scored[0].channel, reused: true };
+    const text = await guild.channels.create({
+      name: 'groups-chat', type: ChannelType.GuildText, parent: settings.textCategoryId || undefined,
+      permissionOverwrites: [{ id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] }],
+      reason: 'Create the single shared managed group chat parent'
+    });
+    return { text, reused: false };
+  });
+}
 async function getSettings(guildId) { await schema(); const row = await dbManager.get('SELECT * FROM group_system_settings WHERE guild_id = ?', [String(guildId)]); return normalizeSettings(row || { guild_id: guildId, settings_json: JSON.stringify({}) }); }
 async function saveSettingsLocked(guildId, patch, actorId = null) {
   const result = await dbManager.transaction(async tx => {
@@ -739,10 +767,9 @@ async function createGroup(guild, { name, description = '', ownerId, color = '#5
         if (!owner.roles.cache.has(leaderRole.id)) { await owner.roles.add(leaderRole, 'Managed group leader role'); leaderRoleAdded = true; }
       }
       if (settings.chatMode === GROUP_CHAT_MODES.THREADS) {
-        const sharedTextId = existingRows.map(row => row.text_channel_id).find(Boolean);
-        text = sharedTextId && (guild.channels.cache.get(String(sharedTextId)) || await guild.channels.fetch(String(sharedTextId)).catch(() => null));
-        if (text?.type === ChannelType.GuildText) reusedSharedText = true;
-        else text = await guild.channels.create({ name: 'groups-chat', type: ChannelType.GuildText, parent: settings.textCategoryId, reason: 'Create shared managed groups thread parent' });
+        const shared = await getOrCreateSharedGroupChat(guild, settings);
+        text = shared.text;
+        reusedSharedText = shared.reused;
         if (!reusedSharedText) created.push(['channel', text]);
         thread = await text.threads.create({ name: groupName.slice(0, 100), type: ChannelType.PrivateThread, invitable: false, reason: 'Create managed group thread' });
         created.push(['thread', thread]); await thread.members.add(owner.id);
@@ -865,4 +892,4 @@ async function releaseOperationLock(lockKey, ownerToken) {
   await schema();
   await dbManager.run('DELETE FROM group_operation_locks WHERE lock_key = ? AND owner_token = ?', [String(lockKey), String(ownerToken)]).catch(() => {});
 }
-module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, runtimeLog, logGroupEvent, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, explainActivity, listMemberPoints, listPointsLedger, pruneGroupHistory, upsertVoiceSession, listVoiceSessions, deleteVoiceSession, getMemberPoints, createGroup, deleteGroup, acquireOperationLock, releaseOperationLock };
+module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, runtimeLog, logGroupEvent, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, explainActivity, listMemberPoints, listPointsLedger, pruneGroupHistory, upsertVoiceSession, listVoiceSessions, deleteVoiceSession, getMemberPoints, getOrCreateSharedGroupChat, createGroup, deleteGroup, acquireOperationLock, releaseOperationLock };
