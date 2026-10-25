@@ -507,7 +507,14 @@ async function consolidateThreadGroupChats(guild, settings, groups) {
     const channel = guild.channels.cache.get(id) || await guild.channels.fetch(id).catch(() => null);
     if (channel?.type === ChannelType.GuildText) parentsById.set(channel.id, channel);
   }
-  const parents = [...parentsById.values()];
+  // Prefer the parent that already contains the most threads. On a tie,
+  // Discord snowflakes sort chronologically, so the oldest parent wins.
+  const parentScores = await Promise.all([...parentsById.values()].map(async parent => ({
+    parent,
+    threadCount: (await threadChoices(parent).catch(() => [])).length
+  })));
+  parentScores.sort((a, b) => b.threadCount - a.threadCount || String(a.parent.id).localeCompare(String(b.parent.id)));
+  const parents = parentScores.map(item => item.parent);
   if (!parents.length && !groups.length) return;
   let canonical = parents[0] || null;
   if (!canonical) {
@@ -2567,7 +2574,9 @@ async function assertExclusive(guild, group, channel) {
   // Threads inherit overwrites from their parent. Only a dedicated, linked parent is safe.
   if (channel.type === ChannelType.GuildText && channel.threads) {
     const threads = await threadChoices(channel);
-    if (threads.some(thread => thread.id !== group.thread_id)) throw new Error('SHARED_CHANNEL');
+    const selectedThreadId = String(group.thread_id || '');
+    if (selectedThreadId && !threads.some(thread => String(thread.id) === selectedThreadId)) throw new Error('INVALID_THREAD');
+    if (!sharedThreadParent && threads.some(thread => String(thread.id) !== selectedThreadId)) throw new Error('SHARED_CHANNEL');
   }
 }
 async function groupChannels(guild, group, scope) {
@@ -2773,18 +2782,41 @@ function confirmFlowPayload(guild, flow, description) {
 function importGroupName(role) {
   return safe(String(role?.name || '').replace(/^Group[・\s]+/i, ''), 80).trim() || 'Group';
 }
+async function findSharedGroupChat(guild, settings) {
+  const groups = await gm.listGroups(guild.id);
+  for (const group of groups) {
+    if (!group.text_channel_id) continue;
+    const channel = await channelById(guild, group.text_channel_id);
+    if (channel?.type === ChannelType.GuildText) return channel;
+  }
+  const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
+  return [...channels.values()]
+    .filter(channel => channel?.type === ChannelType.GuildText
+      && String(channel.name || '').toLowerCase() === 'groups-chat'
+      && (!settings.textCategoryId || String(channel.parentId || '') === String(settings.textCategoryId)))
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0] || null;
+}
 async function createImportTextResources(guild, flow, settings, role) {
   const name = importGroupName(role);
   const created = [];
   try {
-    const text = await guild.channels.create({
-      name: settings.chatMode === 'threads' ? 'groups-chat' : `📝・${name}`.slice(0, 100),
-      type: ChannelType.GuildText,
-      parent: settings.textCategoryId || undefined,
-      permissionOverwrites: groupChannelOverwrites(guild, role.id),
-      reason: 'Create group resources from admin Add'
-    });
-    created.push(text);
+    let text = settings.chatMode === 'threads' ? await findSharedGroupChat(guild, settings) : null;
+    let createdText = false;
+    if (!text) {
+      text = await guild.channels.create({
+        name: settings.chatMode === 'threads' ? 'groups-chat' : `📝・${name}`.slice(0, 100),
+        type: ChannelType.GuildText,
+        parent: settings.textCategoryId || undefined,
+        permissionOverwrites: groupChannelOverwrites(guild, role.id),
+        reason: 'Create group resources from admin Add'
+      });
+      createdText = true;
+      created.push(text);
+    } else if (settings.chatMode === 'threads') {
+      await text.permissionOverwrites.edit(role.id, {
+        ViewChannel: true, SendMessages: true, SendMessagesInThreads: true, ReadMessageHistory: true
+      }, { reason: 'Add imported group role to shared group chat' });
+    }
     flow.textId = text.id;
     flow.threadId = null;
     if (settings.chatMode === 'threads') {
@@ -2792,7 +2824,7 @@ async function createImportTextResources(guild, flow, settings, role) {
       created.push(thread);
       flow.threadId = thread.id;
     }
-    return { text, thread: flow.threadId ? await channelById(guild, flow.threadId) : null };
+    return { text, thread: flow.threadId ? await channelById(guild, flow.threadId) : null, createdText };
   } catch (error) {
     for (const resource of created.reverse()) await resource.delete('Rollback failed group resource import').catch(() => {});
     throw error;
@@ -3056,7 +3088,7 @@ async function saveImportedGroup(interaction, flow) {
       if (!role || !owner) throw new Error('MEMBER_NOT_FOUND');
       if (!flow.textId) {
         const resources = await createImportTextResources(interaction.guild, flow, settings, role);
-        created.push(resources.text);
+        if (resources.createdText) created.push(resources.text);
         if (resources.thread) created.push(resources.thread);
       } else if (flow.createThread && !flow.threadId) {
         const text = await channelById(interaction.guild, flow.textId);
