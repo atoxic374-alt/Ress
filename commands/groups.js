@@ -491,6 +491,22 @@ async function syncGroupThreadMembers(guild, group, thread, role = null) {
   return failed;
 }
 
+async function migrateDuplicateGroupThread(thread, canonical) {
+  const replacement = await withDiscordRetry(() => canonical.threads.create({
+    name: String(thread.name || 'Group').slice(0, 100), type: ChannelType.PrivateThread, invitable: false,
+    reason: 'Migrate thread from duplicate groups-chat parent'
+  }));
+  let members = [];
+  try {
+    const collection = await thread.members?.fetch?.();
+    members = collection ? [...collection.keys()] : [];
+  } catch {}
+  await runWithConcurrency(members, 4, async userId => { await restoreThreadMember(replacement, userId); });
+  if (thread.archived) await replacement.setArchived?.(true, 'Preserve archived state after groups-chat migration').catch(() => {});
+  await thread.delete('Remove duplicate groups-chat thread after migration').catch(() => null);
+  return replacement;
+}
+
 async function consolidateThreadGroupChats(guild, settings, groups) {
   if (settings.chatMode !== 'threads') return;
   const linkedParentIds = [...new Set(groups.map(group => String(group.text_channel_id || '')).filter(Boolean))];
@@ -552,9 +568,22 @@ async function consolidateThreadGroupChats(guild, settings, groups) {
   for (const parent of parents) {
     if (parent.id === canonical.id) continue;
     const remainingThreads = await threadChoices(parent).catch(() => []);
-    const hasUnmanagedThreads = remainingThreads.some(thread => !managedThreadIds.has(thread.id));
-    if (!hasUnmanagedThreads) await parent.delete('Remove duplicate managed group chat parent').catch(() => {});
-    else console.warn('[groups] kept duplicate group-chat parent because it contains unmanaged threads:', parent.id);
+    let migrationFailed = false;
+    for (const thread of remainingThreads) {
+      try {
+        const replacement = await migrateDuplicateGroupThread(thread, canonical);
+        const linkedGroup = groups.find(group => String(group.thread_id) === String(thread.id));
+        if (linkedGroup) {
+          await gm.updateGroup(guild.id, linkedGroup.id, { text_channel_id: canonical.id, thread_id: replacement.id, updated_at: Date.now() }, null);
+          managedThreadIds.add(replacement.id);
+        }
+      } catch (error) {
+        migrationFailed = true;
+        console.error('[groups] failed to migrate duplicate group-chat thread:', parent.id, thread.id, error?.message || error);
+      }
+    }
+    if (!migrationFailed) await parent.delete('Remove duplicate groups-chat parent after thread migration').catch(() => {});
+    else console.warn('[groups] kept duplicate group-chat parent because a thread could not be migrated:', parent.id);
   }
 }
 
@@ -607,9 +636,13 @@ async function restoreGroupResources(guild, sourceGroup, trigger = 'resource_del
     let voice = group.voice_channel_id && (guild.channels.cache.get(group.voice_channel_id) || await guild.channels.fetch(group.voice_channel_id).catch(() => null));
     let thread = group.thread_id && (guild.channels.cache.get(group.thread_id) || await guild.channels.fetch(group.thread_id).catch(() => null));
     if (!text || text.type !== ChannelType.GuildText) {
-      text = await withDiscordRetry(() => guild.channels.create({ name: settings.chatMode === 'threads' ? 'groups-chat' : `📝・${String(group.name || 'Group').slice(0, 90)}`, type: ChannelType.GuildText, parent: settings.textCategoryId || undefined, permissionOverwrites: groupChannelOverwrites(guild, roleResult.role.id), reason: 'Restore deleted managed group text channel' }));
+      text = settings.chatMode === 'threads' ? await findSharedGroupChat(guild, settings) : null;
+      if (!text) text = await withDiscordRetry(() => guild.channels.create({ name: settings.chatMode === 'threads' ? 'groups-chat' : `📝・${String(group.name || 'Group').slice(0, 90)}`, type: ChannelType.GuildText, parent: settings.textCategoryId || undefined, permissionOverwrites: groupChannelOverwrites(guild, roleResult.role.id), reason: 'Restore deleted managed group text channel' }));
       patch.text_channel_id = text.id;
       thread = null;
+      if (settings.chatMode === 'threads') await text.permissionOverwrites.edit(roleResult.role.id, {
+        ViewChannel: true, SendMessages: true, SendMessagesInThreads: true, ReadMessageHistory: true
+      }, { reason: 'Restore managed group role in shared group chat' }).catch(() => {});
     } else {
       await text.permissionOverwrites.edit(roleResult.role.id, {
         ViewChannel: true, SendMessages: true, SendMessagesInThreads: true, ReadMessageHistory: true
@@ -2784,17 +2817,25 @@ function importGroupName(role) {
 }
 async function findSharedGroupChat(guild, settings) {
   const groups = await gm.listGroups(guild.id);
+  const candidates = new Map();
   for (const group of groups) {
     if (!group.text_channel_id) continue;
     const channel = await channelById(guild, group.text_channel_id);
-    if (channel?.type === ChannelType.GuildText) return channel;
+    if (channel?.type === ChannelType.GuildText) candidates.set(channel.id, channel);
   }
   const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
-  return [...channels.values()]
+  for (const channel of [...channels.values()]
     .filter(channel => channel?.type === ChannelType.GuildText
       && String(channel.name || '').toLowerCase() === 'groups-chat'
-      && (!settings.textCategoryId || String(channel.parentId || '') === String(settings.textCategoryId)))
-    .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0] || null;
+      && (!settings.textCategoryId || String(channel.parentId || '') === String(settings.textCategoryId)))) {
+    candidates.set(channel.id, channel);
+  }
+  const scored = await Promise.all([...candidates.values()].map(async channel => ({
+    channel,
+    threadCount: (await threadChoices(channel).catch(() => [])).length
+  })));
+  scored.sort((a, b) => b.threadCount - a.threadCount || String(a.channel.id).localeCompare(String(b.channel.id)));
+  return scored[0]?.channel || null;
 }
 async function createImportTextResources(guild, flow, settings, role) {
   const name = importGroupName(role);
