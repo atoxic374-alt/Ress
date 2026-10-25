@@ -571,6 +571,7 @@ async function consolidateThreadGroupChats(guild, settings, groups) {
         thread = replacement;
         managedThreadIds.add(thread.id);
       } catch (error) {
+        if (oldThread) await gm.updateGroup(guild.id, group.id, { text_channel_id: oldParentId, thread_id: oldThread.id, updated_at: Date.now() }, null).catch(() => {});
         await replacement.delete('Rollback incomplete managed thread migration').catch(() => {});
         throw error;
       }

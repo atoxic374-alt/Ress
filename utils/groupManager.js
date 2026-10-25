@@ -812,11 +812,18 @@ async function deleteGroup(guild, groupId, actorId) {
       const group = await getGroup(guild.id, groupId);
       if (!group) throw new Error('GROUP_NOT_FOUND');
       if (group.status === 'deleted') return true;
+      const settings = await getSettings(guild.id);
+      const textChannel = group.text_channel_id
+        && (guild.channels.cache.get(String(group.text_channel_id)) || await guild.channels.fetch(String(group.text_channel_id)).catch(() => null));
+      const sharedThreadParent = settings.chatMode === GROUP_CHAT_MODES.THREADS
+        || String(textChannel?.name || '').toLowerCase() === 'groups-chat';
       const resources = [
-        ['thread', group.thread_id], ['text_channel', group.text_channel_id],
+        ['thread', group.thread_id],
+        ...(!sharedThreadParent ? [['text_channel', group.text_channel_id]] : []),
         ['voice_channel', group.voice_channel_id], ['role', group.role_id]
       ].filter(([, id]) => id);
       const resourceStatus = Object.fromEntries(resources.map(([type, id]) => [type, { id: String(id), state: 'pending' }]));
+      if (sharedThreadParent && group.text_channel_id) resourceStatus.text_channel = { id: String(group.text_channel_id), state: 'preserved_shared_parent' };
       const failed = [];
       for (const [type, id] of resources) {
         const isRole = type === 'role';
@@ -850,7 +857,6 @@ async function deleteGroup(guild, groupId, actorId) {
       }, 'group-delete');
       // Remove global leader/manager roles only when the deleted group was their last entitlement.
       try {
-      const settings = await getSettings(guild.id);
       const remaining = await listGroups(guild.id);
       const roleCleanup = new Map();
       if (settings.leaderRoleId && !remaining.some(item => String(item.owner_id) === String(group.owner_id))) roleCleanup.set(String(group.owner_id), settings.leaderRoleId);
