@@ -1,4 +1,5 @@
 const groups = require('./groups');
+const gm = require('../utils/groupManager');
 
 const GROUP_SETUP_TOKENS = new Set(['groups', 'group', 'قروبات', 'قروب', 'إعدادات', 'اعدادات', 'تهيئة']);
 const HELP_TOKENS = new Set(['help', 'مساعدة', '؟']);
@@ -7,6 +8,9 @@ module.exports = {
   name: 'setup',
   aliases: ['إعدادات', 'group-setup'],
   async execute(message, args = [], context = {}) {
+    if (!message.guild || !gm.isBotOwner(context.client || message.client, message.member || message.author)) {
+      return message.reply('أمر setup متاح لمالكي البوت فقط.');
+    }
     const action = String(args[0] || '').toLowerCase();
     if (!action || GROUP_SETUP_TOKENS.has(action)) {
       return groups.execute(message, ['setup'], context);

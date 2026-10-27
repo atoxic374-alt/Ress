@@ -320,6 +320,14 @@ async function logGroupEvent(guild, event, details = {}, actorId = null) {
   }
 }
 function isOwner(client, member) { return Boolean(member && (member.id === member.guild?.ownerId || client?.isBotOwner?.(member.id) || global.isBotOwner?.(member.id) || (global.BOT_OWNERS || []).map(String).includes(String(member.id)))); }
+function isBotOwner(client, member) {
+  const userId = String(member?.id || member?.user?.id || '');
+  if (!userId) return false;
+  if (client?.isBotOwner?.(userId) || global.isBotOwner?.(member || userId)) return true;
+  if ((global.BOT_OWNERS || []).map(String).includes(userId)) return true;
+  const ownerRoles = new Set((global.BOT_OWNER_ROLES || []).map(String));
+  return Boolean(ownerRoles.size && member?.roles?.cache?.some(role => ownerRoles.has(String(role.id))));
+}
 function isSystemManager(settings, member) { if (!member) return false; return settings.systemUsers.includes(String(member.id)) || member.roles?.cache?.some(role => settings.systemRoles.includes(String(role.id))); }
 function canManageSystem(client, settings, member) { return isOwner(client, member) || isSystemManager(settings, member); }
 function canManageGroup(client, settings, group, member) { if (!member || !group) return false; return canManageSystem(client, settings, member) || String(group.owner_id) === String(member.id) || group.managerIds.includes(String(member.id)); }
@@ -898,4 +906,4 @@ async function releaseOperationLock(lockKey, ownerToken) {
   await schema();
   await dbManager.run('DELETE FROM group_operation_locks WHERE lock_key = ? AND owner_token = ?', [String(lockKey), String(ownerToken)]).catch(() => {});
 }
-module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, runtimeLog, logGroupEvent, isOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, explainActivity, listMemberPoints, listPointsLedger, pruneGroupHistory, upsertVoiceSession, listVoiceSessions, deleteVoiceSession, getMemberPoints, getOrCreateSharedGroupChat, createGroup, deleteGroup, acquireOperationLock, releaseOperationLock };
+module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, runtimeLog, logGroupEvent, isOwner, isBotOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, explainActivity, listMemberPoints, listPointsLedger, pruneGroupHistory, upsertVoiceSession, listVoiceSessions, deleteVoiceSession, getMemberPoints, getOrCreateSharedGroupChat, createGroup, deleteGroup, acquireOperationLock, releaseOperationLock };
