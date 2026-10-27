@@ -329,6 +329,7 @@ function isBotOwner(client, member) {
   return Boolean(ownerRoles.size && member?.roles?.cache?.some(role => ownerRoles.has(String(role.id))));
 }
 function isSystemManager(settings, member) { if (!member) return false; return settings.systemUsers.includes(String(member.id)) || member.roles?.cache?.some(role => settings.systemRoles.includes(String(role.id))); }
+function canManageGroupAdmin(client, settings, member) { return isBotOwner(client, member) || isSystemManager(settings, member); }
 function canManageSystem(client, settings, member) { return isOwner(client, member) || isSystemManager(settings, member); }
 function canManageGroup(client, settings, group, member) { if (!member || !group) return false; return canManageSystem(client, settings, member) || String(group.owner_id) === String(member.id) || group.managerIds.includes(String(member.id)); }
 function channelBelongs(group, channelId) { return [group.text_channel_id, group.thread_id, group.voice_channel_id].filter(Boolean).includes(String(channelId)); }
@@ -906,4 +907,4 @@ async function releaseOperationLock(lockKey, ownerToken) {
   await schema();
   await dbManager.run('DELETE FROM group_operation_locks WHERE lock_key = ? AND owner_token = ?', [String(lockKey), String(ownerToken)]).catch(() => {});
 }
-module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, runtimeLog, logGroupEvent, isOwner, isBotOwner, isSystemManager, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, explainActivity, listMemberPoints, listPointsLedger, pruneGroupHistory, upsertVoiceSession, listVoiceSessions, deleteVoiceSession, getMemberPoints, getOrCreateSharedGroupChat, createGroup, deleteGroup, acquireOperationLock, releaseOperationLock };
+module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, runtimeLog, logGroupEvent, isOwner, isBotOwner, isSystemManager, canManageGroupAdmin, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, explainActivity, listMemberPoints, listPointsLedger, pruneGroupHistory, upsertVoiceSession, listVoiceSessions, deleteVoiceSession, getMemberPoints, getOrCreateSharedGroupChat, createGroup, deleteGroup, acquireOperationLock, releaseOperationLock };

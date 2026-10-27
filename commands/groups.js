@@ -305,7 +305,8 @@ function replyMessage(message, payload) { return message.reply(responsePayload(t
 async function reply(interaction, payload, ephemeral=true) { const data=responsePayload({...payload,allowedMentions:{parse:[]}}); if(interaction.deferred&&!interaction.replied)return interaction.editReply(data); if(interaction.replied)return interaction.followUp({...data,ephemeral}); return interaction.reply({...data,ephemeral}); }
 async function deny(interaction, message='لا تملك صلاحية استخدام هذه العملية.') { return reply(interaction,{content:message}); }
 function setupConfirmation(interaction, title, text) { const c = baseContainer(interaction.guild, title, `**- ${safe(text, 300)} **`); return componentsV2Payload(c); }
-async function checkSystem(interaction) { const settings=await gm.getSettings(interaction.guild.id); if(!gm.isBotOwner(interaction.client, interaction.member)){await deny(interaction,'لا تملك صلاحية استخدام هذه العملية. هذه العملية مخصصة لمالكي البوت فقط.');return null;} return settings; }
+async function checkSystem(interaction) { const settings=await gm.getSettings(interaction.guild.id); if(!gm.canManageGroupAdmin(interaction.client, settings, interaction.member)){await deny(interaction,'لا تملك صلاحية استخدام هذه العملية. عيّنْك مالك البوت كمسؤول نظام أولًا.');return null;} return settings; }
+async function checkBotOwner(interaction) { const settings=await gm.getSettings(interaction.guild.id); if(!gm.isBotOwner(interaction.client, interaction.member)){await deny(interaction,'لا تملك صلاحية تعديل إعدادات النظام. هذه العملية مخصصة لمالكي البوت فقط.');return null;} return settings; }
 function musicResultMessage(result) { if(!result) return 'لم يتم تنفيذ الميوزك.'; if(result.ok) return result.alreadyPresent ? `بوت الأغاني ${result.musicBot.user.username} موجود بالفعل في القناة.` : `تم سحب بوت الأغاني ${result.musicBot.user.username} إلى القناة.`; const messages={MUSIC_CHANNEL_NOT_CONFIGURED:'لم يتم تحديد قناة مصدر الميوزك.',INVALID_MUSIC_CHANNEL:'قناة مصدر الميوزك غير صالح.',MUSIC_BOT_NOT_FOUND:'لم يتم العثور على بوت أغاني معروف في قناة المصدر.',AMBIGUOUS_SOURCE_BOTS:'يوجد أكثر من بوت أغاني في المصدر؛ لم يتم اختيار بوت عشوائياً.',AMBIGUOUS_TARGET_BOTS:'يوجد أكثر من بوت أغاني في القناة الهدف؛ لم يتم تغيير أي بوت.',MISSING_PERMISSIONS:`صلاحيات البوت ناقصة : ${result.error||'غير معروفة'}`,MOVE_FAILED:'تعذر نقل بوت الأغاني حالياً.',TARGET_IS_MUSIC_CHANNEL:'القناة الهدف هو قناة المصدر نفسه.'}; return messages[result.code]||'تعذر تنفيذ Music بأمان.'; }
 function isGroupMember(group, userId) {
   const id = String(userId || '');
@@ -1333,7 +1334,7 @@ function setupManagerRemovalModal() {
 }
 async function handleSetup(interaction, action) {
   if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const settings = await checkSystem(interaction);
+  const settings = await checkBotOwner(interaction);
   if (!settings) return true;
   if (action === 'toggle') {
     if (!settings.enabled) {
@@ -1403,7 +1404,7 @@ async function handleSetup(interaction, action) {
 }
 async function handleSetupManager(interaction, action, parts = []) {
   if (action === 'remove' && interaction.isButton?.()) {
-    const settings = await checkSystem(interaction);
+    const settings = await checkBotOwner(interaction);
     if (!settings) return true;
     return interaction.showModal(setupManagerRemovalModal());
   }
@@ -1411,7 +1412,7 @@ async function handleSetupManager(interaction, action, parts = []) {
     if (interaction.isModalSubmit?.()) await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     else await interaction.deferUpdate();
   }
-  const settings = await checkSystem(interaction);
+  const settings = await checkBotOwner(interaction);
   if (!settings) return true;
   if (!gm.isBotOwner(interaction.client, interaction.member)) {
     return reply(interaction, { content: 'إضافة مسؤولي النظام وإزالتهم متاحة لمالكي البوت فقط.' });
@@ -1451,7 +1452,7 @@ async function handleSetupManager(interaction, action, parts = []) {
 }
 async function handleSetupSelection(interaction, prefix, action) {
   if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate();
-  const settings = await checkSystem(interaction);
+  const settings = await checkBotOwner(interaction);
   if (!settings) return true;
   if (prefix === 'groups_setup_clear_select') {
     const key = String(interaction.values?.[0] || '');
@@ -1609,7 +1610,7 @@ async function handleMember(interaction, action, groupId) {
   return true;
 }
 async function handleRulesInteraction(interaction, action, parts = []) {
-  const settings = await checkSystem(interaction);
+  const settings = await checkBotOwner(interaction);
   if (!settings) return true;
   const metric = String(parts[0] || '').toLowerCase();
   const definition = RULE_METRICS.find(([key]) => key === metric);
@@ -1714,7 +1715,7 @@ async function handleInteraction(interaction) { const extended=await handleGroup
   const page=action==='next'?currentPage+1:action==='prev'?currentPage-1:currentPage;
   return interaction.update(responsePayload(await buildOurMembersPayload(interaction.guild,group,page)));
  }
- if(prefix==='groups_top'&&['rank','group','pick','manage','avatar','avatar-modal','refresh','leave','leave-confirm','leave-cancel','transfer','transfer-select'].includes(action))return handleTopGroupsInteraction(interaction,action,parts); if(prefix==='groups_bonus')return handleTopBonusButton(interaction,action); if(prefix==='groups_bonus_select')return handleTopBonusSelection(interaction,action,parts); if(prefix==='groups_bonus_page')return handleTopBonusPage(interaction,action,parts); if(prefix==='groups_bonus_member_select')return handleTopBonusMemberSelection(interaction,action,parts); if(prefix==='groups_bonus_modal')return handleTopBonusModal(interaction,action,parts); if(prefix==='groups_bonus_confirm')return handleTopBonusConfirm(interaction,action,parts); if(prefix==='groups_rules_modal'){const metric=parts[0];const settings=await checkSystem(interaction);if(!settings)return true;const definition=RULE_METRICS.find(([key])=>key===metric);if(!definition)return reply(interaction,{content:'قاعدة النقاط غير معروفة.'});try{const rules=await gm.getRules(interaction.guild.id);const current=rules.find(rule=>String(rule.metric)===metric);const threshold=Number(interaction.fields.getTextInputValue('threshold'));const points=Number(interaction.fields.getTextInputValue('points'));await gm.setRule(interaction.guild.id,metric,threshold,points,Number(current?.enabled)===1,interaction.user.id);await gm.logGroupEvent(interaction.guild,'rule_update',{metric,threshold,points,enabled:Number(current?.enabled)===1},interaction.user.id);await refreshSetupPanel(interaction,settings);return reply(interaction,rulesPayload(interaction.guild,await gm.getRules(interaction.guild.id)));}catch(error){const messages={INVALID_THRESHOLD:'الحد يجب أن يكون عددًا صحيحًا أكبر من صفر ولا يتجاوز مليارًا.',INVALID_POINTS:'النقاط لكل حد يجب أن تكون عددًا صحيحًا بين 1 و1,000,000.',INVALID_METRIC:'نوع قاعدة النقاط غير معروف.'};return reply(interaction,{title:'RULE UPDATE FAILED',content:messages[error.message]||'تعذر حفظ قاعدة النقاط. تحقق من القيم وحاول مرة أخرى.'});}} if(prefix==='groups_meta_edit'){
+ if(prefix==='groups_top'&&['rank','group','pick','manage','avatar','avatar-modal','refresh','leave','leave-confirm','leave-cancel','transfer','transfer-select'].includes(action))return handleTopGroupsInteraction(interaction,action,parts); if(prefix==='groups_bonus')return handleTopBonusButton(interaction,action); if(prefix==='groups_bonus_select')return handleTopBonusSelection(interaction,action,parts); if(prefix==='groups_bonus_page')return handleTopBonusPage(interaction,action,parts); if(prefix==='groups_bonus_member_select')return handleTopBonusMemberSelection(interaction,action,parts); if(prefix==='groups_bonus_modal')return handleTopBonusModal(interaction,action,parts); if(prefix==='groups_bonus_confirm')return handleTopBonusConfirm(interaction,action,parts); if(prefix==='groups_rules_modal'){const metric=parts[0];const settings=await checkBotOwner(interaction);if(!settings)return true;const definition=RULE_METRICS.find(([key])=>key===metric);if(!definition)return reply(interaction,{content:'قاعدة النقاط غير معروفة.'});try{const rules=await gm.getRules(interaction.guild.id);const current=rules.find(rule=>String(rule.metric)===metric);const threshold=Number(interaction.fields.getTextInputValue('threshold'));const points=Number(interaction.fields.getTextInputValue('points'));await gm.setRule(interaction.guild.id,metric,threshold,points,Number(current?.enabled)===1,interaction.user.id);await gm.logGroupEvent(interaction.guild,'rule_update',{metric,threshold,points,enabled:Number(current?.enabled)===1},interaction.user.id);await refreshSetupPanel(interaction,settings);return reply(interaction,rulesPayload(interaction.guild,await gm.getRules(interaction.guild.id)));}catch(error){const messages={INVALID_THRESHOLD:'الحد يجب أن يكون عددًا صحيحًا أكبر من صفر ولا يتجاوز مليارًا.',INVALID_POINTS:'النقاط لكل حد يجب أن تكون عددًا صحيحًا بين 1 و1,000,000.',INVALID_METRIC:'نوع قاعدة النقاط غير معروف.'};return reply(interaction,{title:'RULE UPDATE FAILED',content:messages[error.message]||'تعذر حفظ قاعدة النقاط. تحقق من القيم وحاول مرة أخرى.'});}} if(prefix==='groups_meta_edit'){
   const field=choose(action,['name','description','emoji','color','avatar']);
   try { await currentManager(interaction, Number(parts[0])); }
   catch (error) { return reply(interaction,{content:groupError(error)}); }
@@ -1769,7 +1770,7 @@ async function sendCreateCommandPanel(message) {
     busy = true;
     try {
       const settings = await gm.getSettings(interaction.guild.id);
-      if (!gm.isBotOwner(interaction.client, interaction.member)) {
+      if (!gm.canManageGroupAdmin(interaction.client, settings, interaction.member)) {
         busy = false;
         return interaction.reply(responsePayload({ content: 'لا تملك صلاحية إدارة القروبات.', ephemeral: true }));
       }
@@ -1794,9 +1795,9 @@ async function execute(message, args, { client, prefix } = {}) {
   if (!message.guild) return;
   const settings = await gm.getSettings(message.guild.id);
   const member = message.member;
-  if (!gm.isBotOwner(client, member || message.author)) return replyMessage(message, 'أمر القروبات متاح لمالكي البوت فقط.');
+  const canManage = gm.canManageGroupAdmin(client, settings, member || message.author);
+  if (!canManage) return replyMessage(message, 'لا تملك صلاحية إدارة القروبات. عيّنك مالك البوت كمسؤول نظام أولًا.');
   const sub = String(args[0] || '').toLowerCase();
-  const canManage = true;
 
   if (['status', 'diagnose', 'تشخيص', 'حالة'].includes(sub)) {
     if (!canManage) return replyMessage(message, 'هذا التقرير متاح لمسؤولي نظام القروبات فقط.');
@@ -1821,7 +1822,7 @@ async function execute(message, args, { client, prefix } = {}) {
   }
 
   if (sub === 'setup' || sub === 'إعدادات') {
-    if (!canManage) return replyMessage(message,'لا تملك الصلاحية.');
+    if (!gm.isBotOwner(client, member || message.author)) return replyMessage(message,'إعداد النظام متاح لمالكي البوت فقط.');
     return sendSetupPanel(message.channel, message.guild, settings);
   }
   if (sub === 'control' || sub === 'تحكم') {
@@ -1831,6 +1832,7 @@ async function execute(message, args, { client, prefix } = {}) {
   }
   if (['rules', 'قواعد'].includes(sub)) {
     if (!canManage) return replyMessage(message,'لا تملك الصلاحية.');
+    if (!gm.isBotOwner(client, member || message.author)) return replyMessage(message,'تعديل إعدادات القواعد متاح لمالكي البوت فقط.');
     if (!args[1]) return message.channel.send(rulesPayload(message.guild, await gm.getRules(message.guild.id)));
     const metricName = String(args[1]).toLowerCase();
     const metric = metricName === 'voice' ? 'voice_ms' : ['reaction', 'reactions'].includes(metricName) ? 'reactions' : 'messages';
@@ -1842,6 +1844,7 @@ async function execute(message, args, { client, prefix } = {}) {
   }
   if (['minlength', 'حد_الرسالة', 'طول_الرسالة'].includes(sub)) {
     if (!canManage) return replyMessage(message, 'لا تملك الصلاحية.');
+    if (!gm.isBotOwner(client, member || message.author)) return replyMessage(message, 'تعديل إعدادات النظام متاح لمالكي البوت فقط.');
     if (args[1] == null) return replyMessage(message, `الحد الأدنى الحالي لطول الرسالة : ${Number(settings.minMessageLength) || 0} حرف. استخدم groups minlength 0 لإيقاف الشرط، أو رقمًا من 1 إلى 2000.`);
     const value = Number(args[1]);
     if (!Number.isInteger(value) || value < 0 || value > 2000) return replyMessage(message, 'اكتب رقمًا صحيحًا من 0 إلى 2000. القيمة 0 تعطل الحد الأدنى.');
