@@ -1798,6 +1798,10 @@ async function execute(message, args, { client, prefix } = {}) {
   const canManage = gm.canManageGroupAdmin(client, settings, member || message.author);
   if (!canManage) return replyMessage(message, 'لا تملك صلاحية إدارة القروبات. عيّنك مالك البوت كمسؤول نظام أولًا.');
   const sub = String(args[0] || '').toLowerCase();
+  if (!sub) {
+    if (!gm.isBotOwner(client, member || message.author)) return replyMessage(message, 'لوحة الإعداد متاحة لمالكي البوت فقط.');
+    return sendSetupPanel(message.channel, message.guild, settings);
+  }
 
   if (['status', 'diagnose', 'تشخيص', 'حالة'].includes(sub)) {
     if (!canManage) return replyMessage(message, 'هذا التقرير متاح لمسؤولي نظام القروبات فقط.');
