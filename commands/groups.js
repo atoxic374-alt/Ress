@@ -3144,7 +3144,11 @@ function permissionOptions(flow) {
 }
 async function validateImport(guild, flow, settings, includeMembers = false) {
   const groups = (await gm.listGroups(guild.id, true)).filter(g => g.status !== 'deleted');
-  const linkedIds = [flow.textId, flow.threadId, flow.voiceId].filter(Boolean);
+  // In thread mode the parent text channel is deliberately shared by all
+  // groups. Only the selected thread and voice channel must be exclusive;
+  // treating the shared parent as an occupied asset rejects valid owners.
+  const linkedIds = [flow.textId, flow.threadId, flow.voiceId]
+    .filter(id => id && !(settings.chatMode === 'threads' && String(id) === String(flow.textId)));
   if (groups.some(g => (flow.roleId && String(g.role_id || '') === String(flow.roleId)) || linkedIds.some(id => gm.channelBelongs(g, id)))) throw new Error('ASSET_LINKED');
   const role = flow.roleId ? await guild.roles.fetch(flow.roleId).catch(() => null) : null;
   if (flow.roleId && (!role || role.id === guild.id || role.managed || !role.editable || [settings.leaderRoleId, settings.managerRoleId, ...settings.systemRoles].includes(role.id) || role.permissions.has([PermissionsBitField.Flags.Administrator], false) || role.permissions.any([PermissionsBitField.Flags.ManageRoles, PermissionsBitField.Flags.ManageGuild, PermissionsBitField.Flags.ManageChannels, PermissionsBitField.Flags.ModerateMembers, PermissionsBitField.Flags.KickMembers, PermissionsBitField.Flags.BanMembers]))) throw new Error('INVALID_ROLE');
@@ -3257,7 +3261,9 @@ async function saveImportedGroup(interaction, flow) {
       await gm.schema();
       const groupId = await dbManager.transaction(async tx => {
         const existing = await tx.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status != 'deleted'", [interaction.guild.id]);
-        const assetIds = [text.id, thread?.id, voice.id].filter(Boolean);
+        // groups-chat is a shared parent in thread mode. Persist it on the
+        // group, but do not use it as an exclusive asset during collision checks.
+        const assetIds = [settings.chatMode === 'threads' ? null : text.id, thread?.id, voice.id].filter(Boolean);
         for (const row of existing) {
           if (row.role_id === role.id || assetIds.some(id => [row.text_channel_id, row.thread_id, row.voice_channel_id].includes(id))) throw new Error('ASSET_LINKED');
           if (row.status === 'active' && row.name === groupName) throw new Error('NAME_EXISTS');
