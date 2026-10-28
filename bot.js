@@ -4126,8 +4126,16 @@ if (executorMember && !isAllowedExecutor) {
             }
         }
 
-        // 4. حماية رولات المسؤوليات - إزالة تلقائية من غير المسؤولين والحماية من الإزالة
-        const responsibilities = readJSONFile(DATA_FILES.responsibilities, {});
+        // 4. حماية رولات المسؤوليات - إزالة تلقائية من غير المسؤولين والحماية من الإزالة.
+        // استخدم أحدث نسخة من SQLite؛ ملف JSON قد يكون أقدم للحظات بعد إزالة عضو.
+        const responsibilities = dbManager.isInitialized
+            ? await dbManager.getResponsibilities().catch(() => readJSONFile(DATA_FILES.responsibilities, {}))
+            : readJSONFile(DATA_FILES.responsibilities, {});
+        const responsibilityUserIds = (config) => new Set(
+            (Array.isArray(config?.responsibles) ? config.responsibles : (Array.isArray(config?.members) ? config.members : []))
+                .map(String)
+                .filter(Boolean)
+        );
         
         // فحص الرولات المضافة
         for (const [roleId, role] of addedRoles) {
@@ -4142,7 +4150,7 @@ if (executorMember && !isAllowedExecutor) {
 
             if (foundResp) {
                 // التحقق من أن المستخدم مسؤول في هذه المسؤولية
-                const isResponsible = foundResp.data.responsibles && foundResp.data.responsibles.includes(userId);
+                const isResponsible = responsibilityUserIds(foundResp.data).has(String(userId));
                 const isSupervisor = isSupervisorForResponsibility(newMember.guild.id, foundResp.name, newMember);
                 
                 if (!isResponsible && !isSupervisor) {
@@ -4197,7 +4205,7 @@ if (executorMember && !isAllowedExecutor) {
 
             if (foundResp) {
                 // التحقق من أن المستخدم مسؤول في هذه المسؤولية
-                const isResponsible = foundResp.data.responsibles && foundResp.data.responsibles.includes(userId);
+                const isResponsible = responsibilityUserIds(foundResp.data).has(String(userId));
                 const isSupervisor = isSupervisorForResponsibility(newMember.guild.id, foundResp.name, newMember);
                 
                 if (isResponsible || isSupervisor) {
