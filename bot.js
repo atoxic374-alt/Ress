@@ -4194,6 +4194,10 @@ if (executorMember && !isAllowedExecutor) {
         
         // فحص الرولات المحذوفة (حماية ضد الإزالة اليدوية)
         for (const [roleId, role] of removedRoles) {
+            const responsibilitySyncBypass = global.responsibilityRoleSyncBypass?.has(
+                `${newMember.guild.id}:${newMember.id}:${roleId}`
+            );
+            if (responsibilitySyncBypass) continue;
             // البحث عن المسؤولية التي تحتوي هذا الرول
             let foundResp = null;
             for (const [respName, resp] of Object.entries(responsibilities)) {

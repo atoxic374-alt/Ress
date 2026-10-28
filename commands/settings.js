@@ -95,24 +95,46 @@ async function execute(message, args, { responsibilities, client, scheduleSave, 
     return;
   }
 
-  // دالة لمزامنة الرولات لجميع المسؤولين
+  // دالة لمزامنة رولات المسؤوليات من المصدر الحالي. لا تكتفي بالإضافة؛
+  // يجب إزالة الرول فورًا من كل من لم يعد مسؤولًا، مع احترام المشرف الصريح.
   async function syncResponsibilityRoles(responsibilityName, guild) {
     try {
       const responsibility = responsibilities[responsibilityName];
       if (!responsibility || !responsibility.roles || responsibility.roles.length === 0) return;
 
-      const roles = responsibility.roles;
-      const responsibleIds = responsibility.responsibles || [];
+      const roles = [...new Set(responsibility.roles.map(String))];
+      const responsibleIds = new Set((responsibility.responsibles || []).map(String));
+      const { isSupervisorForResponsibility } = require('../utils/responsibilitySupervisors');
+      const supervisorIds = new Set(
+        (require('../utils/responsibilitySupervisors').getSupervisors(guild.id, responsibilityName).userIds || []).map(String)
+      );
 
-      // جلب جميع أعضاء السيرفر لضمان دقة الفحص (تحسين: جلب فردي عند الحاجة)
-      for (const userId of responsibleIds) {
+      // افحص الأعضاء الذين يملكون الرول أيضًا حتى تزال الرولات القديمة.
+      const candidateIds = new Set();
+      for (const roleId of roles) {
+        const role = await guild.roles.fetch(roleId).catch(() => null);
+        for (const member of role?.members?.values?.() || []) candidateIds.add(String(member.id));
+      }
+      for (const userId of responsibleIds) candidateIds.add(userId);
+
+      for (const userId of candidateIds) {
         try {
           const member = await guild.members.fetch(userId).catch(() => null);
           if (!member) continue;
 
           for (const roleId of roles) {
-            if (!member.roles.cache.has(roleId)) {
+            const isAuthorized = responsibleIds.has(String(member.id))
+              || supervisorIds.has(String(member.id))
+              || isSupervisorForResponsibility(guild.id, responsibilityName, member);
+            const hasRole = member.roles.cache.has(roleId);
+            if (isAuthorized && !hasRole) {
               await member.roles.add(roleId, `مزامنة رولات المسؤولية: ${responsibilityName}`).catch(() => {});
+            } else if (!isAuthorized && hasRole) {
+              if (!global.responsibilityRoleSyncBypass) global.responsibilityRoleSyncBypass = new Set();
+              const bypassKey = `${guild.id}:${member.id}:${roleId}`;
+              global.responsibilityRoleSyncBypass.add(bypassKey);
+              setTimeout(() => global.responsibilityRoleSyncBypass?.delete(bypassKey), 30000);
+              await member.roles.remove(roleId, `إزالة رول مسؤولية بعد تحديث العضوية: ${responsibilityName}`).catch(() => {});
             }
           }
         } catch (err) {

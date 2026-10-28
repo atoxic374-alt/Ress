@@ -102,6 +102,23 @@ async function handleInteraction(interaction, context = {}) {
             .filter(id => !removedResponsibleIds.includes(id));
           await dbManager.updateResponsibility(name, responsibility);
           global.responsibilities = responsibilities;
+
+          // التحويل إلى مشرف يزيل صفة المسؤول المباشر؛ أزل الرولات بعد حفظ
+          // أحدث البيانات، مع تجاوز حماية الإعادة لهذه العملية فقط.
+          if (Array.isArray(responsibility.roles) && responsibility.roles.length) {
+            if (!global.responsibilityRoleSyncBypass) global.responsibilityRoleSyncBypass = new Set();
+            for (const userId of removedResponsibleIds) {
+              const member = await interaction.guild.members.fetch(userId).catch(() => null);
+              if (!member) continue;
+              for (const roleId of responsibility.roles.map(String)) {
+                if (!member.roles.cache.has(roleId)) continue;
+                const bypassKey = `${interaction.guild.id}:${userId}:${roleId}`;
+                global.responsibilityRoleSyncBypass.add(bypassKey);
+                setTimeout(() => global.responsibilityRoleSyncBypass?.delete(bypassKey), 30000);
+                await member.roles.remove(roleId, `إزالة رول المسؤولية بعد التحويل إلى مشرف: ${name}`).catch(() => {});
+              }
+            }
+          }
         }
       }
     }
