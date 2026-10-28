@@ -67,10 +67,6 @@ async function applyMemberSupervisorAction(interaction, session, adding, selecte
       userIds: adding ? [...new Set([...current.userIds, String(target.id)])] : current.userIds.filter(id => String(id) !== String(target.id)),
       roleIds: current.roleIds
     });
-    if (adding && Array.isArray(config.responsibles) && config.responsibles.some(id => String(id) === String(target.id))) {
-      config.responsibles = config.responsibles.map(String).filter(id => id !== String(target.id));
-      await dbManager.updateResponsibility(name, config);
-    }
     for (const roleId of [...(config.roles || []), ...(config.roleId ? [config.roleId] : [])]) roleIds.add(String(roleId));
     changed.push(name);
   }
@@ -177,42 +173,6 @@ async function handleInteraction(interaction, context = {}) {
     const changedUserIds = adding
       ? selected.filter(id => !current.userIds.includes(String(id)))
       : selected.filter(id => current.userIds.includes(String(id)));
-    let removedResponsibleIds = [];
-
-    // لا يمكن للشخص أن يكون مسؤولًا ومشرفًا على المسؤولية نفسها.
-    if (adding && changedUserIds.length) {
-      const responsibilities = await dbManager.getResponsibilities();
-      const responsibility = responsibilities?.[name];
-      if (responsibility && Array.isArray(responsibility.responsibles)) {
-        removedResponsibleIds = responsibility.responsibles
-          .map(String)
-          .filter(id => changedUserIds.map(String).includes(id));
-        if (removedResponsibleIds.length) {
-          responsibility.responsibles = responsibility.responsibles
-            .map(String)
-            .filter(id => !removedResponsibleIds.includes(id));
-          await dbManager.updateResponsibility(name, responsibility);
-          global.responsibilities = responsibilities;
-
-          // التحويل إلى مشرف يزيل صفة المسؤول المباشر؛ أزل الرولات بعد حفظ
-          // أحدث البيانات، مع تجاوز حماية الإعادة لهذه العملية فقط.
-          if (Array.isArray(responsibility.roles) && responsibility.roles.length) {
-            if (!global.responsibilityRoleSyncBypass) global.responsibilityRoleSyncBypass = new Set();
-            for (const userId of removedResponsibleIds) {
-              const member = await interaction.guild.members.fetch(userId).catch(() => null);
-              if (!member) continue;
-              for (const roleId of responsibility.roles.map(String)) {
-                if (!member.roles.cache.has(roleId)) continue;
-                const bypassKey = `${interaction.guild.id}:${userId}:${roleId}`;
-                global.responsibilityRoleSyncBypass.add(bypassKey);
-                setTimeout(() => global.responsibilityRoleSyncBypass?.delete(bypassKey), 30000);
-                await member.roles.remove(roleId, `إزالة رول المسؤولية بعد التحويل إلى مشرف: ${name}`).catch(() => {});
-              }
-            }
-          }
-        }
-      }
-    }
     setSupervisors(interaction.guild.id, name, { userIds });
 
     // مزامنة الرولات في لوحة المسؤولية القديمة أيضًا، حتى لا يختلف سلوكها
@@ -264,7 +224,7 @@ async function handleInteraction(interaction, context = {}) {
         if (member) {
           await member.send({
             content: adding
-              ? `**تم تعيينك مشرفًا على مسؤولية : ${name}** في سيرفر **${interaction.guild.name}**.${removedResponsibleIds.includes(String(userId)) ? `\nتمت إزالتك تلقائيًا من صفة المسؤول عن نفس المسؤولية.` : ''}`
+              ? `**تم تعيينك مشرفًا على مسؤولية : ${name}** في سيرفر **${interaction.guild.name}**.`
               : `**تمت إزالة إشرافك عن مسؤولية : ${name}** في سيرفر **${interaction.guild.name}**.`
           }).catch(() => {});
         }

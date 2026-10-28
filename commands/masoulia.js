@@ -179,14 +179,6 @@ module.exports = {
                         try {
                             if (type === 'add') {
                                 if (!config.responsibles.includes(targetId)) {
-                                    // لا يمكن الجمع بين الإشراف والمسؤولية على المسؤولية نفسها.
-                                    const supervisorData = getSupervisors(i.guild.id, respName);
-                                    if (supervisorData.userIds.includes(String(targetId))) {
-                                        setSupervisors(i.guild.id, respName, {
-                                            userIds: supervisorData.userIds.filter(id => id !== String(targetId)),
-                                            roleIds: supervisorData.roleIds
-                                        });
-                                    }
                                     config.responsibles.push(targetId);
                                     const success = await dbManager.updateResponsibility(respName, config);
                                     if (success) {
