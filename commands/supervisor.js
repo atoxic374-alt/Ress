@@ -31,8 +31,8 @@ function managePanel(guildId, name, selected = []) {
   const embed = colorManager.createEmbed().setTitle('Responsibility Supervisor').setDescription(`**المسؤولية : ${name}**\n**المشرفون : ${list}**\nاختر الأشخاص ثم استخدم Add أو Remove.`);
   const select = new UserSelectMenuBuilder().setCustomId(`supervisor_users_${encode(name)}`).setPlaceholder('اختر الأشخاص').setMinValues(1).setMaxValues(25);
   const actions = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`supervisor_add_${encode(name)}`).setLabel('Add').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`supervisor_remove_${encode(name)}`).setLabel('Remove').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`supervisor_add_${encode(name)}`).setLabel('إضافة إشراف').setStyle(ButtonStyle.Success).setEmoji('<:emoji_91:1442990316549312582>'),
+    new ButtonBuilder().setCustomId(`supervisor_remove_${encode(name)}`).setLabel('إزالة إشراف').setStyle(ButtonStyle.Danger).setEmoji('<:emoji_90:1442990214925520976>'),
     new ButtonBuilder().setCustomId('supervisor_back').setLabel('Back').setStyle(ButtonStyle.Secondary)
   );
   return { embeds: [embed], components: [new ActionRowBuilder().addComponents(select), actions], selected };
@@ -97,7 +97,7 @@ async function applyMemberSupervisorAction(interaction, session, adding, selecte
   }
   if (global.client) global.client.emit('responsibilityUpdate');
   const verb = adding ? 'إضافة' : 'إزالة';
-  return interaction.update({ content: changed.length ? `✅ **تم ${verb} الإشراف في ${changed.length} مسؤولية.**` : `⚠️ **لم يتم ${verb} أي إشراف جديد.**`, embeds: [], components: [] });
+  return interaction.update({ content: changed.length ? `✅ **تم ${verb} الإشراف بنجاح.**` : `⚠️ **لم يتم ${verb} أي إشراف جديد.**`, embeds: [], components: [] });
 }
 
 async function execute(message, args, context = {}) {
