@@ -171,8 +171,9 @@ async function withLock(key, operation) {
   await previous.catch(() => {});
   try { return await operation(); } finally { release(); if (locks.get(key) === current) locks.delete(key); }
 }
-async function getOrCreateSharedGroupChat(guild, settings) {
+async function getOrCreateSharedGroupChat(guild, settings, options = {}) {
   if (settings?.chatMode !== GROUP_CHAT_MODES.THREADS) throw new Error('THREAD_CHAT_MODE_REQUIRED');
+  const createIfMissing = options.createIfMissing !== false;
   return withLock(`group-chat:${guild.id}`, async () => {
     const candidates = new Map();
     const rows = await dbManager.all("SELECT text_channel_id, thread_id FROM managed_groups WHERE guild_id = ? AND status != 'deleted' AND text_channel_id IS NOT NULL", [guild.id]);
@@ -191,6 +192,7 @@ async function getOrCreateSharedGroupChat(guild, settings) {
     })));
     scored.sort((a, b) => b.count - a.count || String(a.channel.id).localeCompare(String(b.channel.id)));
     if (scored[0]?.channel) return { text: scored[0].channel, reused: true };
+    if (!createIfMissing) throw new Error('SHARED_GROUP_CHAT_UNAVAILABLE');
     const text = await guild.channels.create({
       name: 'groups-chat', type: ChannelType.GuildText, parent: settings.textCategoryId || undefined,
       permissionOverwrites: [{ id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] }],
@@ -785,10 +787,11 @@ async function createGroup(guild, { name, description = '', ownerId, color = '#5
       }
       else { text = await guild.channels.create({ name: `📝・${groupName.slice(0, 90)}`, type: ChannelType.GuildText, parent: settings.textCategoryId, reason: 'Create managed group text channel' }); created.push(['channel', text]); }
       voice = await guild.channels.create({ name: groupName.slice(0, 100), type: ChannelType.GuildVoice, parent: settings.voiceCategoryId, reason: 'Create managed group voice channel' }); created.push(['voice', voice]);
-      const overwrites = [{ id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] }, { id: role.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.SendMessagesInThreads, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.Speak] }];
-      if (reusedSharedText) await text.permissionOverwrites.edit(role.id, { ViewChannel: true, SendMessages: true, SendMessagesInThreads: true, ReadMessageHistory: true }, { reason: 'Add managed group role to shared group chat' }).catch(error => { throw Object.assign(new Error('GROUP_TEXT_PERMISSIONS_FAILED'), { cause: error }); });
-      else await text.permissionOverwrites.set(overwrites, 'Secure managed group text space').catch(error => { throw Object.assign(new Error('GROUP_TEXT_PERMISSIONS_FAILED'), { cause: error }); });
-      await voice.permissionOverwrites.set(overwrites, 'Secure managed group voice space').catch(error => { throw Object.assign(new Error('GROUP_VOICE_PERMISSIONS_FAILED'), { cause: error }); });
+      const textOverwrites = [{ id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] }, { id: role.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.SendMessagesInThreads, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.AddReactions, PermissionsBitField.Flags.AttachFiles, PermissionsBitField.Flags.EmbedLinks, PermissionsBitField.Flags.UseExternalEmojis, PermissionsBitField.Flags.UseExternalStickers] }];
+      const voiceOverwrites = [{ id: guild.roles.everyone.id, allow: [PermissionsBitField.Flags.ViewChannel], deny: [PermissionsBitField.Flags.Connect] }, { id: role.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.Speak, PermissionsBitField.Flags.Stream, PermissionsBitField.Flags.UseVAD] }];
+      if (reusedSharedText) await text.permissionOverwrites.edit(role.id, Object.fromEntries(textOverwrites[1].allow.map(flag => [flag, true])), { reason: 'Add managed group role to shared group chat' }).catch(error => { throw Object.assign(new Error('GROUP_TEXT_PERMISSIONS_FAILED'), { cause: error }); });
+      else await text.permissionOverwrites.set(textOverwrites, 'Secure managed group text space').catch(error => { throw Object.assign(new Error('GROUP_TEXT_PERMISSIONS_FAILED'), { cause: error }); });
+      await voice.permissionOverwrites.set(voiceOverwrites, 'Secure managed group voice space').catch(error => { throw Object.assign(new Error('GROUP_VOICE_PERMISSIONS_FAILED'), { cause: error }); });
       const row = await dbManager.run(`INSERT INTO managed_groups(guild_id,name,description,owner_id,manager_ids_json,member_ids_json,blocked_ids_json,role_id,text_channel_id,thread_id,voice_channel_id,color,emoji,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [guild.id, groupName, String(description).slice(0, 1000), owner.id, '[]', JSON.stringify([owner.id]), '[]', role.id, text.id, thread?.id || null, voice.id, color || '#5865F2', emoji, now, now]);
       createdGroupId = row.id ?? row.lastID;
       const group = await getGroup(guild.id, createdGroupId);

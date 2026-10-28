@@ -641,7 +641,15 @@ async function restoreGroupRole(guild, group, forceMissing = false) {
 function groupChannelOverwrites(guild, roleId) {
   return [
     { id: guild.roles.everyone.id, deny: ['ViewChannel'] },
-    { id: roleId, allow: ['ViewChannel', 'SendMessages', 'SendMessagesInThreads', 'ReadMessageHistory', 'Connect', 'Speak'] }
+    { id: roleId, allow: GROUP_TEXT_ACCESS.concat(GROUP_VOICE_ACCESS) }
+  ];
+}
+const GROUP_TEXT_ACCESS = ['ViewChannel', 'SendMessages', 'SendMessagesInThreads', 'ReadMessageHistory', 'AddReactions', 'AttachFiles', 'EmbedLinks', 'UseExternalEmojis', 'UseExternalStickers'];
+const GROUP_VOICE_ACCESS = ['ViewChannel', 'Connect', 'Speak', 'Stream', 'UseVAD'];
+function groupVoiceOverwrites(guild, roleId) {
+  return [
+    { id: guild.roles.everyone.id, allow: ['ViewChannel'], deny: ['Connect'] },
+    { id: roleId, allow: GROUP_VOICE_ACCESS }
   ];
 }
 
@@ -685,11 +693,12 @@ async function restoreGroupResources(guild, sourceGroup, trigger = 'resource_del
       patch.thread_id = null;
     }
     if (!voice || voice.type !== ChannelType.GuildVoice) {
-      voice = await withDiscordRetry(() => guild.channels.create({ name: String(group.name || 'Group').slice(0, 100), type: ChannelType.GuildVoice, parent: settings.voiceCategoryId || undefined, permissionOverwrites: groupChannelOverwrites(guild, roleResult.role.id), reason: 'Restore deleted managed group voice channel' }));
+      voice = await withDiscordRetry(() => guild.channels.create({ name: String(group.name || 'Group').slice(0, 100), type: ChannelType.GuildVoice, parent: settings.voiceCategoryId || undefined, permissionOverwrites: groupVoiceOverwrites(guild, roleResult.role.id), reason: 'Restore deleted managed group voice channel' }));
       patch.voice_channel_id = voice.id;
     } else {
+      await voice.permissionOverwrites.edit(guild.roles.everyone.id, { ViewChannel: true, Connect: false }, { reason: 'Restore public voice visibility and deny public connect' }).catch(() => {});
       await voice.permissionOverwrites.edit(roleResult.role.id, {
-        ViewChannel: true, Connect: true, Speak: true
+        ViewChannel: true, Connect: true, Speak: true, Stream: true, UseVAD: true
       }, { reason: 'Restore managed group voice permissions' }).catch(() => {});
     }
     group = await gm.updateGroup(guild.id, group.id, { ...patch, sync_state: 'ready' }, null);
@@ -783,6 +792,20 @@ async function sendTopGroupsPanel(channel, guild, options = {}) {
   })();
   topPanelLocks.set(key, work);
   try { return await work; } finally { topPanelLocks.delete(key); }
+}
+async function refreshConfiguredTopBoards(client) {
+  const jobs = [...(client?.guilds?.cache?.values?.() || [])].map(async guild => {
+    const settings = await gm.getSettings(guild.id).catch(() => null);
+    const channelId = settings?.topChannelId;
+    if (!channelId) return null;
+    const channel = guild.channels.cache.get(String(channelId)) || await guild.channels.fetch(String(channelId)).catch(() => null);
+    if (!channel || channel.isThread?.() || !channel.isTextBased?.()) return null;
+    return sendTopGroupsPanel(channel, guild, { channelId: channel.id }).catch(error => {
+      console.error('[groups] startup top-board refresh failed:', guild.id, error?.message || error);
+      return null;
+    });
+  });
+  await Promise.allSettled(jobs);
 }
 async function handleTopGroupsInteraction(interaction, action, parts = []) {
   const viewAction = action === 'pick' ? String(parts[0] || '') : action;
@@ -1940,6 +1963,13 @@ const reconciliationSignatures = new Map();
 const reconciliationLocks = new Map();
 const reconciliationCursors = new Map();
 const pendingRoleGuardChecks = new Map();
+function isAllowedGroupVoiceMember(group, member, channel = null) {
+  const userId = String(member?.id || member?.user?.id || '');
+  if (!userId || group.blockedIds.includes(userId)) return false;
+  if ([String(group.owner_id), ...group.memberIds, ...group.managerIds].includes(userId)) return true;
+  const overwrite = channel?.permissionOverwrites?.cache?.get?.(userId);
+  return Boolean(overwrite?.allow?.has?.(PermissionsBitField.Flags.Connect) && !overwrite?.deny?.has?.(PermissionsBitField.Flags.Connect));
+}
 async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
   let allGroups = (await gm.listGroups(guild.id, true)).filter(group => group.status !== 'deleted');
   const cursorKey = String(guild.id);
@@ -2010,10 +2040,21 @@ async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
         });
       }
       if (resourceVoice?.permissionOverwrites) {
+        await resourceVoice.permissionOverwrites.edit(guild.roles.everyone.id, {
+          ViewChannel: true, Connect: false
+        }, { reason: 'Synchronize public voice visibility and private connect' }).catch(error => {
+          issues.push({ groupId: group.id, groupName: group.name, type: 'voice_public_permissions_sync_failed', detail: String(error?.message || error).slice(0, 200) });
+        });
         await resourceVoice.permissionOverwrites.edit(role.id, {
-          ViewChannel: true, Connect: true, Speak: true
+          ViewChannel: true, Connect: true, Speak: true, Stream: true, UseVAD: true
         }, { reason: 'Synchronize managed group voice permissions' }).catch(error => {
           issues.push({ groupId: group.id, groupName: group.name, type: 'voice_permissions_sync_failed', detail: String(error?.message || error).slice(0, 200) });
+        });
+        const unauthorized = [...(resourceVoice.members?.values?.() || [])].filter(member => !member.user?.bot && !isAllowedGroupVoiceMember(group, member, resourceVoice));
+        await runWithConcurrency(unauthorized, 4, async member => {
+          await member.voice?.disconnect?.(`Unauthorized entry to group voice ${group.id}`).catch(error => {
+            issues.push({ groupId: group.id, groupName: group.name, type: 'voice_unauthorized_disconnect_failed', userId: member.id, detail: String(error?.message || error).slice(0, 200) });
+          });
         });
       }
       for (const userId of expected) {
@@ -2191,6 +2232,17 @@ function registerInteractionHandler(client) {
   if (client.isReady?.()) startReconciliation();
   else client.once('ready', startReconciliation);
 
+  // Rebuild the persisted top-board message after every bot restart. The
+  // refresh timer is in-memory, so without this bootstrap a board can remain
+  // stale indefinitely until someone manually runs the top command again.
+  const startTopBoardRefresh = () => {
+    refreshConfiguredTopBoards(client).catch(error => {
+      console.error('[groups] top-board startup refresh failed:', error?.message || error);
+    });
+  };
+  if (client.isReady?.()) startTopBoardRefresh();
+  else client.once('ready', startTopBoardRefresh);
+
   const voiceCheckpoint = setInterval(async () => {
     const now = Date.now();
     for (const [key, started] of voiceStarts) {
@@ -2306,6 +2358,16 @@ function registerInteractionHandler(client) {
       cachedSettings(guildId).catch(() => null)
     ]);
     const memberId = String(newState.id || oldState.id);
+    const eventMember = newState.member || await newState.guild?.members?.fetch(memberId).catch(() => null);
+    const enteredGroupVoice = newState.channelId && groups.find(group => String(group.voice_channel_id) === String(newState.channelId));
+    const enteredChannel = newState.channel || newState.guild?.channels?.cache?.get?.(String(newState.channelId)) || await channelById(newState.guild, newState.channelId);
+    if (enteredGroupVoice && eventMember && !eventMember.user?.bot && !isAllowedGroupVoiceMember(enteredGroupVoice, eventMember, enteredChannel)) {
+      await newState.disconnect?.(`Unauthorized entry to group voice ${enteredGroupVoice.id}`).catch(error => {
+        console.warn('[groups] unauthorized voice disconnect failed:', guildId, memberId, error?.message || error);
+      });
+      await gm.audit(guildId, memberId, enteredGroupVoice.id, 'group_voice_unauthorized_entry', { channelId: newState.channelId }).catch(() => {});
+      return;
+    }
     const eligible = group => group && (group.memberIds.includes(memberId) || String(group.owner_id) === memberId || group.managerIds.includes(memberId));
     const tracksChannel = channelId => Boolean(channelId && (
       (settings?.countAllChannels && groups.some(eligible))
@@ -2561,7 +2623,7 @@ function groupError(error) {
     GROUP_NOT_FOUND: 'القروب غير موجود أو لم يعد نشطاً.', NO_PERMISSION: 'ليس لديك صلاحية مالك/مسؤول لهذا القروب.',
     EXTRA_DISABLED: 'الصلاحيات الإضافية متوقفة؛ يجب تفعيلها من إعدادات القروبات أولًا.',
     FLOW_EXPIRED: 'انتهت هذه القائمة أو استُخدمت؛ افتح قائمة جديدة.', FLOW_OWNER: 'هذه القائمة تخص مستخدماً آخر.',
-    INVALID_SELECTION: 'اختيار غير صالح؛ افتح القائمة مجدداً.', MEMBER_NOT_FOUND: 'العضو غير موجود في السيرفر.', NO_VOICE_MEMBERS: 'لا يوجد أعضاء حاليًا داخل قناة القروب الصوتي لفصلهم.',
+    INVALID_SELECTION: 'اختيار غير صالح؛ افتح القائمة مجدداً.', MEMBER_NOT_FOUND: 'العضو غير موجود في السيرفر أو تعذر جلب بياناته من Discord.', OWNER_NOT_IN_ROLE: 'العضو موجود، لكنه لا يحمل الرول الذي اخترته كـرول للقروب.', BOT_OWNER_NOT_ALLOWED: 'لا يمكن تعيين بوت كمالك للقروب.', NO_VOICE_MEMBERS: 'لا يوجد أعضاء حاليًا داخل قناة القروب الصوتي لفصلهم.',
     TARGET_PROTECTED: 'لا يمكن تقييد مالك القروب أو مسؤوليه أو مديري النظام أو البوت.', TARGET_NOT_IN_GROUP: 'الميوت والنميوت متاحان لأعضاء القروب فقط.',
     CHANNEL_NOT_FOUND: 'قناة القروب المحددة غير موجودة أو نوعها غير صالح.', GROUP_OPERATION_BUSY: 'توجد عملية أخرى تعمل على هذا القروب أو الرول؛ حاول بعد قليل.', MISSING_MANAGE_ROLES: 'البوت لا يملك Manage Roles.', MISSING_MANAGE_CHANNELS: 'البوت لا يملك Manage Channels.', GROUP_ROLE_NOT_EDITABLE: 'رتبة القروب أعلى من رتبة البوت أو غير قابلة للتعديل.', ROLE_ICON_UPDATE_FAILED: 'رفض Discord تحديث أيقونة الرتبة؛ تحقق من أن الرتبة غير مُدارة وأنها قابلة للتعديل.', ROLE_COLOR_UPDATE_FAILED: 'رفض Discord تحديث لون الرتبة؛ تحقق من أن الرتبة غير مُدارة وقابلة للتعديل.',
     SHARED_CHANNEL: 'القناة/أب الثريد مشترك؛ لا يمكن تغيير صلاحياته دون التأثير على قروب أو ثريد آخر.',
@@ -2575,9 +2637,18 @@ function groupError(error) {
     NOT_IN_GROUP_VOICE: 'العضو ليس في قناة هذا القروب؛ لن يتم فصله من أي قناة أخرى.',
     MISSING_PERMISSIONS: 'البوت لا يملك الصلاحيات المطلوبة في قناة القروب.',
     GROUP_FULL: 'عدد الأعضاء يتجاوز الحد المحدد للقروبات.', ACTION_BUSY: 'يوجد إجراء جارٍ لهذا القروب، حاول مجدداً.', OWNER_ROLE_NOT_FOUND: 'رتبة مالك القروب غير موجودة؛ لم يتم نقل الملكية.', MANAGER_ROLE_NOT_FOUND: 'رتبة مسؤول القروب غير موجودة؛ لم يتم نقل الملكية.',
+    GROUP_TEXT_PERMISSIONS_FAILED: 'تعذر ضبط صلاحيات الشات النصي؛ تأكد أن البوت يملك Manage Channels وأن القناة أو الكاتاقوري ليست محمية باستثناء يمنع التعديل.',
+    GROUP_VOICE_PERMISSIONS_FAILED: 'تعذر ضبط صلاحيات قناة الفويس؛ تأكد أن البوت يملك Manage Channels وأن قناة الفويس قابلة للتعديل.',
+    SHARED_GROUP_CHAT_UNAVAILABLE: 'تعذر العثور على روم groups-chat المشترك أو إنشاء الثريد داخله؛ تحقق من Manage Channels وCreate Private Threads.',
+    SHARED_GROUP_CHAT_ACCESS_FAILED: 'تعذر تعديل صلاحيات روم groups-chat المشترك؛ تحقق من Manage Channels على مستوى السيرفر ومن عدم وجود قفل صلاحيات على الروم.',
+    THREAD_CHAT_MODE_REQUIRED: 'نمط الشات الحالي لا يسمح بإنشاء ثريدات؛ عدّل نمط القروبات أو اختر شاتًا نصيًا مستقلًا.',
     THREAD_ARCHIVED: 'الثريد مؤرشف؛ افتحه من Discord قبل منح عضو الوصول إليه.'
   };
   if (String(error?.message).includes('UNIQUE constraint failed')) return messages.NAME_EXISTS;
+  if (Number(error?.code) === 50013 || /missing permissions|missing access/i.test(String(error?.message || ''))) {
+    return 'رفض Discord العملية بسبب صلاحية على القناة أو الرتبة. تأكد من Manage Channels وManage Threads، وأن رتبة البوت أعلى من رول القروب.';
+  }
+  if (Number(error?.code) === 10004 || Number(error?.code) === 10003) return 'المورد المطلوب لم يعد موجودًا في Discord؛ أعد فتح لوحة Add وحاول من جديد.';
   return messages[error?.message] || 'تعذر تنفيذ الإجراء. تحقق من صلاحيات البوت وترتيب رتبته؛ لم نمنح أي صلاحية على مستوى السيرفر.';
 }
 async function currentManager(context, groupId, extra = false) {
@@ -2665,10 +2736,6 @@ async function groupChannels(guild, group, scope) {
     if (!voice || voice.type !== ChannelType.GuildVoice || !voice.permissionOverwrites) throw new Error('CHANNEL_NOT_FOUND');
     await assertExclusive(guild, group, voice);
     channels.push(voice);
-  }
-  const me = guild.members.me || await guild.members.fetchMe();
-  for (const channel of channels) {
-    if (!channel.permissionsFor(me)?.has([PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ManageChannels])) throw new Error('MISSING_PERMISSIONS');
   }
   return channels;
 }
@@ -2851,12 +2918,13 @@ function importGroupName(role) {
   return safe(String(role?.name || '').replace(/^Group[・\s]+/i, ''), 80).trim() || 'Group';
 }
 async function findSharedGroupChat(guild, settings) {
-  return (await gm.getOrCreateSharedGroupChat(guild, settings)).text;
+  return (await gm.getOrCreateSharedGroupChat(guild, settings, { createIfMissing: false })).text;
 }
 async function createImportTextResources(guild, flow, settings, role) {
   const name = importGroupName(role);
   const created = [];
   try {
+    if (flow.createText && settings.chatMode !== 'threads') throw new Error('THREAD_CHAT_MODE_REQUIRED');
     let text = settings.chatMode === 'threads' ? await findSharedGroupChat(guild, settings) : null;
     let createdText = false;
     if (!text && settings.chatMode === 'threads') throw new Error('SHARED_GROUP_CHAT_UNAVAILABLE');
@@ -2871,9 +2939,7 @@ async function createImportTextResources(guild, flow, settings, role) {
       createdText = true;
       created.push(text);
     } else if (settings.chatMode === 'threads') {
-      await text.permissionOverwrites.edit(role.id, {
-        ViewChannel: true, SendMessages: true, SendMessagesInThreads: true, ReadMessageHistory: true
-      }, { reason: 'Add imported group role to shared group chat' });
+      await text.permissionOverwrites.edit(role.id, Object.fromEntries(GROUP_TEXT_ACCESS.map(flag => [flag, true])), { reason: 'Add imported group role to shared group chat' });
     }
     flow.textId = text.id;
     flow.threadId = null;
@@ -2894,7 +2960,7 @@ async function createImportVoiceResource(guild, flow, settings, role) {
     name,
     type: ChannelType.GuildVoice,
     parent: settings.voiceCategoryId || undefined,
-    permissionOverwrites: groupChannelOverwrites(guild, role.id),
+    permissionOverwrites: groupVoiceOverwrites(guild, role.id),
     reason: 'Create group voice resource from admin Add'
   });
   flow.voiceId = voice.id;
@@ -3082,8 +3148,12 @@ async function validateImport(guild, flow, settings, includeMembers = false) {
   if (groups.some(g => (flow.roleId && String(g.role_id || '') === String(flow.roleId)) || linkedIds.some(id => gm.channelBelongs(g, id)))) throw new Error('ASSET_LINKED');
   const role = flow.roleId ? await guild.roles.fetch(flow.roleId).catch(() => null) : null;
   if (flow.roleId && (!role || role.id === guild.id || role.managed || !role.editable || [settings.leaderRoleId, settings.managerRoleId, ...settings.systemRoles].includes(role.id) || role.permissions.has([PermissionsBitField.Flags.Administrator], false) || role.permissions.any([PermissionsBitField.Flags.ManageRoles, PermissionsBitField.Flags.ManageGuild, PermissionsBitField.Flags.ManageChannels, PermissionsBitField.Flags.ModerateMembers, PermissionsBitField.Flags.KickMembers, PermissionsBitField.Flags.BanMembers]))) throw new Error('INVALID_ROLE');
-  const owner = flow.ownerId ? await guild.members.fetch(flow.ownerId).catch(() => null) : null;
-  if (flow.ownerId && (!owner || owner.user.bot || !owner.roles.cache.has(flow.roleId))) throw new Error('MEMBER_NOT_FOUND');
+  const owner = flow.ownerId
+    ? await guild.members.fetch({ user: String(flow.ownerId), force: true }).catch(() => guild.members.fetch(String(flow.ownerId)).catch(() => null))
+    : null;
+  if (flow.ownerId && !owner) throw new Error('MEMBER_NOT_FOUND');
+  if (owner?.user?.bot) throw new Error('BOT_OWNER_NOT_ALLOWED');
+  if (flow.ownerId && !owner.roles.cache.has(flow.roleId)) throw new Error('OWNER_NOT_IN_ROLE');
   if (owner && groups.some(g => String(g.owner_id) === String(owner.id))) throw new Error('OWNER_ALREADY_HAS_GROUP');
   let text, thread, voice;
   if (flow.textId) {
@@ -3104,8 +3174,14 @@ async function validateImport(guild, flow, settings, includeMembers = false) {
     // Fetch the full role membership, not just the gateway cache. Import never grants/removes roles.
     await guild.members.fetch();
     members = [...role.members.values()].map(member => String(member.id));
-    if (!members.includes(owner.id)) throw new Error('MEMBER_NOT_FOUND');
-    await groupChannels(guild, { id: null, text_channel_id: text.id, thread_id: thread?.id || null, voice_channel_id: voice.id }, 'both');
+    if (!members.includes(owner.id)) throw new Error('OWNER_NOT_IN_ROLE');
+    // When the flow started with “no text room”, the text resource is created
+    // only after the voice-selection step. Do not dereference it during this
+    // intermediate validation; saveImportedGroup performs the full validation
+    // again after all missing resources have been created.
+    if (text && voice) {
+      await groupChannels(guild, { id: null, text_channel_id: text.id, thread_id: thread?.id || null, voice_channel_id: voice.id }, 'both');
+    }
   }
   return { role, owner, text, thread, voice, members };
 }
@@ -3166,13 +3242,17 @@ async function saveImportedGroup(interaction, flow) {
       if (!groupName) throw new Error('NAME_REQUIRED');
       const existingNames = await gm.listGroups(interaction.guild.id, true);
       if (existingNames.some(item => item.status === 'active' && String(item.name).toLowerCase() === groupName.toLowerCase())) throw new Error('NAME_EXISTS');
-      const textFlags = ['ViewChannel', 'SendMessages', 'SendMessagesInThreads', 'ReadMessageHistory'];
-      const voiceFlags = ['ViewChannel', 'Connect', 'Speak'];
+      const textFlags = GROUP_TEXT_ACCESS;
+      const voiceFlags = GROUP_VOICE_ACCESS;
       for (const [channel, flags] of [[text, textFlags], [voice, voiceFlags]]) {
         const previous = channel.permissionOverwrites.cache.get(role.id);
         permissionSnapshots.push({ channel, roleId: role.id, existed: Boolean(previous), values: Object.fromEntries(flags.map(flag => [flag, previous?.allow.has(PermissionsBitField.Flags[flag]) ? true : previous?.deny.has(PermissionsBitField.Flags[flag]) ? false : null])) });
       }
+      const everyoneVoiceId = interaction.guild.roles.everyone.id;
+      const previousEveryoneVoice = voice.permissionOverwrites.cache.get(everyoneVoiceId);
+      permissionSnapshots.push({ channel: voice, roleId: everyoneVoiceId, existed: Boolean(previousEveryoneVoice), values: { ViewChannel: previousEveryoneVoice?.allow.has(PermissionsBitField.Flags.ViewChannel) ? true : previousEveryoneVoice?.deny.has(PermissionsBitField.Flags.ViewChannel) ? false : null, Connect: previousEveryoneVoice?.allow.has(PermissionsBitField.Flags.Connect) ? true : previousEveryoneVoice?.deny.has(PermissionsBitField.Flags.Connect) ? false : null } });
       await text.permissionOverwrites.edit(role.id, Object.fromEntries(textFlags.map(flag => [flag, true])), { reason: 'Apply imported group text permissions' });
+      await voice.permissionOverwrites.edit(everyoneVoiceId, { ViewChannel: true, Connect: false }, { reason: 'Make group voice visible but not publicly joinable' });
       await voice.permissionOverwrites.edit(role.id, Object.fromEntries(voiceFlags.map(flag => [flag, true])), { reason: 'Apply imported group voice permissions' });
       await gm.schema();
       const groupId = await dbManager.transaction(async tx => {
@@ -3248,12 +3328,11 @@ async function advanceImport(interaction, flow, settings) {
   if (flow.step === 'thread') {
     if (!flow.threads.slice((flow.page || 0) * 25, ((flow.page || 0) + 1) * 25).some(t => t.id === value)) throw new Error('INVALID_SELECTION');
     flow.threadId = value; await validateImport(interaction.guild, flow, settings);
-    const parent = await channelById(interaction.guild, flow.textId);
-    if ((await threadChoices(parent)).some(t => t.id !== value)) throw new Error('SHARED_CHANNEL');
     flow.step = 'voice';
     return entitySelect(interaction.guild, flow, 'استيراد : قناة الفويس', 'اختر قناة القروب الصوتي أو اضغط «لا يوجد» لإنشائها باسم الرول.', new ChannelSelectMenuBuilder().setChannelTypes(ChannelType.GuildVoice).setPlaceholder('قناة فويس القروب الموجود'), 'no-voice');
   }
   if (flow.step === 'no-text') {
+    if (settings.chatMode !== 'threads') throw new Error('THREAD_CHAT_MODE_REQUIRED');
     flow.createText = true;
     flow.textId = null;
     flow.threadId = null;
@@ -3264,7 +3343,10 @@ async function advanceImport(interaction, flow, settings) {
     flow.voiceId = value;
     const assets = await validateImport(interaction.guild, flow, settings, true);
     flow.step = 'confirm';
-    return confirmFlowPayload(interaction.guild, flow, `Role: <@&${assets.role.id}>\nOwner: <@${assets.owner.id}>\nText: <#${assets.text.id}>\nThread: ${assets.thread ? `<#${assets.thread.id}>` : 'لا يوجد'}\nVoice: <#${assets.voice.id}>\nMembers: ${assets.members.length}\nسيتم ربط الرول وإنشاء القروب وإضافة جميع أعضائه.`);
+    const textLabel = assets.text ? `<#${assets.text.id}>` : 'سيتم استخدام groups-chat الرئيسي';
+    const threadLabel = assets.thread ? `<#${assets.thread.id}>` : 'سيتم إنشاء ثريد تلقائيًا';
+    const voiceLabel = assets.voice ? `<#${assets.voice.id}>` : 'سيتم إنشاء قناة فويس تلقائيًا';
+    return confirmFlowPayload(interaction.guild, flow, `Role: <@&${assets.role.id}>\nOwner: <@${assets.owner.id}>\nText: ${textLabel}\nThread: ${threadLabel}\nVoice: ${voiceLabel}\nMembers: ${assets.members.length}\nسيتم ربط الرول وإضافة الأعضاء بالتوازي داخل الثريد وتطبيق صلاحيات الرول فقط.`);
   }
   if (flow.step === 'no-voice') {
     flow.createVoice = true;

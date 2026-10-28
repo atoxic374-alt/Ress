@@ -320,17 +320,19 @@ async function renderTopGroups({ guild, groups = [], memberRowsByGroup = {}, gro
     ctx.textAlign = 'left'; ctx.fillStyle = medal; ctx.font = 'bold 29px Cairo, sans-serif';
     ctx.fillText(`#${index + 1}`, x + 20, y + 36);
     if (row) {
-      avatar(ctx, avatars[index], x + cardW / 2, y + 103, 48, medal, row.name || 'G');
+      // Give the owner avatar more visual weight and leave a deliberate gap
+      // before the group name so the name never hugs the circle.
+      avatar(ctx, avatars[index], x + cardW / 2, y + 105, 60, medal, row.name || 'G');
       ctx.textAlign = 'center'; ctx.fillStyle = '#FFF'; ctx.font = 'bold 28px Cairo, sans-serif';
-      text(ctx, row.name || 'Group', x + cardW / 2, y + 178, cardW - 34);
+      text(ctx, row.name || 'Group', x + cardW / 2, y + 198, cardW - 34);
       ctx.fillStyle = medal; ctx.font = 'bold 30px Cairo, sans-serif';
-      ctx.fillText(`${number(row.points).toLocaleString('ar-SA')} Points`, x + cardW / 2, y + 224);
+      ctx.fillText(`${number(row.points).toLocaleString('en-US')} Points`, x + cardW / 2, y + 238);
       ctx.fillStyle = '#AAB4C5'; ctx.font = '25px Cairo, sans-serif';
-      ctx.fillText(`${number(row.memberCount).toLocaleString('ar-SA')} أعضاء`, x + cardW / 2, y + 264);
-      roundRect(ctx, x + 45, y + 280, cardW - 90, 3, 2, `rgba(${r},${g},${b},.65)`);
+      ctx.fillText(`${number(row.memberCount).toLocaleString('en-US')} Members`, x + cardW / 2, y + 276);
+      roundRect(ctx, x + 45, y + 292, cardW - 90, 3, 2, `rgba(${r},${g},${b},.65)`);
     } else {
       ctx.textAlign = 'center'; ctx.fillStyle = '#7F8CA1'; ctx.font = '25px Cairo, sans-serif';
-      text(ctx, 'لا يوجد قروب في هذا المركز', x + cardW / 2, y + 160, cardW - 30);
+      text(ctx, 'No Groups Here', x + cardW / 2, y + 160, cardW - 30);
     }
   }
 
