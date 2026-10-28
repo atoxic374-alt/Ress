@@ -268,16 +268,16 @@ async function sendSetupPanel(channel, guild, settings) {
   try { return await work; } finally { setupPanelLocks.delete(key); }
 }
 function controlPayload(guild) {
-  const c = baseContainer(guild, 'GROUP ADMINISTRATION', '');
+  const c = baseContainer(guild, 'GROUP ADMIN', '');
   const items = [
-    ['Create', 'ابدأ إنشاء قروب جديد من النموذج.', 'groups_admin:create', '<:emoji_33:1465383525644501238>', ButtonStyle.Secondary],
-    ['Add', 'إنشاء أو ربط موارد القروب من رول موجود.', 'groups_admin:add', '<:emoji_30:1465383419641856233>', ButtonStyle.Secondary],
-    ['Info', 'عرض معلومات القروب وأعضائه.', 'groups_admin:info', '<:emoji_33:1465383582292771025>', ButtonStyle.Secondary],
-    ['Edit', 'تعديل إعدادات القروب.', 'groups_admin:edit', '<:emoji_35:1465383704993202452>', ButtonStyle.Secondary],
-    ['Delete', 'حذف القروب.', 'groups_admin:delete', '<:emoji_21:1465336647477493894>', ButtonStyle.Danger],
-    ['Cleanup', 'إعادة محاولة تنظيف موارد قروب متعثر.', 'groups_admin:cleanup', '<:emoji_21:1465336647477493894>', ButtonStyle.Danger],
-    ['Reset', 'تصفير نقاط قروب واحد.', 'groups_admin:reset', '<:emoji_34:1465383644339241073>', ButtonStyle.Danger],
-    ['Reset All', 'تصفير نقاط جميع القروبات.', 'groups_admin:resetall', '<:emoji_26:1465373714060415180>', ButtonStyle.Danger]
+    ['Create', '**إنشاء قروب جديد**', 'groups_admin:create', '<:emoji_33:1465383525644501238>', ButtonStyle.Secondary],
+    ['Add', '**إضافة قروب من رول**', 'groups_admin:add', '<:emoji_30:1465383419641856233>', ButtonStyle.Secondary],
+    ['Info', '**عرض القروب والأعضاء**', 'groups_admin:info', '<:emoji_33:1465383582292771025>', ButtonStyle.Secondary],
+    ['Edit', '**تعديل القروب**', 'groups_admin:edit', '<:emoji_35:1465383704993202452>', ButtonStyle.Secondary],
+    ['Delete', '**حذف القروب**', 'groups_admin:delete', '<:emoji_21:1465336647477493894>', ButtonStyle.Danger],
+    ['Cleanup', '**تنظيف قروب متعثر**', 'groups_admin:cleanup', '<:emoji_21:1465336647477493894>', ButtonStyle.Danger],
+    ['Reset', '**تصفير نقاط قروب**', 'groups_admin:reset', '<:emoji_34:1465383644339241073>', ButtonStyle.Danger],
+    ['Reset All', '**تصفير نقاط الكل**', 'groups_admin:resetall', '<:emoji_26:1465373714060415180>', ButtonStyle.Danger]
   ];
   for (const [label, description, id, emoji, style] of items) {
     c.addSectionComponents(new SectionBuilder()
@@ -1596,7 +1596,7 @@ async function handleAdmin(interaction, action, page = 0) {
     }));
     const payload = selectPayload(interaction.guild,
       action === 'delete' ? 'حذف قروب' : action === 'cleanup' ? 'إعادة تنظيف قروب' : action === 'reset' ? 'تصفير النقاط' : 'اختر قروبًا',
-      `${action === 'cleanup' ? 'اختر قروبًا متعثرًا لإعادة محاولة حذف موارده.' : 'اختر قروبًا واحدًا.'} الصفحة ${safePage + 1}/${pageCount} • الإجمالي ${groups.length}.`,
+      `${action === 'cleanup' ? 'اختر قروبًا متعثرًا لتنظيفه.' : 'اختر قروبًا واحدًا.'} الصفحة ${safePage + 1}/${pageCount} • الإجمالي ${groups.length}.`,
       `groups_admin_select:${action}:${safePage}`, options);
     if (pageCount > 1) {
       const nav = [];
