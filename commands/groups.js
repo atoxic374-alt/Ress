@@ -3278,6 +3278,11 @@ async function saveImportedGroup(interaction, flow) {
       const failedMembers = await addImportThreadMembers(thread, members);
       if (failedMembers.length) await gm.audit(interaction.guild.id, interaction.user.id, groupId, 'group_thread_members_restore_failed', { userIds: failedMembers }).catch(() => {});
       invalidateGroupCaches(interaction.guild.id);
+      // نشر دليل الأوامر داخل مورد القروب نفسه فور اكتمال الإنشاء.
+      // في نمط الثريد يكون الهدف هو الثريد، وفي نمط الرومات تكون القناة النصية.
+      await sendGroupCommandGuide(thread || text, { name: groupName }, settings).catch(error => {
+        console.error('[groups] failed to publish imported group command guide:', error?.message || error);
+      });
       const result = `تم إنشاء وربط القروب **${safe(groupName)}** (#${groupId}) مع الرول وإضافة ${members.length - failedMembers.length} من ${members.length} عضوًا.${failedMembers.length ? ` تعذرت إضافة ${failedMembers.length} عضوًا للثريد وسيتم تسجيلها للمراجعة.` : ''}`;
       await gm.releaseOperationLock(operationKey, operationToken);
       operationToken = null;
