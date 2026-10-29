@@ -4622,6 +4622,16 @@ client.on('interactionCreate', async (interaction) => {
     // تعريف customId في البداية
     const customId = interaction?.customId || '';
 
+    // أزرار التقديم حساسة لمهلة Discord؛ عالجها قبل المعالجات العامة
+    // التي قد تنفذ فحوصًا إضافية وتؤخر deferReply.
+    if (interaction.isButton?.() && customId === 'apply_resp_button') {
+        const respCommand = client.commands.get('resp');
+        if (respCommand?.handleApplyRespButton) {
+            await respCommand.handleApplyRespButton(interaction, client);
+        }
+        return;
+    }
+
     // Responsibility supervisor panel (settings button and مشرف command)
     if (customId.startsWith('supervisor_')) {
         const supervisorCommand = client.commands.get('مشرف') || client.commands.get('supervisor');

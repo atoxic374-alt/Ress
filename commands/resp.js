@@ -1238,6 +1238,9 @@ async function handleApplyRespButton(interaction, client) {
     try {
         if (interaction.replied || interaction.deferred) return;
 
+        // تأكيد التفاعل فورًا قبل تجهيز البيانات حتى لا تنتهي مهلة Discord.
+        await interaction.deferReply({ ephemeral: true });
+
         // التحقق من الكولداون
         const cooldownMs = getRespApplyCooldownMs(interaction.guild.id);
         const cooldownKey = `${interaction.guild.id}:${interaction.user.id}`;
@@ -1245,9 +1248,8 @@ async function handleApplyRespButton(interaction, client) {
         if (cooldownMs && lastApply) {
             const timeLeft = lastApply + cooldownMs - Date.now();
             if (timeLeft > 0) {
-                return await interaction.reply({
-                    content: `⏳ **يجب عليك الانتظار ${formatRemainingTimeFromMs(timeLeft)} قبل تقديم طلب آخر أو اختيار مسؤولية أخرى.**`,
-                    ephemeral: true
+                return await interaction.editReply({
+                    content: `⏳ **يجب عليك الانتظار ${formatRemainingTimeFromMs(timeLeft)} قبل تقديم طلب آخر أو اختيار مسؤولية أخرى.**`
                 });
             }
         }
@@ -1255,9 +1257,8 @@ async function handleApplyRespButton(interaction, client) {
         const currentResps = getCurrentResponsibilities();
         
         if (Object.keys(currentResps).length === 0) {
-            return await interaction.reply({
-                content: '**لا توجد مسؤوليات متاحة للتقديم عليها حالياً**',
-                ephemeral: true
+            return await interaction.editReply({
+                content: '**لا توجد مسؤوليات متاحة للتقديم عليها حالياً**'
             });
         }
 
@@ -1303,9 +1304,7 @@ async function handleApplyRespButton(interaction, client) {
             };
         };
 
-        const pickerMessage = interaction.replied || interaction.deferred
-            ? await interaction.editReply(buildPayload())
-            : await interaction.reply({ ...buildPayload(), ephemeral: true, fetchReply: true });
+        const pickerMessage = await interaction.editReply(buildPayload());
 
         const targetMessage = pickerMessage?.awaitMessageComponent ? pickerMessage : await interaction.fetchReply();
         const pickerCollector = targetMessage.createMessageComponentCollector({
@@ -1355,6 +1354,9 @@ async function handleApplyRespButton(interaction, client) {
         });
     } catch (error) {
         console.error('Error in handleApplyRespButton:', error);
+        if (interaction.deferred && !interaction.replied) {
+            await interaction.editReply({ content: '**حدث خطأ أثناء تجهيز قائمة المسؤوليات. حاول مرة أخرى.**' }).catch(() => {});
+        }
     }
 }
 
