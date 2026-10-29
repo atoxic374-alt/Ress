@@ -5910,6 +5910,10 @@ if ((interaction.isButton() || interaction.isModalSubmit() || interaction.isRole
           await interaction.editReply({ content: `**هذه المشكلة مستلمة بالفعل من <@${callData.claimedBy}>.**` }).catch(() => {});
           return;
         }
+        if (String(callData.requesterId) === String(interaction.user.id)) {
+          await interaction.editReply({ content: '**لا يمكنك استلام الاختصار الذي أنشأته أنت. يجب أن يستلمه مسؤول آخر.**' }).catch(() => {});
+          return;
+        }
         let currentResponsibilities = global.responsibilities || {};
         if (dbManager.isInitialized) {
           currentResponsibilities = await dbManager.getResponsibilities().catch(() => currentResponsibilities);
