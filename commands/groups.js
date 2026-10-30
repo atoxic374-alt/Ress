@@ -332,7 +332,7 @@ function groupResourceSummary(group) {
 }
 async function deny(interaction, message='لا تملك صلاحية استخدام هذه العملية.') { return reply(interaction,{content:message}); }
 function setupConfirmation(interaction, title, text) { const c = baseContainer(interaction.guild, title, `**- ${safe(text, 300)} **`); return componentsV2Payload(c); }
-async function checkSystem(interaction) { const settings=await gm.getSettings(interaction.guild.id); if(!gm.canManageGroupAdmin(interaction.client, settings, interaction.member)){await deny(interaction,'لا تملك صلاحية استخدام هذه العملية. عيّنْك مالك البوت كمسؤول نظام أولًا.');return null;} return settings; }
+async function checkSystem(interaction) { const settings=await gm.getSettings(interaction.guild.id); if(!gm.canManageGroupAdmin(interaction.client, settings, interaction.member)){await deny(interaction,'لا تملك صلاحية استخدام هذه العملية. يجب أن يعيّنك مالك البوت مسؤولًا عن نظام القروبات أولًا.');return null;} return settings; }
 async function checkBotOwner(interaction) { const settings=await gm.getSettings(interaction.guild.id); if(!gm.isBotOwner(interaction.client, interaction.member)){await deny(interaction,'لا تملك صلاحية تعديل إعدادات النظام. هذه العملية مخصصة لمالكي البوت فقط.');return null;} return settings; }
 function musicResultMessage(result) { if(!result) return 'لم يتم تنفيذ الميوزك.'; if(result.ok) return result.alreadyPresent ? `بوت الأغاني ${result.musicBot.user.username} موجود بالفعل في القناة.` : `تم سحب بوت الأغاني ${result.musicBot.user.username} إلى القناة.`; const messages={MUSIC_CHANNEL_NOT_CONFIGURED:'لم يتم تحديد قناة مصدر الميوزك.',INVALID_MUSIC_CHANNEL:'قناة مصدر الميوزك غير صالح.',MUSIC_BOT_NOT_FOUND:'لم يتم العثور على بوت أغاني معروف في قناة المصدر.',AMBIGUOUS_SOURCE_BOTS:'يوجد أكثر من بوت أغاني في المصدر؛ لم يتم اختيار بوت عشوائياً.',AMBIGUOUS_TARGET_BOTS:'يوجد أكثر من بوت أغاني في القناة الهدف؛ لم يتم تغيير أي بوت.',MISSING_PERMISSIONS:`صلاحيات البوت ناقصة : ${result.error||'غير معروفة'}`,MOVE_FAILED:'تعذر نقل بوت الأغاني حالياً.',TARGET_IS_MUSIC_CHANNEL:'القناة الهدف هو قناة المصدر نفسه.'}; return messages[result.code]||'تعذر تنفيذ Music بأمان.'; }
 function isGroupMember(group, userId) {
@@ -1432,8 +1432,8 @@ async function handleSetup(interaction, action) {
     { label: 'كل الرومات', value: 'all', description: 'كل رومات السيرفر المقروءة' }
   ]));
   if (['log', 'topchannel', 'adminchannel', 'memberchannel'].includes(action)) {
-    const menu = new ChannelSelectMenuBuilder().setCustomId(`groups_setup_channel:${action}`).setPlaceholder('اختر قناةًا نصيًا').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText);
-    const c = baseContainer(interaction.guild, 'CHANNEL SETTINGS', 'اختر قناةًا نصيًا واحدًا.');
+    const menu = new ChannelSelectMenuBuilder().setCustomId(`groups_setup_channel:${action}`).setPlaceholder('اختر قناة نصية').setMinValues(1).setMaxValues(1).setChannelTypes(ChannelType.GuildText);
+    const c = baseContainer(interaction.guild, 'CHANNEL SETTINGS', 'اختر قناة نصية واحدة.');
     c.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
     return reply(interaction, componentsV2Payload(c));
   }
@@ -1578,7 +1578,7 @@ async function handleSetupSelection(interaction, prefix, action) {
     const textActions = ['log', 'topchannel', 'adminchannel', 'memberchannel'];
     if (categoryActions.includes(action) && channel.type !== ChannelType.GuildCategory) return reply(interaction, { content: 'اختر كاتاقوري للرومات.' });
     if (action === 'music' && channel.type !== ChannelType.GuildVoice) return reply(interaction, { content: 'اختر قناةًا صوتيًا عاديًا لمصدر الموسيقى.' });
-    if (textActions.includes(action) && channel.type !== ChannelType.GuildText) return reply(interaction, { content: 'اختر قناةًا نصيًا عاديًا.' });
+    if (textActions.includes(action) && channel.type !== ChannelType.GuildText) return reply(interaction, { content: 'اختر قناة نصية عادية.' });
     const keys = { textcat: 'textCategoryId', voicecat: 'voiceCategoryId', music: 'musicChannelId', topchannel: 'topChannelId', adminchannel: 'adminControlChannelId', memberchannel: 'memberControlChannelId', log: 'logChannelId' };
     if (!keys[action]) return reply(interaction, { content: 'نوع القناة غير صالح.' });
     const labels = { textcat: 'كاتاقوري النص', voicecat: 'كاتاقوري الصوت', music: 'مصدر الموسيقى', topchannel: 'قناة الترتيب', adminchannel: 'قناة تحكم الإدارة', memberchannel: 'قناة تحكم الأعضاء', log: 'قناة السجلات' };
@@ -1857,7 +1857,7 @@ async function execute(message, args, { client, prefix } = {}) {
   const settings = await gm.getSettings(message.guild.id);
   const member = message.member;
   const canManage = gm.canManageGroupAdmin(client, settings, member || message.author);
-  if (!canManage) return replyMessage(message, 'لا تملك صلاحية إدارة القروبات. عيّنك مالك البوت كمسؤول نظام أولًا.');
+  if (!canManage) return replyMessage(message, 'لا تملك صلاحية إدارة القروبات. يجب أن يعيّنك مالك البوت مسؤولًا عن نظام القروبات أولًا.');
   const sub = String(args[0] || '').toLowerCase();
   if (!sub) {
     if (!gm.isBotOwner(client, member || message.author)) return replyMessage(message, 'لوحة الإعداد متاحة لمالكي البوت فقط.');
