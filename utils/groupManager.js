@@ -140,6 +140,9 @@ async function schema() {
     if (!managedGroupColumns.some(column => String(column.name) === 'sync_state')) {
       await dbManager.run(`ALTER TABLE managed_groups ADD COLUMN sync_state TEXT NOT NULL DEFAULT 'ready'`);
     }
+    if (!managedGroupColumns.some(column => String(column.name) === 'archive_json')) {
+      await dbManager.run(`ALTER TABLE managed_groups ADD COLUMN archive_json TEXT`);
+    }
     await dbManager.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_groups_active_name ON managed_groups(guild_id, name) WHERE status = 'active'`);
     await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_managed_groups_role_lookup ON managed_groups(guild_id, role_id, status)`);
     await dbManager.run(`CREATE INDEX IF NOT EXISTS idx_managed_groups_text_lookup ON managed_groups(guild_id, text_channel_id, status)`);
@@ -809,6 +812,120 @@ async function createGroup(guild, { name, description = '', ownerId, color = '#5
   }
   });
 }
+function serializeChannelOverwrites(channel) {
+  return (channel?.permissionOverwrites?.cache ? [...channel.permissionOverwrites.cache.values()] : []).map(overwrite => ({
+    id: String(overwrite.id), type: Number(overwrite.type),
+    allow: String(overwrite.allow?.bitfield ?? 0), deny: String(overwrite.deny?.bitfield ?? 0)
+  }));
+}
+async function captureGroupArchive(guild, group, settings) {
+  const fetchChannel = async id => id && (guild.channels.cache.get(String(id)) || await guild.channels.fetch(String(id)).catch(() => null));
+  const role = group.role_id && (guild.roles.cache.get(String(group.role_id)) || await guild.roles.fetch(String(group.role_id)).catch(() => null));
+  const text = await fetchChannel(group.text_channel_id), voice = await fetchChannel(group.voice_channel_id), thread = await fetchChannel(group.thread_id);
+  const sharedText = Boolean(text && text.type === ChannelType.GuildText && (String(text.name || '').toLowerCase() === 'groups-chat' || settings.chatMode === GROUP_CHAT_MODES.THREADS));
+  return {
+    version: 1, capturedAt: Date.now(), chatMode: sharedText ? GROUP_CHAT_MODES.THREADS : GROUP_CHAT_MODES.CHANNELS,
+    role: role ? { name: role.name, color: role.hexColor, hoist: role.hoist, mentionable: role.mentionable, permissions: role.permissions.bitfield.toString() } : null,
+    text: text ? { name: text.name, parentId: text.parentId || null, topic: text.topic || null, nsfw: Boolean(text.nsfw), rateLimitPerUser: Number(text.rateLimitPerUser || 0), overwrites: serializeChannelOverwrites(text) } : null,
+    thread: thread ? { name: thread.name, autoArchiveDuration: thread.autoArchiveDuration || 1440 } : null,
+    voice: voice ? { name: voice.name, parentId: voice.parentId || null, bitrate: voice.bitrate || null, userLimit: voice.userLimit || 0, rtcRegion: voice.rtcRegion || null, overwrites: serializeChannelOverwrites(voice) } : null,
+    memberIds: [...new Set([String(group.owner_id), ...(group.memberIds || []), ...(group.managerIds || [])].filter(Boolean))],
+    managerIds: [...(group.managerIds || [])], blockedIds: [...(group.blockedIds || [])]
+  };
+}
+function restoredOverwrites(snapshot, roleId, everyoneId) {
+  const source = Array.isArray(snapshot?.overwrites) ? snapshot.overwrites : [];
+  const result = source.filter(item => String(item.id) === String(everyoneId)).map(item => ({ id: String(everyoneId), allow: BigInt(item.allow || 0), deny: BigInt(item.deny || 0) }));
+  const roleSource = source.find(item => String(item.id) !== String(everyoneId) && Number(item.type) === 0);
+  result.push(roleSource ? { id: String(roleId), allow: BigInt(roleSource.allow || 0), deny: BigInt(roleSource.deny || 0) } : { id: String(roleId), allow: BigInt(0), deny: BigInt(0) });
+  return result;
+}
+async function restoreGroup(guild, groupId, actorId, newOwnerId = null) {
+  return withLock(`restore:${guild.id}:${groupId}`, async () => {
+    const operationKey = `guild:${guild.id}:group:${groupId}:restore`;
+    const operationToken = await acquireOperationLock(operationKey, 240000);
+    if (!operationToken) throw new Error('GROUP_OPERATION_BUSY');
+    const created = []; let role = null;
+    try {
+      const group = await getGroup(guild.id, groupId);
+      if (!group || group.status !== 'deleted') throw new Error('GROUP_NOT_RESTORABLE');
+      const archive = safeJson(group.archive_json, null);
+      if (!archive || Number(archive.version) !== 1) throw new Error('GROUP_ARCHIVE_MISSING');
+      const settings = await getSettings(guild.id), ownerId = String(newOwnerId || group.owner_id);
+      if (!isSnowflake(ownerId)) throw new Error('INVALID_OWNER');
+      const owner = await guild.members.fetch(ownerId).catch(() => null);
+      if (!owner || owner.user?.bot) throw new Error('RESTORE_OWNER_NOT_FOUND');
+      if ((await listGroups(guild.id)).some(item => String(item.owner_id) === ownerId)) throw new Error('OWNER_ALREADY_HAS_GROUP');
+      const previousMembers = [...new Set([...(archive.memberIds || []), ownerId])];
+      role = await guild.roles.create({
+        name: String(archive.role?.name || group.name).slice(0, 100), color: archive.role?.color || group.color || '#5865F2',
+        hoist: Boolean(archive.role?.hoist), mentionable: Boolean(archive.role?.mentionable),
+        permissions: archive.role?.permissions || '0', reason: `Restore managed group #${group.id}`
+      });
+      created.push(role);
+      if (settings.mainRoleId) {
+        const mainRole = guild.roles.cache.get(settings.mainRoleId) || await guild.roles.fetch(settings.mainRoleId).catch(() => null);
+        if (mainRole && mainRole.id !== guild.id && mainRole.position > 1 && role.position >= mainRole.position) await role.setPosition(Math.max(1, mainRole.position - 1), 'Place restored group role under Main Role');
+      }
+      const textSnapshot = archive.text || {}, voiceSnapshot = archive.voice || {};
+      const textCategory = textSnapshot.parentId && guild.channels.cache.has(String(textSnapshot.parentId)) ? String(textSnapshot.parentId) : settings.textCategoryId || undefined;
+      const voiceCategory = voiceSnapshot.parentId && guild.channels.cache.has(String(voiceSnapshot.parentId)) ? String(voiceSnapshot.parentId) : settings.voiceCategoryId || undefined;
+      let text = null, thread = null, voice = null;
+      if (archive.chatMode === GROUP_CHAT_MODES.THREADS || archive.thread) {
+        const shared = await getOrCreateSharedGroupChat(guild, { ...settings, chatMode: GROUP_CHAT_MODES.THREADS });
+        text = shared.text;
+        if (!shared.reused) created.push(text);
+        await text.permissionOverwrites.edit(role.id, { ViewChannel: true, SendMessages: true, SendMessagesInThreads: true, ReadMessageHistory: true, AddReactions: true, AttachFiles: true, EmbedLinks: true }, { reason: 'Restore managed group thread permissions' });
+        thread = await text.threads.create({ name: String(archive.thread?.name || group.name).slice(0, 100), type: ChannelType.PrivateThread, invitable: false, autoArchiveDuration: [60,1440,4320,10080].includes(Number(archive.thread?.autoArchiveDuration)) ? Number(archive.thread.autoArchiveDuration) : 1440, reason: `Restore managed group #${group.id}` });
+        created.push(thread);
+      } else {
+        text = await guild.channels.create({
+          name: String(textSnapshot.name || `📝・${group.name}`).slice(0, 100), type: ChannelType.GuildText,
+          parent: textCategory, topic: textSnapshot.topic || undefined, nsfw: Boolean(textSnapshot.nsfw),
+          rateLimitPerUser: Math.max(0, Math.min(21600, Number(textSnapshot.rateLimitPerUser) || 0)),
+          permissionOverwrites: restoredOverwrites(textSnapshot, role.id, guild.roles.everyone.id),
+          reason: `Restore managed group #${group.id}`
+        });
+        created.push(text);
+      }
+      voice = await guild.channels.create({
+        name: String(voiceSnapshot.name || group.name).slice(0, 100), type: ChannelType.GuildVoice, parent: voiceCategory,
+        bitrate: voiceSnapshot.bitrate || undefined, userLimit: Math.max(0, Math.min(99, Number(voiceSnapshot.userLimit) || 0)),
+        rtcRegion: voiceSnapshot.rtcRegion || undefined,
+        permissionOverwrites: archive.voice ? restoredOverwrites(voiceSnapshot, role.id, guild.roles.everyone.id) : [
+          { id: guild.roles.everyone.id, allow: [PermissionsBitField.Flags.ViewChannel], deny: [PermissionsBitField.Flags.Connect] },
+          { id: role.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.Speak, PermissionsBitField.Flags.Stream, PermissionsBitField.Flags.UseVAD] }
+        ], reason: `Restore managed group #${group.id}`
+      });
+      created.push(voice);
+      const restoredMembers = [];
+      for (const userId of previousMembers) {
+        const member = await guild.members.fetch(userId).catch(() => null);
+        if (!member || member.user?.bot) continue;
+        await member.roles.add(role, 'Restore managed group membership').catch(() => {});
+        if (thread) await thread.members.add(member.id).catch(() => {});
+        restoredMembers.push(member.id);
+      }
+      if (!restoredMembers.includes(owner.id)) throw new Error('RESTORE_OWNER_NOT_ADDED');
+      if (settings.leaderRoleId) {
+        const leaderRole = guild.roles.cache.get(settings.leaderRoleId) || await guild.roles.fetch(settings.leaderRoleId).catch(() => null);
+        if (leaderRole && !owner.roles.cache.has(leaderRole.id)) await owner.roles.add(leaderRole, 'Restore managed group owner');
+      }
+      const now = Date.now();
+      await dbManager.transaction(async tx => {
+        await tx.run(`UPDATE managed_groups SET owner_id = ?, manager_ids_json = ?, member_ids_json = ?, role_id = ?, text_channel_id = ?, thread_id = ?, voice_channel_id = ?, status = 'active', sync_state = 'ready', archived_at = NULL, updated_at = ? WHERE guild_id = ? AND id = ? AND status = 'deleted'`,
+          [owner.id, JSON.stringify((archive.managerIds || []).filter(id => restoredMembers.includes(String(id)) && String(id) !== owner.id)), JSON.stringify(restoredMembers), role.id, text.id, thread?.id || null, voice.id, now, String(guild.id), Number(groupId)]);
+        await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)',
+          [String(guild.id), Number(groupId), actorId ? String(actorId) : null, 'group_restore', JSON.stringify({ ownerId: owner.id, previousOwnerId: group.owner_id, memberIds: restoredMembers, roleId: role.id, textId: text.id, threadId: thread?.id || null, voiceId: voice.id }), now]);
+      }, 'group-restore');
+      return await getGroup(guild.id, groupId);
+    } catch (error) {
+      for (const resource of created.reverse()) await resource?.delete?.('Rollback failed group restore').catch(() => {});
+      if (role) await role.delete('Rollback failed group restore').catch(() => {});
+      throw error;
+    } finally { await releaseOperationLock(operationKey, operationToken); }
+  });
+}
 async function deleteGroup(guild, groupId, actorId) {
   return withLock(`delete:${guild.id}:${groupId}`, async () => {
     const operationKey = `guild:${guild.id}:group:${groupId}:delete`;
@@ -829,6 +946,8 @@ async function deleteGroup(guild, groupId, actorId) {
         && (guild.channels.cache.get(String(group.text_channel_id)) || await guild.channels.fetch(String(group.text_channel_id)).catch(() => null));
       const sharedThreadParent = settings.chatMode === GROUP_CHAT_MODES.THREADS
         || String(textChannel?.name || '').toLowerCase() === 'groups-chat';
+      const archive = await captureGroupArchive(guild, group, settings);
+      await dbManager.run('UPDATE managed_groups SET archive_json = ?, updated_at = ? WHERE guild_id = ? AND id = ?', [JSON.stringify(archive), Date.now(), String(guild.id), Number(groupId)]);
       const resources = [
         ['thread', group.thread_id],
         ...(!sharedThreadParent ? [['text_channel', group.text_channel_id]] : []),
@@ -910,4 +1029,4 @@ async function releaseOperationLock(lockKey, ownerToken) {
   await schema();
   await dbManager.run('DELETE FROM group_operation_locks WHERE lock_key = ? AND owner_token = ?', [String(lockKey), String(ownerToken)]).catch(() => {});
 }
-module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, runtimeLog, logGroupEvent, isOwner, isBotOwner, isSystemManager, canManageGroupAdmin, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, explainActivity, listMemberPoints, listPointsLedger, pruneGroupHistory, upsertVoiceSession, listVoiceSessions, deleteVoiceSession, getMemberPoints, getOrCreateSharedGroupChat, createGroup, deleteGroup, acquireOperationLock, releaseOperationLock };
+module.exports = { GROUP_CHAT_MODES, GROUP_DEFAULTS, schema, getSettings, saveSettings, listGroups, getGroup, getGroupForChannel, audit, runtimeLog, logGroupEvent, isOwner, isBotOwner, isSystemManager, canManageGroupAdmin, canManageSystem, canManageGroup, channelBelongs, validateConfig, setSystemUser, setSystemRole, updateGroup, addMember, removeMember, setManagers, setBlocked, resetPoints, adjustGroupPoints, adjustAllGroupPoints, adjustMemberPoints, setRule, getRules, recordActivity, explainActivity, listMemberPoints, listPointsLedger, pruneGroupHistory, upsertVoiceSession, listVoiceSessions, deleteVoiceSession, getMemberPoints, getOrCreateSharedGroupChat, createGroup, deleteGroup, restoreGroup, acquireOperationLock, releaseOperationLock };
