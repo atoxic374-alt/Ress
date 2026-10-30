@@ -907,6 +907,13 @@ async function restoreGroup(guild, groupId, actorId, newOwnerId = null) {
         restoredMembers.push(member.id);
       }
       if (!restoredMembers.includes(owner.id)) throw new Error('RESTORE_OWNER_NOT_ADDED');
+      if (settings.managerRoleId) {
+        const managerRole = guild.roles.cache.get(settings.managerRoleId) || await guild.roles.fetch(settings.managerRoleId).catch(() => null);
+        if (managerRole) for (const managerId of archive.managerIds || []) {
+          const manager = await guild.members.fetch(String(managerId)).catch(() => null);
+          if (manager && restoredMembers.includes(String(managerId)) && !manager.roles.cache.has(managerRole.id)) await manager.roles.add(managerRole, 'Restore managed group manager').catch(() => {});
+        }
+      }
       if (settings.leaderRoleId) {
         const leaderRole = guild.roles.cache.get(settings.leaderRoleId) || await guild.roles.fetch(settings.leaderRoleId).catch(() => null);
         if (leaderRole && !owner.roles.cache.has(leaderRole.id)) await owner.roles.add(leaderRole, 'Restore managed group owner');
@@ -946,8 +953,10 @@ async function deleteGroup(guild, groupId, actorId) {
         && (guild.channels.cache.get(String(group.text_channel_id)) || await guild.channels.fetch(String(group.text_channel_id)).catch(() => null));
       const sharedThreadParent = settings.chatMode === GROUP_CHAT_MODES.THREADS
         || String(textChannel?.name || '').toLowerCase() === 'groups-chat';
-      const archive = await captureGroupArchive(guild, group, settings);
-      await dbManager.run('UPDATE managed_groups SET archive_json = ?, updated_at = ? WHERE guild_id = ? AND id = ?', [JSON.stringify(archive), Date.now(), String(guild.id), Number(groupId)]);
+      if (!group.archive_json) {
+        const archive = await captureGroupArchive(guild, group, settings);
+        await dbManager.run('UPDATE managed_groups SET archive_json = ?, updated_at = ? WHERE guild_id = ? AND id = ?', [JSON.stringify(archive), Date.now(), String(guild.id), Number(groupId)]);
+      }
       const resources = [
         ['thread', group.thread_id],
         ...(!sharedThreadParent ? [['text_channel', group.text_channel_id]] : []),
