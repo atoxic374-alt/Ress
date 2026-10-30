@@ -865,7 +865,7 @@ async function restoreGroup(guild, groupId, actorId, newOwnerId = null) {
       created.push(role);
       if (settings.mainRoleId) {
         const mainRole = guild.roles.cache.get(settings.mainRoleId) || await guild.roles.fetch(settings.mainRoleId).catch(() => null);
-        if (mainRole && mainRole.id !== guild.id && mainRole.position > 1 && role.position >= mainRole.position) await role.setPosition(Math.max(1, mainRole.position - 1), 'Place restored group role under Main Role');
+        if (mainRole && mainRole.id !== guild.id && mainRole.position > 1) await role.setPosition(Math.max(1, mainRole.position - 1), 'Place restored group role under Main Role');
       }
       const textSnapshot = archive.text || {}, voiceSnapshot = archive.voice || {};
       const textCategory = textSnapshot.parentId && guild.channels.cache.has(String(textSnapshot.parentId)) ? String(textSnapshot.parentId) : settings.textCategoryId || undefined;
