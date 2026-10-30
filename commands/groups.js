@@ -1606,7 +1606,10 @@ async function handleSetupSelection(interaction, prefix, action) {
   return false;
 }
 async function handleAdmin(interaction, action, page = 0) {
-  if (action !== 'create' && !interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  if (action !== 'create' && !interaction.deferred && !interaction.replied) {
+    if (String(interaction.customId || '').startsWith('groups_admin_page:')) await interaction.deferUpdate();
+    else await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  }
   const settings = await checkSystem(interaction);
   if (!settings) return true;
   if (action === 'create') return interaction.showModal(createGroupModal(interaction.user.id));
@@ -3315,7 +3318,7 @@ async function saveImportedGroup(interaction, flow) {
         console.error('[groups] failed to publish imported group command guide:', error?.message || error);
       });
       const importedGroup = await gm.getGroup(interaction.guild.id, groupId).catch(() => null);
-      if (importedGroup) await notifyGroupParties(interaction.guild, importedGroup, interaction.user.id, 'GROUP ADDED', `تم ربط القروب الموجود بالنظام بنجاح.\\n\\n${groupResourceSummary(importedGroup)}\\n**Members Added :** ${members.length - failedMembers.length} / ${members.length}`);
+      if (importedGroup) await notifyGroupParties(interaction.guild, importedGroup, interaction.user.id, 'GROUP ADDED', `تم ربط القروب الموجود بالنظام بنجاح.\n\n${groupResourceSummary(importedGroup)}\n**Members Added :** ${members.length - failedMembers.length} / ${members.length}`);
       const result = `تم إنشاء وربط القروب **${safe(groupName)}** (#${groupId}) مع الرول وإضافة ${members.length - failedMembers.length} من ${members.length} عضوًا.${failedMembers.length ? ` تعذرت إضافة ${failedMembers.length} عضوًا للثريد وسيتم تسجيلها للمراجعة.` : ''}`;
       await gm.releaseOperationLock(operationKey, operationToken);
       operationToken = null;
