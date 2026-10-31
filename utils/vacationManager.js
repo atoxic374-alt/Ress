@@ -2,10 +2,12 @@ const fs = require('fs');
 const path = require('path');
 const { EmbedBuilder } = require('discord.js');
 const colorManager = require('./colorManager');
+const { normalizeDiscordId } = require('./mentions');
 
 const vacationsPath = path.join(__dirname, '..', 'data', 'vacations.json');
 const adminRolesPath = path.join(__dirname, '..', 'data', 'adminRoles.json');
 const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
+const RESPONSIBILITY_AUDIT_INTERVAL_MS = 2 * 60 * 1000;
 
 // نظام حماية الرولات مشابه لنظام الداون
 class VacationRoleProtection {
@@ -132,20 +134,61 @@ async function getResponsibilitiesForVacation() {
     const responsibilities = await manager.getResponsibilities();
     if (responsibilities && Object.keys(responsibilities).length > 0) return responsibilities;
     if (global.responsibilities && Object.keys(global.responsibilities).length > 0) return global.responsibilities;
+    const fileResponsibilities = readJson(responsibilitiesPath, {});
+    if (fileResponsibilities && Object.keys(fileResponsibilities).length > 0) return fileResponsibilities;
     return responsibilities || {};
+}
+
+function normalizeResponsibilityRoleId(value) {
+    const raw = typeof value === 'object' ? (value?.id ?? value?.roleId) : value;
+    if (raw === null || raw === undefined) return null;
+    const text = String(raw).trim();
+    const mention = text.match(/^<@&(\d{17,20})>$/);
+    const id = mention ? mention[1] : text;
+    return /^\d{17,20}$/.test(id) ? id : null;
 }
 
 function captureResponsibilityAssignments(responsibilities, userId) {
     const assignments = [];
+    const normalizedUserId = normalizeDiscordId(userId) || String(userId);
     for (const [name, config] of Object.entries(responsibilities || {})) {
-        const responsibles = Array.isArray(config?.responsibles) ? config.responsibles.map(String) : [];
-        const index = responsibles.indexOf(String(userId));
+        const responsibles = Array.isArray(config?.responsibles) ? config.responsibles : [];
+        const index = responsibles.findIndex(value => (normalizeDiscordId(value) || String(value)) === normalizedUserId);
         if (index !== -1) {
-            const roles = Array.isArray(config.roles) ? config.roles : (config.roleId ? [config.roleId] : []);
-            assignments.push({ name, index, roleIds: [...new Set(roles.map(String).filter(Boolean))] });
+            const roles = [
+                ...(Array.isArray(config.roles) ? config.roles : []),
+                ...(Array.isArray(config.roleIds) ? config.roleIds : []),
+                ...(config.roleId ? [config.roleId] : [])
+            ];
+            assignments.push({ name, index, roleIds: [...new Set(roles.map(normalizeResponsibilityRoleId).filter(Boolean))] });
         }
     }
     return assignments;
+}
+
+function mergeResponsibilityAssignments(...assignmentLists) {
+    const merged = new Map();
+    for (const list of assignmentLists) {
+        if (!Array.isArray(list)) continue;
+        for (const assignment of list) {
+            const name = String(assignment?.name || '').trim();
+            if (!name) continue;
+            const existing = merged.get(name);
+            const incomingRoleIds = Array.isArray(assignment.roleIds)
+                ? assignment.roleIds.map(normalizeResponsibilityRoleId).filter(Boolean)
+                : [];
+            if (existing) {
+                existing.roleIds = [...new Set([...existing.roleIds, ...incomingRoleIds])];
+            } else {
+                merged.set(name, {
+                    name,
+                    index: Math.max(0, Number(assignment.index) || 0),
+                    roleIds: [...new Set(incomingRoleIds)]
+                });
+            }
+        }
+    }
+    return [...merged.values()];
 }
 
 function syncResponsibilitiesSnapshot(responsibilities) {
@@ -170,13 +213,18 @@ async function removeUserFromResponsibilities(userId, assignments) {
 
         for (const assignment of targets) {
             const config = responsibilities[assignment.name];
-            if (!config || !Array.isArray(config.responsibles)) {
+            if (!config) continue; // المسؤولية حُذفت أصلًا؛ لا يوجد عضو لإزالته منها.
+            if (!Array.isArray(config.responsibles)) {
                 failed.push(assignment);
                 continue;
             }
-            const current = config.responsibles.map(String);
-            if (!current.includes(String(userId))) continue;
-            const updated = { ...config, responsibles: current.filter(id => id !== String(userId)) };
+            const normalizedUserId = normalizeDiscordId(userId) || String(userId);
+            const current = config.responsibles.map(value => normalizeDiscordId(value) || String(value));
+            if (!current.includes(normalizedUserId)) continue;
+            const updated = {
+                ...config,
+                responsibles: config.responsibles.filter(value => (normalizeDiscordId(value) || String(value)) !== normalizedUserId)
+            };
             if (!await manager.updateResponsibility(assignment.name, updated)) failed.push(assignment);
             else responsibilities[assignment.name] = updated;
         }
@@ -204,10 +252,11 @@ async function restoreUserResponsibilities(userId, assignments = []) {
                 failed.push(assignment);
                 continue;
             }
-            const current = config.responsibles.map(String);
-            if (current.includes(String(userId))) continue;
+            const normalizedUserId = normalizeDiscordId(userId) || String(userId);
+            const current = config.responsibles.map(value => normalizeDiscordId(value) || String(value));
+            if (current.includes(normalizedUserId)) continue;
             const insertAt = Math.min(Math.max(Number(assignment.index) || 0, 0), current.length);
-            current.splice(insertAt, 0, String(userId));
+            current.splice(insertAt, 0, normalizedUserId);
             const updated = { ...config, responsibles: current };
             if (!await manager.updateResponsibility(assignment.name, updated)) failed.push(assignment);
             else responsibilities[assignment.name] = updated;
@@ -283,11 +332,11 @@ async function approveVacation(interaction, userId, approverId) {
         return { success: false, message: 'تعذر تحميل المسؤوليات وحفظها قبل بدء الإجازة.' };
     }
 
-    const adminRoles = readJson(adminRolesPath, []);
-    console.log(`📋 Admin Roles from file: ${JSON.stringify(adminRoles)}`);
+    const adminRoleIds = new Set(readJson(adminRolesPath, []).map(String));
 
     const responsibilityRoleIds = [...new Set(responsibilityAssignments.flatMap(item => item.roleIds || []))];
-    const rolesToRemove = member.roles.cache.filter(role => adminRoles.includes(role.id) || responsibilityRoleIds.includes(role.id));
+    const responsibilityRoleIdSet = new Set(responsibilityRoleIds.map(String));
+    const rolesToRemove = member.roles.cache.filter(role => adminRoleIds.has(String(role.id)) || responsibilityRoleIdSet.has(String(role.id)));
     let actuallyRemovedRoleIds = [];
 
     try {
@@ -312,6 +361,7 @@ async function approveVacation(interaction, userId, approverId) {
         approvedBy: approverId, 
         approvedAt: new Date().toISOString(), 
         removedRoles: actuallyRemovedRoleIds,  // معرفات الرولات المسحوبة
+        protectedRoleIds: responsibilityRoleIds,
         guildId: guild.id,  // حفظ معرف السيرفر
         responsibilityAssignments,
         responsibilitiesRemoved: responsibilityAssignments.length === 0
@@ -965,25 +1015,127 @@ async function checkVacations(client) {
             return guildLookups.get(guildId);
         };
 
-        // Retry responsibility removal if an approval was partially interrupted.
+        // Re-scan every active vacation: legacy records may not have saved snapshots,
+        // and a responsibility may be reassigned while the member is still on leave.
+        let liveResponsibilities = null;
+        let responsibilitiesLoaded = false;
         for (const [userId, vacation] of Object.entries(vacations.active)) {
-            const assignments = Array.isArray(vacation.responsibilityAssignments) ? vacation.responsibilityAssignments : [];
-            if (!assignments.length || vacation.responsibilitiesRemoved || Number(vacation.responsibilityRemovalRetryAt) > now) continue;
+            const endTime = vacation.endDate ? new Date(vacation.endDate).getTime() : NaN;
+            if (Number.isFinite(endTime) && now >= endTime) continue;
+            const nextAuditAt = Math.max(
+                Number(vacation.responsibilityAuditAt) || 0,
+                Number(vacation.responsibilityRemovalRetryAt) || 0
+            );
+            if (nextAuditAt > now) continue;
+
             try {
-                const removal = await removeUserFromResponsibilities(userId, assignments);
+                if (!responsibilitiesLoaded) {
+                    liveResponsibilities = await getResponsibilitiesForVacation();
+                    responsibilitiesLoaded = true;
+                }
+
+                const storedAssignments = Array.isArray(vacation.responsibilityAssignments)
+                    ? vacation.responsibilityAssignments
+                    : [];
+                const currentAssignments = captureResponsibilityAssignments(liveResponsibilities, userId);
+                const assignments = mergeResponsibilityAssignments(storedAssignments, currentAssignments);
+                vacation.responsibilityAssignments = assignments;
+
+                const assignmentRoleIds = assignments.flatMap(item => item.roleIds || []);
+                vacation.protectedRoleIds = [...new Set([
+                    ...(Array.isArray(vacation.protectedRoleIds) ? vacation.protectedRoleIds : []),
+                    ...assignmentRoleIds
+                ].map(normalizeResponsibilityRoleId).filter(Boolean))];
+                const trackedRoleIds = [...new Set([
+                    ...(Array.isArray(vacation.removedRoles) ? vacation.removedRoles : []),
+                    ...assignmentRoleIds
+                ].map(normalizeResponsibilityRoleId).filter(Boolean))];
+
+                let guild = null;
+                let member = null;
+                let roleFailures = [];
+                if (trackedRoleIds.length) {
+                    guild = vacation.guildId ? await fetchGuildOnce(vacation.guildId) : null;
+                    if (!guild) {
+                        roleFailures = trackedRoleIds;
+                    } else {
+                        try {
+                            member = await fetchGuildMemberById(guild, userId);
+                        } catch (error) {
+                            if (isUnknownMemberError(error)) {
+                                console.log(`⏳ عضو الإجازة ${userId} غير موجود حاليًا؛ ستتم مراجعة روله عند عودته.`);
+                            } else {
+                                roleFailures = trackedRoleIds;
+                                console.warn(`⚠️ تعذر جلب عضو الإجازة ${userId} لمراجعة الرولات: ${error.message}`);
+                            }
+                        }
+                    }
+                }
+
+                const roleIdsPresent = member
+                    ? trackedRoleIds.filter(roleId => member.roles.cache.has(roleId))
+                    : [];
+                if (roleIdsPresent.length) {
+                    const savedRoleIds = new Set((vacation.removedRoles || []).map(String));
+                    vacation.removedRoles = [...savedRoleIds];
+                    vacation.rolesData = Array.isArray(vacation.rolesData) ? vacation.rolesData : [];
+                    for (const roleId of roleIdsPresent) {
+                        if (!savedRoleIds.has(roleId)) {
+                            savedRoleIds.add(roleId);
+                            vacation.removedRoles.push(roleId);
+                        }
+                        if (!vacation.rolesData.some(role => String(role.id) === roleId)) {
+                            const role = member.roles.cache.get(roleId) || guild.roles.cache.get(roleId);
+                            vacation.rolesData.push({ id: roleId, name: role?.name || 'رول غير معروف' });
+                        }
+                    }
+                }
+
+                vacation.responsibilitiesRemoved = assignments.length === 0;
+                vacation.responsibilityAuditAt = now + RESPONSIBILITY_AUDIT_INTERVAL_MS;
+                if (!saveVacations(vacations)) {
+                    console.error(`❌ لم تُحذف مسؤوليات أو رولات الإجازة للمستخدم ${userId} لأن تعذر حفظ نسخة الاستعادة.`);
+                    continue;
+                }
+                vacationDataChanged = true;
+
+                let removal = { failed: [] };
+                if (assignments.length) {
+                    removal = await removeUserFromResponsibilities(userId, assignments);
+                }
                 vacation.responsibilitiesRemovalFailures = removal.failed;
                 vacation.responsibilitiesRemoved = removal.failed.length === 0;
-                vacation.responsibilityRemovalRetryAt = removal.failed.length ? now + 120000 : null;
-                if (vacation.responsibilitiesRemoved) vacation.responsibilitiesRemovedAt = new Date().toISOString();
-                vacationDataChanged = true;
+
+                if (member && roleIdsPresent.length) {
+                    try {
+                        await member.roles.remove(roleIdsPresent, 'سحب رولات المسؤولية طوال الإجازة');
+                    } catch (error) {
+                        roleFailures = [...new Set([...roleFailures, ...roleIdsPresent])];
+                        console.error(`❌ تعذر سحب رولات المسؤولية للمستخدم ${userId}:`, error.message);
+                    }
+                }
+
+                vacation.responsibilityRoleRemovalFailures = roleFailures;
+                const hasFailures = removal.failed.length > 0 || roleFailures.length > 0;
+                const retryDelay = hasFailures ? 120000 : RESPONSIBILITY_AUDIT_INTERVAL_MS;
+                vacation.responsibilityRemovalRetryAt = hasFailures ? now + retryDelay : null;
+                vacation.responsibilityAuditAt = now + retryDelay;
+                if (vacation.responsibilitiesRemoved && assignments.length) {
+                    vacation.responsibilitiesRemovedAt = new Date().toISOString();
+                }
                 if (removal.failed.length) {
                     console.warn(`⚠️ تعذرت إزالة ${removal.failed.length} مسؤولية للمستخدم ${userId}; ستعاد المحاولة لاحقًا.`);
-                } else {
-                    console.log(`✅ اكتملت إزالة مسؤوليات المستخدم ${userId} للإجازة.`);
+                } else if (assignments.length) {
+                    console.log(`✅ اكتملت مراجعة وإزالة مسؤوليات المستخدم ${userId} أثناء الإجازة.`);
+                }
+                if (!saveVacations(vacations)) {
+                    console.error(`❌ تعذر حفظ نتيجة مراجعة مسؤوليات الإجازة للمستخدم ${userId}.`);
                 }
             } catch (error) {
                 vacation.responsibilityRemovalRetryAt = now + getRetryDelayMs(error, 120000);
+                vacation.responsibilityAuditAt = vacation.responsibilityRemovalRetryAt;
                 vacationDataChanged = true;
+                saveVacations(vacations);
                 console.error(`❌ تعذر تحديث مسؤوليات الإجازة للمستخدم ${userId}:`, error.message);
             }
         }
@@ -1228,6 +1380,7 @@ module.exports = {
     handleMemberLeave,
     getResponsibilitiesForVacation,
     captureResponsibilityAssignments,
+    mergeResponsibilityAssignments,
     removeUserFromResponsibilities,
     restoreUserResponsibilities
 };

@@ -1,10 +1,12 @@
-function isGenericAdminRole(role) {
-    return role.name.trim().toLowerCase() === 'admin';
-}
+const { getPromotionRoleType } = require('./promotionRoleTypes');
 
 function matchesPromotionType(role, selectedType) {
-    if (isGenericAdminRole(role)) return false;
-    return (role.name.length <= 3) === (selectedType === 'rank');
+    const roleType = selectedType === 'rank'
+        ? 'letter'
+        : selectedType === 'visual'
+            ? 'phenomena'
+            : selectedType;
+    return getPromotionRoleType(role) === roleType;
 }
 
 function getAvailableQuickRoles(adminRoles, selectedType) {
@@ -38,51 +40,35 @@ function resolveQuickPromotion({
         .filter((role) => adminRoleIds.includes(role.id) && matchesPromotionType(role, selectedType))
         .sort((a, b) => b.position - a.position)[0] || null;
 
-    // عند عدم وجود رتبة من النوع المختار في الترقية، استخدم الرتبة الإدارية
-    // الحالية كنقطة انطلاق للتحويل إلى النوع المطلوب.
-    const startingRole = !currentRole && selectedAction === 'up'
-        ? memberRoles
-            .filter((role) => adminRoleIds.includes(role.id) && (
-                isGenericAdminRole(role) || !matchesPromotionType(role, selectedType)
-            ))
-            .sort((a, b) => b.position - a.position)[0] || null
-        : null;
-    const sourceRole = currentRole || startingRole;
-
-    if (!sourceRole) {
+    // ابدأ من أول مستوى في الفئة المطلوبة عند عدم وجود رول من النوع نفسه؛
+    // لا تستخدم رول ظواهر كنقطة انطلاق لترقية حرف أو العكس.
+    if (!currentRole && selectedAction !== 'up') {
         return { error: 'no-current-role' };
     }
 
-    let targetIndex;
-    if (startingRole) {
-        // التحويل إلى النوع المختار يبدأ من الرتبة ذات المستوى الذي اختاره المستخدم.
-        targetIndex = levels - 1;
-    } else {
-        const signedLevels = selectedAction === 'up' ? levels : -levels;
-        const currentIndex = availableRoles.findIndex((role) => role.id === sourceRole.id);
-        targetIndex = currentIndex === -1
-            ? availableRoles.findIndex((role) => role.position > sourceRole.position) +
-                (signedLevels - (selectedAction === 'up' ? 1 : 0))
-            : currentIndex + signedLevels;
-    }
+    const currentIndex = currentRole
+        ? availableRoles.findIndex((role) => role.id === currentRole.id)
+        : -1;
+    const targetIndex = !currentRole
+        ? levels - 1
+        : currentIndex === -1
+            ? availableRoles.findIndex((role) => role.position > currentRole.position) + (levels - 1)
+            : currentIndex + levels;
 
     if (targetIndex < 0 || targetIndex >= availableRoles.length) {
-        return { error: 'out-of-range', currentRole: sourceRole };
+        return { error: 'out-of-range', currentRole };
     }
 
     const newRole = availableRoles[targetIndex];
-    // احذف رتب النوع المختار فقط إذا كان موجودًا؛ عند التحويل تُزال رتبة المصدر.
     const rolesToRemove = memberRoles
-        .filter((role) => adminRoleIds.includes(role.id) && (
-            matchesPromotionType(role, selectedType) || Boolean(startingRole)
-        ))
+        .filter((role) => adminRoleIds.includes(role.id) && matchesPromotionType(role, selectedType))
         .map((role) => role.id);
 
     return {
-        currentRole: sourceRole,
+        currentRole,
         newRole,
         rolesToRemove,
-        startedFromOtherType: Boolean(startingRole)
+        startedFromOtherType: false
     };
 }
 

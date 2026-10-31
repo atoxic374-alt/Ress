@@ -22,6 +22,7 @@ let lastCacheUpdate = 0;
 const activeOperations = new Set(); // تتبع المسؤولين النشطين
 const lockedMembers = new Set();    // تتبع الأعضاء الجاري ترقيتهم/تنزيلهم لمنع التداخل
 const recentPromotions = new Map();
+const QUICK_LOG_REUSE_WINDOW_MS = 30 * 60 * 1000;
 
 // دالة تحويل الملي ثانية إلى تنسيق مقروء
 function formatTime(ms) {
@@ -94,18 +95,33 @@ module.exports = {
             return message.reply({ content: '**❌ ليس لديك صلاحية لاستخدام هذا الأمر .**', flags: MessageFlags.Ephemeral });
         }
 
-        const targets = message.mentions.members.filter(m => !m.user.bot);
-        if (targets.size === 0) return message.reply('**❌ يرجى منشن إداري واحد على الأقل .**');
+        const requestedMembers = new Map();
+        for (const [memberId, member] of message.mentions.members) {
+            requestedMembers.set(memberId, member);
+        }
+        const explicitTargetIds = (Array.isArray(args) ? args : []).flatMap(argument => {
+            const match = String(argument).trim().match(/^(?:<@!?(\d{17,20})>|(\d{17,20}))$/);
+            const id = match?.[1] || match?.[2];
+            return id ? [id] : [];
+        });
+        for (const memberId of explicitTargetIds) {
+            if (requestedMembers.has(memberId)) continue;
+            let member = message.guild.members.cache.get(memberId) || null;
+            if (!member) member = await message.guild.members.fetch(memberId).catch(() => null);
+            if (member) requestedMembers.set(memberId, member);
+        }
+        const targets = [...requestedMembers.values()].filter(member => !member.user.bot);
+        if (targets.length === 0) return message.reply('**❌ يرجى منشن إداري أو إدخال ID صحيح لعضو واحد على الأقل .**');
 
         // التحقق من تداخل العمليات على الأعضاء المستهدفين
         const lockedTargets = targets.filter(m => lockedMembers.has(m.id));
-        if (lockedTargets.size > 0) {
+        if (lockedTargets.length > 0) {
             return message.reply(`**⚠️ الأعضاء التاليين قيد المعالجة حالياً في عملية أخرى: ${lockedTargets.map(m => m.toString()).join(' , ')}**`);
         }
 
         const adminRolesListIds = promoteManager.getAdminRoles();
         const nonAdmins = targets.filter(m => !m.roles.cache.some(r => adminRolesListIds.includes(r.id)));
-        if (nonAdmins.size > 0) return message.reply(`**❌ الأعضاء التاليين ليسوا إداريين : ${nonAdmins.map(m => m.toString()).join(' , ')}**`);
+        if (nonAdmins.length > 0) return message.reply(`**❌ الأعضاء التاليين ليسوا إداريين : ${nonAdmins.map(m => m.toString()).join(' , ')}**`);
 
         const botMember = await message.guild.members.fetch(client.user.id);
         if (!botMember.permissions.has('ManageRoles')) {
@@ -114,11 +130,11 @@ module.exports = {
 
         const embed = colorManager.createEmbed()
             .setTitle('نظام الترقية والتنزيل السريع')
-            .setDescription(`** سيتم التعامل مع ${targets.size} إداري . راجع إحصائياتهم سريعا :**`)
+            .setDescription(`** سيتم التعامل مع ${targets.length} إداري . راجع إحصائياتهم سريعا :**`)
             .setThumbnail(client.user.displayAvatarURL())
             .setTimestamp();
 
-        for (const [id, target] of targets) {
+                for (const target of targets) {
             try {
                 const s = await getRealUserStats(target.id);
                 const voiceTimeFormatted = formatTime(s.voiceTime || 0);
@@ -192,7 +208,7 @@ module.exports = {
 
                 const processingEmbed = colorManager.createEmbed()
                     .setTitle('جاري تنفيذ العملية ...')
-                    .setDescription(`يتم الآن معالجة **${selectedAction === 'up' ? 'ترقية' : 'تنزيل'}** **${targets.size}** إداري بمقدار **${selectedLevels}** مستوى لكل نوع محدد (${selectedType === 'both' ? 'الحرف والظاهرية بشكل مستقل' : selectedType === 'rank' ? 'الحرف' : 'الظاهرية'}).\nيرجى الانتظار ثوانٍ معدودة ...`);
+                    .setDescription(`يتم الآن معالجة **${selectedAction === 'up' ? 'ترقية' : 'تنزيل'}** **${targets.length}** إداري بمقدار **${selectedLevels}** مستوى لكل نوع محدد (${selectedType === 'both' ? 'الحرف والظاهرية بشكل مستقل' : selectedType === 'rank' ? 'الحرف' : 'الظاهرية'}).\nيرجى الانتظار ثوانٍ معدودة ...`);
                     
                 await interaction.update({ embeds: [processingEmbed], components: [] });
 
@@ -204,7 +220,9 @@ module.exports = {
                 const promoPromises = targets.map(async (target) => {
                     try {
                         const memberOutcome = [];
-                        const initialRoles = [...target.roles.cache.values()];
+                        // العضو المستهدف موجود أصلًا من المنشن؛ استخدم الكاش ولا تجلب أعضاء السيرفر.
+                        const member = target;
+                        const initialRoles = [...member.roles.cache.values()];
                         const typePlan = getQuickPromotionTypes(initialRoles, adminRolesListIds, selectedType);
 
                         if (typePlan.types.length === 0) {
@@ -217,7 +235,6 @@ module.exports = {
 
                         // كل نوع عملية مستقلة؛ فشل إحداها لا يمنع تنفيذ النوع الآخر.
                         for (const type of typePlan.types) {
-                            const member = await message.guild.members.fetch({ user: target.id, force: true }).catch(() => target);
                             const memberRoles = [...member.roles.cache.values()];
                             const typeName = type === 'rank' ? 'RANK' : 'VISUAL';
                             const availableRoles = getAvailableQuickRoles(sortedAdminRoles, type);
@@ -240,6 +257,7 @@ module.exports = {
                             }
 
                             const { currentRole, newRole, rolesToRemove } = resolution;
+                            const previousRoleName = currentRole?.name || (type === 'rank' ? 'بداية مسار الحروف' : 'بداية مسار الظواهر');
                             const res = await promoteManager.createPromotion(
                                 message.guild, client, target.id, newRole.id,
                                 'نهائي', `Shortcut ${selectedAction.toUpperCase()} (${typeName})`,
@@ -259,13 +277,15 @@ module.exports = {
                             // الذي يملكه العضو عند تشغيل المسارين معًا.
                             for (const oldRoleId of rolesToRemove) {
                                 if (oldRoleId === newRole.id) continue;
-                                const currentMember = await message.guild.members.fetch({ user: target.id, force: true }).catch(() => member);
-                                if (currentMember.roles.cache.has(oldRoleId)) {
-                                    await currentMember.roles.remove(oldRoleId, 'استبدال رتبة النوع المختار في الترقية السريعة').catch(() => {});
+                                if (member.roles.cache.has(oldRoleId)) {
+                                    await member.roles.remove(oldRoleId, 'استبدال رتبة النوع المختار في الترقية السريعة').catch(() => {});
                                 }
                             }
 
-                            promotionDetails[type].push(`• **${target.displayName}** : **${currentRole.name}** ➜ **${newRole.name}**`);
+                            const memberMention = target?.id ? `<@${target.id}>` : target.displayName;
+                            const previousRoleMention = currentRole?.id ? `<@&${currentRole.id}>` : (currentRole?.name || '—');
+                            const newRoleMention = newRole?.id ? `<@&${newRole.id}>` : (newRole?.name || 'غير معروف');
+                            promotionDetails[type].push(`• ${memberMention} : ${previousRoleMention} ➜ ${newRoleMention}`);
                             undoData.push({
                                 memberId: target.id,
                                 addedRoleId: newRole.id,
@@ -274,12 +294,12 @@ module.exports = {
                             memberOutcome.push(
                                 `✅ **${target.displayName} — ${typeName}**\n` +
                                 `> **STATUS :** ${selectedAction === 'up' ? 'تمت ترقيته' : 'تم تنزيله'}\n` +
-                                `> **FROM :** ${currentRole.name}\n` +
+                                `> **FROM :** ${previousRoleName}\n` +
                                 `> **TO :** ${newRole.name}`
                             );
 
                             try {
-                                await target.send(`**✅ تم ${selectedAction === 'up' ? 'ترقيتك' : 'تنزيلك'} (${typeName}) في ${message.guild.name}\nمن الرتبة: ${currentRole.name}\nإلى الرتبة: ${newRole.name}**`).catch(() => {});
+                                await target.send(`**✅ تم ${selectedAction === 'up' ? 'ترقيتك' : 'تنزيلك'} (${typeName}) في ${message.guild.name}\nمن الرتبة: ${previousRoleName}\nإلى الرتبة: ${newRole.name}**`).catch(() => {});
                             } catch (e) {}
                         }
                         return memberOutcome;
@@ -312,7 +332,11 @@ module.exports = {
                             ? await logChannel.messages.fetch(settings.quickLogMessageId).catch(() => null)
                             : null;
                         let savedLog = null;
-                        if (previousLog) {
+                        const lastLogActivity = previousLog
+                            ? Math.max(previousLog.createdTimestamp || 0, previousLog.editedTimestamp || 0)
+                            : 0;
+                        const canReusePreviousLog = lastLogActivity > 0 && Date.now() - lastLogActivity <= QUICK_LOG_REUSE_WINDOW_MS;
+                        if (previousLog && canReusePreviousLog) {
                             savedLog = await previousLog.edit(logPayload).catch(() => null);
                         }
                         if (!savedLog) savedLog = await logChannel.send(logPayload).catch(() => null);

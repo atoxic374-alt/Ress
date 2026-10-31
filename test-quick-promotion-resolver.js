@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { getAvailableQuickRoles, getQuickPromotionTypes, resolveQuickPromotion } = require('./utils/quickPromotionResolver');
+const { getPromotionRoleType } = require('./utils/promotionRoleTypes');
 
 const roles = {
     admin: { id: 'admin-id', name: 'admin', position: 1 },
@@ -7,13 +8,21 @@ const roles = {
     b: { id: 'b-id', name: 'B', position: 3 },
     a: { id: 'a-id', name: 'A', position: 4 },
     v2: { id: 'v2-id', name: 'V2 Moderator', position: 5 },
-    v1: { id: 'v1-id', name: 'V1 Moderator', position: 6 }
+    v1: { id: 'v1-id', name: 'V1 Moderator', position: 6 },
+    threeChars: { id: 'three-id', name: 'ABC', position: 7 }
 };
 const adminRoleIds = Object.values(roles).map((role) => role.id);
 const rankRoles = [roles.c, roles.b, roles.a];
-const visualRoles = [roles.v2, roles.v1];
+const visualRoles = [roles.admin, roles.v2, roles.v1];
 
-assert.deepEqual(getAvailableQuickRoles(Object.values(roles), 'visual').map(role => role.id), [roles.v2.id, roles.v1.id]);
+assert.equal(getPromotionRoleType('AB'), 'letter');
+assert.equal(getPromotionRoleType('ABC'), null);
+assert.equal(getPromotionRoleType('ABCD'), 'phenomena');
+assert.equal(getPromotionRoleType('أب'), 'letter');
+assert.equal(getPromotionRoleType('أبو'), null);
+assert.equal(getPromotionRoleType('أبجد'), 'phenomena');
+assert.equal(getPromotionRoleType(''), null);
+assert.deepEqual(getAvailableQuickRoles(Object.values(roles), 'visual').map(role => role.id), [roles.admin.id, roles.v2.id, roles.v1.id]);
 assert.deepEqual(getAvailableQuickRoles(Object.values(roles), 'rank').map(role => role.id), [roles.c.id, roles.b.id, roles.a.id]);
 
 assert.deepEqual(getQuickPromotionTypes([roles.c, roles.v1], adminRoleIds, 'both'), {
@@ -25,6 +34,10 @@ assert.deepEqual(getQuickPromotionTypes([roles.c], adminRoleIds, 'both'), {
     missingTypes: ['visual']
 });
 assert.deepEqual(getQuickPromotionTypes([roles.admin], adminRoleIds, 'both'), {
+    types: ['visual'],
+    missingTypes: ['rank']
+});
+assert.deepEqual(getQuickPromotionTypes([roles.threeChars], adminRoleIds, 'both'), {
     types: [],
     missingTypes: ['rank', 'visual']
 });
@@ -40,23 +53,19 @@ function resolve(memberRoles, selectedType, selectedAction = 'up', levels = 1) {
     });
 }
 
-// Generic admin only: promote to the first role of the chosen type.
+// A letter promotion starts at its own first role and preserves the visual role.
 const adminToFirstRank = resolve([roles.admin], 'rank');
-assert.equal(adminToFirstRank.currentRole.id, roles.admin.id);
+assert.equal(adminToFirstRank.currentRole, null);
 assert.equal(adminToFirstRank.newRole.id, roles.c.id);
-assert.deepEqual(adminToFirstRank.rolesToRemove, [roles.admin.id]);
-assert.equal(adminToFirstRank.startedFromOtherType, true);
+assert.deepEqual(adminToFirstRank.rolesToRemove, []);
 
 const adminToSecondRank = resolve([roles.admin], 'rank', 'up', 2);
 assert.equal(adminToSecondRank.newRole.id, roles.b.id);
 
 const adminToFirstVisual = resolve([roles.admin], 'visual');
+assert.equal(adminToFirstVisual.currentRole.id, roles.admin.id);
 assert.equal(adminToFirstVisual.newRole.id, roles.v2.id);
 assert.deepEqual(adminToFirstVisual.rolesToRemove, [roles.admin.id]);
-
-const adminAndOtherTypeToRank = resolve([roles.admin, roles.v1], 'rank');
-assert.equal(adminAndOtherTypeToRank.newRole.id, roles.c.id);
-assert.deepEqual(adminAndOtherTypeToRank.rolesToRemove, [roles.admin.id, roles.v1.id]);
 
 // Existing letter rank moves one step; the visual role remains untouched.
 const rankAndVisual = resolve([roles.c, roles.v1], 'rank');
@@ -68,18 +77,13 @@ const visualAndRank = resolve([roles.v2, roles.a], 'visual');
 assert.equal(visualAndRank.newRole.id, roles.v1.id);
 assert.deepEqual(visualAndRank.rolesToRemove, [roles.v2.id]);
 
-// If the member has only the opposite type, convert that role to the chosen type.
+// If the member has only the opposite or an unclassified role, preserve it.
 const visualToRank = resolve([roles.v1], 'rank');
 assert.equal(visualToRank.newRole.id, roles.c.id);
-assert.deepEqual(visualToRank.rolesToRemove, [roles.v1.id]);
-
-const rankToVisual = resolve([roles.a], 'visual');
-assert.equal(rankToVisual.newRole.id, roles.v2.id);
-assert.deepEqual(rankToVisual.rolesToRemove, [roles.a.id]);
-
-const regularPromotion = resolve([roles.c], 'rank');
-assert.equal(regularPromotion.newRole.id, roles.b.id);
-assert.equal(regularPromotion.startedFromOtherType, false);
+assert.deepEqual(visualToRank.rolesToRemove, []);
+const threeCharToRank = resolve([roles.threeChars], 'rank');
+assert.equal(threeCharToRank.newRole.id, roles.c.id);
+assert.deepEqual(threeCharToRank.rolesToRemove, []);
 
 const outOfRange = resolve([roles.a], 'rank');
 assert.equal(outOfRange.error, 'out-of-range');

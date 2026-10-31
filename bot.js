@@ -3737,13 +3737,17 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
         // 2. حماية نظام الإجازات
         const vacations = vacationManager.readJson(path.join(__dirname, 'data', 'vacations.json'));
         const activeVacation = vacations.active?.[userId];
+        const protectedVacationRoleIds = new Set([
+            ...(Array.isArray(activeVacation?.removedRoles) ? activeVacation.removedRoles : []),
+            ...(Array.isArray(activeVacation?.protectedRoleIds) ? activeVacation.protectedRoleIds : [])
+        ].map(String));
 
-        if (activeVacation && activeVacation.removedRoles) {
+        if (activeVacation && protectedVacationRoleIds.size > 0) {
             console.log(`🔍 فحص حماية الإجازة للمستخدم ${newMember.displayName}`);
 
             // التحقق من الرولات المضافة حديثاً
             for (const [roleId, role] of addedRoles) {
-                if (activeVacation.removedRoles.includes(roleId)) {
+                if (protectedVacationRoleIds.has(String(roleId))) {
                     // فحص إذا كان البوت في عملية استعادة الرول (استعادة شرعية)
                     if (vacationManager.roleProtection.isBotRestoration(newMember.guild.id, userId, roleId)) {
                         console.log(`✅ تجاهل إعادة الرول ${role.name} للعضو ${newMember.displayName} - استعادة شرعية بواسطة البوت (إجازة)`);

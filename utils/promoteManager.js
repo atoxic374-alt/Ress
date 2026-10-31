@@ -5,6 +5,7 @@ const path = require('path');
 const colorManager = require('./colorManager');
 const ms = require('ms');
 const { promoteLogPayload } = require('./promoteLogContainer');
+const { getPromotionRoleType } = require('./promotionRoleTypes');
 
 // File paths
 const promoteSettingsPath = path.join(__dirname, '..', 'data', 'promoteSettings.json');
@@ -302,11 +303,14 @@ isBotPromotion(guildId, userId, roleId) {
             // Get highest roles
             const promoterHighestRole = promoterMember.roles.highest;
             const adminRoles = this.getAdminRoles();
-            const isTargetRoleRank = (role.name || '').length <= 3;
+            const targetRoleType = getPromotionRoleType(role);
+            if (!targetRoleType) {
+                return { valid: false, error: 'اسم الرول يجب أن يكون أقل من 3 أحرف للحروف أو أكثر من 3 أحرف للظواهر.' };
+            }
 
             // أعلى رول للعضو من نفس نوع العملية فقط (حرف/ظواهر)
             const targetHighestSameTypeRole = targetMember.roles.cache
-                .filter((memberRole) => adminRoles.includes(memberRole.id) && ((memberRole.name || '').length <= 3) === isTargetRoleRank)
+                .filter((memberRole) => adminRoles.includes(memberRole.id) && getPromotionRoleType(memberRole) === targetRoleType)
                 .sort((a, b) => b.position - a.position)
                 .first();
 
@@ -334,7 +338,7 @@ isBotPromotion(guildId, userId, roleId) {
             if (targetHighestSameTypeRole && role.position <= targetHighestSameTypeRole.position) {
                 return {
                     valid: false,
-                    error: `لا يمكن الترقية: في نفس النوع (${isTargetRoleRank ? 'حرف' : 'ظواهر'}) العضو لديه رول أعلى/مساوٍ للرول المطلوب (الرول المطلوب: **${role.name}** | أعلى رول بنفس النوع: **${targetHighestSameTypeRole.name}**).`
+                    error: `لا يمكن الترقية: في نفس النوع (${targetRoleType === 'letter' ? 'حرف' : 'ظواهر'}) العضو لديه رول أعلى/مساوٍ للرول المطلوب (الرول المطلوب: **${role.name}** | أعلى رول بنفس النوع: **${targetHighestSameTypeRole.name}**).`
                 };
             }
 
@@ -456,11 +460,11 @@ isBotPromotion(guildId, userId, roleId) {
                 if (result.success && (!duration || duration === 'نهائي')) {
                     for (const [oldRoleId, oldRole] of currentAdminRoles) {
                         if (oldRoleId !== targetRoleId && targetMember.roles.cache.has(oldRoleId)) {
-                            const isNewRoleRank = targetRole.name.length <= 2;
-                            const isOldRoleRank = oldRole.name.length <= 2;
+                            const targetRoleType = getPromotionRoleType(targetRole);
+                            const oldRoleType = getPromotionRoleType(oldRole);
 
-                            if (isNewRoleRank === isOldRoleRank) {
-                                await targetMember.roles.remove(oldRoleId, `إزالة الرول القديم (${isNewRoleRank ? 'حرف' : 'ظواهر'}) بعد الترقية الجماعية: ${reason}`);
+                            if (targetRoleType && targetRoleType === oldRoleType) {
+                                await targetMember.roles.remove(oldRoleId, `إزالة الرول القديم (${targetRoleType === 'letter' ? 'حرف' : 'ظواهر'}) بعد الترقية الجماعية: ${reason}`);
                                 console.log(`[Bulk-Smart Logic] تم إزالة ${oldRole.name} من ${targetMember.displayName}`);
                             }
                         }
@@ -584,14 +588,11 @@ isBotPromotion(guildId, userId, roleId) {
                         const newRoleName = role.name;
                         const oldRoleName = oldRole.name;
 
-                        // قاعدة الـ 3 أحرف:
-                        // إذا كان الرول الجديد <= 2 أحرف (حرف)، يزيل فقط الرولات اللي <= 2 أحرف
-                        // إذا كان الرول الجديد > 2 أحرف (ظواهر)، يزيل فقط الرولات اللي > 2 أحرف
-                        const isNewRoleRank = newRoleName.length <= 2;
-                        const isOldRoleRank = oldRoleName.length <= 2;
+                        const newRoleType = getPromotionRoleType(newRoleName);
+                        const oldRoleType = getPromotionRoleType(oldRoleName);
 
-                        if (isNewRoleRank === isOldRoleRank) {
-                            await targetMember.roles.remove(oldRoleId, `إزالة الرول القديم (${isNewRoleRank ? 'حرف' : 'ظواهر'}) بعد الترقية: ${reason}`);
+                        if (newRoleType && newRoleType === oldRoleType) {
+                            await targetMember.roles.remove(oldRoleId, `إزالة الرول القديم (${newRoleType === 'letter' ? 'حرف' : 'ظواهر'}) بعد الترقية: ${reason}`);
                             removedOldRoles.push(`<@&${oldRoleId}>`);
                             console.log(`[Smart Logic] تم إزالة ${oldRoleName} لأن الرول الجديد ${newRoleName} من نفس النوع`);
                         } else {
