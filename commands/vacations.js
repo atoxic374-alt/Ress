@@ -6,17 +6,15 @@ const {
     StringSelectMenuBuilder 
 } = require('discord.js');
 const fs = require('fs');
-const path = require('path');
 const colorManager = require('../utils/colorManager.js');
 const vacationManager = require('../utils/vacationManager.js');
 const { createDecisionContainer, decisionPayload } = require('../utils/decisionContainer.js');
+const { getDataFilePath } = require('../utils/storagePaths.js');
 
-// مسارات الملفات
-const dataDir = path.join(__dirname, '..', 'data');
-const vacationsPath = path.join(dataDir, 'vacations.json');
+// مسار ملف الإجازات الدائم
+const vacationsPath = getDataFilePath('vacations.json');
 
 // التأكد من وجود المجلد والملفات الأساسية
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 if (!fs.existsSync(vacationsPath)) {
     fs.writeFileSync(vacationsPath, JSON.stringify({ active: {}, pending: {}, rejected: {}, cooldowns: {} }, null, 2));
 }

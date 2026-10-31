@@ -56,4 +56,30 @@ assert.deepEqual(merged, [
     { name: 'Beta', index: 0, roleIds: [roleC] }
 ]);
 
+const combinedSources = vacationManager.mergeResponsibilitySources([
+    {
+        Alpha: {
+            responsibles: [otherUserId],
+            roles: [roleA]
+        }
+    },
+    {
+        Alpha: {
+            responsibles: [`<@!${userId}>`, otherUserId],
+            roleIds: [roleB]
+        },
+        Beta: {
+            responsibles: [userId],
+            roleId: roleC
+        }
+    }
+]);
+
+assert.deepEqual(combinedSources.Alpha.responsibles, [otherUserId, userId]);
+assert.deepEqual(combinedSources.Alpha.roles, [roleA, roleB]);
+assert.deepEqual(vacationManager.captureResponsibilityAssignments(combinedSources, userId), [
+    { name: 'Alpha', index: 1, roleIds: [roleA, roleB] },
+    { name: 'Beta', index: 0, roleIds: [roleC] }
+]);
+
 console.log('All vacation responsibility snapshot tests passed.');

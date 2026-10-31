@@ -1,11 +1,11 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionsBitField, RoleSelectMenuBuilder, ChannelSelectMenuBuilder, ChannelType, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const fs = require('fs');
-const path = require('path');
 const colorManager = require('../utils/colorManager.js');
 const { createPaginatedResponsibilityArray, handlePaginationInteraction } = require('../utils/responsibilityPagination.js');
+const { getDataFilePath } = require('../utils/storagePaths.js');
 
-const vacationsPath = path.join(__dirname, '..', 'data', 'vacations.json');
-const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
+const vacationsPath = getDataFilePath('vacations.json');
+const responsibilitiesPath = getDataFilePath('responsibilities.json');
 
 // Helper to read a JSON file
 function readJsonFile(filePath, defaultData = {}) {

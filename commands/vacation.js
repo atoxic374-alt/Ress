@@ -1,13 +1,14 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags, ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, SectionBuilder, ThumbnailBuilder } = require('discord.js');
 const fs = require('fs');
-const path = require('path');
 const ms = require('ms');
 const colorManager = require('../utils/colorManager.js');
 const vacationManager = require('../utils/vacationManager.js');
 const { createDecisionContainer, decisionPayload } = require('../utils/decisionContainer.js');
+const { getDataFilePath } = require('../utils/storagePaths.js');
 
-const adminRolesPath = path.join(__dirname, '..', 'data', 'adminRoles.json');
-const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json'); // Added path for responsibilities.json
+const adminRolesPath = getDataFilePath('adminRoles.json');
+const responsibilitiesPath = getDataFilePath('responsibilities.json');
+const vacationsPath = getDataFilePath('vacations.json');
 
 function vacationAccentColor() {
     const colorText = String(colorManager.getColor?.() || '#0099ff')
@@ -86,7 +87,7 @@ async function execute(message, args, { BOT_OWNERS }) {
         return message.reply({ embeds: [replyEmbed], ephemeral: true });
     }
 
-    const vacations = readJson(path.join(__dirname, '..', 'data', 'vacations.json'));
+    const vacations = readJson(vacationsPath);
     
     // التحقق من الكولداون (12 ساعة)
     if (vacations.cooldowns?.[member.id]) {
@@ -192,7 +193,7 @@ async function handleInteraction(interaction, context) {
             }
 
             // التحقق من وجود طلب إجازة معلق مسبقاً
-            const existingVacations = readJson(path.join(__dirname, '..', 'data', 'vacations.json'));
+            const existingVacations = readJson(vacationsPath);
             if (existingVacations.pending?.[userId]) {
                 return interaction.reply({
                     content: '❌ **لديك طلب إجازة معلق بالفعل! لا يمكنك تقديم طلب آخر.**',
@@ -242,7 +243,7 @@ async function handleInteraction(interaction, context) {
             }
 
             // Save vacation request
-            const vacations = readJson(path.join(__dirname, '..', 'data', 'vacations.json'));
+            const vacations = readJson(vacationsPath);
             if (!vacations.pending) {
                 vacations.pending = {};
             }
@@ -351,7 +352,7 @@ async function handleInteraction(interaction, context) {
             await interaction.deferUpdate().catch(() => {});
         }
 
-        const vacationsData = readJson(path.join(__dirname, '..', 'data', 'vacations.json'));
+        const vacationsData = readJson(vacationsPath);
         const pendingRequest = vacationsData.pending?.[userId];
 
         if (!pendingRequest) {
@@ -442,7 +443,7 @@ async function handleInteraction(interaction, context) {
         const userId = customId.split('_').pop();
         const rejectReason = interaction.fields.getTextInputValue('reject_reason');
 
-        const vacationsData = readJson(path.join(__dirname, '..', 'data', 'vacations.json'));
+        const vacationsData = readJson(vacationsPath);
         const pendingRequest = vacationsData.pending?.[userId];
 
         if (!pendingRequest) {

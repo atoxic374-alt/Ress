@@ -3,10 +3,12 @@ const path = require('path');
 const { EmbedBuilder } = require('discord.js');
 const colorManager = require('./colorManager');
 const { normalizeDiscordId } = require('./mentions');
+const { getDataFilePath } = require('./storagePaths');
 
-const vacationsPath = path.join(__dirname, '..', 'data', 'vacations.json');
-const adminRolesPath = path.join(__dirname, '..', 'data', 'adminRoles.json');
-const responsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
+const projectResponsibilitiesPath = path.join(__dirname, '..', 'data', 'responsibilities.json');
+const vacationsPath = getDataFilePath('vacations.json');
+const adminRolesPath = getDataFilePath('adminRoles.json');
+const responsibilitiesPath = getDataFilePath('responsibilities.json');
 const RESPONSIBILITY_AUDIT_INTERVAL_MS = 2 * 60 * 1000;
 
 // نظام حماية الرولات مشابه لنظام الداون
@@ -94,6 +96,79 @@ function saveVacations(data) {
     }
 }
 
+function getResponsibilityFilePaths() {
+    const candidates = [responsibilitiesPath, projectResponsibilitiesPath];
+    return [...new Set(candidates.map(filePath => path.resolve(filePath)))];
+}
+
+function readResponsibilityFiles() {
+    return getResponsibilityFilePaths().map(filePath => ({
+        path: filePath,
+        data: readJson(filePath, {})
+    }));
+}
+
+function normalizeResponsibilityMemberId(value) {
+    return normalizeDiscordId(value) || String(value ?? '').trim();
+}
+
+function mergeResponsibilitySources(sourceMaps) {
+    const sources = (sourceMaps || []).filter(source => source && typeof source === 'object');
+    const names = new Set(sources.flatMap(source => Object.keys(source)));
+    const merged = {};
+
+    for (const name of names) {
+        const configs = sources.map(source => source[name]).filter(config => config && typeof config === 'object');
+        let config = {};
+        for (let index = configs.length - 1; index >= 0; index -= 1) {
+            config = { ...config, ...configs[index] };
+        }
+
+        const responsibles = new Set();
+        const roleIds = new Set();
+        let hasResponsiblesArray = false;
+        for (const source of sources) {
+            const sourceConfig = source[name];
+            if (!sourceConfig || typeof sourceConfig !== 'object') continue;
+            if (Array.isArray(sourceConfig.responsibles)) {
+                hasResponsiblesArray = true;
+                for (const value of sourceConfig.responsibles) {
+                    const id = normalizeResponsibilityMemberId(value);
+                    if (id) responsibles.add(id);
+                }
+            }
+            const sourceRoles = [
+                ...(Array.isArray(sourceConfig.roles) ? sourceConfig.roles : []),
+                ...(Array.isArray(sourceConfig.roleIds) ? sourceConfig.roleIds : []),
+                ...(sourceConfig.roleId ? [sourceConfig.roleId] : [])
+            ];
+            for (const value of sourceRoles) {
+                const roleId = normalizeResponsibilityRoleId(value);
+                if (roleId) roleIds.add(roleId);
+            }
+        }
+
+        if (hasResponsiblesArray) config.responsibles = [...responsibles];
+        if (roleIds.size) config.roles = [...roleIds];
+        merged[name] = config;
+    }
+    return merged;
+}
+
+function writeJsonAtomically(filePath, data) {
+    const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    try {
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf8');
+        fs.renameSync(tempPath, filePath);
+        return true;
+    } catch (error) {
+        try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch (_) {}
+        console.error(`❌ تعذر تحديث ملف المسؤوليات ${filePath}:`, error.message);
+        return false;
+    }
+}
+
 function isUnknownMemberError(error) {
     const code = Number(error?.code ?? error?.rawError?.code);
     const status = Number(error?.status ?? error?.statusCode);
@@ -131,12 +206,13 @@ function withResponsibilityMutationLock(operation) {
 async function getResponsibilitiesForVacation() {
     const database = require('./database');
     const manager = database.getDatabase();
-    const responsibilities = await manager.getResponsibilities();
-    if (responsibilities && Object.keys(responsibilities).length > 0) return responsibilities;
-    if (global.responsibilities && Object.keys(global.responsibilities).length > 0) return global.responsibilities;
-    const fileResponsibilities = readJson(responsibilitiesPath, {});
-    if (fileResponsibilities && Object.keys(fileResponsibilities).length > 0) return fileResponsibilities;
-    return responsibilities || {};
+    const databaseResponsibilities = await manager.getResponsibilities();
+    const fileSources = readResponsibilityFiles();
+    return mergeResponsibilitySources([
+        ...fileSources.map(source => source.data),
+        global.responsibilities,
+        databaseResponsibilities
+    ]);
 }
 
 function normalizeResponsibilityRoleId(value) {
@@ -191,47 +267,101 @@ function mergeResponsibilityAssignments(...assignmentLists) {
     return [...merged.values()];
 }
 
-function syncResponsibilitiesSnapshot(responsibilities) {
-    try {
-        fs.writeFileSync(responsibilitiesPath, JSON.stringify(responsibilities || {}, null, 2), 'utf8');
-        global.responsibilities = responsibilities;
-    } catch (error) {
-        console.error('❌ تعذر مزامنة ملف المسؤوليات مع قاعدة البيانات:', error.message);
+function syncResponsibilitiesSnapshot(responsibilities, responsibilityNames = null) {
+    const source = responsibilities && typeof responsibilities === 'object' ? responsibilities : {};
+    const names = Array.isArray(responsibilityNames)
+        ? [...new Set(responsibilityNames.map(name => String(name || '').trim()).filter(Boolean))]
+        : Object.keys(source);
+    let succeeded = true;
+
+    for (const filePath of getResponsibilityFilePaths()) {
+        const current = fs.existsSync(filePath) ? readJson(filePath, {}) : { ...source };
+        for (const name of names) {
+            if (source[name]) current[name] = source[name];
+        }
+        if (names.length && !writeJsonAtomically(filePath, current)) succeeded = false;
     }
+
+    const currentGlobal = global.responsibilities && typeof global.responsibilities === 'object'
+        ? global.responsibilities
+        : {};
+    for (const name of names) {
+        if (source[name]) currentGlobal[name] = source[name];
+    }
+    global.responsibilities = currentGlobal;
+    return succeeded;
 }
 
 async function removeUserFromResponsibilities(userId, assignments) {
     return withResponsibilityMutationLock(async () => {
         const database = require('./database');
         const manager = database.getDatabase();
-        let responsibilities = await manager.getResponsibilities();
-        if ((!responsibilities || Object.keys(responsibilities).length === 0) && global.responsibilities && Object.keys(global.responsibilities).length > 0) {
-            responsibilities = global.responsibilities;
-        }
-        const targets = Array.isArray(assignments) ? assignments : captureResponsibilityAssignments(responsibilities, userId);
-        const failed = [];
+        const databaseResponsibilities = await manager.getResponsibilities();
+        const fileSources = readResponsibilityFiles();
+        const combinedResponsibilities = mergeResponsibilitySources([
+            ...fileSources.map(source => source.data),
+            global.responsibilities,
+            databaseResponsibilities
+        ]);
+        const targets = Array.isArray(assignments)
+            ? assignments
+            : captureResponsibilityAssignments(combinedResponsibilities, userId);
+        const failedByName = new Map();
+        const normalizedUserId = normalizeResponsibilityMemberId(userId);
 
         for (const assignment of targets) {
-            const config = responsibilities[assignment.name];
-            if (!config) continue; // المسؤولية حُذفت أصلًا؛ لا يوجد عضو لإزالته منها.
-            if (!Array.isArray(config.responsibles)) {
-                failed.push(assignment);
-                continue;
+            const name = String(assignment?.name || '').trim();
+            if (!name) continue;
+            const dbConfig = databaseResponsibilities?.[name];
+            const globalConfig = global.responsibilities?.[name];
+            const fileConfig = fileSources.map(source => source.data?.[name]).find(config =>
+                config && typeof config === 'object' && Array.isArray(config.responsibles)
+            );
+            const configToPersist = fileConfig
+                || (Array.isArray(globalConfig?.responsibles) ? globalConfig : null)
+                || (Array.isArray(dbConfig?.responsibles) ? dbConfig : null);
+
+            if (configToPersist) {
+                const updated = {
+                    ...configToPersist,
+                    responsibles: configToPersist.responsibles.filter(value => normalizeResponsibilityMemberId(value) !== normalizedUserId)
+                };
+                if (!await manager.updateResponsibility(name, updated)) failedByName.set(name, assignment);
             }
-            const normalizedUserId = normalizeDiscordId(userId) || String(userId);
-            const current = config.responsibles.map(value => normalizeDiscordId(value) || String(value));
-            if (!current.includes(normalizedUserId)) continue;
-            const updated = {
-                ...config,
-                responsibles: config.responsibles.filter(value => (normalizeDiscordId(value) || String(value)) !== normalizedUserId)
-            };
-            if (!await manager.updateResponsibility(assignment.name, updated)) failed.push(assignment);
-            else responsibilities[assignment.name] = updated;
         }
 
-        syncResponsibilitiesSnapshot(responsibilities);
+        // Some commands edit responsibilities.json directly without updating SQLite.
+        // Reconcile every configured JSON path so stale copies cannot keep showing the member.
+        for (const filePath of getResponsibilityFilePaths()) {
+            const current = readJson(filePath, {});
+            const changedNames = [];
+            for (const assignment of targets) {
+                const config = current?.[assignment.name];
+                if (!Array.isArray(config?.responsibles)) continue;
+                const next = config.responsibles.filter(value => normalizeResponsibilityMemberId(value) !== normalizedUserId);
+                if (next.length !== config.responsibles.length) {
+                    current[assignment.name] = { ...config, responsibles: next };
+                    changedNames.push(assignment.name);
+                }
+            }
+            if (changedNames.length > 0 && !writeJsonAtomically(filePath, current)) {
+                for (const name of changedNames) {
+                    const assignment = targets.find(item => item.name === name);
+                    if (assignment) failedByName.set(name, assignment);
+                }
+            }
+        }
 
-        return { assignments: targets, failed };
+        if (global.responsibilities && typeof global.responsibilities === 'object') {
+            for (const assignment of targets) {
+                const config = global.responsibilities[assignment.name];
+                if (Array.isArray(config?.responsibles)) {
+                    config.responsibles = config.responsibles.filter(value => normalizeResponsibilityMemberId(value) !== normalizedUserId);
+                }
+            }
+        }
+
+        return { assignments: targets, failed: [...failedByName.values()] };
     });
 }
 
@@ -262,7 +392,7 @@ async function restoreUserResponsibilities(userId, assignments = []) {
             else responsibilities[assignment.name] = updated;
         }
 
-        syncResponsibilitiesSnapshot(responsibilities);
+        syncResponsibilitiesSnapshot(responsibilities, assignments.map(assignment => assignment.name));
 
         return { failed };
     });
@@ -1381,6 +1511,7 @@ module.exports = {
     getResponsibilitiesForVacation,
     captureResponsibilityAssignments,
     mergeResponsibilityAssignments,
+    mergeResponsibilitySources,
     removeUserFromResponsibilities,
     restoreUserResponsibilities
 };

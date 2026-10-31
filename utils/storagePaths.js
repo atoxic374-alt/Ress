@@ -135,6 +135,27 @@ function getDataDir() {
   return ensureDirSync(resolveStoragePath('data'));
 }
 
+function getDataFilePath(fileName) {
+  const name = String(fileName || '').trim();
+  if (!name || name !== path.basename(name)) {
+    throw new Error('Data file name must be a single file name.');
+  }
+
+  const targetPath = path.join(getDataDir(), name);
+  const legacyPath = path.join(projectRoot, 'data', name);
+  if (path.resolve(targetPath) !== path.resolve(legacyPath)
+      && !fs.existsSync(targetPath)
+      && fs.existsSync(legacyPath)) {
+    try {
+      fs.copyFileSync(legacyPath, targetPath);
+      console.log(`[storagePaths] Migrated legacy data file to persistent storage: ${name}`);
+    } catch (error) {
+      console.error(`[storagePaths] Could not migrate legacy data file ${name}:`, error.message);
+    }
+  }
+  return targetPath;
+}
+
 function getBackupsDir(...segments) {
   return ensureDirSync(resolveStoragePath('backups', ...segments));
 }
@@ -150,5 +171,6 @@ module.exports = {
   getBotConfigPath,
   writeBotConfigFile,
   getDataDir,
+  getDataFilePath,
   getBackupsDir,
 };
