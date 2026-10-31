@@ -184,6 +184,16 @@ async function syncManagerRole(guild, settings, userId, { ignoreMissing = false 
   if (shouldHaveRole && !hasRole) await member.roles.add(role, 'Group manager role');
   else if (!shouldHaveRole && hasRole) await member.roles.remove(role, 'Group manager role');
 }
+async function fetchGroupChannel(guild, channelId) {
+  if (!channelId) return null;
+  const cached = guild.channels.cache.get(String(channelId));
+  if (cached) return cached;
+  try { return await guild.channels.fetch(String(channelId)); }
+  catch (error) {
+    if (Number(error?.code) === 10003) return null;
+    throw error;
+  }
+}
 async function removeManagedMemberOverwrites(guild, group, userId) {
   const id = String(userId);
   const groups = await gm.listGroups(guild.id);
@@ -192,10 +202,28 @@ async function removeManagedMemberOverwrites(guild, group, userId) {
     && String(other.text_channel_id || '') === String(group.text_channel_id || '')
     && groupHasUser(other, id)
   );
-  const text = group.text_channel_id && (guild.channels.cache.get(String(group.text_channel_id)) || await guild.channels.fetch(String(group.text_channel_id)).catch(() => null));
-  const voice = group.voice_channel_id && (guild.channels.cache.get(String(group.voice_channel_id)) || await guild.channels.fetch(String(group.voice_channel_id)).catch(() => null));
-  if (text?.permissionOverwrites && !otherSharedTextMembership) await text.permissionOverwrites.delete(id, 'Remove managed group member text permissions').catch(() => null);
-  if (voice?.permissionOverwrites) await voice.permissionOverwrites.delete(id, 'Remove managed group member voice permissions').catch(() => null);
+  const text = await fetchGroupChannel(guild, group.text_channel_id);
+  const voice = await fetchGroupChannel(guild, group.voice_channel_id);
+  const cleanup = [];
+  if (text?.permissionOverwrites?.cache?.has?.(id) && !otherSharedTextMembership) {
+    cleanup.push(text.permissionOverwrites.delete(id, 'Remove managed group member text permissions'));
+  }
+  if (voice?.permissionOverwrites?.cache?.has?.(id)) {
+    cleanup.push(voice.permissionOverwrites.delete(id, 'Remove managed group member voice permissions'));
+  }
+  await Promise.all(cleanup);
+}
+async function cleanupDepartedMemberAccess(guild, group, userId) {
+  const id = String(userId);
+  const thread = await fetchGroupChannel(guild, group.thread_id);
+  if (thread?.isThread?.() && thread.members) {
+    const threadMember = await thread.members.fetch(id).catch(error => {
+      if ([10003, 10007].includes(Number(error?.code))) return null;
+      throw error;
+    });
+    if (threadMember) await thread.members.remove(id);
+  }
+  await removeManagedMemberOverwrites(guild, group, id);
 }
 async function leaveGroupMember(guild, settings, group, userId, actorId = userId) {
   const id = String(userId);
@@ -415,4 +443,4 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
   }
   return true;
 }
-module.exports = { handleInternalMessage, handleMemberPickerInteraction, leaveGroupMember, buildOurMembersPayload };
+module.exports = { handleInternalMessage, handleMemberPickerInteraction, leaveGroupMember, cleanupDepartedMemberAccess, removeManagedMemberOverwrites, syncManagerRole, buildOurMembersPayload };

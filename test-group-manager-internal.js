@@ -9,7 +9,7 @@ const testDb = new DatabaseManager(':memory:');
 databaseModule.dbManager = testDb;
 
 const gm = require('./utils/groupManager');
-const { handleInternalMessage } = require('./utils/groupInternal');
+const { handleInternalMessage, cleanupDepartedMemberAccess, removeManagedMemberOverwrites } = require('./utils/groupInternal');
 const groupCommand = require('./commands/groups');
 const interactionRouter = require('./utils/interactionRouter');
 
@@ -51,7 +51,7 @@ async function insertGroup({
     textChannelId,
     null,
     null,
-    '#5865F2',
+    '#000000',
     null,
     points,
     'active',
@@ -89,7 +89,7 @@ async function testCreateGroupRoleDefaults() {
       everyone: { id: guildId },
       create: async options => {
         roleOptions.push(options);
-        const role = { id: 'new-group-role', name: options.name, position: 1, delete: async () => {} };
+        const role = { id: 'new-group-role', name: options.name, hexColor: '#000000', position: 1, delete: async () => {} };
         roleCache.set(role.id, role);
         return role;
       },
@@ -115,9 +115,142 @@ async function testCreateGroupRoleDefaults() {
   const group = await gm.createGroup(guild, { name: 'نسور الشمال', ownerId: OWNER }, ACTOR);
   assert.equal(roleOptions.length, 1);
   assert.equal(roleOptions[0].name, 'نسور الشمال', 'group role name matches the group name without a prefix');
-  assert.equal(roleOptions[0].color, '#5865F2', 'group roles use the configured default color');
+  assert.equal(roleOptions[0].color, 0, 'new group roles use Discord no-color');
   assert.equal(group.role_id, 'new-group-role');
+  assert.equal(group.color, '#000000', 'no-color is persisted for resource restoration');
   global.groupRoleGrantBypass?.clear?.();
+}
+
+async function testDepartedMemberAccessCleanup() {
+  const guildId = 'departed-member-cleanup-guild';
+  const siblingGroupId = await insertGroup({
+    guildId,
+    name: 'Sibling shared-chat group',
+    ownerId: USER_B,
+    memberIds: [USER_A],
+    textChannelId: 'shared-group-chat'
+  });
+  const deletionCalls = [];
+  const makeChannel = id => ({
+    id,
+    permissionOverwrites: {
+      cache: new Map([[USER_A, { id: USER_A }]]),
+      delete: async userId => { deletionCalls.push(`${id}:${userId}`); }
+    }
+  });
+  const text = makeChannel('shared-group-chat');
+  const voice = makeChannel('departed-member-voice');
+  const threadMembers = new Map([[USER_A, { id: USER_A }]]);
+  const thread = {
+    id: 'departed-member-thread',
+    isThread: () => true,
+    members: {
+      fetch: async userId => threadMembers.get(String(userId)) || null,
+      remove: async userId => { threadMembers.delete(String(userId)); }
+    }
+  };
+  const channels = new Map([[text.id, text], [voice.id, voice], [thread.id, thread]]);
+  const guild = {
+    id: guildId,
+    channels: { cache: channels, fetch: async id => channels.get(String(id)) || null }
+  };
+  const group = { id: 999, text_channel_id: text.id, voice_channel_id: voice.id, thread_id: thread.id };
+
+  await cleanupDepartedMemberAccess(guild, group, USER_A);
+  assert.equal(threadMembers.has(USER_A), false, 'a departed member is removed from the private group thread');
+  assert.deepEqual(deletionCalls, [`${voice.id}:${USER_A}`], 'shared text access remains while another group still needs it');
+
+  await gm.removeMember(guildId, siblingGroupId, USER_A, OWNER);
+  threadMembers.set(USER_A, { id: USER_A });
+  voice.permissionOverwrites.cache.set(USER_A, { id: USER_A });
+  await cleanupDepartedMemberAccess(guild, group, USER_A);
+  assert.deepEqual(deletionCalls, [`${voice.id}:${USER_A}`, `${text.id}:${USER_A}`, `${voice.id}:${USER_A}`],
+    'member-specific text and voice overwrites are deleted when no other group shares the text channel');
+
+  const failingVoice = {
+    id: 'failing-voice',
+    permissionOverwrites: {
+      cache: new Map([[USER_A, { id: USER_A }]]),
+      delete: async () => { throw new Error('missing permissions'); }
+    }
+  };
+  const failingGuild = { ...guild, channels: { cache: new Map([[failingVoice.id, failingVoice]]), fetch: async () => failingVoice } };
+  await assert.rejects(removeManagedMemberOverwrites(failingGuild, { id: 1000, text_channel_id: null, voice_channel_id: failingVoice.id }, USER_A), /missing permissions/,
+    'failed Discord overwrite removal is surfaced instead of silently reporting success');
+}
+
+async function testPeriodicUnlinkedAccessCleanup() {
+  assert.equal(groupCommand.MEMBERSHIP_RECONCILIATION_INTERVAL_MS, 5 * 60 * 1000, 'periodic group access reconciliation runs every five minutes');
+  const guildId = 'periodic-unlinked-cleanup-guild';
+  const roleId = 'periodic-unlinked-group-role';
+  const textId = 'periodic-unlinked-text';
+  const voiceId = 'periodic-unlinked-voice';
+  const threadId = 'periodic-unlinked-thread';
+  const groupId = await insertGroup({ guildId, name: 'Periodic cleanup group', ownerId: USER_B, textChannelId: textId });
+  await testDb.run('UPDATE managed_groups SET role_id = ?, voice_channel_id = ?, thread_id = ? WHERE guild_id = ? AND id = ?',
+    [roleId, voiceId, threadId, guildId, groupId]);
+  const role = { id: roleId, editable: true };
+  const roleIds = new Set([roleId]);
+  const member = {
+    id: USER_A,
+    user: { id: USER_A, bot: false },
+    roles: {
+      cache: { has: id => roleIds.has(String(id)) },
+      remove: async target => { roleIds.delete(String(target.id)); },
+      add: async target => { roleIds.add(String(target.id)); }
+    }
+  };
+  const deletedOverwrites = [];
+  const makeChannel = id => {
+    const overwrites = new Map([[USER_A, { id: USER_A, type: 1 }]]);
+    return {
+      id,
+      permissionOverwrites: {
+        cache: overwrites,
+        delete: async userId => { deletedOverwrites.push(`${id}:${userId}`); overwrites.delete(String(userId)); }
+      }
+    };
+  };
+  const text = makeChannel(textId);
+  const voice = makeChannel(voiceId);
+  const threadMemberIds = new Set([USER_A]);
+  const thread = {
+    id: threadId,
+    isThread: () => true,
+    members: {
+      fetch: async userId => userId === undefined
+        ? new Map([...threadMemberIds].map(id => [id, { id, user: { id, bot: false } }]))
+        : threadMemberIds.has(String(userId)) ? { id: String(userId) } : null,
+      remove: async userId => { threadMemberIds.delete(String(userId)); }
+    }
+  };
+  const channels = new Map([[textId, text], [voiceId, voice], [threadId, thread]]);
+  const guild = {
+    id: guildId,
+    roles: { cache: new Map([[roleId, role]]), fetch: async id => String(id) === roleId ? role : null },
+    members: {
+      cache: new Map([[USER_A, member]]),
+      fetch: async options => String(typeof options === 'object' ? options.user : options) === USER_A ? member : null
+    },
+    channels: { cache: channels, fetch: async id => channels.get(String(id)) || null }
+  };
+  const group = await gm.getGroup(guildId, groupId);
+  const result = await groupCommand.revokeUnlinkedGroupAccess(guild, { managerRoleId: null }, group, USER_A);
+  assert.equal(result.removed, true, 'periodic reconciliation handles an unlinked member');
+  assert.equal(roleIds.has(roleId), false, 'unlinked member loses the group role');
+  assert.equal(threadMemberIds.has(USER_A), false, 'unlinked member is removed from the group thread');
+  assert.deepEqual(deletedOverwrites, [`${textId}:${USER_A}`, `${voiceId}:${USER_A}`], 'unlinked member loses member-specific text and voice overwrites');
+
+  await testDb.run('UPDATE managed_groups SET member_ids_json = ? WHERE guild_id = ? AND id = ?', [JSON.stringify([USER_A]), guildId, groupId]);
+  roleIds.add(roleId);
+  text.permissionOverwrites.cache.set(USER_A, { id: USER_A, type: 1 });
+  voice.permissionOverwrites.cache.set(USER_A, { id: USER_A, type: 1 });
+  threadMemberIds.add(USER_A);
+  const linkedResult = await groupCommand.revokeUnlinkedGroupAccess(guild, { managerRoleId: null }, group, USER_A);
+  assert.equal(linkedResult.reason, 'MEMBER_LINKED', 'a user who is now listed in the group is never cleaned up');
+  assert.equal(roleIds.has(roleId), true, 'linked member keeps the group role');
+  assert.equal(threadMemberIds.has(USER_A), true, 'linked member keeps thread membership');
+  assert.equal(text.permissionOverwrites.cache.has(USER_A), true, 'linked member keeps channel overwrites');
 }
 
 async function testGroupCommandGuideAndMusicApi() {
@@ -918,6 +1051,8 @@ async function main() {
     testSetupValidation();
     await testGroupCommandGuideAndMusicApi();
     await testCreateGroupRoleDefaults();
+    await testDepartedMemberAccessCleanup();
+    await testPeriodicUnlinkedAccessCleanup();
     await testDashboardPublishers();
     await testSetupDashboardSerialization();
     await testDeleteCommandFlow();

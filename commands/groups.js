@@ -5,7 +5,7 @@ const colorManager = require('../utils/colorManager');
 const tempVoice = require('./temp');
 const { componentsV2Payload, colorToNumber } = require('../utils/structuredContainer');
 const { renderMembers, renderInfo, renderTopGroups, renderMyRank } = require('../utils/groupRenderer');
-const { handleInternalMessage, handleMemberPickerInteraction, leaveGroupMember, buildOurMembersPayload } = require('../utils/groupInternal');
+const { handleInternalMessage, handleMemberPickerInteraction, leaveGroupMember, cleanupDepartedMemberAccess, syncManagerRole, buildOurMembersPayload } = require('../utils/groupInternal');
 const { parseCustomEmoji, parseEmojiId, parseUnicodeEmoji, extractFirstEmoji, resolveIconBuffer, applyRoleIcon } = require('../utils/roleIconUtils');
 const name = 'groups';
 const aliases = ['group', 'قروب', 'قروبات'];
@@ -1306,7 +1306,7 @@ async function createFromModal(interaction) {
   await reply(interaction, { title: 'CREATING GROUP', content: 'جارٍ إنشاء القروب وتجهيز الرتبة والقنوات. انتظر حتى تظهر نتيجة العملية.', thumbnail: groupThumb(interaction.guild) });
   let group;
   try {
-    group = await gm.createGroup(interaction.guild, { name: groupName, ownerId, color: '#5865F2' }, interaction.user.id);
+    group = await gm.createGroup(interaction.guild, { name: groupName, ownerId }, interaction.user.id);
   } catch (error) {
     const message = error.message?.startsWith('GROUP_SETUP_REQUIRED')
       ? 'أكمل إعدادات القروبات أولًا.'
@@ -1923,7 +1923,7 @@ async function execute(message, args, { client, prefix } = {}) {
     if (!canManage) return replyMessage(message, 'لا تملك الصلاحية.');
     const result = await reconcileGroupMembership(message.guild, message.author.id);
     const lines = result.issues.slice(0, 25).map(issue => `• Group ${issue.groupId} (${safe(issue.groupName, 60)}) — ${issue.detail}${issue.userId ? ` <@${issue.userId}>` : ''}`);
-    const summary = `تم فحص ${result.groups} قروب. عدد حالات الاختلاف : ${result.issues.length}. لم يتم تعديل الرتب أو العضويات تلقائيًا.\n\n${lines.join('\n') || 'لم يتم العثور على اختلافات.'}`;
+    const summary = `تم فحص ${result.groups} قروب. عدد حالات الاختلاف : ${result.issues.length}. تتم إزالة الرتب وصلاحيات القنوات والثريد تلقائيًا من الأعضاء غير المسجلين بعد التحقق من سجل القروب.\n\n${lines.join('\n') || 'لم يتم العثور على اختلافات.'}`;
     return message.channel.send({ ...componentsV2Payload(baseContainer(message.guild, 'MEMBERSHIP RECONCILIATION', summary.slice(0, 3800))), allowedMentions: { parse: [] } });
   }
   if (['ledger', 'سجل_النقاط', 'points-audit'].includes(sub)) {
@@ -2002,12 +2002,75 @@ const reconciliationSignatures = new Map();
 const reconciliationLocks = new Map();
 const reconciliationCursors = new Map();
 const pendingRoleGuardChecks = new Map();
+const MEMBERSHIP_RECONCILIATION_INTERVAL_MS = 5 * 60 * 1000;
 function isAllowedGroupVoiceMember(group, member, channel = null) {
   const userId = String(member?.id || member?.user?.id || '');
   if (!userId || group.blockedIds.includes(userId)) return false;
   if ([String(group.owner_id), ...group.memberIds, ...group.managerIds].includes(userId)) return true;
   const overwrite = channel?.permissionOverwrites?.cache?.get?.(userId);
   return Boolean(overwrite?.allow?.has?.(PermissionsBitField.Flags.Connect) && !overwrite?.deny?.has?.(PermissionsBitField.Flags.Connect));
+}
+function isLinkedToGroup(group, userId) {
+  const id = String(userId);
+  return Boolean(group && (String(group.owner_id) === id || group.memberIds.includes(id) || group.managerIds.includes(id)));
+}
+async function revokeUnlinkedGroupAccess(guild, settings, group, userId) {
+  const id = String(userId);
+  return groupOperation(`group:${guild.id}:${group.id}:member:${id}`, async () => {
+    let latest = await gm.getGroup(guild.id, group.id);
+    if (!latest || latest.status === 'deleted') return { removed: false, reason: 'GROUP_MISSING' };
+    if (isLinkedToGroup(latest, id)) return { removed: false, reason: 'MEMBER_LINKED' };
+
+    let role = null;
+    if (latest.role_id) {
+      role = guild.roles.cache.get(String(latest.role_id)) || null;
+      if (!role) {
+        try { role = await withDiscordRetry(() => guild.roles.fetch(String(latest.role_id)), 3); }
+        catch (error) { if (Number(error?.code) !== 10011) throw error; }
+      }
+    }
+    let member = null;
+    try { member = await guild.members.fetch({ user: id, force: true }); }
+    catch (error) { if (![10007, 10013].includes(Number(error?.code))) throw error; }
+
+    latest = await gm.getGroup(guild.id, group.id);
+    if (!latest || latest.status === 'deleted') return { removed: false, reason: 'GROUP_MISSING' };
+    if (isLinkedToGroup(latest, id)) return { removed: false, reason: 'MEMBER_LINKED' };
+
+    const failures = [];
+    const hadRole = Boolean(role && member?.roles?.cache?.has(role.id));
+    if (hadRole) {
+      if (!role.editable) failures.push(new Error('GROUP_ROLE_NOT_EDITABLE'));
+      else {
+        try { await withDiscordRetry(() => member.roles.remove(role, 'Remove unlinked group role during reconciliation'), 3); }
+        catch (error) { failures.push(error); }
+      }
+    }
+    try { await withDiscordRetry(() => cleanupDepartedMemberAccess(guild, latest, id), 3); }
+    catch (error) { failures.push(error); }
+
+    const afterCleanup = await gm.getGroup(guild.id, group.id).catch(() => null);
+    if (isLinkedToGroup(afterCleanup, id)) {
+      if (role && member && !member.roles.cache.has(role.id)) {
+        await withDiscordRetry(() => member.roles.add(role, 'Restore newly linked group member during reconciliation'), 3).catch(error => {
+          console.error('[groups] linked member role restore after reconciliation race failed:', id, error?.message || error);
+        });
+      }
+      const thread = afterCleanup.thread_id && (guild.channels.cache.get(String(afterCleanup.thread_id)) || await guild.channels.fetch(String(afterCleanup.thread_id)).catch(() => null));
+      if (thread?.isThread?.()) await restoreThreadMember(thread, id);
+      await syncManagerRole(guild, settings, id, { ignoreMissing: true }).catch(() => {});
+      return { removed: false, reason: 'MEMBER_LINKED_DURING_CLEANUP' };
+    }
+
+    if (member) {
+      try { await syncManagerRole(guild, settings, id, { ignoreMissing: true }); }
+      catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, 'UNLINKED_ACCESS_CLEANUP_FAILED');
+    await gm.audit(guild.id, null, group.id, 'unlinked_member_access_removed', { userId: id, roleRemoved: hadRole, source: 'periodic_reconciliation' }).catch(() => {});
+    await gm.logGroupEvent(guild, 'update', { groupId: group.id, reason: 'unlinked_member_access_removed', userId: id, roleRemoved: hadRole, source: 'periodic_reconciliation' }, null).catch(() => {});
+    return { removed: true, roleRemoved: hadRole };
+  });
 }
 async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
   let allGroups = (await gm.listGroups(guild.id, true)).filter(group => group.status !== 'deleted');
@@ -2066,7 +2129,13 @@ async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
       await gm.runtimeLog(guild.id, group.id, 'settings_drift', 'warning', { fields: settingsDrift }).catch(() => {});
       issues.push({ groupId: group.id, groupName: group.name, type: 'settings_drift', detail: `الموارد لا تطابق إعدادات الكاتاقوري: ${settingsDrift.join(', ')}` });
     }
-    let expected = [...new Set([String(group.owner_id), ...group.memberIds, ...group.managerIds].filter(Boolean))];
+    const expected = [...new Set([String(group.owner_id), ...group.memberIds, ...group.managerIds].filter(Boolean))];
+    const unlinkedAccessIds = new Set();
+    for (const channel of [resourceText, resourceVoice]) {
+      for (const overwrite of channel?.permissionOverwrites?.cache?.values?.() || []) {
+        if (Number(overwrite.type) === 1) unlinkedAccessIds.add(String(overwrite.id));
+      }
+    }
     const role = group.role_id ? (guild.roles.cache.get(String(group.role_id)) || await guild.roles.fetch(String(group.role_id)).catch(() => null)) : null;
     if (!role) {
       issues.push({ groupId: group.id, groupName: group.name, type: 'role_missing', detail: 'رتبة القروب غير موجودة أو لا يمكن الوصول إليها.' });
@@ -2106,21 +2175,7 @@ async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
         }
         else if (!member && !role.members.has(userId)) issues.push({ groupId: group.id, groupName: group.name, type: 'member_not_found', userId, detail: 'العضو محفوظ في قاعدة البيانات لكنه غير موجود أو تعذر جلبه من السيرفر.' });
       }
-      for (const [userId] of role.members) {
-        if (await isBotId(userId)) continue;
-        if (!expected.includes(String(userId))) issues.push({ groupId: group.id, groupName: group.name, type: 'role_member_not_in_db', userId, detail: 'عضو يحمل رتبة القروب لكنه غير موجود في قائمة العضوية المحفوظة.' });
-      }
-      // Database membership is authoritative. Discord role caches can lag or be
-      // incomplete, so never remove a saved member or silently enroll a role
-      // holder during reconciliation. Missing roles are repaired above; explicit
-      // leave/block actions are responsible for removals.
-      const roleMemberIds = new Set([...role.members.keys()].map(String));
-      for (const userId of roleMemberIds) {
-        if (await isBotId(userId)) continue;
-        if (!expected.includes(userId) && !group.blockedIds.includes(userId)) {
-          issues.push({ groupId: group.id, groupName: group.name, type: 'role_member_not_in_db', userId, detail: 'عضو يحمل رتبة القروب لكنه غير موجود في قائمة العضوية المحفوظة؛ تم إبقاء الرتبة لحين التحقق الآمن.' });
-        }
-      }
+      for (const [userId] of role.members) unlinkedAccessIds.add(String(userId));
     }
     if (group.thread_id) {
       const thread = guild.channels.cache.get(String(group.thread_id)) || await guild.channels.fetch(String(group.thread_id)).catch(() => null);
@@ -2138,15 +2193,20 @@ async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
           await runWithConcurrency(missingThreadMembers, 4, async userId => {
             if (!(await restoreThreadMember(thread, userId))) await gm.audit(guild.id, actorId, group.id, 'group_thread_member_repair_failed', { userId }).catch(() => {});
           });
-          const extraThreadMembers = [...actual].filter(userId => group.blockedIds.includes(userId));
-          for (const userId of extraThreadMembers) issues.push({ groupId: group.id, groupName: group.name, type: 'thread_member_not_in_db', userId, detail: 'عضو في الثريد غير موجود في قائمة العضوية المحفوظة.' });
-          await runWithConcurrency(extraThreadMembers, 4, async userId => {
-            try { await withDiscordRetry(() => thread.members.remove(userId), 3); }
-            catch (error) { await gm.audit(guild.id, actorId, group.id, 'group_thread_member_remove_failed', { userId, message: String(error?.message || error).slice(0, 200) }).catch(() => {}); }
-          });
+          for (const userId of actual) unlinkedAccessIds.add(userId);
         }
       }
     }
+    await runWithConcurrency([...unlinkedAccessIds], 4, async userId => {
+      if (expected.includes(userId) || await isBotId(userId)) return;
+      try {
+        const result = await revokeUnlinkedGroupAccess(guild, settings, group, userId);
+        if (result.removed) issues.push({ groupId: group.id, groupName: group.name, type: 'unlinked_group_access_removed', userId, detail: 'تمت إزالة رتبة القروب وصلاحيات القنوات والثريد تلقائيًا؛ العضو غير مسجل في القروب.' });
+      } catch (error) {
+        issues.push({ groupId: group.id, groupName: group.name, type: 'unlinked_group_access_cleanup_failed', userId, detail: `تعذر إكمال إزالة الرتبة أو الصلاحيات: ${String(error?.message || error).slice(0, 160)}` });
+        await gm.audit(guild.id, actorId, group.id, 'unlinked_member_access_cleanup_failed', { userId, message: String(error?.message || error).slice(0, 200) }).catch(() => {});
+      }
+    });
   }
   const byGroup = new Map();
   for (const issue of issues) {
@@ -2265,7 +2325,7 @@ function registerInteractionHandler(client) {
       }
     };
     run().catch(error => console.error('[groups] membership reconciliation run failed:', error?.message || error));
-    const timer = setInterval(run, 15 * 60 * 1000);
+    const timer = setInterval(run, MEMBERSHIP_RECONCILIATION_INTERVAL_MS);
     timer.unref?.();
   };
   if (client.isReady?.()) startReconciliation();
@@ -2475,6 +2535,13 @@ function registerInteractionHandler(client) {
     for (const group of groups) {
       const userId = String(member.id);
       if (!group.memberIds.includes(userId) && String(group.owner_id) !== userId && !group.managerIds.includes(userId)) continue;
+      const cleanupDeparted = async () => {
+        try { await cleanupDepartedMemberAccess(member.guild, group, userId); }
+        catch (error) {
+          console.error('[groups] departed member access cleanup failed:', group.id, userId, error?.message || error);
+          await gm.audit(member.guild.id, null, group.id, 'member_access_cleanup_failed', { userId, message: String(error?.message || error).slice(0, 200) }).catch(() => {});
+        }
+      };
       if (String(group.owner_id) === userId) {
         const candidates = await Promise.all(group.managerIds.filter(id => id !== userId).map(id => member.guild.members.fetch(id).catch(() => null)));
         const successor = candidates.find(Boolean) || null;
@@ -2492,10 +2559,19 @@ function registerInteractionHandler(client) {
           await gm.audit(member.guild.id, null, group.id, 'owner_left', { userId, status: 'orphaned' });
           await gm.logGroupEvent(member.guild, 'owner', { groupId: group.id, from: userId, status: 'orphaned' }, null);
         }
+        await cleanupDeparted();
         activityCache.delete(String(member.guild.id));
         continue;
       }
-      await gm.removeMember(member.guild.id, group.id, userId, 'member_left').catch(() => {});
+      let removalError = null;
+      try { await gm.removeMember(member.guild.id, group.id, userId, 'member_left'); }
+      catch (error) { removalError = error; }
+      await cleanupDeparted();
+      if (removalError) {
+        console.error('[groups] departed member database removal failed:', group.id, userId, removalError?.message || removalError);
+        await gm.audit(member.guild.id, null, group.id, 'member_database_removal_failed', { userId, message: String(removalError?.message || removalError).slice(0, 200) }).catch(() => {});
+        continue;
+      }
       await gm.logGroupEvent(member.guild, 'member_remove', { groupId: group.id, userId, reason: 'member_left' }, null);
       const owner = await member.guild.members.fetch(group.owner_id).catch(() => null);
       for (const managerId of group.managerIds) {
@@ -3592,4 +3668,4 @@ async function handleGroupExtensions(interaction) {
   } finally { if (flow) flow.busy = false; }
 }
 
-module.exports={name,aliases,execute,registerInteractionHandler,handleInternalMessage:dispatchInternalMessage,sendGroupPanel,sendGroupAdminPanel,sendAdminControlPanel,sendMemberControlPanels,sendTopGroupsPanel,buildTopGroupsPayload,selectMemberGroup,buildGroupCommandGuide:groupCommandGuideText,controlPayload,handleInteraction};
+module.exports={name,aliases,execute,registerInteractionHandler,handleInternalMessage:dispatchInternalMessage,sendGroupPanel,sendGroupAdminPanel,sendAdminControlPanel,sendMemberControlPanels,sendTopGroupsPanel,buildTopGroupsPayload,selectMemberGroup,buildGroupCommandGuide:groupCommandGuideText,controlPayload,handleInteraction,revokeUnlinkedGroupAccess,MEMBERSHIP_RECONCILIATION_INTERVAL_MS};

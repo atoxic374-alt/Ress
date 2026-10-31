@@ -130,7 +130,7 @@ async function schema() {
       id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, name TEXT NOT NULL, description TEXT DEFAULT '',
       owner_id TEXT NOT NULL, manager_ids_json TEXT NOT NULL DEFAULT '[]', member_ids_json TEXT NOT NULL DEFAULT '[]',
       blocked_ids_json TEXT NOT NULL DEFAULT '[]', role_id TEXT, text_channel_id TEXT, thread_id TEXT, voice_channel_id TEXT,
-      color TEXT DEFAULT '#5865F2', emoji TEXT, avatar_url TEXT, points INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'active', sync_state TEXT NOT NULL DEFAULT 'ready',
+      color TEXT DEFAULT '#000000', emoji TEXT, avatar_url TEXT, points INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'active', sync_state TEXT NOT NULL DEFAULT 'ready',
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, archived_at INTEGER
     )`);
     const managedGroupColumns = await dbManager.all('PRAGMA table_info(managed_groups)');
@@ -748,7 +748,7 @@ async function getMemberPoints(guildId, groupId, userId) {
   await schema();
   return dbManager.get('SELECT * FROM group_member_points WHERE guild_id = ? AND group_id = ? AND user_id = ?', [String(guildId), Number(groupId), String(userId)]);
 }
-async function createGroup(guild, { name, description = '', ownerId, color = '#5865F2', emoji = null }, actorId) {
+async function createGroup(guild, { name, description = '', ownerId, color = 0, emoji = null }, actorId) {
   const groupName = String(name || '').trim();
   if (!groupName || groupName.length > 100 || /[\u0000-\u001f]/.test(groupName)) throw new Error('NAME_REQUIRED');
   const settings = await getSettings(guild.id); const missing = validateConfig(guild, settings); if (!settings.enabled) throw new Error('GROUP_SYSTEM_DISABLED'); if (missing.length) throw new Error(`GROUP_SETUP_REQUIRED:${missing.join(',')}`); const owner = await guild.members.fetch(String(ownerId));
@@ -764,7 +764,7 @@ async function createGroup(guild, { name, description = '', ownerId, color = '#5
     if (ownedGroup) throw new Error('OWNER_ALREADY_HAS_GROUP');
     const now = Date.now(); let role = null; let text = null; let thread = null; let voice = null; let leaderRole = null; let leaderRoleAdded = false; let createdGroupId = null; let reusedSharedText = false; const created = [];
     try {
-      role = await guild.roles.create({ name: groupName.slice(0, 100), color: color || '#5865F2', reason: 'Create managed group' }); created.push(['role', role]);
+      role = await guild.roles.create({ name: groupName.slice(0, 100), color: color ?? 0, reason: 'Create managed group' }); created.push(['role', role]);
       if (settings.mainRoleId) {
         const mainRole = guild.roles.cache.get(settings.mainRoleId) || await guild.roles.fetch(settings.mainRoleId).catch(() => null);
         if (!mainRole || mainRole.id === guild.id || mainRole.position < 2) throw new Error('MAIN_ROLE_INVALID');
@@ -795,7 +795,7 @@ async function createGroup(guild, { name, description = '', ownerId, color = '#5
       if (reusedSharedText) await text.permissionOverwrites.edit(role.id, Object.fromEntries(textOverwrites[1].allow.map(flag => [flag, true])), { reason: 'Add managed group role to shared group chat' }).catch(error => { throw Object.assign(new Error('GROUP_TEXT_PERMISSIONS_FAILED'), { cause: error }); });
       else await text.permissionOverwrites.set(textOverwrites, 'Secure managed group text space').catch(error => { throw Object.assign(new Error('GROUP_TEXT_PERMISSIONS_FAILED'), { cause: error }); });
       await voice.permissionOverwrites.set(voiceOverwrites, 'Secure managed group voice space').catch(error => { throw Object.assign(new Error('GROUP_VOICE_PERMISSIONS_FAILED'), { cause: error }); });
-      const row = await dbManager.run(`INSERT INTO managed_groups(guild_id,name,description,owner_id,manager_ids_json,member_ids_json,blocked_ids_json,role_id,text_channel_id,thread_id,voice_channel_id,color,emoji,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [guild.id, groupName, String(description).slice(0, 1000), owner.id, '[]', JSON.stringify([owner.id]), '[]', role.id, text.id, thread?.id || null, voice.id, color || '#5865F2', emoji, now, now]);
+      const row = await dbManager.run(`INSERT INTO managed_groups(guild_id,name,description,owner_id,manager_ids_json,member_ids_json,blocked_ids_json,role_id,text_channel_id,thread_id,voice_channel_id,color,emoji,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [guild.id, groupName, String(description).slice(0, 1000), owner.id, '[]', JSON.stringify([owner.id]), '[]', role.id, text.id, thread?.id || null, voice.id, role.hexColor || color || '#000000', emoji, now, now]);
       createdGroupId = row.id ?? row.lastID;
       const group = await getGroup(guild.id, createdGroupId);
       await audit(guild.id, actorId || owner.id, group.id, 'group_create', { roleId: role.id, textId: text.id, threadId: thread?.id, voiceId: voice.id }).catch(() => {});
@@ -858,7 +858,7 @@ async function restoreGroup(guild, groupId, actorId, newOwnerId = null) {
       if ((await listGroups(guild.id)).some(item => String(item.owner_id) === ownerId)) throw new Error('OWNER_ALREADY_HAS_GROUP');
       const previousMembers = [...new Set([...(archive.memberIds || []), ownerId])];
       role = await guild.roles.create({
-        name: String(archive.role?.name || group.name).slice(0, 100), color: archive.role?.color || group.color || '#5865F2',
+        name: String(archive.role?.name || group.name).slice(0, 100), color: archive.role?.color || group.color || '#000000',
         hoist: Boolean(archive.role?.hoist), mentionable: Boolean(archive.role?.mentionable),
         permissions: archive.role?.permissions || '0', reason: `Restore managed group #${group.id}`
       });
