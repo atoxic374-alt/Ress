@@ -9,7 +9,7 @@ const {
 const { dbManager } = require('../utils/database.js');
 const colorManager = require('../utils/colorManager.js');
 const respCommand = require('./resp.js');
-const { getSupervisedResponsibilities, getSupervisors, setSupervisors } = require('../utils/responsibilitySupervisors.js');
+const { getSupervisedResponsibilities } = require('../utils/responsibilitySupervisors.js');
 const { isOwnerMember } = require('../utils/ownersStore.js');
 
 module.exports = {
@@ -83,7 +83,7 @@ module.exports = {
                         : getSupervisedResponsibilities(i.guild.id, message.member, allResps);
 
                     if (type === 'add') {
-                        const availableResps = respNames.filter(name => !allResps[name].responsibles.includes(targetId));
+                        const availableResps = respNames.filter(name => !(allResps[name].responsibles || []).map(String).includes(String(targetId)));
                         if (availableResps.length === 0) {
                             return i.update({ content: '❌ **هذا العضو يمتلك جميع المسؤوليات المتاحة بالفعل.**', embeds: [], components: [] });
                         }
@@ -105,7 +105,7 @@ module.exports = {
                             embeds: []
                         });
                     } else if (type === 'remove') {
-                        const currentResps = respNames.filter(name => allResps[name].responsibles.includes(targetId));
+                        const currentResps = respNames.filter(name => (allResps[name].responsibles || []).map(String).includes(String(targetId)));
                         if (currentResps.length === 0) {
                             return i.update({ content: '❌ **هذا العضو لا يملك أي مسؤوليات لإزالتها.**', embeds: [], components: [] });
                         }
@@ -169,17 +169,19 @@ module.exports = {
                         
                         // رولات المسؤولية من ملف الإعدادات (دعم رول واحد أو قائمة رولات)
                         const roleIds = [];
-                        if (config.roleId) roleIds.push(config.roleId);
+                        if (config.roleId) roleIds.push(String(config.roleId));
                         if (Array.isArray(config.roles)) {
                             config.roles.forEach(r => {
-                                if (r && !roleIds.includes(r)) roleIds.push(r);
+                                if (r && !roleIds.includes(String(r))) roleIds.push(String(r));
                             });
                         }
 
                         try {
                             if (type === 'add') {
-                                if (!config.responsibles.includes(targetId)) {
-                                    config.responsibles.push(targetId);
+                                config.responsibles = Array.isArray(config.responsibles) ? config.responsibles.map(String) : [];
+                                if (!config.responsibles.includes(String(targetId))) {
+                                    // يمكن الجمع بين الإشراف والمسؤولية على المسؤولية نفسها.
+                                    config.responsibles.push(String(targetId));
                                     const success = await dbManager.updateResponsibility(respName, config);
                                     if (success) {
                                         addedResps.push(`**${respName}**`);
@@ -202,11 +204,34 @@ module.exports = {
                                     }
                                 }
                             } else if (type === 'remove') {
-                                const idx = config.responsibles.indexOf(targetId);
+                                config.responsibles = Array.isArray(config.responsibles) ? config.responsibles.map(String) : [];
+                                const targetIdString = String(targetId);
+                                const idx = config.responsibles.indexOf(targetIdString);
                                 if (idx > -1) {
                                     config.responsibles.splice(idx, 1);
                                     const success = await dbManager.updateResponsibility(respName, config);
                                     if (success) {
+                                        // تحقق فعلي من SQLite؛ لا نكتفي بتحديث الذاكرة أو ملف JSON.
+                                        let persisted = await dbManager.getResponsibilities();
+                                        let persistedConfig = persisted?.[respName];
+                                        const stillPersisted = Array.isArray(persistedConfig?.responsibles)
+                                            && persistedConfig.responsibles.map(String).includes(targetIdString);
+                                        if (stillPersisted) {
+                                            const correctedConfig = {
+                                                ...persistedConfig,
+                                                responsibles: persistedConfig.responsibles
+                                                    .map(String)
+                                                    .filter(id => id !== targetIdString)
+                                            };
+                                            const retrySuccess = await dbManager.updateResponsibility(respName, correctedConfig);
+                                            persisted = retrySuccess ? await dbManager.getResponsibilities() : persisted;
+                                            persistedConfig = persisted?.[respName];
+                                        }
+                                        if (Array.isArray(persistedConfig?.responsibles)
+                                            && persistedConfig.responsibles.map(String).includes(targetIdString)) {
+                                            errors.push(`تعذر تثبيت إزالة المسؤول من قاعدة البيانات لمسؤولية **${respName}**`);
+                                            continue;
+                                        }
                                         removedResps.push(`**${respName}**`);
                                         // Update global state and emit event for real-time UI updates
                                         if (global.client) global.client.emit('responsibilityUpdate');
@@ -215,9 +240,10 @@ module.exports = {
                                             // التأكد أن العضو لا يملك مسؤولية أخرى تستخدم نفس الرول
                                             const stillNeedsRole = Object.values(allResps).some(r => {
                                                 const rIds = [];
-                                                if (r.roleId) rIds.push(r.roleId);
-                                                if (Array.isArray(r.roles)) r.roles.forEach(rid => rIds.push(rid));
-                                                return rIds.includes(rId) && r.responsibles.includes(targetId);
+                                                if (r.roleId) rIds.push(String(r.roleId));
+                                                if (Array.isArray(r.roles)) r.roles.forEach(rid => rIds.push(String(rid)));
+                                                return rIds.includes(String(rId))
+                                                    && (Array.isArray(r.responsibles) ? r.responsibles.map(String) : []).includes(targetIdString);
                                             });
 
                                             if (!stillNeedsRole) {

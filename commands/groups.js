@@ -464,6 +464,9 @@ const TOP_BOARD_REFRESH_MS = 30_000;
 const topPanelRefreshTimers = new Map();
 const topPanelRefreshChannels = new Map();
 const topPanelMessageIds = new Map();
+const memberPanelRefreshTimers = new Map();
+const memberPanelRefreshChannels = new Map();
+const memberPanelMessageIds = new Map();
 const groupRoleSyncLocks = new Set();
 const groupResourceLocks = new Map();
 
@@ -766,13 +769,40 @@ function scheduleTopPanelRefresh(channel, guild, options = {}) {
       if (topPanelRefreshTimers.get(key) === timer) topPanelRefreshTimers.delete(key);
       return;
     }
-    sendTopGroupsPanel(channel, guild, options).catch(error => {
+    sendTopGroupsPanel(channel, guild, { ...options, allowCreate: false }).catch(error => {
       console.error('[groups] automatic top-board refresh failed:', error?.message || error);
     });
   }, TOP_BOARD_REFRESH_MS);
   timer.unref?.();
   topPanelRefreshTimers.set(key, timer);
   topPanelRefreshChannels.set(key, String(channel?.id || ''));
+}
+function scheduleMemberPanelRefresh(channel, guild) {
+  const key = String(guild?.id || '');
+  if (!key || !channel?.id) return;
+  const previous = memberPanelRefreshTimers.get(key);
+  if (previous && memberPanelRefreshChannels.get(key) === String(channel.id)) return;
+  if (previous) clearInterval(previous);
+  const timer = setInterval(() => {
+    if (channel.deleted || !channel.isTextBased?.()) {
+      clearInterval(timer);
+      if (memberPanelRefreshTimers.get(key) === timer) memberPanelRefreshTimers.delete(key);
+      memberPanelRefreshChannels.delete(key);
+      return;
+    }
+    sendMemberControlPanels(channel, guild, { schedule: false, allowCreate: false }).catch(error => {
+      console.error('[groups] automatic member-board refresh failed:', error?.message || error);
+    });
+  }, TOP_BOARD_REFRESH_MS);
+  timer.unref?.();
+  memberPanelRefreshTimers.set(key, timer);
+  memberPanelRefreshChannels.set(key, String(channel.id));
+}
+function messageContainsMarker(message, marker) {
+  try {
+    const raw = typeof message?.toJSON === 'function' ? message.toJSON() : message;
+    return JSON.stringify(raw || {}).includes(String(marker));
+  } catch { return false; }
 }
 function isComponentsV2Message(message) {
   if (message?.flags?.has?.(MessageFlags.IsComponentsV2)) return true;
@@ -799,7 +829,7 @@ async function sendTopGroupsPanel(channel, guild, options = {}) {
     if (!existing) {
       const messages = await channel?.messages?.fetch?.({ limit: 50 }).catch(() => null);
       existing = messages && [...messages.values()]
-        .filter(message => (!botId || message.author?.id === botId) && JSON.stringify(message.components || []).includes('groups_top:'))
+        .filter(message => (!botId || message.author?.id === botId) && messageContainsMarker(message, 'groups_top:'))
         .sort((a, b) => Number(a.createdTimestamp || 0) - Number(b.createdTimestamp || 0)).pop();
     }
     if (existing?.edit) {
@@ -812,6 +842,7 @@ async function sendTopGroupsPanel(channel, guild, options = {}) {
       // If Discord rejected the edit (deleted/stale/invalid message), publish
       // a fresh panel and remove the stale one after the new message exists.
     }
+    if (options.allowCreate === false) return null;
     const sent = await channel.send(payload);
     if (sent.id) topPanelMessageIds.set(key, String(sent.id));
     if (existing?.delete) await Promise.resolve(existing.delete()).catch(() => null);
@@ -1184,20 +1215,28 @@ function memberGroupPayload(guild, groupId) {
   // complete control set here instead of publishing an information-only card.
   return controlGroupPayload(guild, Number(groupId));
 }
-async function sendGroupPanel(channel, guild, groupId) {
+async function sendGroupPanel(channel, guild, groupId, { allowCreate = true } = {}) {
   const payload = { ...memberGroupPayload(guild, groupId), allowedMentions: { parse: [] } };
   const id = Number(groupId);
+  const key = `${channel?.id || ''}:${id}`;
   const messages = await channel?.messages?.fetch?.({ limit: 100 }).catch(() => null);
   const botId = guild?.client?.user?.id;
   const marker = `groups_member:info:${id}`;
-  const existing = messages && [...messages.values()].filter(message =>
-    (!botId || message.author?.id === botId) && JSON.stringify(message.components || []).includes(marker)
+  const known = memberPanelMessageIds.get(key);
+  const knownMessage = known ? await channel?.messages?.fetch?.(String(known)).catch(() => null) : null;
+  const existing = knownMessage?.edit ? knownMessage : messages && [...messages.values()].filter(message =>
+    (!botId || message.author?.id === botId) && messageContainsMarker(message, marker)
   ).sort((a, b) => Number(a.createdTimestamp || 0) - Number(b.createdTimestamp || 0)).pop();
   if (existing?.edit) {
     const edited = await existing.edit(payload).catch(() => null);
-    if (edited) return edited;
+    if (edited) { memberPanelMessageIds.set(key, String(edited.id)); return edited; }
   }
-  try { return await channel.send(payload); }
+  if (!allowCreate) return null;
+  try {
+    const sent = await channel.send(payload);
+    if (sent?.id) memberPanelMessageIds.set(key, String(sent.id));
+    return sent;
+  }
   catch (error) {
     console.error(`تعذر إرسال لوحة معلومات القروب ${groupId}:`, error?.stack || error?.message || error);
     return null;
@@ -1207,7 +1246,7 @@ async function sendGroupAdminPanel(channel, guild, groupId) {
   if (!channel?.send) return null;
   return channel.send({ ...groupMetadataPayload(guild, groupId), allowedMentions: { parse: [] } });
 }
-async function sendMemberControlPanels(channel, guild) {
+async function sendMemberControlPanels(channel, guild, { schedule = true, allowCreate = true } = {}) {
   const groups = await gm.listGroups(guild.id);
   const activeIds = new Set(groups.map(group => String(group.id)));
   const botId = guild?.client?.user?.id;
@@ -1222,10 +1261,11 @@ async function sendMemberControlPanels(channel, guild) {
   let published = 0;
   for (let offset = 0; offset < groups.length; offset += 5) {
     const batch = groups.slice(offset, offset + 5);
-    const results = await Promise.all(batch.map(group => sendGroupPanel(channel, guild, group.id).catch(() => null)));
+    const results = await Promise.all(batch.map(group => sendGroupPanel(channel, guild, group.id, { allowCreate }).catch(() => null)));
     published += results.filter(Boolean).length;
   }
-  const overview = await sendMemberOverviewPanel(channel, guild, groups.length).catch(() => null);
+  const overview = await sendMemberOverviewPanel(channel, guild, groups.length, { allowCreate }).catch(() => null);
+  if (schedule) scheduleMemberPanelRefresh(channel, guild);
   return { total: groups.length, published, failed: groups.length - published, overview: Boolean(overview) };
 }
 function memberOverviewPayload(guild, groupCount) {
@@ -1237,17 +1277,18 @@ function memberOverviewPayload(guild, groupCount) {
   c.addActionRowComponents(new ActionRowBuilder().addComponents(notice));
   return componentsV2Payload(c);
 }
-async function sendMemberOverviewPanel(channel, guild, groupCount) {
+async function sendMemberOverviewPanel(channel, guild, groupCount, { allowCreate = true } = {}) {
   const payload = memberOverviewPayload(guild, groupCount);
   const messages = await channel?.messages?.fetch?.({ limit: 100 }).catch(() => null);
   const botId = guild?.client?.user?.id;
   const existing = messages && [...messages.values()].filter(message =>
-    (!botId || message.author?.id === botId) && JSON.stringify(message.components || []).includes('groups_member:overview')
+    (!botId || message.author?.id === botId) && messageContainsMarker(message, 'groups_member:overview')
   ).sort((a, b) => Number(a.createdTimestamp || 0) - Number(b.createdTimestamp || 0)).pop();
   if (existing?.edit) {
     const edited = await existing.edit(payload).catch(() => null);
     if (edited) return edited;
   }
+  if (!allowCreate) return null;
   return channel.send(payload);
 }
 function groupCommandGuideText(group, settings) {
@@ -2252,7 +2293,7 @@ async function cachedSettings(guildId){const hit=settingsCache.get(String(guildI
 function pruneRuntimeCaches(client) {
   const guildIds = new Set([...client.guilds.cache.keys()].map(String));
   const keepGuildKey = key => guildIds.has(String(key).split(':')[0]);
-  for (const map of [activityCache, settingsCache, reconciliationSignatures, reconciliationCursors, topPanelLocks, topPanelRefreshTimers, topPanelRefreshChannels, topPanelMessageIds]) {
+  for (const map of [activityCache, settingsCache, reconciliationSignatures, reconciliationCursors, topPanelLocks, topPanelRefreshTimers, topPanelRefreshChannels, topPanelMessageIds, memberPanelRefreshTimers, memberPanelRefreshChannels, memberPanelMessageIds]) {
     for (const key of map.keys()) if (!keepGuildKey(key)) map.delete(key);
   }
   for (const map of [voiceStarts, voiceChannels, lastMessageAt, lastSkipAuditAt]) {
@@ -2341,6 +2382,24 @@ function registerInteractionHandler(client) {
   };
   if (client.isReady?.()) startTopBoardRefresh();
   else client.once('ready', startTopBoardRefresh);
+  const startPanelRefreshes = async () => {
+    for (const guild of client.guilds.cache.values()) {
+      const settings = await gm.getSettings(guild.id).catch(() => null);
+      if (!settings) continue;
+      if (settings.topChannelId) {
+        const channel = guild.channels.cache.get(String(settings.topChannelId))
+          || await guild.channels.fetch(String(settings.topChannelId)).catch(() => null);
+        if (channel?.isTextBased?.() && !channel.isThread?.()) scheduleTopPanelRefresh(channel, guild, { channelId: channel.id });
+      }
+      if (settings.memberControlChannelId) {
+        const channel = guild.channels.cache.get(String(settings.memberControlChannelId))
+          || await guild.channels.fetch(String(settings.memberControlChannelId)).catch(() => null);
+        if (channel?.isTextBased?.() && !channel.isThread?.()) scheduleMemberPanelRefresh(channel, guild);
+      }
+    }
+  };
+  if (client.isReady?.()) startPanelRefreshes().catch(error => console.error('[groups] panel timer startup failed:', error?.message || error));
+  else client.once('ready', () => startPanelRefreshes().catch(error => console.error('[groups] panel timer startup failed:', error?.message || error)));
 
   const voiceCheckpoint = setInterval(async () => {
     const now = Date.now();

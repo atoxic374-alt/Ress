@@ -3155,15 +3155,7 @@ client.on('messageCreate', async message => {
           ? null
           : findActiveShortcutRequest(message.guild.id, matchedResponsibility, timestamp);
         if (activeRequest) {
-          const originalChannel = activeRequest.channelId === message.channel.id
-            ? message.channel
-            : await client.channels.fetch(activeRequest.channelId).catch(() => null);
-          const originalMessage = originalChannel?.messages?.fetch
-            ? await originalChannel.messages.fetch(activeRequest.messageId).catch(() => null)
-            : null;
-          const channelMention = activeRequest.channelId !== message.channel.id
-            ? ` <#${message.channel.id}>`
-            : '';
+          const channelMention = ` <#${activeRequest.channelId}>`;
           const retryButton = new ButtonBuilder()
             .setCustomId(`shortcut_retry_${activeRequest.requestToken}`)
             .setEmoji('<:emoji_3:1484364952780144710>')
@@ -3184,13 +3176,8 @@ client.on('messageCreate', async message => {
             ...componentsV2Payload(duplicateContainer),
             allowedMentions: { users: [String(message.author.id)], repliedUser: false }
           };
-          if (originalMessage?.reply) {
-            await originalMessage.reply(duplicatePayload)
-              .catch(error => console.error('تعذر إرسال رد الطلب المكرر على رسالة المشكلة:', error.message));
-          } else {
-            await message.channel.send(duplicatePayload)
-              .catch(error => console.error('تعذر إرسال تنبيه الطلب المكرر:', error.message));
-          }
+          await message.channel.send(duplicatePayload)
+            .catch(error => console.error('تعذر إرسال تنبيه الطلب المكرر:', error.message));
           startShortcutUsageCooldown(message.guild.id, message.author.id, matchedResponsibility);
           return;
         }

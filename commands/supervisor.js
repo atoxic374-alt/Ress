@@ -174,7 +174,6 @@ async function handleInteraction(interaction, context = {}) {
       ? selected.filter(id => !current.userIds.includes(String(id)))
       : selected.filter(id => current.userIds.includes(String(id)));
     setSupervisors(interaction.guild.id, name, { userIds });
-
     // مزامنة الرولات في لوحة المسؤولية القديمة أيضًا، حتى لا يختلف سلوكها
     // عن أمر مشرف الجديد. نعالج الأعضاء المحددين فقط وبالتوازي.
     const roleConfig = (await dbManager.getResponsibilities())?.[name] || {};
@@ -209,7 +208,6 @@ async function handleInteraction(interaction, context = {}) {
         }));
       }
     }
-
     // تأكيد التفاعل أولاً حتى لا تنتهي مهلة Discord أثناء تحديث رسالة Resp.
     await interaction.update(managePanel(interaction.guild.id, name));
     try {

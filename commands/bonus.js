@@ -1400,7 +1400,7 @@ async function handleInteraction(interaction, context = {}) {
     }
 
     if (action === 'select-channel') {
-      const channel = interaction.guild.channels.cache.get(interaction.values[0]);
+      const channel = await interaction.guild.channels.fetch(String(interaction.values[0])).catch(() => null);
       if (!isGuildText(channel)) {
         await showPrivatePanel(interaction, { content: 'الروم غير صالح. اختر رومًا نصيًا من السيرفر.', components: [new ActionRowBuilder().addComponents(closeButton('رجوع'))] }, true);
         return true;
@@ -1414,7 +1414,24 @@ async function handleInteraction(interaction, context = {}) {
       } else {
         await db.saveConfig(interaction.guild.id, { channelId: channel.id }, interaction.user.id);
       }
-      await showPrivatePanel(interaction, { content: `تم تحديد روم التوب: <#${channel.id}>`, components: [new ActionRowBuilder().addComponents(button('bonus:home', 'رجوع للإعدادات'))] }, true);
+      try {
+        const published = await publishBoard(interaction.guild, interaction.user.id);
+        await showPrivatePanel(interaction, {
+          content: `تم تحديد روم التوب ونشر/تحديث اللوحة في <#${published.channelId}>.`,
+          components: buildHomeRows()
+        }, true);
+      } catch (error) {
+        const messages = {
+          GROUP_REQUIRED: 'تم حفظ الروم، لكن أضف قروبًا واحدًا على الأقل قبل نشر التوب.',
+          RULE_REQUIRED: 'تم حفظ الروم، لكن فعّل قاعدة رسائل أو قاعدة ساعات صوتية قبل نشر التوب.',
+          CHANNEL_NOT_FOUND: 'تم حفظ الروم، لكن البوت لا يستطيع الوصول إليه.',
+          MISSING_CHANNEL_PERMISSIONS: 'تم حفظ الروم، لكن البوت يحتاج صلاحيات عرض الروم وإرسال الرسائل ورفع الملفات وقراءة سجل الرسائل.'
+        };
+        await showPrivatePanel(interaction, {
+          content: messages[error.message] || `تم تحديد روم التوب: <#${channel.id}>، لكن تعذر نشر اللوحة حاليًا.`,
+          components: buildHomeRows()
+        }, true);
+      }
       return true;
     }
 
@@ -2940,7 +2957,8 @@ function registerInteractionHandler(client) {
   client.once('ready', () => {
     restoreVoiceSessions(client).catch(error => console.error('[bonus] voice restore failed:', error));
     for (const guild of client.guilds.cache.values()) {
-      scheduleRefresh(guild, true);
+      // لا نلمس لوحات البونس عند الإقلاع؛ أول تحديث يتم في دورة المؤقت بعد 30 ثانية.
+      // هذا يمنع التعديل الفوري أو إنشاء رسالة جديدة بسبب سباق بدء التشغيل.
       publishAuditLogs(guild, true).catch(error => console.error('[bonus] audit cursor init failed:', error));
     }
     if (!boardRefreshInterval) {

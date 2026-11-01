@@ -218,6 +218,11 @@ class DatabaseManager {
 
     async updateResponsibility(name, config) {
         try {
+            // لا تسمح بحفظ المسؤوليات في SQLite المؤقتة ثم فقدانها عند إعادة التشغيل.
+            // إذا دخلت القاعدة وضع fallback بسبب قفل عابر، أعد فتح القاعدة الدائمة قبل الكتابة.
+            if (this.isDegraded) {
+                await this.recoverPersistent();
+            }
             const normalizedConfig = {
                 ...(config || {})
             };
@@ -2021,8 +2026,6 @@ async function initializeDatabase() {
         if (!dbManager.isInitialized) {
             await dbManager.initialize();
             console.log('✅ تم تهيئة قاعدة البيانات بنجاح');
-        } else {
-            console.log('✅ قاعدة البيانات مهيأة مسبقاً');
         }
         return dbManager;
     } catch (error) {
