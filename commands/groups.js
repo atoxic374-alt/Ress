@@ -2881,8 +2881,9 @@ function groupError(error) {
     THREAD_ARCHIVED: 'الثريد مؤرشف؛ افتحه من Discord قبل منح عضو الوصول إليه.'
   };
   if (String(error?.message).includes('UNIQUE constraint failed')) return messages.NAME_EXISTS;
-  if (Number(error?.code) === 50013 || /missing permissions|missing access/i.test(String(error?.message || ''))) {
-    return 'رفض Discord العملية بسبب صلاحية على القناة أو الرتبة. تأكد من Manage Channels وManage Threads، وأن رتبة البوت أعلى من رول القروب.';
+  if (Number(error?.code || error?.cause?.code) === 50013 || /missing permissions|missing access/i.test(String(error?.message || error?.cause?.message || ''))) {
+    const code = Number(error?.code || error?.cause?.code) || 50013;
+    return `رفض Discord تنفيذ إحدى خطوات إنشاء القروب (API ${code}). راجع صلاحيات البوت الفعلية على روم groups-chat والتصنيفين، وتأكد أن رتبة البوت أعلى من رتبة القروب. لا يكفي ترتيب الرتبة وحده لتجاوز منع صلاحيات القناة.`;
   }
   if (Number(error?.code) === 10004 || Number(error?.code) === 10003) return 'المورد المطلوب لم يعد موجودًا في Discord؛ أعد فتح لوحة Add وحاول من جديد.';
   return messages[error?.message] || 'تعذر تنفيذ الإجراء. تحقق من صلاحيات البوت وترتيب رتبته؛ لم نمنح أي صلاحية على مستوى السيرفر.';
