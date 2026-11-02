@@ -338,29 +338,51 @@ function canManageGroupAdmin(client, settings, member) { return isBotOwner(clien
 function canManageSystem(client, settings, member) { return isOwner(client, member) || isSystemManager(settings, member); }
 function canManageGroup(client, settings, group, member) { if (!member || !group) return false; return canManageSystem(client, settings, member) || String(group.owner_id) === String(member.id) || group.managerIds.includes(String(member.id)); }
 function channelBelongs(group, channelId) { return [group.text_channel_id, group.thread_id, group.voice_channel_id].filter(Boolean).includes(String(channelId)); }
-function validateConfig(guild, settings) {
+async function validateConfig(guild, settings) {
   const missing = [];
-  const me = guild.members?.me;
+  // Refresh the bot member before evaluating effective permissions; cached member
+  // permissions can be stale after role/overwrite changes.
+  const me = await guild.members.fetchMe().catch(() => guild.members?.me || null);
   const requiredPermissions = ['ManageChannels', 'ManageRoles'];
   if (settings.extraPermissions) requiredPermissions.push('ManageMessages', 'ModerateMembers', 'MoveMembers');
   if (!me?.permissions) missing.push('permission:BOT_MEMBER');
   else for (const permission of requiredPermissions) if (!me.permissions.has(permission)) missing.push(`permission:${permission}`);
   if (!settings.chatMode) missing.push('chatMode');
-  const textCategory = settings.textCategoryId && guild.channels.cache.get(settings.textCategoryId);
-  const voiceCategory = settings.voiceCategoryId && guild.channels.cache.get(settings.voiceCategoryId);
+  const fetchChannel = async id => id && (guild.channels.cache.get(String(id)) || await guild.channels.fetch(String(id)).catch(() => null));
+  const textCategory = await fetchChannel(settings.textCategoryId);
+  const voiceCategory = await fetchChannel(settings.voiceCategoryId);
   if (!textCategory || textCategory.type !== ChannelType.GuildCategory) missing.push('textCategoryId');
   if (!voiceCategory || voiceCategory.type !== ChannelType.GuildCategory) missing.push('voiceCategoryId');
-  const checkCategoryPermissions = (category, key, extra = []) => {
-    if (!category || !me) return;
-    const permissions = category.permissionsFor?.(me);
+  const checkPermissions = (channel, key, extra = [], kind = 'categoryPermission') => {
+    if (!channel || !me) return;
+    const permissions = channel.permissionsFor?.(me);
     for (const permission of ['ViewChannel', 'ManageChannels', ...extra]) {
-      if (!permissions?.has(permission)) missing.push(`categoryPermission:${key}:${permission}`);
+      if (!permissions?.has(permission)) missing.push(`${kind}:${key}:${permission}`);
     }
   };
-  checkCategoryPermissions(textCategory, 'textCategoryId', settings.chatMode === GROUP_CHAT_MODES.THREADS
-    ? ['CreatePrivateThreads', 'ManageThreads', 'SendMessages', 'SendMessagesInThreads']
-    : ['SendMessages', 'ReadMessageHistory']);
-  checkCategoryPermissions(voiceCategory, 'voiceCategoryId', settings.musicChannelId ? ['Connect', 'MoveMembers'] : []);
+  if (settings.chatMode === GROUP_CHAT_MODES.THREADS) {
+    // Thread permissions are evaluated on the actual parent text channel, not
+    // reliably from the category alone. ManageThreads is not required to create
+    // a private thread that the bot itself owns.
+    let sharedText = null;
+    const allChannels = await guild.channels.fetch().catch(() => guild.channels.cache);
+    for (const channel of allChannels.values()) {
+      if (channel?.type === ChannelType.GuildText
+        && String(channel.name || '').toLowerCase() === 'groups-chat'
+        && (!settings.textCategoryId || String(channel.parentId || '') === String(settings.textCategoryId))) {
+        sharedText = channel;
+        break;
+      }
+    }
+    if (sharedText) {
+      checkPermissions(sharedText, 'groups-chat', ['CreatePrivateThreads', 'SendMessages', 'SendMessagesInThreads'], 'channelPermission');
+    } else {
+      checkPermissions(textCategory, 'textCategoryId', ['CreatePrivateThreads', 'SendMessages', 'SendMessagesInThreads']);
+    }
+  } else {
+    checkPermissions(textCategory, 'textCategoryId', ['SendMessages', 'ReadMessageHistory']);
+  }
+  checkPermissions(voiceCategory, 'voiceCategoryId', settings.musicChannelId ? ['Connect', 'MoveMembers'] : []);
   if (settings.musicChannelId) {
     const music = guild.channels.cache.get(settings.musicChannelId);
     if (!music?.isVoiceBased?.()) missing.push('musicChannelId');
@@ -751,7 +773,7 @@ async function getMemberPoints(guildId, groupId, userId) {
 async function createGroup(guild, { name, description = '', ownerId, color = 0, emoji = null }, actorId) {
   const groupName = String(name || '').trim();
   if (!groupName || groupName.length > 100 || /[\u0000-\u001f]/.test(groupName)) throw new Error('NAME_REQUIRED');
-  const settings = await getSettings(guild.id); const missing = validateConfig(guild, settings); if (!settings.enabled) throw new Error('GROUP_SYSTEM_DISABLED'); if (missing.length) throw new Error(`GROUP_SETUP_REQUIRED:${missing.join(',')}`); const owner = await guild.members.fetch(String(ownerId));
+  const settings = await getSettings(guild.id); const missing = await validateConfig(guild, settings); if (!settings.enabled) throw new Error('GROUP_SYSTEM_DISABLED'); if (missing.length) throw new Error(`GROUP_SETUP_REQUIRED:${missing.join(',')}`); const owner = await guild.members.fetch(String(ownerId));
   if (owner.user?.bot) throw new Error('BOT_NOT_ALLOWED');
   return withLock(`members:${guild.id}`, async () => {
   const operationKey = `guild:${guild.id}:create:${owner.id}`;
