@@ -772,7 +772,7 @@ async function getMemberPoints(guildId, groupId, userId) {
 }
 async function createGroup(guild, { name, description = '', ownerId, color = 0, emoji = null }, actorId, onProgress = null) {
   const groupName = String(name || '').trim();
-  if (!groupName || groupName.length > 100 || /[\\u0000-\\u001f]/.test(groupName)) throw new Error('NAME_REQUIRED');
+  if (!groupName || groupName.length > 100 || /[\u0000-\u001f]/.test(groupName)) throw new Error('NAME_REQUIRED');
 
   const settings = await getSettings(guild.id);
   const missing = await validateConfig(guild, settings);
