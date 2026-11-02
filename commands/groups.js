@@ -1374,13 +1374,38 @@ async function createFromModal(interaction) {
       actorId: interaction.user.id,
       ownerId,
       message: error?.message || String(error),
-      code: error?.code || error?.cause?.code || null,
-      cause: error?.cause?.message || null
+      stage: error?.stage || error?.message?.match(/^GROUP_CREATE_STEP_FAILED:(.+)$/)?.[1] || null,
+      code: error?.code || error?.cause?.code || error?.cause?.rawError?.code || null,
+      cause: error?.cause?.message || null,
+      rollbackFailures: error?.rollbackFailures || []
     });
     const setupError = error.message?.match(/^GROUP_SETUP_REQUIRED:(.*)$/);
+    const failedStage = error.message?.match(/^GROUP_CREATE_STEP_FAILED:(.+)$/)?.[1];
+    const stageLabels = {
+      role_create: 'إنشاء رتبة القروب',
+      role_position: 'ترتيب رتبة القروب',
+      owner_group_role_add: 'إضافة رتبة القروب للمالك',
+      owner_leader_role_add: 'إضافة رتبة المالك',
+      shared_text_resolve: 'تحديد روم المحادثة المشترك',
+      thread_create: 'إنشاء الثريد الخاص',
+      thread_parent_permissions: 'ضبط صلاحيات الرتبة على روم groups-chat',
+      thread_validate: 'التحقق من الثريد بعد إنشائه',
+      thread_owner_add: 'إضافة المالك إلى الثريد الخاص',
+      thread_owner_verify: 'تأكيد عضوية المالك داخل الثريد',
+      text_channel_create: 'إنشاء روم القروب النصي',
+      text_channel_permissions: 'ضبط صلاحيات روم القروب النصي',
+      voice_channel_create: 'إنشاء روم القروب الصوتي',
+      voice_channel_permissions: 'ضبط صلاحيات روم القروب الصوتي',
+      resource_verification: 'التحقق النهائي من موارد القروب',
+      database_commit: 'حفظ القروب في قاعدة البيانات',
+      database_verify: 'التحقق من ربط الموارد بقاعدة البيانات'
+    };
+    const causeCode = error?.cause?.code || error?.cause?.rawError?.code || error?.code;
     const message = setupError
       ? `تعذر إنشاء القروب بسبب الإعدادات أو صلاحيات البوت التالية:\n${setupError[1].split(',').map(setupIssueLabel).join('\n')}`
-      : ({ GROUP_SYSTEM_DISABLED: 'نظام القروبات متوقف حاليًا.', BOT_NOT_ALLOWED: 'لا يمكن تعيين بوت كمالك للقروب.', OWNER_ALREADY_HAS_GROUP: 'لا يمكن للعضو امتلاك أكثر من قروب واحد.', GROUP_FULL: 'وصل القروب إلى الحد الأقصى للأعضاء.', NAME_REQUIRED: 'اسم القروب مطلوب وصالح.', MAIN_ROLE_INVALID: 'رتبة النظام الرئيسية غير صالحة؛ راجع الإعدادات.', LEADER_ROLE_INVALID: 'رتبة المالك غير صالحة؛ راجع الإعدادات.', MANAGER_ROLE_INVALID: 'رتبة المسؤول غير صالحة؛ راجع الإعدادات.' })[error.message] || groupError(error);
+      : failedStage
+        ? `توقف إنشاء القروب عند خطوة: **${stageLabels[failedStage] || failedStage}**.\nلم يتم تأكيد اكتمال الإنشاء. ${causeCode ? `رمز Discord: ${causeCode}.` : 'راجع سجل القروبات لمعرفة تفاصيل الخطأ.'} تم تنفيذ محاولة تنظيف تلقائي للموارد التي أُنشئت.`
+        : ({ GROUP_SYSTEM_DISABLED: 'نظام القروبات متوقف حاليًا.', BOT_NOT_ALLOWED: 'لا يمكن تعيين بوت كمالك للقروب.', OWNER_ALREADY_HAS_GROUP: 'لا يمكن للعضو امتلاك أكثر من قروب واحد.', GROUP_FULL: 'وصل القروب إلى الحد الأقصى للأعضاء.', NAME_REQUIRED: 'اسم القروب مطلوب وصالح.', MAIN_ROLE_INVALID: 'رتبة النظام الرئيسية غير صالحة؛ راجع الإعدادات.', LEADER_ROLE_INVALID: 'رتبة المالك غير صالحة؛ راجع الإعدادات.', MANAGER_ROLE_INVALID: 'رتبة المسؤول غير صالحة؛ راجع الإعدادات.' })[error.message] || groupError(error);
     return interaction.editReply(responsePayload({ title: 'GROUP CREATION FAILED', content: message, thumbnail: groupThumb(interaction.guild), allowedMentions: { parse: [] } }));
   }
 
@@ -1406,7 +1431,8 @@ async function createFromModal(interaction) {
 
   const defaultChannel = await channelById(interaction.guild, group.thread_id || group.text_channel_id);
   const configuredChannel = settings.memberControlChannelId ? await channelById(interaction.guild, settings.memberControlChannelId) : null;
-  if (group.thread_id && defaultChannel?.members?.add) await defaultChannel.members.add(ownerId).catch(() => null);
+  // Thread owner membership is added and verified inside gm.createGroup; do not
+  // issue a second, silent add here after the transaction has already committed.
   const panelChannel = configuredChannel || defaultChannel;
   let panelPublished = false;
   if (panelChannel) {
