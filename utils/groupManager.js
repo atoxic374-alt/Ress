@@ -362,8 +362,8 @@ async function validateConfig(guild, settings) {
   };
   if (settings.chatMode === GROUP_CHAT_MODES.THREADS) {
     // Thread permissions are evaluated on the actual parent text channel, not
-    // reliably from the category alone. ManageThreads is not required to create
-    // a private thread that the bot itself owns.
+    // reliably from the category alone. Check the complete set used by this flow
+    // (private-thread creation and adding the owner) against that parent.
     let sharedText = null;
     const allChannels = await guild.channels.fetch().catch(() => guild.channels.cache);
     for (const channel of allChannels.values()) {
