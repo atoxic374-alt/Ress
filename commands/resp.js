@@ -6,7 +6,12 @@ const axios = require('axios');
 const dns = require('dns').promises;
 const net = require('net');
 const colorManager = require('../utils/colorManager.js');
-const { getResponsibilitiesSnapshot, normalizeResponsibilitiesMap } = require('../utils/responsibilitiesStore');
+const {
+    responsibilitiesPath,
+    getResponsibilitiesSnapshot,
+    normalizeResponsibilitiesMap,
+    getResponsibilityRoleIds
+} = require('../utils/responsibilitiesStore');
 const { isOwnerMember } = require('../utils/ownersStore');
 
 // نظام الكولداون
@@ -2174,6 +2179,7 @@ module.exports = {
         });
 
         panelCollector.on('collect', async (interaction) => {
+            let responsibilitySyncSuspendedGuildId = null;
             try {
                 if (interaction.customId.startsWith('resp_panel_managers_')) {
                     if (!isOwner) {
@@ -2876,13 +2882,33 @@ module.exports = {
                     }
                     await confirm.deferUpdate().catch(() => {});
 
+                    if (global.responsibilityRoleSyncSuspendedGuilds instanceof Set) {
+                        responsibilitySyncSuspendedGuildId = guildId;
+                        global.responsibilityRoleSyncSuspendedGuilds.add(guildId);
+                        await global.waitForResponsibilityRoleSyncIdle?.();
+                    }
+
                     const currentResps = getCurrentResponsibilities();
-                    let totalRemoved = 0;
+                    const responsibilityNames = Object.keys(currentResps);
+                    const { dbManager } = require('../utils/database.js');
+                    const { clearGuildSupervisors, getSupervisors } = require('../utils/responsibilitySupervisors.js');
+                    const assignedMemberIds = new Set();
+                    const candidateMemberIds = new Set();
+                    const responsibilityRoleIds = new Set();
+                    for (const [respName, resp] of Object.entries(currentResps)) {
+                        for (const roleId of getResponsibilityRoleIds(resp)) responsibilityRoleIds.add(String(roleId));
+                        for (const userId of [...(resp.responsibles || []), ...(resp.members || [])]) {
+                            if (!userId) continue;
+                            assignedMemberIds.add(String(userId));
+                            candidateMemberIds.add(String(userId));
+                        }
+                        for (const userId of getSupervisors(guildId, respName).userIds) candidateMemberIds.add(String(userId));
+                    }
+                    let totalRemoved = assignedMemberIds.size;
                     let totalRolesRemoved = 0;
                     let skippedMissingMembers = 0;
-                    const { dbManager } = require('../utils/database.js');
-                    const { clearGuildSupervisors } = require('../utils/responsibilitySupervisors.js');
-                    const responsibilityNames = Object.keys(currentResps);
+                    let failedRoleRemovals = 0;
+                    let memberFetchFailed = false;
                     const totalResponsibilities = responsibilityNames.length;
                     let completedResponsibilities = 0;
                     const progressBar = (done, total, size = 12) => {
@@ -2898,41 +2924,65 @@ module.exports = {
                     };
 
                     await updateClearProgress('بدء العملية...');
+                    const fetchedGuildMembers = await message.guild.members.fetch().catch(error => {
+                        memberFetchFailed = true;
+                        console.warn('[RESP] تعذر جلب جميع أعضاء السيرفر أثناء Clean resp:', error?.message || error);
+                        return null;
+                    });
+                    const responsibilityRoles = new Map();
+                    for (const roleId of responsibilityRoleIds) {
+                        const role = message.guild.roles.cache.get(roleId)
+                            || await message.guild.roles.fetch(roleId).catch(() => null);
+                        if (!role) continue;
+                        responsibilityRoles.set(roleId, role);
+                        for (const member of role.members.values()) candidateMemberIds.add(String(member.id));
+                    }
+
+                    // امسح مصدر الاستحقاق كاملًا أولًا، بما فيه المشرفون؛ وإلا فإن roleUpdate
+                    // يرى المشرف ما زال مخولًا أثناء إزالة الرول ويعيده قبل مسح سجل المشرفين.
                     for (const respName of responsibilityNames) {
                         const resp = currentResps[respName];
                         await updateClearProgress(`جاري معالجة : ${respName}`);
-                        const roleIds = Array.isArray(resp.roles) ? resp.roles.filter(Boolean) : (resp.roleId ? [resp.roleId] : []);
-                        const members = [...new Set(resp.responsibles || resp.members || [])];
-                        const fetchedMembers = members.length > 0
-                            ? await message.guild.members.fetch({ user: members }).catch(() => null)
-                            : null;
-
-                        for (const userId of members) {
-                            totalRemoved++;
-                            const member = fetchedMembers?.get(userId) || message.guild.members.cache.get(userId) || null;
-                            if (!member) {
-                                skippedMissingMembers++;
-                                continue;
-                            }
-                            for (const roleId of roleIds) {
-                                if (member.roles.cache.has(roleId)) {
-                                    await member.roles.remove(roleId).catch(() => {});
-                                    totalRolesRemoved++;
-                                }
-                            }
-                        }
-
                         resp.members = [];
                         resp.responsibles = [];
-                        if (dbManager?.updateResponsibility) await dbManager.updateResponsibility(respName, resp);
+                        if (!dbManager?.updateResponsibility || !await dbManager.updateResponsibility(respName, resp)) {
+                            throw new Error(`RESPONSIBILITY_CLEAR_SAVE_FAILED:${respName}`);
+                        }
                         completedResponsibilities++;
                     }
-
-                    // حذف المشرفين المحفوظين لهذا السيرفر بعد تفريغ كل المسؤوليات.
-                    clearGuildSupervisors(guildId);
-                    await updateClearProgress('تم تفريغ جميع المسؤوليات والمشرفين.');
-                    writeJSONFile(DATA_FILES.responsibilities, currentResps);
+                    if (!writeJSONFile(responsibilitiesPath, currentResps)) {
+                        throw new Error('RESPONSIBILITY_CLEAR_FILE_SAVE_FAILED');
+                    }
                     global.responsibilities = currentResps;
+                    clearGuildSupervisors(guildId);
+
+                    // بعد محو العضويات والمشرفين، أزل الرولات من كل من يحملها، لا من القائمة المسجلة فقط.
+                    for (const userId of candidateMemberIds) {
+                        const member = fetchedGuildMembers?.get(userId)
+                            || message.guild.members.cache.get(userId)
+                            || await message.guild.members.fetch(userId).catch(() => null);
+                        if (!member) {
+                            if (assignedMemberIds.has(userId)) skippedMissingMembers++;
+                            continue;
+                        }
+                        for (const [roleId, role] of responsibilityRoles) {
+                            if (!member.roles.cache.has(roleId)) continue;
+                            if (!global.responsibilityRoleSyncBypass) global.responsibilityRoleSyncBypass = new Set();
+                            const bypassKey = `${guildId}:${member.id}:${roleId}`;
+                            global.responsibilityRoleSyncBypass.add(bypassKey);
+                            const bypassTimeout = setTimeout(() => global.responsibilityRoleSyncBypass?.delete(bypassKey), 30000);
+                            bypassTimeout.unref?.();
+                            try {
+                                await member.roles.remove(role, 'Clean responsibility roles');
+                                totalRolesRemoved++;
+                            } catch (error) {
+                                global.responsibilityRoleSyncBypass.delete(bypassKey);
+                                failedRoleRemovals++;
+                                console.warn(`[RESP] تعذر إزالة رول مسؤولية ${roleId} من ${member.id}:`, error?.message || error);
+                            }
+                        }
+                    }
+                    await updateClearProgress('تم تفريغ جميع المسؤوليات والمشرفين.');
                     await updateEmbedMessage(message.client, guildId).catch(() => {});
                     appendRespAuditLog(guildId, message.author.id, 'resp.clearMembers', {
                         removedMembers: totalRemoved,
@@ -2942,8 +2992,14 @@ module.exports = {
                     const skippedLine = skippedMissingMembers > 0
                         ? `\n**⚠️ لم يتم سحب رولات : ${skippedMissingMembers} (طالعين من السيرفر).**`
                         : '';
+                    const failedLine = failedRoleRemovals > 0
+                        ? `\n**⚠️ تعذر إزالة ${failedRoleRemovals} رول؛ تحقق من صلاحيات البوت وترتيب رتبته.**`
+                        : '';
+                    const fetchWarning = memberFetchFailed
+                        ? '\n**⚠️ تعذر جلب كامل أعضاء السيرفر؛ تمت المراجعة على الأعضاء المحمّلين فقط.**'
+                        : '';
                     await interaction.editReply({
-                        content: `**✅ تم تفريغ المسؤولين (${totalRemoved}) والمشرفين عن جميع المسؤوليات وسحب الرولات (${totalRolesRemoved}).**${skippedLine}`,
+                        content: `**✅ تم تفريغ المسؤولين (${totalRemoved}) والمشرفين عن جميع المسؤوليات وسحب الرولات (${totalRolesRemoved}).**${skippedLine}${failedLine}${fetchWarning}`,
                         components: []
                     });
                 }
@@ -2953,6 +3009,10 @@ module.exports = {
                     await interaction.reply({ content: '**❌ حدث خطأ أثناء تنفيذ الإجراء.**', ephemeral: true }).catch(() => {});
                 }
             } finally {
+                if (responsibilitySyncSuspendedGuildId) {
+                    global.responsibilityRoleSyncSuspendedGuilds?.delete(responsibilitySyncSuspendedGuildId);
+                    global.client?.emit('responsibilityUpdate');
+                }
                 await refreshPanelMessage();
             }
         });

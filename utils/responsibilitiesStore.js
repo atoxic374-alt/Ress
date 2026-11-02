@@ -24,6 +24,21 @@ function normalizeResponsibilitiesMap(responsibilities) {
   return normalized;
 }
 
+function getResponsibilityMemberIds(config) {
+  return normalizeResponsiblesList(config?.responsibles);
+}
+
+function getResponsibilityRoleIds(config) {
+  const roleIds = [];
+  if (config?.roleId) roleIds.push(String(config.roleId));
+  if (Array.isArray(config?.roles)) {
+    for (const roleId of config.roles) {
+      if (roleId && !roleIds.includes(String(roleId))) roleIds.push(String(roleId));
+    }
+  }
+  return roleIds;
+}
+
 function safeReadResponsibilitiesFile() {
   try {
     if (!fs.existsSync(responsibilitiesPath)) return {};
@@ -55,5 +70,7 @@ module.exports = {
   responsibilitiesPath,
   normalizeResponsiblesList,
   normalizeResponsibilitiesMap,
+  getResponsibilityMemberIds,
+  getResponsibilityRoleIds,
   getResponsibilitiesSnapshot
 };

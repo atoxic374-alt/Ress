@@ -186,8 +186,20 @@ const { getDataDir, getBotConfigPath, writeBotConfigFile } = require('./utils/st
 const shortcutStateStore = require('./utils/responsibilityShortcutStore.js');
 const shortcutStore = shortcutStateStore.loadShortcutStore();
 const { isSupervisorForResponsibility, removeUserFromAllSupervisors } = require('./utils/responsibilitySupervisors');
+const {
+    responsibilitiesPath,
+    getResponsibilitiesSnapshot,
+    getResponsibilityMemberIds,
+    getResponsibilityRoleIds
+} = require('./utils/responsibilitiesStore');
+const {
+    responsibilityAuthorizationSourcesDiffer,
+    buildDesiredRoleAssignments,
+    collectActualRoleMemberIds
+} = require('./utils/responsibilityRoleReconciler');
 const { ownersPath, normalizeIds, loadOwners, saveOwners } = require('./utils/ownersStore');
 let interactiveRolesManager;
+const responsibilityRoleSyncTimers = new Map();
 
 // مسارات ملفات البيانات
 const dataDir = getDataDir();
@@ -1819,84 +1831,242 @@ async function ensureRespMessageFreshness(client, reason = 'periodic') {
     }
 }
 
-async function syncAllResponsibilityRoles(client) {
-    console.log('🔄 جاري بدء فحص ومزامنة رولات المسؤوليات...');
-    try {
-        const responsibilities = global.responsibilities || {};
-        for (const guild of client.guilds.cache.values()) {
-            console.log(`📡 جاري فحص سيرفر: ${guild.name}`);
-            
-            // تجميع الرولات ومن يملكها
-            const roleToResponsibles = new Map();
-            for (const config of Object.values(responsibilities)) {
-                const roles = Array.isArray(config.roles) ? config.roles : (config.roleId ? [config.roleId] : []);
-                const members = config.responsibles || config.members || [];
-                for (const roleId of roles) {
-                    if (!roleToResponsibles.has(roleId)) roleToResponsibles.set(roleId, new Set());
-                    members.forEach(id => roleToResponsibles.get(roleId).add(id));
+let responsibilityRoleSyncRunning = false;
+let responsibilityRoleSyncRerunRequested = false;
+const responsibilityRoleSyncSuspendedGuilds = new Set();
+global.responsibilityRoleSyncSuspendedGuilds = responsibilityRoleSyncSuspendedGuilds;
+
+async function syncResponsibilitySourceMirrors(responsibilities, previousGlobal, databaseSnapshot, sourceName) {
+    const fileSnapshot = readJSONFile(responsibilitiesPath, {});
+    const fileDrift = responsibilityAuthorizationSourcesDiffer(fileSnapshot, responsibilities);
+    const globalDrift = responsibilityAuthorizationSourcesDiffer(previousGlobal, responsibilities);
+    const databaseDrift = Boolean(databaseSnapshot)
+        && responsibilityAuthorizationSourcesDiffer(databaseSnapshot, responsibilities);
+
+    if (fileDrift || globalDrift || databaseDrift) {
+        const names = [...new Set([
+            ...Object.keys(fileSnapshot || {}),
+            ...Object.keys(previousGlobal || {}),
+            ...Object.keys(databaseSnapshot || {}),
+            ...Object.keys(responsibilities || {})
+        ])];
+        const changedNames = names.filter(name =>
+            responsibilityAuthorizationSourcesDiffer(
+                fileSnapshot && Object.prototype.hasOwnProperty.call(fileSnapshot, name) ? { [name]: fileSnapshot[name] } : {},
+                responsibilities && Object.prototype.hasOwnProperty.call(responsibilities, name) ? { [name]: responsibilities[name] } : {}
+            )
+            || responsibilityAuthorizationSourcesDiffer(
+                previousGlobal && Object.prototype.hasOwnProperty.call(previousGlobal, name) ? { [name]: previousGlobal[name] } : {},
+                responsibilities && Object.prototype.hasOwnProperty.call(responsibilities, name) ? { [name]: responsibilities[name] } : {}
+            )
+            || responsibilityAuthorizationSourcesDiffer(
+                databaseSnapshot && Object.prototype.hasOwnProperty.call(databaseSnapshot, name) ? { [name]: databaseSnapshot[name] } : {},
+                responsibilities && Object.prototype.hasOwnProperty.call(responsibilities, name) ? { [name]: responsibilities[name] } : {}
+            )
+        );
+        console.warn(`[RESP-RECONCILE] اختلاف مصادر المسؤوليات؛ المصدر المعتمد لهذه الجولة: ${sourceName}. سيتم توحيد: ${changedNames.join(', ') || 'البيانات العامة'}`);
+    }
+
+    if (databaseDrift) {
+        const previousSuppression = Boolean(global.responsibilityRoleSourceSyncInProgress);
+        global.responsibilityRoleSourceSyncInProgress = true;
+        try {
+            for (const dbName of Object.keys(databaseSnapshot || {})) {
+                if (Object.prototype.hasOwnProperty.call(responsibilities, dbName)) continue;
+                await dbManager.run('DELETE FROM responsibilities WHERE name = ?', [dbName]);
+            }
+            for (const [name, config] of Object.entries(responsibilities)) {
+                if (responsibilityAuthorizationSourcesDiffer(
+                    databaseSnapshot && Object.prototype.hasOwnProperty.call(databaseSnapshot, name) ? { [name]: databaseSnapshot[name] } : {},
+                    { [name]: config }
+                )) {
+                    const previousConfig = databaseSnapshot?.[name] || {};
+                    const nextConfig = {
+                        ...previousConfig,
+                        ...config,
+                        responsibles: getResponsibilityMemberIds(config)
+                    };
+                    if (!Object.prototype.hasOwnProperty.call(config, 'roles')) delete nextConfig.roles;
+                    if (!Object.prototype.hasOwnProperty.call(config, 'roleId')) delete nextConfig.roleId;
+                    if (!Object.prototype.hasOwnProperty.call(config, 'image') && previousConfig.image) nextConfig.image = previousConfig.image;
+                    const saved = await dbManager.updateResponsibility(name, nextConfig);
+                    if (!saved) console.error(`[RESP-RECONCILE] لم يمكن مزامنة المسؤولية ${name} إلى SQLite.`);
                 }
             }
-            for (const [responsibilityName, config] of Object.entries(responsibilities)) {
-                const roles = Array.isArray(config.roles) ? config.roles : (config.roleId ? [config.roleId] : []);
-                const supervisorIds = require('./utils/responsibilitySupervisors').getSupervisors(guild.id, responsibilityName).userIds;
-                for (const roleId of roles) {
-                    if (!roleToResponsibles.has(roleId)) roleToResponsibles.set(roleId, new Set());
-                    supervisorIds.forEach(id => roleToResponsibles.get(roleId).add(id));
-                }
+        } catch (error) {
+            console.error('[RESP-RECONCILE] تعذر إصلاح اختلاف SQLite:', error?.message || error);
+        } finally {
+            global.responsibilityRoleSourceSyncInProgress = previousSuppression;
+        }
+    }
+
+    if (fileDrift || databaseDrift) {
+        try {
+            fs.mkdirSync(path.dirname(responsibilitiesPath), { recursive: true });
+            const temporaryPath = `${responsibilitiesPath}.reconcile.tmp`;
+            fs.writeFileSync(temporaryPath, `${JSON.stringify(responsibilities, null, 2)}\n`, 'utf8');
+            fs.renameSync(temporaryPath, responsibilitiesPath);
+        } catch (error) {
+            console.error('[RESP-RECONCILE] تعذر إصلاح ملف المسؤوليات:', error?.message || error);
+        }
+    }
+    global.responsibilities = responsibilities;
+}
+
+async function performResponsibilityRoleReconciliation(client) {
+    console.log('🔄 بدء المصالحة الشاملة لمصادر ورولات المسؤوليات...');
+    if (responsibilityRoleSyncSuspendedGuilds.size > 0) {
+        console.log('[RESP-RECONCILE] تأجيل المصالحة حتى ينتهي Clean resp.');
+        return;
+    }
+    const previousGlobal = global.responsibilities || {};
+    const fileSnapshot = readJSONFile(responsibilitiesPath, {});
+    let databaseSnapshot = null;
+    if (dbManager.isInitialized) {
+        databaseSnapshot = await dbManager.getResponsibilities().catch(error => {
+            console.error('[RESP-RECONCILE] تعذر قراءة SQLite:', error?.message || error);
+            return null;
+        });
+    }
+    let responsibilities;
+    let sourceName;
+    if (Object.keys(fileSnapshot || {}).length > 0) {
+        responsibilities = getResponsibilitiesSnapshot();
+        sourceName = 'ملف واجهة المسؤوليات';
+    } else if (Object.keys(databaseSnapshot || {}).length > 0) {
+        responsibilities = databaseSnapshot;
+        global.responsibilities = responsibilities;
+        sourceName = 'SQLite لأن ملف الواجهة فارغ';
+    } else {
+        responsibilities = getResponsibilitiesSnapshot();
+        sourceName = 'الذاكرة/مصدر التخزين المتاح';
+    }
+    await syncResponsibilitySourceMirrors(responsibilities, previousGlobal, databaseSnapshot, sourceName);
+
+    for (const guild of client.guilds.cache.values()) {
+        if (responsibilityRoleSyncSuspendedGuilds.has(guild.id)) {
+            console.log(`[RESP-RECONCILE] تخطي ${guild.name} مؤقتًا أثناء عملية Clean resp.`);
+            continue;
+        }
+        let added = 0;
+        let removed = 0;
+        let failures = 0;
+        let memberSnapshot = null;
+        try {
+            memberSnapshot = await guild.members.fetch();
+        } catch (error) {
+            console.warn(`[RESP-RECONCILE] تعذر جلب كل أعضاء ${guild.name}؛ سيستخدم الفحص الأعضاء المحمّلين: ${error?.message || error}`);
+            memberSnapshot = guild.members.cache;
+        }
+
+        const desiredByRole = await buildDesiredRoleAssignments(responsibilities, guild);
+        const botMember = guild.members.me || await guild.members.fetchMe().catch(() => null);
+        if (!botMember?.permissions?.has(PermissionsBitField.Flags.ManageRoles)) {
+            console.error(`[RESP-RECONCILE] لا يملك البوت ManageRoles في ${guild.name}؛ تعذر إصلاح رولات المسؤوليات.`);
+            continue;
+        }
+
+        for (const [roleId, allowedUserIds] of desiredByRole) {
+            if (responsibilityRoleSyncSuspendedGuilds.has(guild.id)) break;
+            const role = guild.roles.cache.get(roleId) || await guild.roles.fetch(roleId).catch(() => null);
+            if (!role) {
+                console.warn(`[RESP-RECONCILE] الرول المرتبط بالمسؤولية ${roleId} غير موجود في ${guild.name}.`);
+                continue;
+            }
+            if (role.managed || !role.editable) {
+                console.error(`[RESP-RECONCILE] لا يستطيع البوت إدارة الرول ${role.name} (${roleId}) في ${guild.name}; تحقق من ترتيب الرتب.`);
+                continue;
             }
 
-            const memberLookups = new Map();
-            const getMember = async (userId) => {
-                const cached = guild.members.cache.get(String(userId));
-                if (cached) return cached;
-                if (!memberLookups.has(String(userId))) {
-                    memberLookups.set(String(userId), (async () => {
-                        try {
-                            return await guild.members.fetch({ user: String(userId), force: true });
-                        } catch (error) {
-                            if (Number(error?.code ?? error?.rawError?.code) === 10007 || Number(error?.status) === 404) return null;
-                            throw error;
-                        } finally {
-                            // فاصل بين طلبات البحث الفردية عند التشغيل لتجنب دفعة REST كبيرة.
-                            await new Promise(resolve => setTimeout(resolve, 500));
-                        }
-                    })());
-                }
-                return memberLookups.get(String(userId));
-            };
-
-            for (const [roleId, allowedUsers] of roleToResponsibles) {
-                const role = guild.roles.cache.get(roleId);
-                if (!role) continue;
-                const candidateIds = new Set([...role.members.keys(), ...allowedUsers]);
-                for (const memberId of candidateIds) {
-                    // لا نبحث عن عضو غير مخزّن إلا إذا كان معينًا لهذه المسؤولية.
-                    if (!allowedUsers.has(memberId) && !guild.members.cache.has(memberId)) continue;
-                    let member;
-                    try {
-                        member = await getMember(memberId);
-                    } catch (error) {
-                        console.warn(`⚠️ تعذر جلب العضو ${memberId} لمزامنة المسؤوليات في ${guild.name}: ${error.message}`);
-                        continue;
+            const actualUserIds = collectActualRoleMemberIds(role, memberSnapshot);
+            const candidateIds = new Set([...actualUserIds, ...allowedUserIds]);
+            for (const userId of candidateIds) {
+                if (responsibilityRoleSyncSuspendedGuilds.has(guild.id)) break;
+                const member = memberSnapshot?.get?.(userId)
+                    || guild.members.cache.get(userId)
+                    || (allowedUserIds.has(userId) ? await guild.members.fetch(userId).catch(() => null) : null);
+                if (!member) {
+                    if (allowedUserIds.has(userId)) {
+                        failures++;
+                        console.warn(`[RESP-RECONCILE] تعذر جلب العضو المستحق ${userId} في ${guild.name}.`);
                     }
-                    if (!member) continue;
-                    const hasRole = member.roles.cache.has(roleId);
-                    const isResponsible = allowedUsers.has(member.id);
-                    if (isResponsible && !hasRole) {
-                        await member.roles.add(roleId, 'مزامنة: مسؤول بدون رول').catch(error => console.warn(`⚠️ لم تتم إضافة رول المسؤولية للعضو ${member.id}: ${error.message}`));
-                        await new Promise(resolve => setTimeout(resolve, 500));
-                    } else if (!isResponsible && hasRole) {
-                        await member.roles.remove(roleId, 'مزامنة: رول بدون مسؤولية').catch(error => console.warn(`⚠️ لم تتم إزالة رول المسؤولية من العضو ${member.id}: ${error.message}`));
-                        await new Promise(resolve => setTimeout(resolve, 500));
+                    continue;
+                }
+
+                const hasRole = member.roles.cache.has(roleId);
+                const shouldHaveRole = allowedUserIds.has(String(member.id));
+                if (shouldHaveRole && !hasRole) {
+                    try {
+                        await member.roles.add(role, 'مصالحة رولات المسؤوليات: العضو مستحق للرول');
+                        added++;
+                    } catch (error) {
+                        failures++;
+                        console.warn(`[RESP-RECONCILE] تعذرت إضافة ${roleId} للعضو ${member.id}: ${error?.message || error}`);
+                    }
+                } else if (!shouldHaveRole && hasRole) {
+                    if (!global.responsibilityRoleSyncBypass) global.responsibilityRoleSyncBypass = new Set();
+                    const bypassKey = `${guild.id}:${member.id}:${roleId}`;
+                    global.responsibilityRoleSyncBypass.add(bypassKey);
+                    const bypassTimeout = setTimeout(() => global.responsibilityRoleSyncBypass?.delete(bypassKey), 30000);
+                    bypassTimeout.unref?.();
+                    try {
+                        await member.roles.remove(role, 'مصالحة رولات المسؤوليات: لا يوجد استحقاق للرول');
+                        removed++;
+                    } catch (error) {
+                        global.responsibilityRoleSyncBypass.delete(bypassKey);
+                        failures++;
+                        console.warn(`[RESP-RECONCILE] تعذرت إزالة ${roleId} من العضو ${member.id}: ${error?.message || error}`);
                     }
                 }
             }
         }
-        console.log('✅ انتهت عملية مزامنة الرولات بنجاح.');
+        console.log(`[RESP-RECONCILE] ${guild.name}: أضيف ${added}، أزيل ${removed}، تعذر ${failures}.`);
+    }
+    console.log('✅ انتهت المصالحة الشاملة لمصادر ورولات المسؤوليات.');
+}
+
+async function syncAllResponsibilityRoles(client) {
+    if (responsibilityRoleSyncRunning) {
+        responsibilityRoleSyncRerunRequested = true;
+        return;
+    }
+    responsibilityRoleSyncRunning = true;
+    try {
+        do {
+            responsibilityRoleSyncRerunRequested = false;
+            await performResponsibilityRoleReconciliation(client);
+        } while (responsibilityRoleSyncRerunRequested);
     } catch (error) {
-        console.error('❌ خطأ في مزامنة رولات المسؤوليات:', error);
+        console.error('❌ خطأ في مصالحة رولات المسؤوليات:', error);
+    } finally {
+        responsibilityRoleSyncRunning = false;
     }
 }
+
+function scheduleResponsibilityRoleSync(client, reason = 'responsibility update') {
+    if (global.responsibilityRoleSourceSyncInProgress) return;
+    const key = 'all-guilds';
+    clearTimeout(responsibilityRoleSyncTimers.get(key));
+    const timer = setTimeout(() => {
+        responsibilityRoleSyncTimers.delete(key);
+        console.log(`[RESP-RECONCILE] تشغيل فحص مؤجل بسبب: ${reason}`);
+        syncAllResponsibilityRoles(client).catch(error => console.error('[RESP-RECONCILE] فشل الفحص المؤجل:', error));
+    }, 3000);
+    timer.unref?.();
+    responsibilityRoleSyncTimers.set(key, timer);
+}
+
+client.on('responsibilityUpdate', () => scheduleResponsibilityRoleSync(client));
+client.on('guildCreate', () => scheduleResponsibilityRoleSync(client, 'new guild'));
+const responsibilityRoleAuditInterval = setInterval(() => {
+    syncAllResponsibilityRoles(client).catch(error => console.error('[RESP-RECONCILE] فشل الفحص الدوري:', error));
+}, 15 * 60 * 1000);
+responsibilityRoleAuditInterval.unref?.();
+global.waitForResponsibilityRoleSyncIdle = async () => {
+    while (responsibilityRoleSyncRunning) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+};
 
 client.once(Events.ClientReady, async () => {
   try {
@@ -4120,46 +4290,23 @@ if (executorMember && !isAllowedExecutor) {
             }
         }
 
-        // 4. حماية رولات المسؤوليات - إزالة تلقائية من غير المسؤولين والحماية من الإزالة.
-        // استخدم أحدث نسخة من SQLite؛ ملف JSON قد يكون أقدم للحظات بعد إزالة عضو.
-        const responsibilities = dbManager.isInitialized
-            ? await dbManager.getResponsibilities().catch(() => readJSONFile(DATA_FILES.responsibilities, {}))
-            : readJSONFile(DATA_FILES.responsibilities, {});
-        const responsibilityUserIds = (config) => new Set(
-            (Array.isArray(config?.responsibles) ? config.responsibles : (Array.isArray(config?.members) ? config.members : []))
-                .map(String)
-                .filter(Boolean)
+        // 4. حماية رولات المسؤوليات - اعتمد نفس لقطة المسؤوليات التي تعرضها أوامر النظام.
+        // العضوية المعتبرة هي responsibles فقط؛ members بيانات legacy ولا تمنح استحقاق الرول.
+        const responsibilities = getResponsibilitiesSnapshot();
+        const matchingResponsibilitiesForRole = (roleId) => Object.entries(responsibilities)
+            .filter(([, config]) => getResponsibilityRoleIds(config).includes(String(roleId)))
+            .map(([name, data]) => ({ name, data }));
+        const findAuthorizedResponsibility = (matches) => matches.find(({ name, data }) =>
+            getResponsibilityMemberIds(data).includes(String(userId))
+            || isSupervisorForResponsibility(newMember.guild.id, name, newMember)
         );
-        const responsibilityRoleIds = (config) => {
-            const roleIds = [];
-            if (config?.roleId) roleIds.push(String(config.roleId));
-            if (Array.isArray(config?.roles)) {
-                for (const configuredRoleId of config.roles) {
-                    if (configuredRoleId && !roleIds.includes(String(configuredRoleId))) {
-                        roleIds.push(String(configuredRoleId));
-                    }
-                }
-            }
-            return roleIds;
-        };
         
         // فحص الرولات المضافة
         for (const [roleId, role] of addedRoles) {
-            // البحث عن المسؤولية التي تحتوي هذا الرول
-            let foundResp = null;
-            for (const [respName, resp] of Object.entries(responsibilities)) {
-                if (responsibilityRoleIds(resp).includes(String(roleId))) {
-                    foundResp = { name: respName, data: resp };
-                    break;
-                }
-            }
+            const matchingResponsibilities = matchingResponsibilitiesForRole(roleId);
+            const authorizedResponsibility = findAuthorizedResponsibility(matchingResponsibilities);
 
-            if (foundResp) {
-                // التحقق من أن المستخدم مسؤول في هذه المسؤولية
-                const isResponsible = responsibilityUserIds(foundResp.data).has(String(userId));
-                const isSupervisor = isSupervisorForResponsibility(newMember.guild.id, foundResp.name, newMember);
-                
-                if (!isResponsible && !isSupervisor) {
+            if (matchingResponsibilities.length > 0 && !authorizedResponsibility) {
                     // شخص غير مسؤول حصل على رول المسؤولية - يجب إزالته
                     console.log(`🚨 محاولة أخذ رول مسؤولية من غير مسؤول: ${role.name} للعضو ${newMember.displayName}`);
                     
@@ -4187,14 +4334,13 @@ if (executorMember && !isAllowedExecutor) {
                             fields: [
                                 { name: '👤 العضو', value: `<@${userId}>`, inline: true },
                                 { name: '🏷️ الرول', value: `<@&${roleId}> (${role.name})`, inline: true },
-                                { name: '📂 المسؤولية', value: foundResp.name, inline: true },
+                                { name: '📂 المسؤوليات', value: matchingResponsibilities.map(resp => resp.name).join('، ').slice(0, 1024), inline: true },
                                 { name: '⚠️ السبب', value: 'العضو ليس مسؤولاً أو مشرفاً في هذه المسؤولية', inline: false }
                             ]
                         });
                     } catch (removeError) {
                         console.error(`خطأ في إزالة رول المسؤولية:`, removeError);
                     }
-                }
             }
         }
         
@@ -4204,26 +4350,15 @@ if (executorMember && !isAllowedExecutor) {
                 `${newMember.guild.id}:${newMember.id}:${roleId}`
             );
             if (responsibilitySyncBypass) continue;
-            // البحث عن المسؤولية التي تحتوي هذا الرول
-            let foundResp = null;
-            for (const [respName, resp] of Object.entries(responsibilities)) {
-                if (responsibilityRoleIds(resp).includes(String(roleId))) {
-                    foundResp = { name: respName, data: resp };
-                    break;
-                }
-            }
+            const matchingResponsibilities = matchingResponsibilitiesForRole(roleId);
+            const authorizedResponsibility = findAuthorizedResponsibility(matchingResponsibilities);
 
-            if (foundResp) {
-                // التحقق من أن المستخدم مسؤول في هذه المسؤولية
-                const isResponsible = responsibilityUserIds(foundResp.data).has(String(userId));
-                const isSupervisor = isSupervisorForResponsibility(newMember.guild.id, foundResp.name, newMember);
-                
-                if (isResponsible || isSupervisor) {
+            if (authorizedResponsibility) {
                     // مسؤول تم إزالة رول المسؤولية منه - يجب إعادته
-                    console.log(`🔄 إعادة رول مسؤولية تم إزالته: ${role.name} للمسؤول ${newMember.displayName}`);
+                    console.log(`🔄 إعادة رول مسؤولية تم إزالته: ${role.name} للمستحق ${newMember.displayName} (${authorizedResponsibility.name})`);
                     
                     try {
-                        await newMember.roles.add(role, `إعادة رول المسؤولية: ${foundResp.name}`);
+                        await newMember.roles.add(role, `إعادة رول المسؤولية: ${authorizedResponsibility.name}`);
                         console.log(`✅ تم إعادة رول ${role.name} للمسؤول ${newMember.displayName}`);
                         
                         logEvent(client, newMember.guild, {
@@ -4234,14 +4369,13 @@ if (executorMember && !isAllowedExecutor) {
                             fields: [
                                 { name: '👤 المسؤول', value: `<@${userId}>`, inline: true },
                                 { name: '🏷️ الرول المُعاد', value: `<@&${roleId}> (${role.name})`, inline: true },
-                                { name: '📂 المسؤولية', value: foundResp.name, inline: true },
+                                { name: '📂 المسؤولية', value: authorizedResponsibility.name, inline: true },
                                 { name: '✅ الإجراء', value: 'تمت إعادة الرول تلقائياً', inline: false }
                             ]
                         });
                     } catch (addError) {
                         console.error(`❌ خطأ في إعادة رول المسؤولية:`, addError);
                     }
-                }
             }
         }
 
