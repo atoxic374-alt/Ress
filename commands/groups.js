@@ -1367,7 +1367,47 @@ async function createFromModal(interaction) {
   await reply(interaction, { title: 'CREATING GROUP', content: 'جارٍ إنشاء القروب وتجهيز الرتبة والقنوات. انتظر حتى تظهر نتيجة العملية.', thumbnail: groupThumb(interaction.guild) });
   let group;
   try {
-    group = await gm.createGroup(interaction.guild, { name: groupName, ownerId }, interaction.user.id);
+    const creationProgress = {
+      role_create: 'إنشاء رتبة القروب',
+      role_position: 'ترتيب رتبة القروب',
+      owner_group_role_add: 'إضافة رتبة القروب للمالك',
+      owner_leader_role_add: 'إضافة رتبة المالك',
+      shared_text_resolve: 'تجهيز روم المحادثة المشترك',
+      thread_create: 'إنشاء الثريد الخاص',
+      thread_parent_permissions: 'ضبط صلاحيات الثريد والرتبة',
+      thread_validate: 'التحقق من الثريد',
+      thread_owner_add: 'إضافة المالك إلى الثريد',
+      thread_owner_verify: 'تأكيد عضوية المالك',
+      text_channel_create: 'إنشاء روم القروب النصي',
+      text_channel_permissions: 'ضبط صلاحيات الروم النصي',
+      voice_channel_create: 'إنشاء روم القروب الصوتي',
+      voice_channel_permissions: 'ضبط صلاحيات الروم الصوتي',
+      resource_verification: 'التحقق النهائي من الموارد',
+      database_commit: 'حفظ بيانات القروب',
+      database_verify: 'تأكيد ربط الموارد بقاعدة البيانات'
+    };
+    let lastConfirmedStep = null;
+    group = await gm.createGroup(
+      interaction.guild,
+      { name: groupName, ownerId },
+      interaction.user.id,
+      async ({ stage, status }) => {
+        const label = creationProgress[stage];
+        if (!label) return;
+        if (status === 'completed') lastConfirmedStep = label;
+        const currentText = status === 'started'
+          ? `**الخطوة الحالية :** ${label}\n`
+          : `**تم التأكيد :** ${label}\n`;
+        const previousText = lastConfirmedStep && status === 'started'
+          ? `**آخر خطوة مكتملة :** ${lastConfirmedStep}\n`
+          : '';
+        await interaction.editReply(responsePayload({
+          title: 'CREATING GROUP',
+          content: `${previousText}${currentText}يتم التحقق من كل مورد قبل الانتقال للخطوة التالية.`,
+          thumbnail: groupThumb(interaction.guild)
+        })).catch(() => null);
+      }
+    );
   } catch (error) {
     console.error('[groups] createGroup failed:', {
       guildId: interaction.guild.id,
