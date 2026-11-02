@@ -772,66 +772,322 @@ async function getMemberPoints(guildId, groupId, userId) {
 }
 async function createGroup(guild, { name, description = '', ownerId, color = 0, emoji = null }, actorId) {
   const groupName = String(name || '').trim();
-  if (!groupName || groupName.length > 100 || /[\u0000-\u001f]/.test(groupName)) throw new Error('NAME_REQUIRED');
-  const settings = await getSettings(guild.id); const missing = await validateConfig(guild, settings); if (!settings.enabled) throw new Error('GROUP_SYSTEM_DISABLED'); if (missing.length) throw new Error(`GROUP_SETUP_REQUIRED:${missing.join(',')}`); const owner = await guild.members.fetch(String(ownerId));
+  if (!groupName || groupName.length > 100 || /[\\u0000-\\u001f]/.test(groupName)) throw new Error('NAME_REQUIRED');
+
+  const settings = await getSettings(guild.id);
+  const missing = await validateConfig(guild, settings);
+  if (!settings.enabled) throw new Error('GROUP_SYSTEM_DISABLED');
+  if (missing.length) throw new Error(`GROUP_SETUP_REQUIRED:${missing.join(',')}`);
+
+  const owner = await guild.members.fetch(String(ownerId));
   if (owner.user?.bot) throw new Error('BOT_NOT_ALLOWED');
+
   return withLock(`members:${guild.id}`, async () => {
-  const operationKey = `guild:${guild.id}:create:${owner.id}`;
-  const operationToken = await acquireOperationLock(operationKey, 180000);
-  if (!operationToken) throw new Error('GROUP_OPERATION_BUSY');
-  try {
-  return await withLock(`create:${guild.id}:${owner.id}`, async () => {
-    const existingRows = await dbManager.all("SELECT * FROM managed_groups WHERE guild_id = ? AND status = 'active'", [guild.id]);
-    const ownedGroup = existingRows.map(hydrate).find(group => String(group.owner_id) === String(owner.id));
-    if (ownedGroup) throw new Error('OWNER_ALREADY_HAS_GROUP');
-    const now = Date.now(); let role = null; let text = null; let thread = null; let voice = null; let leaderRole = null; let leaderRoleAdded = false; let createdGroupId = null; let reusedSharedText = false; const created = [];
+    const operationKey = `guild:${guild.id}:create:${owner.id}`;
+    const operationToken = await acquireOperationLock(operationKey, 180000);
+    if (!operationToken) throw new Error('GROUP_OPERATION_BUSY');
+
     try {
-      role = await guild.roles.create({ name: groupName.slice(0, 100), color: color ?? 0, reason: 'Create managed group' }); created.push(['role', role]);
-      if (settings.mainRoleId) {
-        const mainRole = guild.roles.cache.get(settings.mainRoleId) || await guild.roles.fetch(settings.mainRoleId).catch(() => null);
-        if (!mainRole || mainRole.id === guild.id || mainRole.position < 2) throw new Error('MAIN_ROLE_INVALID');
-        await role.setPosition(Math.max(1, mainRole.position - 1), 'Place managed group role under Main Role');
-      }
-      if (!global.groupRoleGrantBypass) global.groupRoleGrantBypass = new Set();
-      const ownerRoleKey = `${guild.id}:${owner.id}:${role.id}`;
-      global.groupRoleGrantBypass.add(ownerRoleKey);
-      setTimeout(() => global.groupRoleGrantBypass.delete(ownerRoleKey), 15000);
-      await owner.roles.add(role, 'Managed group owner');
-      if (settings.leaderRoleId) {
-        leaderRole = guild.roles.cache.get(settings.leaderRoleId) || await guild.roles.fetch(settings.leaderRoleId).catch(() => null);
-        if (!leaderRole) throw new Error('LEADER_ROLE_INVALID');
-        if (!owner.roles.cache.has(leaderRole.id)) { await owner.roles.add(leaderRole, 'Managed group leader role'); leaderRoleAdded = true; }
-      }
-      if (settings.chatMode === GROUP_CHAT_MODES.THREADS) {
-        const shared = await getOrCreateSharedGroupChat(guild, settings);
-        text = shared.text;
-        reusedSharedText = shared.reused;
-        if (!reusedSharedText) created.push(['channel', text]);
-        thread = await text.threads.create({ name: groupName.slice(0, 100), type: ChannelType.PrivateThread, invitable: false, reason: 'Create managed group thread' });
-        created.push(['thread', thread]); await thread.members.add(owner.id);
-      }
-      else { text = await guild.channels.create({ name: `📝・${groupName.slice(0, 90)}`, type: ChannelType.GuildText, parent: settings.textCategoryId, reason: 'Create managed group text channel' }); created.push(['channel', text]); }
-      voice = await guild.channels.create({ name: groupName.slice(0, 100), type: ChannelType.GuildVoice, parent: settings.voiceCategoryId, reason: 'Create managed group voice channel' }); created.push(['voice', voice]);
-      const textOverwrites = [{ id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] }, { id: role.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.SendMessagesInThreads, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.AddReactions, PermissionsBitField.Flags.AttachFiles, PermissionsBitField.Flags.EmbedLinks, PermissionsBitField.Flags.UseExternalEmojis, PermissionsBitField.Flags.UseExternalStickers] }];
-      const voiceOverwrites = [{ id: guild.roles.everyone.id, allow: [PermissionsBitField.Flags.ViewChannel], deny: [PermissionsBitField.Flags.Connect] }, { id: role.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.Speak, PermissionsBitField.Flags.Stream, PermissionsBitField.Flags.UseVAD] }];
-      if (reusedSharedText) await text.permissionOverwrites.edit(role.id, Object.fromEntries(textOverwrites[1].allow.map(flag => [flag, true])), { reason: 'Add managed group role to shared group chat' }).catch(error => { throw Object.assign(new Error('GROUP_TEXT_PERMISSIONS_FAILED'), { cause: error }); });
-      else await text.permissionOverwrites.set(textOverwrites, 'Secure managed group text space').catch(error => { throw Object.assign(new Error('GROUP_TEXT_PERMISSIONS_FAILED'), { cause: error }); });
-      await voice.permissionOverwrites.set(voiceOverwrites, 'Secure managed group voice space').catch(error => { throw Object.assign(new Error('GROUP_VOICE_PERMISSIONS_FAILED'), { cause: error }); });
-      const row = await dbManager.run(`INSERT INTO managed_groups(guild_id,name,description,owner_id,manager_ids_json,member_ids_json,blocked_ids_json,role_id,text_channel_id,thread_id,voice_channel_id,color,emoji,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [guild.id, groupName, String(description).slice(0, 1000), owner.id, '[]', JSON.stringify([owner.id]), '[]', role.id, text.id, thread?.id || null, voice.id, role.hexColor || color || '#000000', emoji, now, now]);
-      createdGroupId = row.id ?? row.lastID;
-      const group = await getGroup(guild.id, createdGroupId);
-      await audit(guild.id, actorId || owner.id, group.id, 'group_create', { roleId: role.id, textId: text.id, threadId: thread?.id, voiceId: voice.id }).catch(() => {});
-      return group;
-    } catch (error) {
-      if (createdGroupId) await dbManager.run("UPDATE managed_groups SET status = 'deleted', archived_at = ?, updated_at = ? WHERE guild_id = ? AND id = ?", [Date.now(), Date.now(), guild.id, Number(createdGroupId)]).catch(() => {});
-      if (leaderRoleAdded && leaderRole) await owner.roles.remove(leaderRole, 'Rollback incomplete group creation').catch(() => {});
-      for (const [, resource] of created.reverse()) await resource?.delete?.('Rollback incomplete group creation').catch(() => {});
-      throw error;
+      return await withLock(`create:${guild.id}:${owner.id}`, async () => {
+        const existingRows = await dbManager.all(
+          "SELECT * FROM managed_groups WHERE guild_id = ? AND status = 'active'",
+          [guild.id]
+        );
+        const ownedGroup = existingRows.map(hydrate).find(group => String(group.owner_id) === String(owner.id));
+        if (ownedGroup) throw new Error('OWNER_ALREADY_HAS_GROUP');
+
+        const now = Date.now();
+        let role = null;
+        let text = null;
+        let thread = null;
+        let voice = null;
+        let leaderRole = null;
+        let leaderRoleAdded = false;
+        let createdGroupId = null;
+        let reusedSharedText = false;
+        let currentStage = 'role_create';
+        const created = [];
+
+        const runStage = async (stage, operation) => {
+          currentStage = stage;
+          try {
+            return await operation();
+          } catch (cause) {
+            await runtimeLog(guild.id, null, `group_create:${stage}`, 'error', {
+              ownerId: String(owner.id),
+              groupName,
+              code: cause?.code ?? cause?.rawError?.code ?? null,
+              httpStatus: cause?.status ?? cause?.httpStatus ?? null,
+              message: String(cause?.message || cause).slice(0, 500)
+            }).catch(() => null);
+            const error = new Error(`GROUP_CREATE_STEP_FAILED:${stage}`);
+            error.code = cause?.code ?? cause?.rawError?.code ?? null;
+            error.cause = cause;
+            error.stage = stage;
+            throw error;
+          }
+        };
+
+        try {
+          role = await runStage('role_create', () => guild.roles.create({
+            name: groupName.slice(0, 100),
+            color: color ?? 0,
+            reason: 'Create managed group'
+          }));
+          created.push(['role', role]);
+
+          if (settings.mainRoleId) {
+            const mainRole = guild.roles.cache.get(settings.mainRoleId)
+              || await guild.roles.fetch(settings.mainRoleId).catch(() => null);
+            if (!mainRole || mainRole.id === guild.id || mainRole.position < 2) {
+              throw new Error('MAIN_ROLE_INVALID');
+            }
+            await runStage('role_position', () => role.setPosition(
+              Math.max(1, mainRole.position - 1),
+              'Place managed group role under Main Role'
+            ));
+          }
+
+          if (!global.groupRoleGrantBypass) global.groupRoleGrantBypass = new Set();
+          const ownerRoleKey = `${guild.id}:${owner.id}:${role.id}`;
+          global.groupRoleGrantBypass.add(ownerRoleKey);
+          const bypassTimer = setTimeout(() => global.groupRoleGrantBypass.delete(ownerRoleKey), 15000);
+          bypassTimer.unref?.();
+
+          await runStage('owner_group_role_add', () => owner.roles.add(role, 'Managed group owner'));
+
+          if (settings.leaderRoleId) {
+            leaderRole = guild.roles.cache.get(settings.leaderRoleId)
+              || await guild.roles.fetch(settings.leaderRoleId).catch(() => null);
+            if (!leaderRole) throw new Error('LEADER_ROLE_INVALID');
+            if (!owner.roles.cache.has(leaderRole.id)) {
+              await runStage('owner_leader_role_add', () => owner.roles.add(leaderRole, 'Managed group leader role'));
+              leaderRoleAdded = true;
+            }
+          }
+
+          if (settings.chatMode === GROUP_CHAT_MODES.THREADS) {
+            currentStage = 'shared_text_resolve';
+            const shared = await runStage('shared_text_resolve', () => getOrCreateSharedGroupChat(guild, settings));
+            text = shared.text;
+            reusedSharedText = shared.reused;
+            if (!reusedSharedText) created.push(['channel', text]);
+
+            thread = await runStage('thread_create', () => text.threads.create({
+              name: groupName.slice(0, 100),
+              type: ChannelType.PrivateThread,
+              invitable: false,
+              reason: 'Create managed group thread'
+            }));
+            created.push(['thread', thread]);
+
+            // Discord private threads inherit permissions from their parent.
+            // The group role must be granted access on the parent before the
+            // owner is invited; thread membership alone does not grant role access.
+            await runStage('thread_parent_permissions', () => text.permissionOverwrites.edit(
+              role.id,
+              {
+                ViewChannel: true,
+                SendMessages: true,
+                SendMessagesInThreads: true,
+                ReadMessageHistory: true,
+                AddReactions: true,
+                AttachFiles: true,
+                EmbedLinks: true,
+                UseExternalEmojis: true,
+                UseExternalStickers: true
+              },
+              { reason: 'Grant managed group role access to its private thread' }
+            ));
+
+            await runStage('thread_validate', async () => {
+              const fetchedThread = await guild.channels.fetch(thread.id);
+              if (!fetchedThread?.isThread?.() || String(fetchedThread.parentId) !== String(text.id)) {
+                throw new Error('CREATED_THREAD_INVALID');
+              }
+              if (fetchedThread.archived || fetchedThread.locked) {
+                throw new Error('CREATED_THREAD_UNAVAILABLE');
+              }
+              thread = fetchedThread;
+            });
+
+            await runStage('thread_owner_add', () => thread.members.add(owner.id));
+            await runStage('thread_owner_verify', async () => {
+              const member = await thread.members.fetch(owner.id);
+              if (!member || String(member.id) !== String(owner.id)) {
+                throw new Error('THREAD_OWNER_MEMBERSHIP_NOT_CONFIRMED');
+              }
+            });
+          } else {
+            text = await runStage('text_channel_create', () => guild.channels.create({
+              name: `📝・${groupName.slice(0, 90)}`,
+              type: ChannelType.GuildText,
+              parent: settings.textCategoryId,
+              reason: 'Create managed group text channel'
+            }));
+            created.push(['channel', text]);
+          }
+
+          if (settings.chatMode !== GROUP_CHAT_MODES.THREADS) {
+            const textOverwrites = [
+              { id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+              {
+                id: role.id,
+                allow: [
+                  PermissionsBitField.Flags.ViewChannel,
+                  PermissionsBitField.Flags.SendMessages,
+                  PermissionsBitField.Flags.SendMessagesInThreads,
+                  PermissionsBitField.Flags.ReadMessageHistory,
+                  PermissionsBitField.Flags.AddReactions,
+                  PermissionsBitField.Flags.AttachFiles,
+                  PermissionsBitField.Flags.EmbedLinks,
+                  PermissionsBitField.Flags.UseExternalEmojis,
+                  PermissionsBitField.Flags.UseExternalStickers
+                ]
+              }
+            ];
+            await runStage('text_channel_permissions', () => text.permissionOverwrites.set(
+              textOverwrites,
+              'Secure managed group text space'
+            ));
+          }
+
+          voice = await runStage('voice_channel_create', () => guild.channels.create({
+            name: groupName.slice(0, 100),
+            type: ChannelType.GuildVoice,
+            parent: settings.voiceCategoryId,
+            reason: 'Create managed group voice channel'
+          }));
+          created.push(['voice', voice]);
+
+          const voiceOverwrites = [
+            {
+              id: guild.roles.everyone.id,
+              allow: [PermissionsBitField.Flags.ViewChannel],
+              deny: [PermissionsBitField.Flags.Connect]
+            },
+            {
+              id: role.id,
+              allow: [
+                PermissionsBitField.Flags.ViewChannel,
+                PermissionsBitField.Flags.Connect,
+                PermissionsBitField.Flags.Speak,
+                PermissionsBitField.Flags.Stream,
+                PermissionsBitField.Flags.UseVAD
+              ]
+            }
+          ];
+          await runStage('voice_channel_permissions', () => voice.permissionOverwrites.set(
+            voiceOverwrites,
+            'Secure managed group voice space'
+          ));
+
+          await runStage('resource_verification', async () => {
+            const [freshRole, freshText, freshVoice] = await Promise.all([
+              guild.roles.fetch(role.id),
+              guild.channels.fetch(text.id),
+              guild.channels.fetch(voice.id)
+            ]);
+            if (!freshRole || !freshText || !freshVoice) throw new Error('GROUP_RESOURCE_MISSING');
+            if (thread) {
+              const freshThread = await guild.channels.fetch(thread.id);
+              if (!freshThread?.isThread?.() || String(freshThread.parentId) !== String(freshText.id)) {
+                throw new Error('GROUP_THREAD_LINK_INVALID');
+              }
+              const ownerThreadMember = await freshThread.members.fetch(owner.id);
+              if (!ownerThreadMember) throw new Error('THREAD_OWNER_MEMBERSHIP_NOT_CONFIRMED');
+              thread = freshThread;
+            }
+            role = freshRole;
+            text = freshText;
+            voice = freshVoice;
+          });
+
+          const row = await runStage('database_commit', () => dbManager.run(
+            `INSERT INTO managed_groups(guild_id,name,description,owner_id,manager_ids_json,member_ids_json,blocked_ids_json,role_id,text_channel_id,thread_id,voice_channel_id,color,emoji,created_at,updated_at)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            [
+              guild.id, groupName, String(description).slice(0, 1000), owner.id, '[]',
+              JSON.stringify([owner.id]), '[]', role.id, text.id, thread?.id || null,
+              voice.id, role.hexColor || color || '#000000', emoji, now, now
+            ]
+          ));
+          createdGroupId = row.id ?? row.lastID;
+
+          const group = await runStage('database_verify', async () => {
+            const saved = await getGroup(guild.id, createdGroupId);
+            if (!saved || String(saved.role_id) !== String(role.id)
+              || String(saved.text_channel_id) !== String(text.id)
+              || String(saved.voice_channel_id) !== String(voice.id)
+              || String(saved.thread_id || '') !== String(thread?.id || '')) {
+              throw new Error('GROUP_DATABASE_LINK_INVALID');
+            }
+            return saved;
+          });
+
+          await audit(guild.id, actorId || owner.id, group.id, 'group_create', {
+            roleId: role.id,
+            textId: text.id,
+            threadId: thread?.id,
+            voiceId: voice.id,
+            completedStages: [
+              'role_create', 'owner_group_role_add', 'thread_create',
+              ...(thread ? ['thread_parent_permissions', 'thread_owner_add', 'thread_owner_verify'] : []),
+              'voice_channel_create', 'voice_channel_permissions', 'resource_verification', 'database_commit'
+            ]
+          }).catch(() => null);
+
+          await runtimeLog(guild.id, group.id, 'group_create:completed', 'info', {
+            ownerId: String(owner.id),
+            roleId: role.id,
+            textId: text.id,
+            threadId: thread?.id || null,
+            voiceId: voice.id
+          }).catch(() => null);
+
+          return group;
+        } catch (error) {
+          await runtimeLog(guild.id, createdGroupId, 'group_create:rollback_started', 'warning', {
+            stage: error?.stage || currentStage,
+            code: error?.code || error?.cause?.code || null,
+            message: String(error?.message || error).slice(0, 500)
+          }).catch(() => null);
+
+          if (createdGroupId) {
+            await dbManager.run(
+              "UPDATE managed_groups SET status = 'deleted', archived_at = ?, updated_at = ? WHERE guild_id = ? AND id = ?",
+              [Date.now(), Date.now(), guild.id, Number(createdGroupId)]
+            ).catch(() => null);
+          }
+          if (leaderRoleAdded && leaderRole) {
+            await owner.roles.remove(leaderRole, 'Rollback incomplete group creation').catch(() => null);
+          }
+          const rollbackFailures = [];
+          for (const [kind, resource] of created.reverse()) {
+            try {
+              if (resource?.delete) await resource.delete('Rollback incomplete group creation');
+            } catch (rollbackError) {
+              rollbackFailures.push({
+                kind,
+                id: resource?.id || null,
+                code: rollbackError?.code || null,
+                message: String(rollbackError?.message || rollbackError).slice(0, 300)
+              });
+            }
+          }
+          if (rollbackFailures.length) {
+            await runtimeLog(guild.id, createdGroupId, 'group_create:rollback_incomplete', 'error', {
+              stage: error?.stage || currentStage,
+              failures: rollbackFailures
+            }).catch(() => null);
+            error.rollbackFailures = rollbackFailures;
+          }
+          throw error;
+        }
+      });
+    } finally {
+      await releaseOperationLock(operationKey, operationToken);
     }
-  });
-  } finally {
-    await releaseOperationLock(operationKey, operationToken);
-  }
   });
 }
 function serializeChannelOverwrites(channel) {
