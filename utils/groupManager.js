@@ -770,7 +770,7 @@ async function getMemberPoints(guildId, groupId, userId) {
   await schema();
   return dbManager.get('SELECT * FROM group_member_points WHERE guild_id = ? AND group_id = ? AND user_id = ?', [String(guildId), Number(groupId), String(userId)]);
 }
-async function createGroup(guild, { name, description = '', ownerId, color = 0, emoji = null }, actorId) {
+async function createGroup(guild, { name, description = '', ownerId, color = 0, emoji = null }, actorId, onProgress = null) {
   const groupName = String(name || '').trim();
   if (!groupName || groupName.length > 100 || /[\\u0000-\\u001f]/.test(groupName)) throw new Error('NAME_REQUIRED');
 
@@ -808,10 +808,18 @@ async function createGroup(guild, { name, description = '', ownerId, color = 0, 
         let currentStage = 'role_create';
         const created = [];
 
+        const reportProgress = async (stage, status) => {
+          if (typeof onProgress !== 'function') return;
+          try { await onProgress({ stage, status }); } catch { /* UI progress must never fail creation */ }
+        };
+
         const runStage = async (stage, operation) => {
           currentStage = stage;
+          await reportProgress(stage, 'started');
           try {
-            return await operation();
+            const result = await operation();
+            await reportProgress(stage, 'completed');
+            return result;
           } catch (cause) {
             await runtimeLog(guild.id, null, `group_create:${stage}`, 'error', {
               ownerId: String(owner.id),
