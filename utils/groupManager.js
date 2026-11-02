@@ -375,9 +375,9 @@ async function validateConfig(guild, settings) {
       }
     }
     if (sharedText) {
-      checkPermissions(sharedText, 'groups-chat', ['CreatePrivateThreads', 'SendMessages', 'SendMessagesInThreads'], 'channelPermission');
+      checkPermissions(sharedText, 'groups-chat', ['CreatePrivateThreads', 'ManageThreads', 'SendMessages', 'SendMessagesInThreads'], 'channelPermission');
     } else {
-      checkPermissions(textCategory, 'textCategoryId', ['CreatePrivateThreads', 'SendMessages', 'SendMessagesInThreads']);
+      checkPermissions(textCategory, 'textCategoryId', ['CreatePrivateThreads', 'ManageThreads', 'SendMessages', 'SendMessagesInThreads']);
     }
   } else {
     checkPermissions(textCategory, 'textCategoryId', ['SendMessages', 'ReadMessageHistory']);
