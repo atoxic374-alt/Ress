@@ -1351,7 +1351,7 @@ async function createFromModal(interaction) {
   const settings = await checkSystem(interaction);
   if (!settings) return;
   await hydrateSetupReferences(interaction.guild, settings);
-  const missingSetup = gm.validateConfig(interaction.guild, settings);
+  const missingSetup = await gm.validateConfig(interaction.guild, settings);
   if (missingSetup.length) {
     return reply(interaction, {
       title: 'GROUP CREATION FAILED',
@@ -1359,7 +1359,8 @@ async function createFromModal(interaction) {
       allowedMentions: { parse: [] }
     });
   }
-  const groupName = safe(interaction.fields.getTextInputValue('group_name'), 80).trim();
+  const rawGroupName = interaction.fields.getTextInputValue('group_name');
+  const groupName = safe(String(rawGroupName ?? ''), 80).trim();
   const ownerValue = interaction.fields.getTextInputValue('group_owner') || '';
   const ownerId = ownerValue.match(/\d{16,20}/)?.[0] || interaction.user.id;
   if (!groupName) return reply(interaction, { title: 'GROUP CREATION FAILED', content: 'اسم القروب مطلوب.' });
