@@ -3020,7 +3020,7 @@ client.on('messageCreate', async message => {
             || message.guild?.ownerId === message.author.id
             || Boolean(cachedMember?.permissions?.has('Administrator'))
             || currentAdminRoles.some(roleId => cachedMember?.roles?.cache?.has(String(roleId)));
-          if (message.guild && !publicCommands.has(commandName) && !cachedMemberHasAdminAccess) {
+          if (message.guild && !publicCommands.has(commandName) && (!cachedMember || !cachedMemberHasAdminAccess)) {
             await refreshMessageMember(message);
           }
           await command.execute(message, args, {
@@ -3331,7 +3331,9 @@ client.on('messageCreate', async message => {
     let isOwner = isBotOwner(member || message.author) || message.guild?.ownerId === message.author.id;
     let hasAdminRole = CURRENT_ADMIN_ROLES.some(roleId => member?.roles?.cache?.has(String(roleId)));
     let hasAdministrator = Boolean(member?.permissions?.has('Administrator'));
-    if (message.guild && !isOwner && !hasAdminRole && !hasAdministrator) {
+    // Even bot owners need a GuildMember object for commands that inspect roles.
+    // Do not skip the member refresh just because an uncached author is an owner.
+    if (message.guild && (!member || (!isOwner && !hasAdminRole && !hasAdministrator))) {
       member = await refreshMessageMember(message) || member;
       isOwner = isBotOwner(member || message.author) || message.guild.ownerId === message.author.id;
       hasAdminRole = CURRENT_ADMIN_ROLES.some(roleId => member?.roles?.cache?.has(String(roleId)));
@@ -3391,8 +3393,9 @@ client.on('messageCreate', async message => {
         console.log(`- hasAdminRole: ${hasAdminRole}`);
         console.log(`- CURRENT_ADMIN_ROLES count: ${CURRENT_ADMIN_ROLES.length}`);
         console.log(`- CURRENT_ADMIN_ROLES: ${JSON.stringify(CURRENT_ADMIN_ROLES)}`);
-        console.log(`- User roles: ${member.roles.cache.map(r => r.id).join(', ')}`);
-        console.log(`- User roles names: ${member.roles.cache.map(r => r.name).join(', ')}`);
+        const userRoles = member?.roles?.cache;
+        console.log(`- User roles: ${userRoles ? userRoles.map(r => r.id).join(', ') : 'unavailable (guild member was not cached)'}`);
+        console.log(`- User roles names: ${userRoles ? userRoles.map(r => r.name).join(', ') : 'unavailable (guild member was not cached)'}`);
       }
 
       if (hasAdminRole || isOwner || hasAdministrator) {
@@ -4127,13 +4130,25 @@ if (executorMember && !isAllowedExecutor) {
                 .map(String)
                 .filter(Boolean)
         );
+        const responsibilityRoleIds = (config) => {
+            const roleIds = [];
+            if (config?.roleId) roleIds.push(String(config.roleId));
+            if (Array.isArray(config?.roles)) {
+                for (const configuredRoleId of config.roles) {
+                    if (configuredRoleId && !roleIds.includes(String(configuredRoleId))) {
+                        roleIds.push(String(configuredRoleId));
+                    }
+                }
+            }
+            return roleIds;
+        };
         
         // فحص الرولات المضافة
         for (const [roleId, role] of addedRoles) {
             // البحث عن المسؤولية التي تحتوي هذا الرول
             let foundResp = null;
             for (const [respName, resp] of Object.entries(responsibilities)) {
-                if (resp.roles && resp.roles.includes(roleId)) {
+                if (responsibilityRoleIds(resp).includes(String(roleId))) {
                     foundResp = { name: respName, data: resp };
                     break;
                 }
@@ -4192,7 +4207,7 @@ if (executorMember && !isAllowedExecutor) {
             // البحث عن المسؤولية التي تحتوي هذا الرول
             let foundResp = null;
             for (const [respName, resp] of Object.entries(responsibilities)) {
-                if (resp.roles && resp.roles.includes(roleId)) {
+                if (responsibilityRoleIds(resp).includes(String(roleId))) {
                     foundResp = { name: respName, data: resp };
                     break;
                 }

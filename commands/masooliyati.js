@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { getSupervisedResponsibilities, getSupervisors } = require('../utils/responsibilitySupervisors.js');
+const { getResponsibilitiesSnapshot } = require('../utils/responsibilitiesStore.js');
 
 const DATA_FILES = {
     categories: path.join(__dirname, '..', 'data', 'respCategories.json')
@@ -81,18 +82,18 @@ module.exports = {
         let userId = targetUser.id;
         const targetMember = await message.guild.members.fetch(userId).catch(() => null);
 
-        // تحميل المسؤوليات الحديثة من الكائن العالمي أو SQLite
-        let currentResponsibilities = global.responsibilities;
-        if (!currentResponsibilities || Object.keys(currentResponsibilities).length === 0) {
-            try {
+        // استخدم نفس لقطة التخزين المشتركة التي يعتمدها أمر مسؤوليه وبقية واجهات المسؤوليات.
+        let currentResponsibilities = getResponsibilitiesSnapshot();
+        try {
+            if (Object.keys(currentResponsibilities).length === 0) {
                 const database = require('../utils/database');
                 const dbManager = database.getDatabase ? database.getDatabase() : database.dbManager;
                 currentResponsibilities = await dbManager.getResponsibilities();
                 global.responsibilities = currentResponsibilities;
-            } catch (error) {
-                console.error('خطأ في جلب المسؤوليات:', error);
-                currentResponsibilities = {};
             }
+        } catch (error) {
+            console.error('خطأ في جلب المسؤوليات:', error);
+            currentResponsibilities = global.responsibilities || {};
         }
 
         // دالة للبحث عن قسم المسؤولية

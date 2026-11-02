@@ -13,6 +13,7 @@ let registered = false;
 const locks = new Set();
 const pendingGroupEmoji = new Map();
 const orphanCleanupNextAt = new Map();
+const pendingGroupRoleColorUpdates = new Map();
 function safe(s, n=100) { return String(s||'').replace(/[\u0000-\u001f]/g,'').slice(0,n); }
 function normalizeGroupAvatar(value) {
   const input = String(value || '').trim();
@@ -59,8 +60,18 @@ async function applyGroupRoleColor(guild, group, value) {
   const me = guild.members.me || await guild.members.fetchMe().catch(() => null);
   if (!me?.permissions?.has(PermissionsBitField.Flags.ManageRoles)) throw new Error('MISSING_MANAGE_ROLES');
   if (!role.editable) throw new Error('GROUP_ROLE_NOT_EDITABLE');
+  const updateKey = `${guild.id}:${role.id}`;
+  const expectedColor = typeof value === 'number' && value === 0 ? '#000000' : String(value || '#000000').toLowerCase();
+  pendingGroupRoleColorUpdates.set(updateKey, expectedColor);
+  const timeout = setTimeout(() => pendingGroupRoleColorUpdates.delete(updateKey), 15000);
+  timeout.unref?.();
   try { await role.setColor(value, 'Sync group color'); }
-  catch (error) { console.error('[groups] failed to sync group role color:', error?.message || error); throw new Error('ROLE_COLOR_UPDATE_FAILED'); }
+  catch (error) {
+    pendingGroupRoleColorUpdates.delete(updateKey);
+    clearTimeout(timeout);
+    console.error('[groups] failed to sync group role color:', error?.message || error);
+    throw new Error('ROLE_COLOR_UPDATE_FAILED');
+  }
 }
 async function saveGroupSettings(guildId, patch, actorId = null) {
   const updated = await gm.saveSettings(guildId, patch, actorId);
@@ -1339,6 +1350,15 @@ async function createFromModal(interaction) {
   if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const settings = await checkSystem(interaction);
   if (!settings) return;
+  await hydrateSetupReferences(interaction.guild, settings);
+  const missingSetup = gm.validateConfig(interaction.guild, settings);
+  if (missingSetup.length) {
+    return reply(interaction, {
+      title: 'GROUP CREATION FAILED',
+      content: `تعذر إنشاء القروب بسبب الإعدادات أو صلاحيات البوت التالية:\n${missingSetup.map(setupIssueLabel).join('\n')}`,
+      allowedMentions: { parse: [] }
+    });
+  }
   const groupName = safe(interaction.fields.getTextInputValue('group_name'), 80).trim();
   const ownerValue = interaction.fields.getTextInputValue('group_owner') || '';
   const ownerId = ownerValue.match(/\d{16,20}/)?.[0] || interaction.user.id;
@@ -1349,9 +1369,18 @@ async function createFromModal(interaction) {
   try {
     group = await gm.createGroup(interaction.guild, { name: groupName, ownerId }, interaction.user.id);
   } catch (error) {
-    const message = error.message?.startsWith('GROUP_SETUP_REQUIRED')
-      ? 'أكمل إعدادات القروبات أولًا.'
-      : ({ GROUP_SYSTEM_DISABLED: 'نظام القروبات متوقف حاليًا.', BOT_NOT_ALLOWED: 'لا يمكن تعيين بوت كمالك للقروب.', OWNER_ALREADY_HAS_GROUP: 'لا يمكن للعضو امتلاك أكثر من قروب واحد.', GROUP_FULL: 'وصل القروب إلى الحد الأقصى للأعضاء.', NAME_REQUIRED: 'اسم القروب مطلوب وصالح.', MAIN_ROLE_INVALID: 'رتبة النظام الرئيسية غير صالحة؛ راجع الإعدادات.', LEADER_ROLE_INVALID: 'رتبة المالك غير صالحة؛ راجع الإعدادات.', MANAGER_ROLE_INVALID: 'رتبة المسؤول غير صالحة؛ راجع الإعدادات.' })[error.message] || 'تعذر إنشاء القروب. راجع الإعدادات وصلاحيات البوت.';
+    console.error('[groups] createGroup failed:', {
+      guildId: interaction.guild.id,
+      actorId: interaction.user.id,
+      ownerId,
+      message: error?.message || String(error),
+      code: error?.code || error?.cause?.code || null,
+      cause: error?.cause?.message || null
+    });
+    const setupError = error.message?.match(/^GROUP_SETUP_REQUIRED:(.*)$/);
+    const message = setupError
+      ? `تعذر إنشاء القروب بسبب الإعدادات أو صلاحيات البوت التالية:\n${setupError[1].split(',').map(setupIssueLabel).join('\n')}`
+      : ({ GROUP_SYSTEM_DISABLED: 'نظام القروبات متوقف حاليًا.', BOT_NOT_ALLOWED: 'لا يمكن تعيين بوت كمالك للقروب.', OWNER_ALREADY_HAS_GROUP: 'لا يمكن للعضو امتلاك أكثر من قروب واحد.', GROUP_FULL: 'وصل القروب إلى الحد الأقصى للأعضاء.', NAME_REQUIRED: 'اسم القروب مطلوب وصالح.', MAIN_ROLE_INVALID: 'رتبة النظام الرئيسية غير صالحة؛ راجع الإعدادات.', LEADER_ROLE_INVALID: 'رتبة المالك غير صالحة؛ راجع الإعدادات.', MANAGER_ROLE_INVALID: 'رتبة المسؤول غير صالحة؛ راجع الإعدادات.' })[error.message] || groupError(error);
     return interaction.editReply(responsePayload({ title: 'GROUP CREATION FAILED', content: message, thumbnail: groupThumb(interaction.guild), allowedMentions: { parse: [] } }));
   }
 
@@ -1823,7 +1852,7 @@ async function handleInteraction(interaction) { const extended=await handleGroup
   catch (error) { return reply(interaction,{content:groupError(error)}); }
   if (field === 'emoji') return beginGroupEmojiInput(interaction, Number(parts[0]));
   const modal=new ModalBuilder().setCustomId(`groups_meta_modal:submit:${Number(parts[0])}:${field}`).setTitle(field==='name'?'EDIT GROUP NAME':field==='description'?'EDIT GROUP DESCRIPTION':field==='color'?'EDIT GROUP COLOR':field==='avatar'?'EDIT GROUP AVATAR':'EDIT GROUP EMOJI');
-  modal.addLabelComponents(new LabelBuilder().setLabel(field==='name'?'اسم القروب':field==='description'?'وصف القروب':field==='color'?'لون القروب':field==='avatar'?'رابط صورة أو إيموجي القروب':'إيموجي القروب').setTextInputComponent(new TextInputBuilder().setCustomId('value').setStyle(field==='description'?TextInputStyle.Paragraph:TextInputStyle.Short).setRequired(field!=='emoji'&&field!=='avatar').setMaxLength(field==='description'?500:field==='name'?80:field==='color'?7:field==='avatar'?500:10).setPlaceholder(field==='color'?'#5865F2':field==='avatar'?'رابط Discord CDN أو إيموجي مخصص، اتركه فارغًا للإزالة':'')));
+  modal.addLabelComponents(new LabelBuilder().setLabel(field==='name'?'اسم القروب':field==='description'?'وصف القروب':field==='color'?'لون القروب':field==='avatar'?'رابط صورة أو إيموجي القروب':'إيموجي القروب').setTextInputComponent(new TextInputBuilder().setCustomId('value').setStyle(field==='description'?TextInputStyle.Paragraph:TextInputStyle.Short).setRequired(field!=='emoji'&&field!=='avatar').setMaxLength(field==='description'?500:field==='name'?80:field==='color'?7:field==='avatar'?500:10).setPlaceholder(field==='color'?'#000000 (بدون لون)':field==='avatar'?'رابط Discord CDN أو إيموجي مخصص، اتركه فارغًا للإزالة':'')));
   return interaction.showModal(modal);
  }
  if(prefix==='groups_meta_modal'&&action==='submit'){
@@ -2074,6 +2103,10 @@ async function revokeUnlinkedGroupAccess(guild, settings, group, userId) {
     try { member = await guild.members.fetch({ user: id, force: true }); }
     catch (error) { if (![10007, 10013].includes(Number(error?.code))) throw error; }
 
+    // Administrators may remain in private group threads, but all other unlinked
+    // group access cleanup (including voice disconnection) still applies.
+    const preserveThreadMembership = Boolean(member?.permissions?.has?.(PermissionsBitField.Flags.Administrator));
+
     latest = await gm.getGroup(guild.id, group.id);
     if (!latest || latest.status === 'deleted') return { removed: false, reason: 'GROUP_MISSING' };
     if (isLinkedToGroup(latest, id)) return { removed: false, reason: 'MEMBER_LINKED' };
@@ -2087,7 +2120,7 @@ async function revokeUnlinkedGroupAccess(guild, settings, group, userId) {
         catch (error) { failures.push(error); }
       }
     }
-    try { await withDiscordRetry(() => cleanupDepartedMemberAccess(guild, latest, id), 3); }
+    try { await withDiscordRetry(() => cleanupDepartedMemberAccess(guild, latest, id, { preserveThreadMembership }), 3); }
     catch (error) { failures.push(error); }
 
     const afterCleanup = await gm.getGroup(guild.id, group.id).catch(() => null);
@@ -2400,6 +2433,35 @@ function registerInteractionHandler(client) {
   };
   if (client.isReady?.()) startPanelRefreshes().catch(error => console.error('[groups] panel timer startup failed:', error?.message || error));
   else client.once('ready', () => startPanelRefreshes().catch(error => console.error('[groups] panel timer startup failed:', error?.message || error)));
+
+  client.on('roleUpdate', async (oldRole, newRole) => {
+    if (!oldRole || !newRole || oldRole.hexColor === newRole.hexColor) return;
+    const updateKey = `${newRole.guild.id}:${newRole.id}`;
+    const expectedColor = pendingGroupRoleColorUpdates.get(updateKey);
+    if (expectedColor && String(newRole.hexColor || '#000000').toLowerCase() === expectedColor) {
+      pendingGroupRoleColorUpdates.delete(updateKey);
+      return;
+    }
+    if (expectedColor) pendingGroupRoleColorUpdates.delete(updateKey);
+    try {
+      const groups = await gm.listGroups(newRole.guild.id, true);
+      const group = groups.find(item => String(item.role_id) === String(newRole.id) && item.status !== 'deleted');
+      if (!group) return;
+      const savedColor = /^#[0-9a-f]{6}$/i.test(String(group.color || ''))
+        ? String(group.color)
+        : '#000000';
+      if (String(newRole.hexColor || '#000000').toLowerCase() === savedColor.toLowerCase()) return;
+
+      await newRole.setColor(savedColor === '#000000' ? 0 : savedColor, 'Restore saved managed group role color');
+      await gm.audit(newRole.guild.id, null, group.id, 'group_role_color_manual_change_reverted', {
+        roleId: newRole.id,
+        attemptedColor: newRole.hexColor || '#000000',
+        restoredColor: savedColor
+      }).catch(() => {});
+    } catch (error) {
+      console.error('[groups] failed to restore saved group role color:', error?.message || error);
+    }
+  });
 
   const voiceCheckpoint = setInterval(async () => {
     const now = Date.now();
@@ -3446,7 +3508,7 @@ async function saveImportedGroup(interaction, flow) {
           if (row.status === 'active' && row.name === groupName) throw new Error('NAME_EXISTS');
         }
         const now = Date.now();
-        const result = await tx.run(`INSERT INTO managed_groups(guild_id,name,description,owner_id,manager_ids_json,member_ids_json,blocked_ids_json,role_id,text_channel_id,thread_id,voice_channel_id,color,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [interaction.guild.id, groupName, '', owner.id, '[]', JSON.stringify(members), '[]', role.id, text.id, thread?.id || null, voice.id, role.hexColor || '#5865F2', now, now]);
+        const result = await tx.run(`INSERT INTO managed_groups(guild_id,name,description,owner_id,manager_ids_json,member_ids_json,blocked_ids_json,role_id,text_channel_id,thread_id,voice_channel_id,color,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [interaction.guild.id, groupName, '', owner.id, '[]', JSON.stringify(members), '[]', role.id, text.id, thread?.id || null, voice.id, role.hexColor || '#000000', now, now]);
         const importedId = result.id ?? result.lastID;
         if (!Number.isSafeInteger(importedId) || importedId <= 0) throw new Error('GROUP_NOT_FOUND');
         await tx.run('INSERT INTO group_audit_log(guild_id,group_id,actor_id,action,details_json,created_at) VALUES(?,?,?,?,?,?)', [interaction.guild.id, importedId, interaction.user.id, 'group_add', JSON.stringify({ roleId: role.id, ownerId: owner.id, textId: text.id, threadId: thread?.id || null, voiceId: voice.id, members: members.length }), now]);

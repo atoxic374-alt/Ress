@@ -213,15 +213,17 @@ async function removeManagedMemberOverwrites(guild, group, userId) {
   }
   await Promise.all(cleanup);
 }
-async function cleanupDepartedMemberAccess(guild, group, userId) {
+async function cleanupDepartedMemberAccess(guild, group, userId, { preserveThreadMembership = false } = {}) {
   const id = String(userId);
-  const thread = await fetchGroupChannel(guild, group.thread_id);
-  if (thread?.isThread?.() && thread.members) {
-    const threadMember = await thread.members.fetch(id).catch(error => {
-      if ([10003, 10007].includes(Number(error?.code))) return null;
-      throw error;
-    });
-    if (threadMember) await thread.members.remove(id);
+  if (!preserveThreadMembership) {
+    const thread = await fetchGroupChannel(guild, group.thread_id);
+    if (thread?.isThread?.() && thread.members) {
+      const threadMember = await thread.members.fetch(id).catch(error => {
+        if ([10003, 10007].includes(Number(error?.code))) return null;
+        throw error;
+      });
+      if (threadMember) await thread.members.remove(id);
+    }
   }
   await removeManagedMemberOverwrites(guild, group, id);
 }

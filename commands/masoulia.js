@@ -11,6 +11,15 @@ const colorManager = require('../utils/colorManager.js');
 const respCommand = require('./resp.js');
 const { getSupervisedResponsibilities } = require('../utils/responsibilitySupervisors.js');
 const { isOwnerMember } = require('../utils/ownersStore.js');
+const { getResponsibilitiesSnapshot } = require('../utils/responsibilitiesStore.js');
+
+function getCurrentResponsibilities() {
+    const snapshot = getResponsibilitiesSnapshot();
+    if (Object.keys(snapshot).length > 0) return snapshot;
+    return global.responsibilities && Object.keys(global.responsibilities).length > 0
+        ? global.responsibilities
+        : {};
+}
 
 module.exports = {
     name: 'مسؤوليه',
@@ -23,9 +32,10 @@ module.exports = {
                 || message.guild?.ownerId === message.author.id;
             const isRespManager = typeof respCommand.isRespManager === 'function' && respCommand.isRespManager(message);
             const canManageAll = isOwner || isRespManager;
-            const knownResponsibilities = Object.keys(global.responsibilities || {}).length
-                ? global.responsibilities
-                : await dbManager.getResponsibilities();
+            let knownResponsibilities = getCurrentResponsibilities();
+            if (Object.keys(knownResponsibilities).length === 0) {
+                knownResponsibilities = await dbManager.getResponsibilities();
+            }
             
             if (!canManageAll && getSupervisedResponsibilities(message.guild.id, message.member, knownResponsibilities).length === 0) {
                 return message.react('❌');
@@ -73,7 +83,10 @@ module.exports = {
                         return i.update({ content: '❌ **تعذر العثور على العضو في السيرفر حالياً.**', embeds: [], components: [] });
                     }
 
-                    const allResps = await dbManager.getResponsibilities();
+                    let allResps = getCurrentResponsibilities();
+                    if (Object.keys(allResps).length === 0) {
+                        allResps = await dbManager.getResponsibilities();
+                    }
                     if (!allResps || Object.keys(allResps).length === 0) {
                         return i.update({ content: '⚠️ **لا توجد أي مسؤوليات معرفة في النظام حالياً.**', embeds: [], components: [] });
                     }
@@ -158,7 +171,10 @@ module.exports = {
 
                     await i.deferUpdate();
 
-                    const allResps = await dbManager.getResponsibilities();
+                    let allResps = getCurrentResponsibilities();
+                    if (Object.keys(allResps).length === 0) {
+                        allResps = await dbManager.getResponsibilities();
+                    }
                     const addedResps = [];
                     const removedResps = [];
                     const errors = [];
@@ -250,10 +266,24 @@ module.exports = {
                                                 try {
                                                     const guildRole = await i.guild.roles.fetch(rId);
                                                     if (guildRole) {
-                                                        await member.roles.remove(guildRole).catch(err => {
+                                                        // This is an intentional responsibility change, not manual role removal.
+                                                        if (!global.responsibilityRoleSyncBypass) {
+                                                            global.responsibilityRoleSyncBypass = new Set();
+                                                        }
+                                                        const bypassKey = `${i.guild.id}:${member.id}:${rId}`;
+                                                        global.responsibilityRoleSyncBypass.add(bypassKey);
+                                                        const bypassTimeout = setTimeout(() => {
+                                                            global.responsibilityRoleSyncBypass?.delete(bypassKey);
+                                                        }, 30000);
+                                                        bypassTimeout.unref?.();
+
+                                                        try {
+                                                            await member.roles.remove(guildRole, `سحب مسؤولية ${respName} عبر أمر مسؤوليه`);
+                                                        } catch (err) {
+                                                            global.responsibilityRoleSyncBypass.delete(bypassKey);
                                                             console.error(`Failed to remove role ${rId}:`, err);
                                                             errors.push(`فشل إزالة الرول لمسؤولية **${respName}** (تأكد من ترتيب رتبة البوت)`);
-                                                        });
+                                                        }
                                                     }
                                                 } catch (roleErr) {
                                                     console.error(`Role fetch error for ${rId}:`, roleErr);
