@@ -805,6 +805,7 @@ async function createGroup(guild, { name, description = '', ownerId, color = 0, 
         let leaderRoleAdded = false;
         let createdGroupId = null;
         let reusedSharedText = false;
+        let sharedTextPermissionSnapshot = null;
         let currentStage = 'role_create';
         const created = [];
 
@@ -892,6 +893,24 @@ async function createGroup(guild, { name, description = '', ownerId, color = 0, 
             // Discord private threads inherit permissions from their parent.
             // The group role must be granted access on the parent before the
             // owner is invited; thread membership alone does not grant role access.
+            if (reusedSharedText) {
+              const previous = text.permissionOverwrites.cache.get(role.id);
+              const flags = [
+                'ViewChannel', 'SendMessages', 'SendMessagesInThreads', 'ReadMessageHistory',
+                'AddReactions', 'AttachFiles', 'EmbedLinks', 'UseExternalEmojis', 'UseExternalStickers'
+              ];
+              sharedTextPermissionSnapshot = {
+                channel: text,
+                roleId: role.id,
+                existed: Boolean(previous),
+                values: Object.fromEntries(flags.map(flag => [
+                  flag,
+                  previous?.allow.has(PermissionsBitField.Flags[flag])
+                    ? true
+                    : previous?.deny.has(PermissionsBitField.Flags[flag]) ? false : null
+                ]))
+              };
+            }
             await runStage('thread_parent_permissions', () => text.permissionOverwrites.edit(
               role.id,
               {
@@ -1071,6 +1090,31 @@ async function createGroup(guild, { name, description = '', ownerId, color = 0, 
             await owner.roles.remove(leaderRole, 'Rollback incomplete group creation').catch(() => null);
           }
           const rollbackFailures = [];
+          if (sharedTextPermissionSnapshot) {
+            try {
+              if (sharedTextPermissionSnapshot.existed) {
+                await sharedTextPermissionSnapshot.channel.permissionOverwrites.edit(
+                  sharedTextPermissionSnapshot.roleId,
+                  sharedTextPermissionSnapshot.values,
+                  { reason: 'Restore shared group chat permissions after failed creation' }
+                );
+              } else {
+                await sharedTextPermissionSnapshot.channel.permissionOverwrites.delete(
+                  sharedTextPermissionSnapshot.roleId,
+                  'Remove shared group chat permissions after failed creation'
+                ).catch(error => {
+                  if (Number(error?.code) !== 10011) throw error;
+                });
+              }
+            } catch (rollbackError) {
+              rollbackFailures.push({
+                kind: 'shared_text_permissions',
+                id: sharedTextPermissionSnapshot.channel?.id || null,
+                code: rollbackError?.code || null,
+                message: String(rollbackError?.message || rollbackError).slice(0, 300)
+              });
+            }
+          }
           for (const [kind, resource] of created.reverse()) {
             try {
               if (resource?.delete) await resource.delete('Rollback incomplete group creation');
@@ -1132,6 +1176,8 @@ async function restoreGroup(guild, groupId, actorId, newOwnerId = null) {
     const operationToken = await acquireOperationLock(operationKey, 240000);
     if (!operationToken) throw new Error('GROUP_OPERATION_BUSY');
     const created = []; let role = null;
+    const addedAuxRoleGrants = [];
+    let sharedTextPermissionSnapshot = null;
     try {
       const group = await getGroup(guild.id, groupId);
       if (!group || group.status !== 'deleted') throw new Error('GROUP_NOT_RESTORABLE');
@@ -1161,6 +1207,21 @@ async function restoreGroup(guild, groupId, actorId, newOwnerId = null) {
         const shared = await getOrCreateSharedGroupChat(guild, { ...settings, chatMode: GROUP_CHAT_MODES.THREADS });
         text = shared.text;
         if (!shared.reused) created.push(text);
+        if (shared.reused) {
+          const previous = text.permissionOverwrites.cache.get(role.id);
+          const flags = ['ViewChannel', 'SendMessages', 'SendMessagesInThreads', 'ReadMessageHistory', 'AddReactions', 'AttachFiles', 'EmbedLinks'];
+          sharedTextPermissionSnapshot = {
+            channel: text,
+            roleId: role.id,
+            existed: Boolean(previous),
+            values: Object.fromEntries(flags.map(flag => [
+              flag,
+              previous?.allow.has(PermissionsBitField.Flags[flag])
+                ? true
+                : previous?.deny.has(PermissionsBitField.Flags[flag]) ? false : null
+            ]))
+          };
+        }
         await text.permissionOverwrites.edit(role.id, { ViewChannel: true, SendMessages: true, SendMessagesInThreads: true, ReadMessageHistory: true, AddReactions: true, AttachFiles: true, EmbedLinks: true }, { reason: 'Restore managed group thread permissions' });
         thread = await text.threads.create({ name: String(archive.thread?.name || group.name).slice(0, 100), type: ChannelType.PrivateThread, invitable: false, autoArchiveDuration: [60,1440,4320,10080].includes(Number(archive.thread?.autoArchiveDuration)) ? Number(archive.thread.autoArchiveDuration) : 1440, reason: `Restore managed group #${group.id}` });
         created.push(thread);
@@ -1188,8 +1249,14 @@ async function restoreGroup(guild, groupId, actorId, newOwnerId = null) {
       for (const userId of previousMembers) {
         const member = await guild.members.fetch(userId).catch(() => null);
         if (!member || member.user?.bot) continue;
-        await member.roles.add(role, 'Restore managed group membership').catch(() => {});
-        if (thread) await thread.members.add(member.id).catch(() => {});
+        await member.roles.add(role, 'Restore managed group membership');
+        const roleVerifiedMember = await guild.members.fetch({ user: String(member.id), force: true });
+        if (!roleVerifiedMember.roles.cache.has(role.id)) throw new Error(`RESTORE_GROUP_ROLE_NOT_CONFIRMED:${member.id}`);
+        if (thread) {
+          await thread.members.add(member.id);
+          const threadMember = await thread.members.fetch(member.id);
+          if (!threadMember || String(threadMember.id) !== String(member.id)) throw new Error(`RESTORE_THREAD_MEMBERSHIP_NOT_CONFIRMED:${member.id}`);
+        }
         restoredMembers.push(member.id);
       }
       if (!restoredMembers.includes(owner.id)) throw new Error('RESTORE_OWNER_NOT_ADDED');
@@ -1197,12 +1264,22 @@ async function restoreGroup(guild, groupId, actorId, newOwnerId = null) {
         const managerRole = guild.roles.cache.get(settings.managerRoleId) || await guild.roles.fetch(settings.managerRoleId).catch(() => null);
         if (managerRole) for (const managerId of archive.managerIds || []) {
           const manager = await guild.members.fetch(String(managerId)).catch(() => null);
-          if (manager && restoredMembers.includes(String(managerId)) && !manager.roles.cache.has(managerRole.id)) await manager.roles.add(managerRole, 'Restore managed group manager').catch(() => {});
+          if (manager && restoredMembers.includes(String(managerId)) && !manager.roles.cache.has(managerRole.id)) {
+            await manager.roles.add(managerRole, 'Restore managed group manager');
+            addedAuxRoleGrants.push({ member: manager, role: managerRole });
+            const verifiedManager = await guild.members.fetch({ user: String(managerId), force: true });
+            if (!verifiedManager.roles.cache.has(managerRole.id)) throw new Error(`RESTORE_MANAGER_ROLE_NOT_CONFIRMED:${managerId}`);
+          }
         }
       }
       if (settings.leaderRoleId) {
         const leaderRole = guild.roles.cache.get(settings.leaderRoleId) || await guild.roles.fetch(settings.leaderRoleId).catch(() => null);
-        if (leaderRole && !owner.roles.cache.has(leaderRole.id)) await owner.roles.add(leaderRole, 'Restore managed group owner');
+        if (leaderRole && !owner.roles.cache.has(leaderRole.id)) {
+          await owner.roles.add(leaderRole, 'Restore managed group owner');
+          addedAuxRoleGrants.push({ member: owner, role: leaderRole });
+          const verifiedOwner = await guild.members.fetch({ user: String(owner.id), force: true });
+          if (!verifiedOwner.roles.cache.has(leaderRole.id)) throw new Error('RESTORE_LEADER_ROLE_NOT_CONFIRMED');
+        }
       }
       const now = Date.now();
       await dbManager.transaction(async tx => {
@@ -1213,6 +1290,36 @@ async function restoreGroup(guild, groupId, actorId, newOwnerId = null) {
       }, 'group-restore');
       return await getGroup(guild.id, groupId);
     } catch (error) {
+      for (const grant of addedAuxRoleGrants.reverse()) {
+        await grant.member.roles.remove(grant.role, 'Rollback failed group restore').catch(rollbackError => {
+          console.error('[groupManager] failed to rollback auxiliary role after restore failure:', grant.member.id, grant.role.id, rollbackError?.message || rollbackError);
+        });
+      }
+      if (sharedTextPermissionSnapshot) {
+        try {
+          if (sharedTextPermissionSnapshot.existed) {
+            await sharedTextPermissionSnapshot.channel.permissionOverwrites.edit(
+              sharedTextPermissionSnapshot.roleId,
+              sharedTextPermissionSnapshot.values,
+              { reason: 'Restore shared chat permissions after failed group restore' }
+            );
+          } else {
+            await sharedTextPermissionSnapshot.channel.permissionOverwrites.delete(
+              sharedTextPermissionSnapshot.roleId,
+              'Remove shared chat permissions after failed group restore'
+            ).catch(rollbackError => {
+              if (Number(rollbackError?.code) !== 10011) throw rollbackError;
+            });
+          }
+        } catch (rollbackError) {
+          console.error('[groupManager] failed to rollback shared chat permission after restore failure:', groupId, rollbackError?.message || rollbackError);
+          await runtimeLog(guild.id, groupId, 'group_restore:rollback_incomplete', 'error', {
+            kind: 'shared_text_permissions',
+            code: rollbackError?.code || null,
+            message: String(rollbackError?.message || rollbackError).slice(0, 300)
+          }).catch(() => null);
+        }
+      }
       for (const resource of created.reverse()) await resource?.delete?.('Rollback failed group restore').catch(() => {});
       if (role) await role.delete('Rollback failed group restore').catch(() => {});
       throw error;

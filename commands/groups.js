@@ -2399,12 +2399,13 @@ async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
     const groupIssues = byGroup.get(String(group.id)) || [];
     const signature = JSON.stringify(groupIssues.map(({ type, userId }) => [type, userId || null]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
     const key = `${guild.id}:${group.id}`;
-    if (reconciliationSignatures.get(key) !== signature) {
+    const previousSignature = reconciliationSignatures.get(key);
+    if (previousSignature !== signature) {
       reconciliationSignatures.set(key, signature);
       if (groupIssues.length) {
         await gm.audit(guild.id, actorId, group.id, 'membership_reconciliation_drift', { issueCount: groupIssues.length, issues: groupIssues.slice(0, 50) }).catch(() => {});
         await gm.logGroupEvent(guild, 'update', { groupId: group.id, reason: 'membership_reconciliation_drift', issueCount: groupIssues.length, issues: groupIssues.slice(0, 10) }, actorId).catch(() => {});
-      } else if (reconciliationSignatures.has(key)) {
+      } else if (previousSignature !== undefined && previousSignature !== '[]') {
         await gm.audit(guild.id, actorId, group.id, 'membership_reconciliation_clean', { resolved: true }).catch(() => {});
       }
     }
@@ -2780,6 +2781,13 @@ function registerInteractionHandler(client) {
           const settings = await gm.getSettings(member.guild.id);
           const leader = settings.leaderRoleId && (member.guild.roles.cache.get(settings.leaderRoleId) || await member.guild.roles.fetch(settings.leaderRoleId).catch(() => null));
           if (leader) await successor.roles.add(leader, 'TRANSFER GROUP OWNERSHIP').catch(() => {});
+          await syncManagerRole(member.guild, settings, successor.id, { ignoreMissing: true }).catch(async error => {
+            console.warn('[groups] successor manager-role sync failed after ownership transfer:', group.id, successor.id, error?.message || error);
+            await gm.audit(member.guild.id, null, group.id, 'successor_manager_role_sync_failed', {
+              userId: String(successor.id),
+              message: String(error?.message || error).slice(0, 200)
+            }).catch(() => {});
+          });
           await gm.audit(member.guild.id, successor.id, group.id, 'owner_transferred', { from: userId, to: successor.id });
           await gm.logGroupEvent(member.guild, 'owner', { groupId: group.id, from: userId, to: successor.id }, successor.id);
         } else {
@@ -3261,10 +3269,29 @@ function confirmFlowPayload(guild, flow, description) {
 function importGroupName(role) {
   return safe(String(role?.name || '').replace(/^Group[・\s]+/i, ''), 80).trim() || 'Group';
 }
+function captureImportPermissionSnapshot(snapshots, channel, roleId, flags) {
+  const key = `${channel.id}:${roleId}`;
+  const existing = snapshots.find(snapshot => `${snapshot.channel.id}:${snapshot.roleId}` === key);
+  if (existing) return existing;
+  const previous = channel.permissionOverwrites.cache.get(String(roleId));
+  const snapshot = {
+    channel,
+    roleId: String(roleId),
+    existed: Boolean(previous),
+    values: Object.fromEntries(flags.map(flag => [
+      flag,
+      previous?.allow.has(PermissionsBitField.Flags[flag])
+        ? true
+        : previous?.deny.has(PermissionsBitField.Flags[flag]) ? false : null
+    ]))
+  };
+  snapshots.push(snapshot);
+  return snapshot;
+}
 async function findSharedGroupChat(guild, settings) {
   return (await gm.getOrCreateSharedGroupChat(guild, settings, { createIfMissing: false })).text;
 }
-async function createImportTextResources(guild, flow, settings, role) {
+async function createImportTextResources(guild, flow, settings, role, permissionSnapshots) {
   const name = importGroupName(role);
   const created = [];
   try {
@@ -3283,6 +3310,7 @@ async function createImportTextResources(guild, flow, settings, role) {
       createdText = true;
       created.push(text);
     } else if (settings.chatMode === 'threads') {
+      captureImportPermissionSnapshot(permissionSnapshots, text, role.id, GROUP_TEXT_ACCESS);
       await text.permissionOverwrites.edit(role.id, Object.fromEntries(GROUP_TEXT_ACCESS.map(flag => [flag, true])), { reason: 'Add imported group role to shared group chat' });
     }
     flow.textId = text.id;
@@ -3572,7 +3600,7 @@ async function saveImportedGroup(interaction, flow) {
       let { role, owner } = await validateImport(interaction.guild, flow, settings, false);
       if (!role || !owner) throw new Error('MEMBER_NOT_FOUND');
       if (!flow.textId) {
-        const resources = await createImportTextResources(interaction.guild, flow, settings, role);
+        const resources = await createImportTextResources(interaction.guild, flow, settings, role, permissionSnapshots);
         if (resources.createdText) created.push(resources.text);
         if (resources.thread) created.push(resources.thread);
       } else if (flow.createThread && !flow.threadId) {
@@ -3596,12 +3624,10 @@ async function saveImportedGroup(interaction, flow) {
       const textFlags = GROUP_TEXT_ACCESS;
       const voiceFlags = GROUP_VOICE_ACCESS;
       for (const [channel, flags] of [[text, textFlags], [voice, voiceFlags]]) {
-        const previous = channel.permissionOverwrites.cache.get(role.id);
-        permissionSnapshots.push({ channel, roleId: role.id, existed: Boolean(previous), values: Object.fromEntries(flags.map(flag => [flag, previous?.allow.has(PermissionsBitField.Flags[flag]) ? true : previous?.deny.has(PermissionsBitField.Flags[flag]) ? false : null])) });
+        captureImportPermissionSnapshot(permissionSnapshots, channel, role.id, flags);
       }
       const everyoneVoiceId = interaction.guild.roles.everyone.id;
-      const previousEveryoneVoice = voice.permissionOverwrites.cache.get(everyoneVoiceId);
-      permissionSnapshots.push({ channel: voice, roleId: everyoneVoiceId, existed: Boolean(previousEveryoneVoice), values: { ViewChannel: previousEveryoneVoice?.allow.has(PermissionsBitField.Flags.ViewChannel) ? true : previousEveryoneVoice?.deny.has(PermissionsBitField.Flags.ViewChannel) ? false : null, Connect: previousEveryoneVoice?.allow.has(PermissionsBitField.Flags.Connect) ? true : previousEveryoneVoice?.deny.has(PermissionsBitField.Flags.Connect) ? false : null } });
+      captureImportPermissionSnapshot(permissionSnapshots, voice, everyoneVoiceId, ['ViewChannel', 'Connect']);
       await text.permissionOverwrites.edit(role.id, Object.fromEntries(textFlags.map(flag => [flag, true])), { reason: 'Apply imported group text permissions' });
       await voice.permissionOverwrites.edit(everyoneVoiceId, { ViewChannel: true, Connect: false }, { reason: 'Make group voice visible but not publicly joinable' });
       await voice.permissionOverwrites.edit(role.id, Object.fromEntries(voiceFlags.map(flag => [flag, true])), { reason: 'Apply imported group voice permissions' });
