@@ -2180,6 +2180,27 @@ async function revokeUnlinkedGroupAccess(guild, settings, group, userId) {
 
     const failures = [];
     const hadRole = Boolean(role && member?.roles?.cache?.has(role.id));
+    const textChannel = latest.text_channel_id
+      ? (guild.channels.cache.get(String(latest.text_channel_id)) || await guild.channels.fetch(String(latest.text_channel_id)).catch(() => null))
+      : null;
+    const voiceChannel = latest.voice_channel_id
+      ? (guild.channels.cache.get(String(latest.voice_channel_id)) || await guild.channels.fetch(String(latest.voice_channel_id)).catch(() => null))
+      : null;
+    const groups = await gm.listGroups(guild.id);
+    const sharedTextStillLinked = groups.some(other =>
+      Number(other.id) !== Number(latest.id)
+      && String(other.text_channel_id || '') === String(latest.text_channel_id || '')
+      && isLinkedToGroup(other, id)
+    );
+    const textOverwriteRemoved = Boolean(textChannel?.permissionOverwrites?.cache?.has?.(id) && !sharedTextStillLinked);
+    const voiceOverwriteRemoved = Boolean(voiceChannel?.permissionOverwrites?.cache?.has?.(id));
+    let threadMemberRemoved = false;
+    if (!preserveThreadMembership && latest.thread_id) {
+      const thread = guild.channels.cache.get(String(latest.thread_id)) || await guild.channels.fetch(String(latest.thread_id)).catch(() => null);
+      if (thread?.isThread?.() && thread.members) {
+        threadMemberRemoved = Boolean(await thread.members.fetch(id).catch(() => null));
+      }
+    }
     if (hadRole) {
       if (!role.editable) failures.push(new Error('GROUP_ROLE_NOT_EDITABLE'));
       else {
@@ -2208,9 +2229,28 @@ async function revokeUnlinkedGroupAccess(guild, settings, group, userId) {
       catch (error) { failures.push(error); }
     }
     if (failures.length) throw new AggregateError(failures, 'UNLINKED_ACCESS_CLEANUP_FAILED');
-    await gm.audit(guild.id, null, group.id, 'unlinked_member_access_removed', { userId: id, roleRemoved: hadRole, source: 'periodic_reconciliation' }).catch(() => {});
-    await gm.logGroupEvent(guild, 'update', { groupId: group.id, reason: 'unlinked_member_access_removed', userId: id, roleRemoved: hadRole, source: 'periodic_reconciliation' }, null).catch(() => {});
-    return { removed: true, roleRemoved: hadRole };
+    const accessChanged = hadRole || textOverwriteRemoved || voiceOverwriteRemoved || threadMemberRemoved;
+    if (accessChanged) {
+      await gm.audit(guild.id, null, group.id, 'unlinked_member_access_removed', {
+        userId: id,
+        roleRemoved: hadRole,
+        textOverwriteRemoved,
+        voiceOverwriteRemoved,
+        threadMemberRemoved,
+        source: 'periodic_reconciliation'
+      }).catch(() => {});
+      await gm.logGroupEvent(guild, 'update', {
+        groupId: group.id,
+        reason: 'unlinked_member_access_removed',
+        userId: id,
+        roleRemoved: hadRole,
+        textOverwriteRemoved,
+        voiceOverwriteRemoved,
+        threadMemberRemoved,
+        source: 'periodic_reconciliation'
+      }, null).catch(() => {});
+    }
+    return { removed: accessChanged, roleRemoved: hadRole };
   });
 }
 async function reconcileGroupMembershipUnlocked(guild, actorId = null) {
