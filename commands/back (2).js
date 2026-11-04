@@ -93,12 +93,13 @@ async function ensureStorage() {
 }
 
 function generateSnapshotHash(data) {
+  const source = data && typeof data === "object" ? data : {};
   const essential = {
-    roles: data.roles.map(r => ({ n: r.name, c: r.color, p: r.permissions })),
-    channels: data.channels.map(c => ({ n: c.name, t: c.type, p: c.parentId, o: c.permissionOverwrites })),
-    settings: data.settings
+    roles: (Array.isArray(source.roles) ? source.roles : []).map(r => ({ id: r.id, n: r.name, c: r.color, p: r.permissions })),
+    channels: (Array.isArray(source.channels) ? source.channels : []).map(c => ({ id: c.id, n: c.name, t: c.type, p: c.parentId, o: c.permissionOverwrites })),
+    settings: source.settings || {}
   };
-  return crypto.createHash('md5').update(JSON.stringify(essential)).digest('hex');
+  return crypto.createHash("sha256").update(JSON.stringify(essential)).digest("hex");
 }
 
 async function getConfig(guildId) {
@@ -173,25 +174,30 @@ function findBestChannelMatch(guild, snapshotChannel, expectedParentId = null) {
 }
 
 async function applyBackup(guild, snapshot, types, options = {}) {
+  if (!snapshot || typeof snapshot !== "object" || !Array.isArray(snapshot.roles) || !Array.isArray(snapshot.channels)) {
+    throw new Error("Invalid or incomplete backup snapshot.");
+  }
   const start = Date.now();
   const limit = createLimiter(DEFAULT_CONCURRENCY);
+  const failures = [];
+  const roleIdMap = new Map();
   const all = types.includes("all");
   const targetId = options.targetId;
   const isPasteMode = options.isPasteMode || false;
 
   if (all || types.includes("settings")) {
     const s = snapshot.settings;
-    await withDiscordRetry(() => guild.edit({ name: s.name, verificationLevel: s.verificationLevel, explicitContentFilter: s.explicitContentFilter, defaultMessageNotifications: s.defaultMessageNotifications, afkTimeout: s.afkTimeout })).catch(() => null);
+    await withDiscordRetry(() => guild.edit({ name: s.name, verificationLevel: s.verificationLevel, explicitContentFilter: s.explicitContentFilter, defaultMessageNotifications: s.defaultMessageNotifications, afkTimeout: s.afkTimeout })).catch((error) => { failures.push(error.message || String(error)); return null; });
   }
 
   if (all || types.includes("roles")) {
     const rolesToProcess = targetId ? snapshot.roles.filter((r) => r.id === targetId) : snapshot.roles;
     const createdRoles = [];
     await Promise.all(rolesToProcess.map((sr) => limit(async () => {
-      let role = guild.roles.cache.find((r) => r.name === sr.name && !r.managed);
-      if (!role) role = await withDiscordRetry(() => guild.roles.create({ name: sr.name, color: sr.color, hoist: sr.hoist, permissions: BigInt(sr.permissions), mentionable: sr.mentionable })).catch(() => null);
-      else await withDiscordRetry(() => role.edit({ color: sr.color, hoist: sr.hoist, permissions: BigInt(sr.permissions), mentionable: sr.mentionable })).catch(() => null);
-      if (role) createdRoles.push({ role, position: sr.position });
+      let role = guild.roles.cache.get(sr.id) || guild.roles.cache.find((r) => r.name === sr.name && !r.managed);
+      if (!role) role = await withDiscordRetry(() => guild.roles.create({ name: sr.name, color: sr.color, hoist: sr.hoist, permissions: BigInt(sr.permissions), mentionable: sr.mentionable })).catch((error) => { failures.push(error.message || String(error)); return null; });
+      else await withDiscordRetry(() => role.edit({ color: sr.color, hoist: sr.hoist, permissions: BigInt(sr.permissions), mentionable: sr.mentionable })).catch((error) => { failures.push(error.message || String(error)); return null; });
+      if (role) { roleIdMap.set(sr.id, role.id); createdRoles.push({ role, position: sr.position }); }
     })));
 
     if (createdRoles.length > 0) {
@@ -199,18 +205,11 @@ async function applyBackup(guild, snapshot, types, options = {}) {
         const botHighestRole = guild.members.me.roles.highest;
         // Fix: Use target position (r.position) for validation
         const sortedPositions = createdRoles.filter((r) => r.position < botHighestRole.position).map((r) => ({ role: r.role, position: r.position }));
-        if (sortedPositions.length > 0) await withDiscordRetry(() => guild.roles.setPositions(sortedPositions)).catch(() => null);
+        if (sortedPositions.length > 0) await withDiscordRetry(() => guild.roles.setPositions(sortedPositions)).catch((error) => { failures.push(error.message || String(error)); return null; });
       } catch (e) { console.error("Role position restore failed:", e); }
     }
 
-    if (!targetId) {
-      const snapshotRoleNames = new Set(snapshot.roles.map((r) => r.name));
-      await Promise.all(
-        guild.roles.cache
-          .filter((r) => !r.managed && r.id !== guild.id && !snapshotRoleNames.has(r.name))
-          .map((r) => limit(() => r.delete("Strict snapshot reconcile: extra role").catch(() => null)))
-      );
-    }
+    // Restore is intentionally non-destructive: roles created after the snapshot are preserved.
   }
 
   if (all || types.includes("channels")) {
@@ -225,25 +224,30 @@ async function applyBackup(guild, snapshot, types, options = {}) {
       c.type === ChannelType.GuildCategory && (!targetId || requiredCategoryIds.has(c.id) || c.id === targetId)
     );
     await Promise.all(cats.map((sc) => limit(async () => {
-      let cat = guild.channels.cache.find((c) => c.name === sc.name && c.type === ChannelType.GuildCategory);
-      if (!cat) cat = await withDiscordRetry(() => guild.channels.create({ name: sc.name, type: ChannelType.GuildCategory, position: sc.position })).catch(() => null);
-      else await withDiscordRetry(() => cat.edit({ position: sc.position })).catch(() => null);
+      let cat = guild.channels.cache.get(sc.id) || guild.channels.cache.find((c) => c.name === sc.name && c.type === ChannelType.GuildCategory);
+      if (!cat) cat = await withDiscordRetry(() => guild.channels.create({ name: sc.name, type: ChannelType.GuildCategory, position: sc.position })).catch((error) => { failures.push(error.message || String(error)); return null; });
+      else await withDiscordRetry(() => cat.edit({ position: sc.position })).catch((error) => { failures.push(error.message || String(error)); return null; });
       if (cat) categoryMap.set(sc.id, cat.id);
     })));
 
     const others = channelsToProcess.filter((c) => c.type !== ChannelType.GuildCategory);
     await Promise.all(others.map((sc) => limit(async () => {
       const parentId = sc.parentId ? categoryMap.get(sc.parentId) || null : null;
-      let ch = findBestChannelMatch(guild, sc, parentId);
+      let ch = guild.channels.cache.get(sc.id) || findBestChannelMatch(guild, sc, parentId);
       let wasCreated = false;
       if (!ch) {
-        ch = await withDiscordRetry(() => guild.channels.create({ name: sc.name, type: sc.type, parent: parentId, position: sc.position, topic: sc.topic || undefined, nsfw: sc.nsfw })).catch(() => null);
+        ch = await withDiscordRetry(() => guild.channels.create({ name: sc.name, type: sc.type, parent: parentId, position: sc.position, topic: sc.topic || undefined, nsfw: sc.nsfw })).catch((error) => { failures.push(error.message || String(error)); return null; });
         wasCreated = true;
-      } else await withDiscordRetry(() => ch.edit({ parent: parentId, position: sc.position, topic: sc.topic || undefined, nsfw: sc.nsfw })).catch(() => null);
+      } else await withDiscordRetry(() => ch.edit({ parent: parentId, position: sc.position, topic: sc.topic || undefined, nsfw: sc.nsfw })).catch((error) => { failures.push(error.message || String(error)); return null; });
 
       if (ch && sc.permissionOverwrites) {
-        const filteredOverwrites = sc.permissionOverwrites.filter((ow) => ow.type === 0 ? guild.roles.cache.has(ow.id) : true);
-        await withDiscordRetry(() => ch.permissionOverwrites.set(filteredOverwrites.map((ow) => ({ id: ow.id, type: ow.type, allow: BigInt(ow.allow), deny: BigInt(ow.deny) })))).catch(() => null);
+        const mappedOverwrites = (sc.permissionOverwrites || []).map((ow) => {
+          const mappedId = ow.type === 0
+            ? (roleIdMap.get(ow.id) || (guild.roles.cache.has(ow.id) ? ow.id : null))
+            : ow.id;
+          return mappedId ? { id: mappedId, type: ow.type, allow: BigInt(ow.allow), deny: BigInt(ow.deny) } : null;
+        }).filter(Boolean);
+        await withDiscordRetry(() => ch.permissionOverwrites.set(mappedOverwrites)).catch((error) => { failures.push(error.message || String(error)); return null; });
       }
 
       if (isPasteMode && wasCreated && ch && sc.messages?.length && ch.isTextBased() && ![ChannelType.GuildVoice, ChannelType.GuildStageVoice, ChannelType.GuildForum, ChannelType.GuildMedia].includes(ch.type)) {
@@ -259,45 +263,39 @@ async function applyBackup(guild, snapshot, types, options = {}) {
       }
     })));
 
-    if (!targetId) {
-      const snapshotChannelSignatures = new Set(
-        channelsToProcess.map((c) => `${c.type}:${c.name}:${c.parentId || "root"}`)
-      );
-      await Promise.all(
-        guild.channels.cache
-          .filter((c) => !c.isThread())
-          .map((c) => limit(async () => {
-            const signature = `${c.type}:${c.name}:${c.parentId || "root"}`;
-            if (!snapshotChannelSignatures.has(signature)) {
-              await c.delete("Strict snapshot reconcile: extra channel").catch(() => null);
-            }
-          }))
-      );
-    }
+    // Keep channels created after the snapshot; restoration must never prune live server data.
   }
 
   if (all || types.includes("assets")) {
-    if (snapshot.emojis) await Promise.all(snapshot.emojis.map((e) => limit(() => guild.emojis.create({ attachment: e.url, name: e.name }).catch(() => null))));
-    if (snapshot.stickers) await Promise.all(snapshot.stickers.map((s) => limit(() => guild.stickers.create({ file: s.url, name: s.name, tags: s.tags, description: s.description }).catch(() => null))));
+    if (snapshot.emojis) await Promise.all(snapshot.emojis.map((e) => limit(async () => {
+      if (guild.emojis.cache.some((current) => current.name === e.name)) return null;
+      return guild.emojis.create({ attachment: e.url, name: e.name }).catch((error) => { failures.push(error.message || String(error)); return null; });
+    })));
+    if (snapshot.stickers) await Promise.all(snapshot.stickers.map((sticker) => limit(async () => {
+      if (guild.stickers.cache.some((current) => current.name === sticker.name)) return null;
+      return guild.stickers.create({ file: sticker.url, name: sticker.name, tags: sticker.tags, description: sticker.description }).catch((error) => { failures.push(error.message || String(error)); return null; });
+    })));
   }
 
   if ((all || types.includes("members")) && snapshot.members && isPasteMode) {
     // Fix: Map Optimization for Role Lookup
     const snapRolesMap = new Map(snapshot.roles.map(r => [r.id, r.name]));
     await Promise.all(snapshot.members.map((sm) => limit(async () => {
-      const member = await guild.members.fetch(sm.id).catch(() => null);
-      if (member) {
+      const member = await guild.members.fetch(sm.id).catch((error) => { failures.push(error.message || String(error)); return null; });
+      if (member && member.id !== guild.ownerId && !member.user.bot && !member.permissions.has(PermissionsBitField.Flags.Administrator)) {
         const roles = sm.roles.map((rId) => {
+          const mappedId = roleIdMap.get(rId);
+          if (mappedId) return guild.roles.cache.get(mappedId);
           const roleName = snapRolesMap.get(rId);
-          return guild.roles.cache.find((r) => r.name === roleName);
+          return roleName ? guild.roles.cache.find((r) => r.name === roleName) : null;
         }).filter((r) => r && r.id !== guild.id && !r.managed);
-        await member.roles.set(roles).catch(() => null);
+        await member.roles.set(roles).catch((error) => { failures.push(error.message || String(error)); return null; });
       }
     })));
   }
 
-  if (all || types.includes("bans")) { if (snapshot.bans) await Promise.all(snapshot.bans.map((b) => limit(() => guild.bans.create(b.id, { reason: b.reason }).catch(() => null)))); }
-  return { durationMs: Date.now() - start };
+  if (all || types.includes("bans")) { if (snapshot.bans) await Promise.all(snapshot.bans.map((b) => limit(() => guild.bans.create(b.id, { reason: b.reason }).catch((error) => { failures.push(error.message || String(error)); return null; })))); }
+  return { durationMs: Date.now() - start, failures };
 }
 
 function markRestoreOperation(guildId, userId) {
@@ -322,12 +320,13 @@ function clearRestoreOperation(key) {
 }
 
 // --- PROTECTION FUNCTIONS (Restored) ---
-async function cleanupOldBackups(guildId) {
+async function cleanupOldBackups(guildId, keep = 10) {
   const db = getDatabase();
-  const backups = await db.all("SELECT id FROM guild_backups WHERE guild_id = ? AND user_id = ? ORDER BY id DESC", [guildId, 'auto-system']);
-  if (backups.length > 1) {
-    const toDelete = backups.slice(1).map(b => b.id);
-    await db.run(`DELETE FROM guild_backups WHERE id IN (${toDelete.join(',')})`);
+  const backups = await db.all("SELECT id FROM guild_backups WHERE guild_id = ? AND user_id = ? ORDER BY id DESC", [guildId, "auto-system"]);
+  if (backups.length > keep) {
+    const toDelete = backups.slice(keep).map((backup) => backup.id);
+    const placeholders = toDelete.map(() => "?").join(",");
+    await db.run(`DELETE FROM guild_backups WHERE id IN (${placeholders})`, toDelete);
   }
 }
 
@@ -446,7 +445,13 @@ async function scheduleProtectionCheck(guild, type, event, affectedElement = nul
 
 
 function isBackManager(userId, guild, client) {
-  return userId === guild.ownerId || (client.config?.owners || []).includes(userId);
+  if (!userId || !guild) return false;
+  const owners = [
+    ...(Array.isArray(client?.config?.owners) ? client.config.owners : []),
+    ...(Array.isArray(client?.BOT_OWNERS) ? client.BOT_OWNERS : []),
+    ...(Array.isArray(global.BOT_OWNERS) ? global.BOT_OWNERS : [])
+  ].map(String);
+  return String(userId) === String(guild.ownerId) || owners.includes(String(userId)) || Boolean(global.isBotOwner?.(userId));
 }
 
 async function createAutoSnapshotIfChanged(guild, reason = "periodic") {
@@ -645,10 +650,11 @@ async function resolveChannelConflicts(guild, snapshot, targetId = null) {
 
 // --- MODULE EXPORT ---
 module.exports = {
-  name: "back",
-  aliases: ["backupx"],
-  async execute(message, args, client) {
-    if (!isBackManager(message.author.id, message.guild, client)) return message.reply("**Denied :** owner only");
+  name: "backup",
+  aliases: ["back", "backupx"],
+  async execute(message, args, context) {
+    const client = context?.client || context;
+    if (!message.guild || !isBackManager(message.author.id, message.guild, client)) return message.reply("**Denied:** server owner or bot owner only");
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`back_copy:${message.guild.id}:${message.author.id}`).setLabel("Copy").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId(`back_paste:${message.guild.id}:${message.author.id}`).setLabel("Paste").setStyle(ButtonStyle.Danger),
@@ -690,7 +696,18 @@ module.exports = {
 
     client.on("interactionCreate", async (interaction) => {
       try {
-        const [action, guildId, userId] = interaction.customId?.split(":") || [];
+        if (!interaction.customId?.startsWith("back_")) return;
+        const [action, guildId, userId] = interaction.customId.split(":");
+        const targetGuild = client.guilds.cache.get(guildId) || interaction.guild;
+        if (!targetGuild || (interaction.guildId && interaction.guildId !== guildId)) {
+          return interaction.reply({ content: "This backup panel belongs to another server.", ephemeral: true }).catch(() => null);
+        }
+        if (action !== "back_restore_user" && userId && userId !== interaction.user.id) {
+          return interaction.reply({ content: "This backup panel belongs to another user.", ephemeral: true }).catch(() => null);
+        }
+        if (!isBackManager(interaction.user.id, targetGuild, client)) {
+          return interaction.reply({ content: "Owner only.", ephemeral: true }).catch(() => null);
+        }
         const db = getDatabase();
         let handled = false;
         if (action === "back_restore_user") {
@@ -709,7 +726,6 @@ module.exports = {
           return interaction.reply({ content: "Member not found. Data cleared.", ephemeral: true });
         }
       }
-      if (interaction.customId?.startsWith("back_") && !isBackManager(interaction.user.id, interaction.guild, client)) { handled = true; return interaction.reply({ content: "Owner only.", ephemeral: true }); }
       if (interaction.isButton()) {
         if (action === "back_copy") {
           const modal = new ModalBuilder().setCustomId(`back_modal_copy:${guildId}:${userId}`).setTitle("اسم النسخة");
@@ -770,13 +786,18 @@ module.exports = {
           const session = sessions.get(`${interaction.guild.id}:${interaction.user.id}`);
           if (!session) { handled = true; return interaction.reply({ content: "Expired", ephemeral: true }); }
           await interaction.deferUpdate();
-          const row = await db.get("SELECT snapshot_json FROM guild_backups WHERE id = ?", [session.backupId]);
+          const row = await db.get("SELECT snapshot_json FROM guild_backups WHERE id = ? AND guild_id = ?", [session.backupId, interaction.guild.id]);
           if (!row) { handled = true; return interaction.editReply({ content: "Backup not found.", components: [] }); }
+          let snapshot;
+          try { snapshot = JSON.parse(row.snapshot_json); }
+          catch { handled = true; return interaction.editReply({ content: "Backup file is corrupted; nothing was restored.", components: [] }); }
           const operationKey = markRestoreOperation(interaction.guild.id, interaction.user.id);
-          const report = await applyBackup(interaction.guild, JSON.parse(row.snapshot_json), session.types, { isPasteMode: true });
-          clearRestoreOperation(operationKey);
-          sessions.delete(`${interaction.guild.id}:${interaction.user.id}`);
-          handled = true; return interaction.editReply({ content: `Restore complete in ${report.durationMs}ms`, components: [] });
+          let report;
+          try { report = await applyBackup(interaction.guild, snapshot, session.types, { isPasteMode: true }); }
+          finally { clearRestoreOperation(operationKey); sessions.delete(`${interaction.guild.id}:${interaction.user.id}`); }
+          handled = true;
+          const failureText = report.failures.length ? `\nFailed operations: ${report.failures.length}. Check bot logs for details.` : "";
+          return interaction.editReply({ content: `Restore finished in ${report.durationMs}ms. ${report.failures.length ? "Some operations failed." : "No API failures reported."}${failureText}`, components: [] });
         }
         if (action === "back_list") {
           const list = await db.all("SELECT id, name, created_at FROM guild_backups WHERE guild_id = ? ORDER BY id DESC LIMIT 25", [interaction.guild.id]);
@@ -846,12 +867,18 @@ module.exports = {
       if (interaction.isModalSubmit() && interaction.customId.startsWith("back_modal_copy")) {
         const [_, gId] = interaction.customId.split(":");
         await interaction.deferReply({ ephemeral: true });
+        if (!interaction.guild || interaction.guild.id !== gId || userId !== interaction.user.id) {
+          handled = true; return interaction.reply({ content: "Invalid backup request.", ephemeral: true });
+        }
         const customName = interaction.fields.getTextInputValue("backup_name").trim();
+        if (!customName || customName.length > 80) {
+          handled = true; return interaction.editReply("Enter a valid backup name (1–80 characters).");
+        }
         const snap = await captureSnapshot(interaction.guild, { includeMessages: true, includeMembers: true, includeAssets: true });
         const hash = generateSnapshotHash(snap);
         const dateLabel = new Date().toISOString();
         await db.run("INSERT INTO guild_backups (guild_id, user_id, name, snapshot_json, hash, created_at) VALUES (?, ?, ?, ?, ?, ?)", [interaction.guild.id, interaction.user.id, customName, JSON.stringify(snap), hash, Date.now()]);
-        handled = true; return interaction.editReply(`تم حفظ النسخة **${customName}**\nالوصف: ${dateLabel}`);
+        handled = true; return interaction.editReply(`تم حفظ النسخة **${customName}**\nتاريخ الإنشاء: ${dateLabel}\nالرومات: ${snap.channels.length} | الرولات: ${snap.roles.length} | الأعضاء: ${snap.members.length}`);
       }
 
       if (interaction.customId?.startsWith("back_") && !handled) {
