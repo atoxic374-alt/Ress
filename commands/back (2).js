@@ -233,7 +233,10 @@ async function applyBackup(guild, snapshot, types, options = {}) {
         // Fix: Use target position (r.position) for validation
         const sortedPositions = createdRoles.filter((r) => r.position < botHighestRole.position).map((r) => ({ role: r.role, position: r.position }));
         if (sortedPositions.length > 0) await withDiscordRetry(() => guild.roles.setPositions(sortedPositions)).catch((error) => { failures.push(error.message || String(error)); return null; });
-      } catch (e) { console.error("Role position restore failed:", e); }
+      } catch (e) {
+        failures.push(`Role position restore failed: ${e.message || String(e)}`);
+        console.error("Role position restore failed:", e);
+      }
     }
 
     // Restore is intentionally non-destructive: roles created after the snapshot are preserved.
@@ -265,7 +268,11 @@ async function applyBackup(guild, snapshot, types, options = {}) {
             const mappedId = ow.type === 0
               ? (roleIdMap.get(ow.id) || (guild.roles.cache.has(ow.id) ? ow.id : null))
               : ow.id;
-            return mappedId ? { id: mappedId, type: ow.type, allow: BigInt(ow.allow), deny: BigInt(ow.deny) } : null;
+            if (!mappedId) {
+              failures.push(`Skipped permission overwrite for missing role ${ow.id}`);
+              return null;
+            }
+            return { id: mappedId, type: ow.type, allow: BigInt(ow.allow), deny: BigInt(ow.deny) };
           }).filter(Boolean);
           const snapshotTargets = new Set(mappedOverwrites.map((overwrite) => `${overwrite.type}:${overwrite.id}`));
           const preservedOverwrites = cat.permissionOverwrites.cache
@@ -314,7 +321,11 @@ async function applyBackup(guild, snapshot, types, options = {}) {
           const mappedId = ow.type === 0
             ? (roleIdMap.get(ow.id) || (guild.roles.cache.has(ow.id) ? ow.id : null))
             : ow.id;
-          return mappedId ? { id: mappedId, type: ow.type, allow: BigInt(ow.allow), deny: BigInt(ow.deny) } : null;
+          if (!mappedId) {
+            failures.push(`Skipped permission overwrite for missing role ${ow.id}`);
+            return null;
+          }
+          return { id: mappedId, type: ow.type, allow: BigInt(ow.allow), deny: BigInt(ow.deny) };
         }).filter(Boolean);
         const snapshotTargets = new Set(mappedOverwrites.map((overwrite) => `${overwrite.type}:${overwrite.id}`));
         const preservedOverwrites = ch.permissionOverwrites.cache
@@ -346,9 +357,15 @@ async function applyBackup(guild, snapshot, types, options = {}) {
               }));
               await new Promise((resolve) => setTimeout(resolve, 400));
             }
-            catch (msgErr) { console.error("Message send failed:", msgErr); }
+            catch (msgErr) {
+              failures.push(`Archived message failed: ${msgErr.message || String(msgErr)}`);
+              console.error("Message send failed:", msgErr);
+            }
           }
-        } catch (e) { console.error("Webhook operation failed:", e); }
+        } catch (e) {
+          failures.push(`Webhook restore failed: ${e.message || String(e)}`);
+          console.error("Webhook operation failed:", e);
+        }
       }
     })));
 
@@ -369,6 +386,7 @@ async function applyBackup(guild, snapshot, types, options = {}) {
   if ((all || types.includes("members")) && snapshot.members && isPasteMode) {
     // Fix: Map Optimization for Role Lookup
     const snapRolesMap = new Map(snapshot.roles.map(r => [r.id, r.name]));
+    const missingMemberRoleIds = new Set();
     await Promise.all(snapshot.members.map((sm) => limit(async () => {
       const member = await guild.members.fetch(sm.id).catch((error) => { failures.push(error.message || String(error)); return null; });
       if (member && member.id !== guild.ownerId && !member.user.bot && !member.permissions.has(PermissionsBitField.Flags.Administrator)) {
@@ -376,13 +394,15 @@ async function applyBackup(guild, snapshot, types, options = {}) {
           const mappedId = roleIdMap.get(rId);
           if (mappedId) return guild.roles.cache.get(mappedId);
           const roleName = snapRolesMap.get(rId);
-          if (!roleName) return null;
+          if (!roleName) { missingMemberRoleIds.add(rId); return null; }
           const matches = guild.roles.cache.filter((role) => !role.managed && role.id !== guild.id && role.name === roleName);
-          return matches.size === 1 ? matches.first() : null;
+          if (matches.size !== 1) { missingMemberRoleIds.add(rId); return null; }
+          return matches.first();
         }).filter((r) => r && r.id !== guild.id && !r.managed);
         if (roles.length) await member.roles.add(roles).catch((error) => { failures.push(error.message || String(error)); return null; });
       }
     })));
+    if (missingMemberRoleIds.size) failures.push(`Could not map ${missingMemberRoleIds.size} saved member role(s).`);
   }
 
   if (all || types.includes("bans")) { if (snapshot.bans) await Promise.all(snapshot.bans.map((b) => limit(() => guild.bans.create(b.id, { reason: b.reason }).catch((error) => { failures.push(error.message || String(error)); return null; })))); }
