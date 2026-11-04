@@ -287,9 +287,16 @@ async function applyBackup(guild, snapshot, types, options = {}) {
       for (const field of [
         "bitrate", "userLimit", "rtcRegion", "rateLimitPerUser",
         "defaultAutoArchiveDuration", "defaultThreadRateLimitPerUser",
-        "availableTags", "defaultReactionEmoji", "defaultForumLayout", "defaultSortOrder"
+        "defaultReactionEmoji", "defaultForumLayout", "defaultSortOrder"
       ]) {
         if (sc[field] !== null && sc[field] !== undefined) channelOptions[field] = sc[field];
+      }
+      if (
+        Array.isArray(sc.availableTags) &&
+        sc.availableTags.length > 0 &&
+        [ChannelType.GuildForum, ChannelType.GuildMedia].includes(sc.type)
+      ) {
+        channelOptions.availableTags = sc.availableTags;
       }
       if (!ch) {
         ch = await withDiscordRetry(() => guild.channels.create(channelOptions)).catch((error) => { failures.push(error.message || String(error)); return null; });
