@@ -190,14 +190,15 @@ async function captureSnapshot(guild, options = {}) {
 function findBestChannelMatch(guild, snapshotChannel, expectedParentId = null) {
   const sameType = guild.channels.cache.filter((c) => c.type === snapshotChannel.type && c.name === snapshotChannel.name);
   if (!sameType.size) return null;
+  const exactParent = sameType.find((c) => (c.parentId || null) === (expectedParentId || null));
+  return exactParent || (sameType.size === 1 ? sameType.first() : null);
+}
 
-  if (expectedParentId) {
-    const exactParent = sameType.find((c) => c.parentId === expectedParentId);
-    if (exactParent) return exactParent;
-  }
-
-  if (sameType.size === 1) return sameType.first();
-  return null;
+function findBestRoleMatch(guild, snapshotRole) {
+  const matches = guild.roles.cache.filter((role) =>
+    role.id !== guild.id && !role.managed && role.name === snapshotRole.name
+  );
+  return matches.size === 1 ? matches.first() : null;
 }
 
 async function applyBackup(guild, snapshot, types, options = {}) {
@@ -221,7 +222,7 @@ async function applyBackup(guild, snapshot, types, options = {}) {
     const rolesToProcess = targetId ? snapshot.roles.filter((r) => r.id === targetId) : snapshot.roles;
     const createdRoles = [];
     await Promise.all(rolesToProcess.map((sr) => limit(async () => {
-      let role = guild.roles.cache.get(sr.id) || guild.roles.cache.find((r) => r.name === sr.name && !r.managed);
+      let role = guild.roles.cache.get(sr.id) || findBestRoleMatch(guild, sr);
       if (!role) role = await withDiscordRetry(() => guild.roles.create({ name: sr.name, color: sr.color, hoist: sr.hoist, permissions: BigInt(sr.permissions), mentionable: sr.mentionable })).catch((error) => { failures.push(error.message || String(error)); return null; });
       else await withDiscordRetry(() => role.edit({ name: sr.name, color: sr.color, hoist: sr.hoist, permissions: BigInt(sr.permissions), mentionable: sr.mentionable })).catch((error) => { failures.push(error.message || String(error)); return null; });
       if (role) { roleIdMap.set(sr.id, role.id); createdRoles.push({ role, position: sr.position }); }
@@ -241,8 +242,7 @@ async function applyBackup(guild, snapshot, types, options = {}) {
 
   if (all || types.includes("channels")) {
     for (const snapshotRole of snapshot.roles) {
-      const existingRole = guild.roles.cache.get(snapshotRole.id)
-        || guild.roles.cache.find((role) => !role.managed && role.name === snapshotRole.name);
+      const existingRole = guild.roles.cache.get(snapshotRole.id) || findBestRoleMatch(guild, snapshotRole);
       if (existingRole) roleIdMap.set(snapshotRole.id, existingRole.id);
     }
     const channelsToProcess = targetId ? snapshot.channels.filter((c) => c.id === targetId) : snapshot.channels;
@@ -281,6 +281,10 @@ async function applyBackup(guild, snapshot, types, options = {}) {
     const others = channelsToProcess.filter((c) => c.type !== ChannelType.GuildCategory);
     await Promise.all(others.map((sc) => limit(async () => {
       const parentId = sc.parentId ? categoryMap.get(sc.parentId) || null : null;
+      if (sc.parentId && !parentId) {
+        failures.push(`Missing parent category for channel ${sc.name}`);
+        return;
+      }
       let ch = guild.channels.cache.get(sc.id) || findBestChannelMatch(guild, sc, parentId);
       let wasCreated = false;
       const channelOptions = { name: sc.name, type: sc.type, parent: parentId, position: sc.position, topic: sc.topic || undefined, nsfw: sc.nsfw };
@@ -373,7 +377,9 @@ async function applyBackup(guild, snapshot, types, options = {}) {
           const mappedId = roleIdMap.get(rId);
           if (mappedId) return guild.roles.cache.get(mappedId);
           const roleName = snapRolesMap.get(rId);
-          return roleName ? guild.roles.cache.find((r) => r.name === roleName) : null;
+          if (!roleName) return null;
+          const matches = guild.roles.cache.filter((role) => !role.managed && role.id !== guild.id && role.name === roleName);
+          return matches.size === 1 ? matches.first() : null;
         }).filter((r) => r && r.id !== guild.id && !r.managed);
         if (roles.length) await member.roles.add(roles).catch((error) => { failures.push(error.message || String(error)); return null; });
       }
