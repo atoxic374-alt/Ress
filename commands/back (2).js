@@ -933,7 +933,7 @@ module.exports = {
           try { selectedSnapshot = JSON.parse(selectedBackup.snapshot_json); }
           catch { handled = true; return interaction.update({ content: "Backup is corrupted and cannot be restored.", components: [] }); }
           sessions.set(`${interaction.guild.id}:${interaction.user.id}`, { backupId, expiresAt: Date.now() + SESSION_TTL_MS });
-          const menu = new StringSelectMenuBuilder().setCustomId(`back_paste_types:${guildId}:${userId}`).setPlaceholder("Scope").addOptions([
+          const menu = new StringSelectMenuBuilder().setCustomId(`back_paste_types:${guildId}:${userId}`).setPlaceholder("Choose restore scopes").setMinValues(1).setMaxValues(5).addOptions([
             { label: "All", value: "all" }, { label: "Channels & 100 Messages (Webhook)", value: "channels" }, { label: "Roles", value: "roles" }, { label: "Members", value: "members" }, { label: "Assets (Emoji/Stickers)", value: "assets" },
           ]);
           handled = true; return interaction.update({
