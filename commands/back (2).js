@@ -513,7 +513,13 @@ function isBackManager(userId, guild, client) {
     ...(Array.isArray(client?.BOT_OWNERS) ? client.BOT_OWNERS : []),
     ...(Array.isArray(global.BOT_OWNERS) ? global.BOT_OWNERS : [])
   ].map(String);
-  return String(userId) === String(guild.ownerId) || owners.includes(String(userId)) || Boolean(global.isBotOwner?.(userId));
+  const member = guild.members.cache.get(String(userId));
+  const ownerRoles = (Array.isArray(global.BOT_OWNER_ROLES) ? global.BOT_OWNER_ROLES : []).map(String);
+  const hasOwnerRole = Boolean(member?.roles?.cache?.some((role) => ownerRoles.includes(String(role.id))));
+  return String(userId) === String(guild.ownerId)
+    || owners.includes(String(userId))
+    || hasOwnerRole
+    || Boolean(global.isBotOwner?.(member || userId));
 }
 
 async function createAutoSnapshotIfChanged(guild, reason = "periodic") {
@@ -718,17 +724,15 @@ module.exports = {
     const client = context?.client || context;
     if (!message.guild || !isBackManager(message.author.id, message.guild, client)) return message.reply("**Denied:** server owner or bot owner only");
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`back_copy:${message.guild.id}:${message.author.id}`).setLabel("Copy").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`back_paste:${message.guild.id}:${message.author.id}`).setLabel("Paste").setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId(`back_copy:${message.guild.id}:${message.author.id}`).setLabel("Create Backup").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`back_paste:${message.guild.id}:${message.author.id}`).setLabel("Restore").setStyle(ButtonStyle.Danger),
       new ButtonBuilder().setCustomId(`back_protection:${message.guild.id}:${message.author.id}`).setLabel("Protection").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId(`back_list:${message.guild.id}:${message.author.id}`).setLabel("List").setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId(`back_list:${message.guild.id}:${message.author.id}`).setLabel("History").setStyle(ButtonStyle.Secondary)
     );
     await message.channel.send({
-      embeds: [colorManager.createEmbed().setTitle("**Back :** Control Panel").addFields(
-        { name: "Status", value: "جاهز", inline: true },
-        { name: "Snapshot", value: "غير محدد", inline: true },
-        { name: "Last Action", value: "لا يوجد", inline: false },
-      )],
+      embeds: [colorManager.createEmbed()
+        .setTitle("Backup Control Panel")
+        .setDescription("إنشاء نسخ احتياطية، استعراضها واستعادتها، وإعداد حماية السيرفر. الاستعادة تحافظ على الرومات والرولات التي أُضيفت بعد النسخة ولا تحذفها.")],
       components: [row]
     });
   },
@@ -882,11 +886,20 @@ module.exports = {
       }
       if (interaction.isStringSelectMenu()) {
         if (action === "back_paste_pick") {
-          sessions.set(`${interaction.guild.id}:${interaction.user.id}`, { backupId: Number(interaction.values[0]), expiresAt: Date.now() + SESSION_TTL_MS });
+          const backupId = Number(interaction.values[0]);
+          const selectedBackup = await db.get("SELECT name, created_at, snapshot_json FROM guild_backups WHERE id = ? AND guild_id = ?", [backupId, guildId]);
+          if (!selectedBackup) { handled = true; return interaction.update({ content: "Backup not found.", components: [] }); }
+          let selectedSnapshot;
+          try { selectedSnapshot = JSON.parse(selectedBackup.snapshot_json); }
+          catch { handled = true; return interaction.update({ content: "Backup is corrupted and cannot be restored.", components: [] }); }
+          sessions.set(`${interaction.guild.id}:${interaction.user.id}`, { backupId, expiresAt: Date.now() + SESSION_TTL_MS });
           const menu = new StringSelectMenuBuilder().setCustomId(`back_paste_types:${guildId}:${userId}`).setPlaceholder("Scope").addOptions([
             { label: "All", value: "all" }, { label: "Channels & 100 Messages (Webhook)", value: "channels" }, { label: "Roles", value: "roles" }, { label: "Members", value: "members" }, { label: "Assets (Emoji/Stickers)", value: "assets" },
           ]);
-          handled = true; return interaction.update({ components: [new ActionRowBuilder().addComponents(menu)] });
+          handled = true; return interaction.update({
+            content: `Backup: ${selectedBackup.name}\nCreated: ${new Date(selectedBackup.created_at).toLocaleString("en-US")}\nChannels: ${selectedSnapshot.channels?.length || 0} | Roles: ${selectedSnapshot.roles?.length || 0} | Members: ${selectedSnapshot.members?.length || 0} | Messages: ${(selectedSnapshot.channels || []).reduce((total, channel) => total + (channel.messages?.length || 0), 0)}\nChoose exactly what to restore. Newer channels and roles will be preserved.`,
+            components: [new ActionRowBuilder().addComponents(menu)]
+          });
         }
         if (action === "back_paste_types") {
           const session = sessions.get(`${interaction.guild.id}:${interaction.user.id}`);
