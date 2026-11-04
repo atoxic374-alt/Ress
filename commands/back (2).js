@@ -67,9 +67,10 @@ async function withDiscordRetry(fn, { retries = MAX_API_RETRIES } = {}) {
     try {
       return await fn();
     } catch (error) {
-      const status = error?.status || error?.code;
+      const status = Number(error?.status || error?.httpStatus || 0);
+      const retryable = status === 429 || (status >= 500 && status < 600) || Number(error?.code) === 429;
       const retryAfterMs = Math.ceil((error?.retryAfter || error?.rawError?.retry_after || 0) * 1000);
-      if (status !== 429 && status < 500) throw error;
+      if (!retryable) throw error;
       if (attempt === retries) throw error;
       await new Promise((resolve) => setTimeout(resolve, retryAfterMs || 150 * 2 ** attempt));
       attempt += 1;
@@ -213,6 +214,11 @@ async function applyBackup(guild, snapshot, types, options = {}) {
   }
 
   if (all || types.includes("channels")) {
+    for (const snapshotRole of snapshot.roles) {
+      const existingRole = guild.roles.cache.get(snapshotRole.id)
+        || guild.roles.cache.find((role) => !role.managed && role.name === snapshotRole.name);
+      if (existingRole) roleIdMap.set(snapshotRole.id, existingRole.id);
+    }
     const channelsToProcess = targetId ? snapshot.channels.filter((c) => c.id === targetId) : snapshot.channels;
     const categoryMap = new Map();
     const requiredCategoryIds = new Set(
@@ -708,6 +714,7 @@ module.exports = {
         if (!isBackManager(interaction.user.id, targetGuild, client)) {
           return interaction.reply({ content: "Owner only.", ephemeral: true }).catch(() => null);
         }
+        await ensureStorage();
         const db = getDatabase();
         let handled = false;
         if (action === "back_restore_user") {
@@ -791,7 +798,7 @@ module.exports = {
           let snapshot;
           try { snapshot = JSON.parse(row.snapshot_json); }
           catch { handled = true; return interaction.editReply({ content: "Backup file is corrupted; nothing was restored.", components: [] }); }
-          const operationKey = markRestoreOperation(interaction.guild.id, interaction.user.id);
+          const operationKey = markRestoreOperation(interaction.guild.id, interaction.guild.client.user.id);
           let report;
           try { report = await applyBackup(interaction.guild, snapshot, session.types, { isPasteMode: true }); }
           finally { clearRestoreOperation(operationKey); sessions.delete(`${interaction.guild.id}:${interaction.user.id}`); }
@@ -886,7 +893,9 @@ module.exports = {
       }
     } catch (error) {
       console.error("Back interaction handler failed:", error);
-      if (!interaction.replied && !interaction.deferred) {
+      if (interaction.deferred) {
+        await interaction.editReply({ content: "Backup operation failed. No success was reported; check bot logs.", components: [] }).catch(() => null);
+      } else if (!interaction.replied) {
         await interaction.reply({ content: "Interaction failed. Try again.", ephemeral: true }).catch(() => null);
       }
     }
