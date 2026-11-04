@@ -167,6 +167,16 @@ async function captureSnapshot(guild, options = {}) {
     const messages = includeMessages ? await fetchChannelMessages(ch) : [];
     channels.push({
       id: ch.id, name: ch.name, type: ch.type, parentId: ch.parentId || null, position: ch.rawPosition, topic: ch.topic || null, nsfw: !!ch.nsfw,
+      bitrate: ch.bitrate ?? null, userLimit: ch.userLimit ?? null, rtcRegion: ch.rtcRegion ?? null,
+      rateLimitPerUser: ch.rateLimitPerUser ?? null, defaultAutoArchiveDuration: ch.defaultAutoArchiveDuration ?? null,
+      defaultThreadRateLimitPerUser: ch.defaultThreadRateLimitPerUser ?? null,
+      availableTags: Array.isArray(ch.availableTags) ? ch.availableTags.map((tag) => ({
+        name: tag.name, moderated: tag.moderated, emojiId: tag.emojiId || null, emojiName: tag.emojiName || null
+      })) : [],
+      defaultReactionEmoji: ch.defaultReactionEmoji ? {
+        emojiId: ch.defaultReactionEmoji.emojiId || null, emojiName: ch.defaultReactionEmoji.emojiName || null
+      } : null,
+      defaultForumLayout: ch.defaultForumLayout ?? null, defaultSortOrder: ch.defaultSortOrder ?? null,
       permissionOverwrites: ch.permissionOverwrites?.cache?.map((ow) => ({ id: ow.id, type: ow.type, allow: ow.allow.bitfield.toString(), deny: ow.deny.bitfield.toString() })) || [],
       messages,
     });
@@ -213,7 +223,7 @@ async function applyBackup(guild, snapshot, types, options = {}) {
     await Promise.all(rolesToProcess.map((sr) => limit(async () => {
       let role = guild.roles.cache.get(sr.id) || guild.roles.cache.find((r) => r.name === sr.name && !r.managed);
       if (!role) role = await withDiscordRetry(() => guild.roles.create({ name: sr.name, color: sr.color, hoist: sr.hoist, permissions: BigInt(sr.permissions), mentionable: sr.mentionable })).catch((error) => { failures.push(error.message || String(error)); return null; });
-      else await withDiscordRetry(() => role.edit({ color: sr.color, hoist: sr.hoist, permissions: BigInt(sr.permissions), mentionable: sr.mentionable })).catch((error) => { failures.push(error.message || String(error)); return null; });
+      else await withDiscordRetry(() => role.edit({ name: sr.name, color: sr.color, hoist: sr.hoist, permissions: BigInt(sr.permissions), mentionable: sr.mentionable })).catch((error) => { failures.push(error.message || String(error)); return null; });
       if (role) { roleIdMap.set(sr.id, role.id); createdRoles.push({ role, position: sr.position }); }
     })));
 
@@ -248,7 +258,7 @@ async function applyBackup(guild, snapshot, types, options = {}) {
     await Promise.all(cats.map((sc) => limit(async () => {
       let cat = guild.channels.cache.get(sc.id) || guild.channels.cache.find((c) => c.name === sc.name && c.type === ChannelType.GuildCategory);
       if (!cat) cat = await withDiscordRetry(() => guild.channels.create({ name: sc.name, type: ChannelType.GuildCategory, position: sc.position })).catch((error) => { failures.push(error.message || String(error)); return null; });
-      else await withDiscordRetry(() => cat.edit({ position: sc.position })).catch((error) => { failures.push(error.message || String(error)); return null; });
+      else await withDiscordRetry(() => cat.edit({ name: sc.name, position: sc.position })).catch((error) => { failures.push(error.message || String(error)); return null; });
       if (cat) {
         categoryMap.set(sc.id, cat.id);
         if (sc.permissionOverwrites) {
@@ -273,10 +283,21 @@ async function applyBackup(guild, snapshot, types, options = {}) {
       const parentId = sc.parentId ? categoryMap.get(sc.parentId) || null : null;
       let ch = guild.channels.cache.get(sc.id) || findBestChannelMatch(guild, sc, parentId);
       let wasCreated = false;
+      const channelOptions = { name: sc.name, type: sc.type, parent: parentId, position: sc.position, topic: sc.topic || undefined, nsfw: sc.nsfw };
+      for (const field of [
+        "bitrate", "userLimit", "rtcRegion", "rateLimitPerUser",
+        "defaultAutoArchiveDuration", "defaultThreadRateLimitPerUser",
+        "availableTags", "defaultReactionEmoji", "defaultForumLayout", "defaultSortOrder"
+      ]) {
+        if (sc[field] !== null && sc[field] !== undefined) channelOptions[field] = sc[field];
+      }
       if (!ch) {
-        ch = await withDiscordRetry(() => guild.channels.create({ name: sc.name, type: sc.type, parent: parentId, position: sc.position, topic: sc.topic || undefined, nsfw: sc.nsfw })).catch((error) => { failures.push(error.message || String(error)); return null; });
+        ch = await withDiscordRetry(() => guild.channels.create(channelOptions)).catch((error) => { failures.push(error.message || String(error)); return null; });
         wasCreated = true;
-      } else await withDiscordRetry(() => ch.edit({ parent: parentId, position: sc.position, topic: sc.topic || undefined, nsfw: sc.nsfw })).catch((error) => { failures.push(error.message || String(error)); return null; });
+      } else {
+        const { type, ...editOptions } = channelOptions;
+        await withDiscordRetry(() => ch.edit(editOptions)).catch((error) => { failures.push(error.message || String(error)); return null; });
+      }
 
       if (ch && sc.permissionOverwrites) {
         const mappedOverwrites = (sc.permissionOverwrites || []).map((ow) => {
