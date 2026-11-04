@@ -249,7 +249,23 @@ async function applyBackup(guild, snapshot, types, options = {}) {
       let cat = guild.channels.cache.get(sc.id) || guild.channels.cache.find((c) => c.name === sc.name && c.type === ChannelType.GuildCategory);
       if (!cat) cat = await withDiscordRetry(() => guild.channels.create({ name: sc.name, type: ChannelType.GuildCategory, position: sc.position })).catch((error) => { failures.push(error.message || String(error)); return null; });
       else await withDiscordRetry(() => cat.edit({ position: sc.position })).catch((error) => { failures.push(error.message || String(error)); return null; });
-      if (cat) categoryMap.set(sc.id, cat.id);
+      if (cat) {
+        categoryMap.set(sc.id, cat.id);
+        if (sc.permissionOverwrites) {
+          const mappedOverwrites = sc.permissionOverwrites.map((ow) => {
+            const mappedId = ow.type === 0
+              ? (roleIdMap.get(ow.id) || (guild.roles.cache.has(ow.id) ? ow.id : null))
+              : ow.id;
+            return mappedId ? { id: mappedId, type: ow.type, allow: BigInt(ow.allow), deny: BigInt(ow.deny) } : null;
+          }).filter(Boolean);
+          const snapshotTargets = new Set(mappedOverwrites.map((overwrite) => `${overwrite.type}:${overwrite.id}`));
+          const preservedOverwrites = cat.permissionOverwrites.cache
+            .filter((overwrite) => !snapshotTargets.has(`${overwrite.type}:${overwrite.id}`))
+            .map((overwrite) => ({ id: overwrite.id, type: overwrite.type, allow: overwrite.allow.bitfield, deny: overwrite.deny.bitfield }));
+          await withDiscordRetry(() => cat.permissionOverwrites.set([...preservedOverwrites, ...mappedOverwrites]))
+            .catch((error) => { failures.push(error.message || String(error)); return null; });
+        }
+      }
     })));
 
     const others = channelsToProcess.filter((c) => c.type !== ChannelType.GuildCategory);
@@ -294,7 +310,8 @@ async function applyBackup(guild, snapshot, types, options = {}) {
                 username: "Backup Archive",
                 avatarURL: guild.iconURL() || DEFAULT_AVATAR,
                 embeds: msg.embeds,
-                files: (msg.attachments || []).slice(0, 10)
+                files: (msg.attachments || []).slice(0, 10),
+                allowedMentions: { parse: [] }
               }));
               await new Promise((resolve) => setTimeout(resolve, 400));
             }
@@ -833,6 +850,9 @@ module.exports = {
           let snapshot;
           try { snapshot = JSON.parse(row.snapshot_json); }
           catch { handled = true; return interaction.editReply({ content: "Backup file is corrupted; nothing was restored.", components: [] }); }
+          if (!snapshot || !Array.isArray(snapshot.roles) || !Array.isArray(snapshot.channels)) {
+            handled = true; return interaction.editReply({ content: "Backup structure is invalid; nothing was restored.", components: [] });
+          }
           const operationKey = markRestoreOperation(interaction.guild.id, interaction.guild.client.user.id);
           let report;
           try { report = await applyBackup(interaction.guild, snapshot, session.types, { isPasteMode: true }); }
