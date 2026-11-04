@@ -11,14 +11,10 @@ const {
   AuditLogEvent,
   EmbedBuilder
 } = require("discord.js");
-const fs = require("fs");
-const path = require("path");
 const crypto = require("crypto");
 const colorManager = require("../utils/colorManager");
 const { getDatabase } = require("../utils/database");
 
-const { getBackupsDir } = require('../utils/storagePaths');
-const backupsDir = getBackupsDir('json-fallback');
 const sessions = new Map();
 const protectionDebounce = new Map();
 let listenersReady = false;
@@ -79,7 +75,6 @@ async function withDiscordRetry(fn, { retries = MAX_API_RETRIES } = {}) {
 }
 
 async function ensureStorage() {
-  await fs.promises.mkdir(backupsDir, { recursive: true });
   const db = getDatabase();
   await db.run(`CREATE TABLE IF NOT EXISTS guild_backups (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT, user_id TEXT, name TEXT, snapshot_json TEXT, hash TEXT, created_at INTEGER)`);
   await db.run(`CREATE TABLE IF NOT EXISTS guild_protection (guild_id TEXT PRIMARY KEY, config_json TEXT, updated_at INTEGER)`);
@@ -475,12 +470,6 @@ async function scheduleProtectionCheck(guild, type, event, affectedElement = nul
       return;
     }
 
-    const isImmediateRestoreEvent = (event === AuditLogEvent.ChannelDelete || event === AuditLogEvent.RoleDelete) && cfg.snapshot && targetId;
-    if (isImmediateRestoreEvent) {
-      await applyBackup(guild, cfg.snapshot, [type === "channel" ? "channels" : "roles"], { targetId, isPasteMode: false });
-      schedulePostRestoreValidation(guild, cfg.snapshot, [type === "channel" ? "channels" : "roles"], { targetId });
-    }
-
     const entry = await fetchAuditLogWithRetry(guild, event, targetId);
     if (entry?.executorId && isRestoreOperationActive(guild.id, entry.executorId)) return;
     const executorMember = entry?.executorId
@@ -507,8 +496,8 @@ async function scheduleProtectionCheck(guild, type, event, affectedElement = nul
         }
       }
 
-      if (isTrusted && entry.executorId !== guild.client.user.id) {
-        await createAutoSnapshotIfChanged(guild, "trusted-change").catch(() => null);
+      if ((isOwner || isTrusted) && entry.executorId !== guild.client.user.id) {
+        await createAutoSnapshotIfChanged(guild, "authorized-change").catch(() => null);
       }
       return;
     }
@@ -535,16 +524,17 @@ async function scheduleProtectionCheck(guild, type, event, affectedElement = nul
               name: `blocked-${affectedElement.name}`.slice(0, 100),
             }).catch(() => null)
           : Promise.resolve();
-      Promise.all([
+      await Promise.all([
         punishUser(guild, entry.executorId, `Unauthorized ${type} creation`),
         canDelete ? affectedElement.delete().catch(() => null) : neutralizeRole,
       ]);
     } else {
       const scope = [type === "channel" ? "channels" : type === "role" ? "roles" : "settings"];
-      Promise.all([
+      await Promise.all([
         punishUser(guild, entry.executorId, `Unauthorized ${type} action`),
         applyBackup(guild, cfg.snapshot, scope, { targetId, isPasteMode: false }),
-      ]).finally(() => schedulePostRestoreValidation(guild, cfg.snapshot, scope, { targetId }));
+      ]);
+      schedulePostRestoreValidation(guild, cfg.snapshot, scope, { targetId });
     }
   } catch (error) { console.error("Protection check failed:", error); }
 }
