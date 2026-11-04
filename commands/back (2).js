@@ -65,7 +65,11 @@ async function withDiscordRetry(fn, { retries = MAX_API_RETRIES } = {}) {
     } catch (error) {
       const status = Number(error?.status || error?.httpStatus || 0);
       const retryable = status === 429 || (status >= 500 && status < 600) || Number(error?.code) === 429;
-      const retryAfterMs = Math.ceil((error?.retryAfter || error?.rawError?.retry_after || 0) * 1000);
+      const retryAfterMs = Math.ceil(
+        error?.retryAfter !== undefined && error?.retryAfter !== null
+          ? Number(error.retryAfter)
+          : Number(error?.rawError?.retry_after || 0) * 1000
+      );
       if (!retryable) throw error;
       if (attempt === retries) throw error;
       await new Promise((resolve) => setTimeout(resolve, retryAfterMs || 150 * 2 ** attempt));
@@ -431,7 +435,11 @@ async function punishUser(guild, userId, reason) {
       global.isBotOwner?.(member)
     ) return;
     await member.roles.set([]).catch(() => null);
-    const ownersToNotify = [guild.ownerId, ...(guild.client.config?.owners || [])];
+    const ownersToNotify = [
+      guild.ownerId,
+      ...(Array.isArray(guild.client.config?.owners) ? guild.client.config.owners : []),
+      ...(Array.isArray(global.BOT_OWNERS) ? global.BOT_OWNERS : [])
+    ];
     const embed = colorManager.createEmbed().setTitle("🚨 Protection Triggered").setDescription(`User <@${userId}> was punished.\nReason: ${reason}`).setTimestamp();
     const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`back_restore_user:${guild.id}:${userId}`).setLabel("Restore Roles").setStyle(ButtonStyle.Success));
     for (const ownerId of [...new Set(ownersToNotify)]) {
