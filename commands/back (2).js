@@ -375,7 +375,7 @@ async function applyBackup(guild, snapshot, types, options = {}) {
           const roleName = snapRolesMap.get(rId);
           return roleName ? guild.roles.cache.find((r) => r.name === roleName) : null;
         }).filter((r) => r && r.id !== guild.id && !r.managed);
-        await member.roles.set(roles).catch((error) => { failures.push(error.message || String(error)); return null; });
+        if (roles.length) await member.roles.add(roles).catch((error) => { failures.push(error.message || String(error)); return null; });
       }
     })));
   }
@@ -422,7 +422,13 @@ async function punishUser(guild, userId, reason) {
     const member = await guild.members.fetch(userId).catch(() => null);
     const roles = member ? member.roles.cache.filter((r) => r.id !== guild.id && !r.managed).map((r) => r.id) : [];
     await db.run("INSERT OR REPLACE INTO punished_users (guild_id, user_id, roles_json) VALUES (?, ?, ?)", [guild.id, userId, JSON.stringify(roles)]);
-    if (!member || member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
+    if (
+      !member ||
+      member.user.bot ||
+      member.id === guild.ownerId ||
+      member.permissions.has(PermissionsBitField.Flags.Administrator) ||
+      global.isBotOwner?.(member)
+    ) return;
     await member.roles.set([]).catch(() => null);
     const ownersToNotify = [guild.ownerId, ...(guild.client.config?.owners || [])];
     const embed = colorManager.createEmbed().setTitle("🚨 Protection Triggered").setDescription(`User <@${userId}> was punished.\nReason: ${reason}`).setTimestamp();
@@ -471,7 +477,12 @@ async function scheduleProtectionCheck(guild, type, event, affectedElement = nul
 
     const entry = await fetchAuditLogWithRetry(guild, event, targetId);
     if (entry?.executorId && isRestoreOperationActive(guild.id, entry.executorId)) return;
-    const isOwner = guild.client.config?.owners?.includes(entry?.executorId) || entry?.executorId === guild.ownerId;
+    const executorMember = entry?.executorId
+      ? await guild.members.fetch(entry.executorId).catch(() => null)
+      : null;
+    const isOwner = guild.client.config?.owners?.includes(entry?.executorId)
+      || entry?.executorId === guild.ownerId
+      || Boolean(global.isBotOwner?.(executorMember || entry?.executorId));
     const isTrusted = await isTrustedExecutor(guild, cfg, entry?.executorId);
     if (entry && (isOwner || isTrusted)) {
       if (
@@ -813,7 +824,8 @@ module.exports = {
         if (!row) return interaction.reply({ content: "Data not found.", ephemeral: true });
         const member = await targetGuild.members.fetch(userId).catch(() => null);
         if (member) {
-          await member.roles.set(JSON.parse(row.roles_json));
+          const savedRoles = JSON.parse(row.roles_json);
+          if (savedRoles.length) await member.roles.add(savedRoles);
           await db.run("DELETE FROM punished_users WHERE guild_id = ? AND user_id = ?", [guildId, userId]);
           handled = true; return interaction.update({ embeds: [EmbedBuilder.from(interaction.message.embeds[0]).setColor(0x00ff00).addFields({ name: "✅ Status", value: `Restored by <@${interaction.user.id}>` })], components: [] });
         } else {
@@ -937,7 +949,7 @@ module.exports = {
           const selectedScopes = interaction.values.map((value) => scopeLabels[value] || value).join(", ");
           const confirm = new ButtonBuilder().setCustomId(`back_paste_confirm:${guildId}:${userId}`).setLabel("Confirm Restore").setStyle(ButtonStyle.Success);
           handled = true; return interaction.update({
-            content: `Selected: ${selectedScopes}.\nRestore updates matching items and preserves extra roles, channels, and unrelated permission overwrites. Member-role restoration skips the server owner, bots, and administrators.\nArchived messages are replayed only into newly created channels, up to 100 per channel.`,
+            content: `Selected: ${selectedScopes}.\nRestore updates matching items and preserves extra roles, channels, and unrelated permission overwrites. Member-role restoration only adds saved roles and skips the server owner, bots, and administrators.\nArchived messages are replayed only into newly created channels, up to 100 per channel.`,
             components: [new ActionRowBuilder().addComponents(confirm)]
           });
         }
