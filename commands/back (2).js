@@ -430,6 +430,10 @@ async function scheduleProtectionCheck(guild, type, event, affectedElement = nul
   try {
     const cfg = await getConfig(guild.id);
     if (!cfg.enabled || !cfg.toggles[type === "channel" ? "channels" : type === "role" ? "roles" : "settings"]) return;
+    if (!cfg.snapshot || !Array.isArray(cfg.snapshot.roles) || !Array.isArray(cfg.snapshot.channels)) {
+      console.warn(`Protection is enabled without a valid baseline for guild ${guild.id}; skipping automatic changes.`);
+      return;
+    }
 
     const isImmediateRestoreEvent = (event === AuditLogEvent.ChannelDelete || event === AuditLogEvent.RoleDelete) && cfg.snapshot && targetId;
     if (isImmediateRestoreEvent) {
@@ -818,9 +822,17 @@ module.exports = {
         }
         if (action === "back_prot_toggle") {
           const cfg = await getConfig(interaction.guild.id);
+          if (!cfg.enabled && (!cfg.snapshot || !Array.isArray(cfg.snapshot.roles) || !Array.isArray(cfg.snapshot.channels))) {
+            cfg.snapshot = await captureSnapshot(interaction.guild, { includeMessages: false, includeMembers: false, includeAssets: false });
+          }
           cfg.enabled = !cfg.enabled;
           await saveConfig(interaction.guild.id, cfg);
-          handled = true; return interaction.update({ content: `Protection ${cfg.enabled ? "Enabled" : "Disabled"}` });
+          handled = true; return interaction.update({
+            content: cfg.enabled
+              ? "Protection enabled. A valid baseline snapshot is saved."
+              : "Protection disabled.",
+            components: []
+          });
         }
         if (action === "back_prot_snap") {
           const list = await db.all("SELECT id, name FROM guild_backups WHERE guild_id = ? ORDER BY id DESC LIMIT 25", [interaction.guild.id]);
