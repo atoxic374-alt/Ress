@@ -84,6 +84,8 @@ async function ensureStorage() {
   await db.run(`CREATE TABLE IF NOT EXISTS guild_backups (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT, user_id TEXT, name TEXT, snapshot_json TEXT, hash TEXT, created_at INTEGER)`);
   await db.run(`CREATE TABLE IF NOT EXISTS guild_protection (guild_id TEXT PRIMARY KEY, config_json TEXT, updated_at INTEGER)`);
   await db.run(`CREATE TABLE IF NOT EXISTS punished_users (guild_id TEXT, user_id TEXT, roles_json TEXT, PRIMARY KEY (guild_id, user_id))`);
+  await db.run("CREATE INDEX IF NOT EXISTS idx_guild_backups_guild_created ON guild_backups (guild_id, created_at DESC)");
+  await db.run("CREATE INDEX IF NOT EXISTS idx_guild_backups_owner ON guild_backups (guild_id, user_id)");
 
   try {
     const tableInfo = await db.all(`PRAGMA table_info(guild_backups)`);
@@ -107,7 +109,21 @@ async function getConfig(guildId) {
   await ensureStorage();
   const db = getDatabase();
   const row = await db.get("SELECT config_json FROM guild_protection WHERE guild_id = ?", [guildId]);
-  return row ? JSON.parse(row.config_json) : { enabled: false, toggles: { channels: true, roles: true, settings: true }, trustedUsers: [], snapshot: null };
+  const defaults = { enabled: false, toggles: { channels: true, roles: true, settings: true }, trustedUsers: [], snapshot: null };
+  if (!row?.config_json) return defaults;
+  try {
+    const parsed = JSON.parse(row.config_json);
+    return {
+      ...defaults,
+      ...parsed,
+      toggles: { ...defaults.toggles, ...(parsed.toggles || {}) },
+      trustedUsers: Array.isArray(parsed.trustedUsers) ? parsed.trustedUsers.map(String) : [],
+      snapshot: parsed.snapshot && typeof parsed.snapshot === "object" ? parsed.snapshot : null
+    };
+  } catch (error) {
+    console.error(`Invalid protection config for guild ${guildId}:`, error.message);
+    return defaults;
+  }
 }
 
 async function saveConfig(guildId, config) {
@@ -253,7 +269,16 @@ async function applyBackup(guild, snapshot, types, options = {}) {
             : ow.id;
           return mappedId ? { id: mappedId, type: ow.type, allow: BigInt(ow.allow), deny: BigInt(ow.deny) } : null;
         }).filter(Boolean);
-        await withDiscordRetry(() => ch.permissionOverwrites.set(mappedOverwrites)).catch((error) => { failures.push(error.message || String(error)); return null; });
+        const snapshotTargets = new Set(mappedOverwrites.map((overwrite) => `${overwrite.type}:${overwrite.id}`));
+        const preservedOverwrites = ch.permissionOverwrites.cache
+          .filter((overwrite) => !snapshotTargets.has(`${overwrite.type}:${overwrite.id}`))
+          .map((overwrite) => ({
+            id: overwrite.id,
+            type: overwrite.type,
+            allow: overwrite.allow.bitfield,
+            deny: overwrite.deny.bitfield
+          }));
+        await withDiscordRetry(() => ch.permissionOverwrites.set([...preservedOverwrites, ...mappedOverwrites])).catch((error) => { failures.push(error.message || String(error)); return null; });
       }
 
       if (isPasteMode && wasCreated && ch && sc.messages?.length && ch.isTextBased() && ![ChannelType.GuildVoice, ChannelType.GuildStageVoice, ChannelType.GuildForum, ChannelType.GuildMedia].includes(ch.type)) {
@@ -262,7 +287,17 @@ async function applyBackup(guild, snapshot, types, options = {}) {
           const existingWebhooks = await ch.fetchWebhooks().catch(() => new Map());
           webhook = existingWebhooks.find(wh => wh.name === "Backup-Restore") || await withDiscordRetry(() => ch.createWebhook({ name: "Backup-Restore", avatar: guild.iconURL() || DEFAULT_AVATAR }));
           for (const msg of sc.messages) {
-            try { await withDiscordRetry(() => webhook.send({ content: msg.content || " ", username: msg.username, avatarURL: msg.avatar, embeds: msg.embeds, files: (msg.attachments || []).slice(0, 10) })); await new Promise((resolve) => setTimeout(resolve, 400)); }
+            try {
+              const archivedContent = `**Original author: ${String(msg.username || "Unknown").slice(0, 80)}**\n${msg.content || " "}`.slice(0, 2000);
+              await withDiscordRetry(() => webhook.send({
+                content: archivedContent,
+                username: "Backup Archive",
+                avatarURL: guild.iconURL() || DEFAULT_AVATAR,
+                embeds: msg.embeds,
+                files: (msg.attachments || []).slice(0, 10)
+              }));
+              await new Promise((resolve) => setTimeout(resolve, 400));
+            }
             catch (msgErr) { console.error("Message send failed:", msgErr); }
           }
         } catch (e) { console.error("Webhook operation failed:", e); }
@@ -306,7 +341,7 @@ async function applyBackup(guild, snapshot, types, options = {}) {
 
 function markRestoreOperation(guildId, userId) {
   const key = `${guildId}:${userId}`;
-  activeRestoreOperations.set(key, Date.now() + 120000);
+  activeRestoreOperations.set(key, Date.now() + 10 * 60 * 1000);
   return key;
 }
 
@@ -825,8 +860,13 @@ module.exports = {
           const session = sessions.get(`${interaction.guild.id}:${interaction.user.id}`);
           if (!session) { handled = true; return interaction.reply({ content: "Session expired, pick backup again.", ephemeral: true }); }
           sessions.set(`${interaction.guild.id}:${interaction.user.id}`, { ...session, types: interaction.values });
-          const confirm = new ButtonBuilder().setCustomId(`back_paste_confirm:${guildId}:${userId}`).setLabel("Confirm").setStyle(ButtonStyle.Success);
-          handled = true; return interaction.update({ components: [new ActionRowBuilder().addComponents(confirm)] });
+          const scopeLabels = { all: "All saved categories", channels: "Channels and archived messages", roles: "Roles", members: "Member roles", assets: "Emojis and stickers" };
+          const selectedScopes = interaction.values.map((value) => scopeLabels[value] || value).join(", ");
+          const confirm = new ButtonBuilder().setCustomId(`back_paste_confirm:${guildId}:${userId}`).setLabel("Confirm Restore").setStyle(ButtonStyle.Success);
+          handled = true; return interaction.update({
+            content: `Selected: ${selectedScopes}.\nRestore updates matching items and preserves extra roles, channels, and unrelated permission overwrites. Member-role restoration skips the server owner, bots, and administrators.\nArchived messages are replayed only into newly created channels, up to 100 per channel.`,
+            components: [new ActionRowBuilder().addComponents(confirm)]
+          });
         }
         if (action === "back_prot_del_trusted") {
           const cfg = await getConfig(guildId);
@@ -885,7 +925,8 @@ module.exports = {
         const hash = generateSnapshotHash(snap);
         const dateLabel = new Date().toISOString();
         await db.run("INSERT INTO guild_backups (guild_id, user_id, name, snapshot_json, hash, created_at) VALUES (?, ?, ?, ?, ?, ?)", [interaction.guild.id, interaction.user.id, customName, JSON.stringify(snap), hash, Date.now()]);
-        handled = true; return interaction.editReply(`تم حفظ النسخة **${customName}**\nتاريخ الإنشاء: ${dateLabel}\nالرومات: ${snap.channels.length} | الرولات: ${snap.roles.length} | الأعضاء: ${snap.members.length}`);
+        const archivedMessages = snap.channels.reduce((total, channel) => total + (channel.messages?.length || 0), 0);
+        handled = true; return interaction.editReply(`تم حفظ النسخة **${customName}**\nتاريخ الإنشاء: ${dateLabel}\nالرومات: ${snap.channels.length} | الرولات: ${snap.roles.length} | الأعضاء: ${snap.members.length} | الرسائل المؤرشفة: ${archivedMessages}\nملاحظة: المرفقات محفوظة كروابط، وليس كملفات مستقلة.`);
       }
 
       if (interaction.customId?.startsWith("back_") && !handled) {
