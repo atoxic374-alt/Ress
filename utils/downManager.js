@@ -1167,7 +1167,7 @@ class DownManager {
             }
         }, 60000); // Check every minute
 
-        // تحديث المنيو التلقائي كل 30 ثانية
+        // تحديث المنيو الدوري كل 5 دقائق لتجنب طلبات Discord المتكررة عند تعطل القناة.
         setInterval(async () => {
             try {
                 const settings = this.getSettings();
@@ -1182,7 +1182,7 @@ class DownManager {
             } catch (error) {
                 console.error('خطأ في تحديث المنيو التلقائي:', error);
             }
-        }, 30000); // تحديث كل 30 ثانية
+        }, 5 * 60_000); // تحديث كل 5 دقائق
 
         // فحص تكاملي دوري: التأكد أن كل من عليه داون لا يملك الرول المسحوب
         setInterval(async () => {

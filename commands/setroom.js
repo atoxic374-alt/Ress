@@ -139,6 +139,7 @@ const setupCleanupLastRun = new Map();
 const setupCleanupInProgress = new Set();
 let setupCleanupTimer = null;
 let setupRefreshPromise = null;
+const channelAccessWarningTimes = new Map();
 // تخزين آخر وقت تم فيه طباعة خطأ تحميل الصورة (لتقليل الرسائل المكررة)
 const lastImageErrorLog = new Map();
 
@@ -179,6 +180,16 @@ async function fetchChannelOrNull(channelManager, channelId) {
         return await channelManager.fetch(channelId);
     } catch (error) {
         if (isUnknownChannelError(error)) return null;
+        const code = getDiscordErrorCode(error);
+        if (code === 50001 || code === 50013) {
+            const now = Date.now();
+            const lastWarning = channelAccessWarningTimes.get(channelId) || 0;
+            if (now - lastWarning >= 10 * 60_000) {
+                console.warn(`⚠️ لا يمكن للبوت الوصول إلى القناة ${channelId} (Discord ${code}). تحقق من صلاحيات View Channel وSend Messages.`);
+                channelAccessWarningTimes.set(channelId, now);
+            }
+            return null;
+        }
         throw error;
     }
 }
@@ -807,7 +818,9 @@ async function runScheduledSetupCleanup(client) {
         try {
             // هذا المسار ينظف كل رسائل القناة، ثم يرسل لوحة setroom من جديد.
             const cleaned = await resendSetupEmbed(guildId, client);
-            if (cleaned) setupCleanupLastRun.set(guildId, Date.now());
+            // حدد وقت المحاولة حتى لا تعاد المحاولة كل دقيقة عند إعداد قناة غير صالح.
+            setupCleanupLastRun.set(guildId, Date.now());
+            if (cleaned) console.log(`✅ اكتملت دورة تحديث لوحة setroom للسيرفر ${guildId}`);
         } catch (error) {
             console.error(`❌ فشل التنظيف الدوري لقناة setroom في ${guildId}:`, error?.stack || error);
         } finally {

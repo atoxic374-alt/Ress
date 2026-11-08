@@ -29,6 +29,11 @@ const { getResponsibilitiesSnapshot } = require('../utils/responsibilitiesStore'
 const { ensureCairoFontsRegistered } = require('../utils/cairoFont');
 const { buildTopSummaryImage } = require('../utils/topSummaryRenderer');
 const { getGuildBannerHexFast } = require('../utils/guildBannerColor');
+const {
+  fetchExistingPanelMessage,
+  deliverTicketPanel,
+  describeTicketPanelDeliveryError
+} = require('../utils/ticketPanelDelivery');
 
 const name = 'ticket';
 const aliases = ['تكت', 'tclose', 'اغلاق', 'اقفال', 'myticket', 'نقاطي', 'tadd', 'اضافه', 'اضافة', 'إضافة', 'tremove', 'ازاله', 'ازالة', 'إزالة', 'tchange', 'تغيير', 'تحويل', 'ttop', 'نقاط', 'tname', 'اسم', 'تسميه', 'تسمية', 'remind', 'تنبيه', 'استدعاء', 'points', 'tm', 'treset', 'tmreset', 'tblock'];
@@ -7039,49 +7044,43 @@ const isServerOwnerOrBotOwner = BOT_OWNERS.includes(message.author.id) || messag
           components: createReasonComponents(config, message.guild.id, panelId)
         };
 
-        const previousPanelMessage = config.panelMessageId
-          ? await panelChannel.messages.fetch(config.panelMessageId).catch(() => null)
-          : null;
+        let storedPanelImage = '';
+        let includesImage = false;
+        try {
+          const previousPanelMessage = await fetchExistingPanelMessage(panelChannel, config.panelMessageId);
+          let deliveryPayload = payload;
 
-        if (mode === 'image' || mode === 'both') {
-          if (!imageInput || imageInput === '0') {
-            await refresh('**❌ تم إلغاء ارسال البانل : وضع الصورة يتطلب صورة صالحة.**');
-            return;
+          if (mode === 'image' || mode === 'both') {
+            if (!imageInput || imageInput === '0') {
+              await refresh('**❌ تم إلغاء ارسال البانل : وضع الصورة يتطلب صورة صالحة.**');
+              return;
+            }
+
+            try {
+              storedPanelImage = await storeImageLocally(imageInput, message.guild.id, `panel_send_${Date.now()}`);
+            } catch {
+              await refresh('**❌ فشل رفع صورة البانل. تأكد ان الرابط مباشر أو ارسل الصورة كمرفق بدون نص.**');
+              return;
+            }
+
+            const panelImage = resolveImageForSend(storedPanelImage);
+            if (!panelImage) {
+              await refresh('**❌ فشل تجهيز صورة البانل بعد الحفظ.**');
+              return;
+            }
+            deliveryPayload = { ...payload, files: [panelImage] };
+            includesImage = true;
           }
 
-          let storedPanelImage = '';
-          try {
-            storedPanelImage = await storeImageLocally(imageInput, message.guild.id, `panel_send_${Date.now()}`);
-          } catch {
-            await refresh('**❌ فشل رفع صورة البانل. تأكد ان الرابط مباشر أو ارسل الصورة كمرفق بدون نص.**');
-            return;
-          }
-
-          const panelImage = resolveImageForSend(storedPanelImage);
-          if (!panelImage) {
-            await refresh('**❌ فشل تجهيز صورة البانل بعد الحفظ.**');
-            return;
-          }
-
-          if (previousPanelMessage?.editable) {
-            await previousPanelMessage.edit({ ...payload, files: [panelImage] }).catch((error) => logSilentError('suppressed', error));
-          } else {
-            const sentPanelMessage = await panelChannel.send({ ...payload, files: [panelImage] }).catch(() => null);
-            if (sentPanelMessage) config.panelMessageId = sentPanelMessage.id;
-          }
-          removeStoredImage(storedPanelImage);
-        } else {
-          if (previousPanelMessage?.editable) {
-            await previousPanelMessage.edit(payload).catch((error) => logSilentError('suppressed', error));
-          } else {
-            const sentPanelMessage = await panelChannel.send(payload).catch(() => null);
-            if (sentPanelMessage) config.panelMessageId = sentPanelMessage.id;
-          }
+          const sentPanelMessage = await deliverTicketPanel(panelChannel, deliveryPayload, previousPanelMessage);
+          config.panelMessageId = sentPanelMessage.id;
+          await refresh(`**✅ تم ارسال بانل التكت بنجاح في <#${panelId}>.**`);
+        } catch (error) {
+          logSilentError(`ticket.panel.delivery.${panelId}`, error);
+          await refresh(`**${describeTicketPanelDeliveryError(error, { includesImage })}**`);
+        } finally {
+          if (storedPanelImage) removeStoredImage(storedPanelImage);
         }
-
-        if (previousPanelMessage?.id) config.panelMessageId = previousPanelMessage.id;
-
-        await refresh(`**✅ تم ارسال بانل التكت بنجاح في <#${panelId}>.**`);
         return;
       }
 

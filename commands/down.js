@@ -9,6 +9,11 @@ const { componentsV2Payload, colorToNumber } = require('../utils/structuredConta
 
 const name = 'down';
 const pendingDownModals = new Map();
+const permanentMenuAccessWarnings = new Map();
+
+function discordErrorCode(error) {
+    return Number(error?.code ?? error?.rawError?.code ?? error?.data?.code);
+}
 
 // Helper function to read JSON files
 function readJson(filePath, defaultValue = {}) {
@@ -178,7 +183,8 @@ async function createPermanentMenu(client, channelId) {
                 console.log('تم تحديث المنيو الموجود');
                 return true;
             } catch (error) {
-                // Message doesn't exist anymore, create new one
+                if (discordErrorCode(error) !== 10008 && Number(error?.status) !== 404) throw error;
+                // Recreate only when Discord confirms the previous message is gone.
                 console.log('Previous menu message not found, creating new one');
                 settings.menuMessageId = null;
             }
@@ -195,11 +201,28 @@ async function createPermanentMenu(client, channelId) {
             console.log(`تم إنشاء منيو جديد برقم: ${message.id}`);
             return true;
         } catch (error) {
-            console.error('خطأ في إنشاء المنيو الجديد:', error);
-            return false;
+            throw error;
         }
     } catch (error) {
-        console.error('خطأ في إنشاء المنيو الدائم:', error);
+        const code = discordErrorCode(error);
+        if (code === 10003 || Number(error?.status) === 404) {
+            const settings = downManager.getSettings();
+            if (settings.menuChannel === channelId) {
+                settings.menuChannel = null;
+                settings.menuMessageId = null;
+                downManager.updateSettings(settings);
+            }
+            console.warn(`⚠️ قناة منيو الداون ${channelId} لم تعد موجودة؛ أُزيلت من الإعدادات ويجب اختيار قناة جديدة.`);
+        } else if (code === 50001 || code === 50013) {
+            const now = Date.now();
+            const lastWarning = permanentMenuAccessWarnings.get(channelId) || 0;
+            if (now - lastWarning >= 5 * 60_000) {
+                console.warn(`⚠️ لا يملك البوت صلاحية الوصول/الإرسال في قناة منيو الداون ${channelId}. تحقق من صلاحيات View Channel وSend Messages.`);
+                permanentMenuAccessWarnings.set(channelId, now);
+            }
+        } else {
+            console.error('خطأ في إنشاء المنيو الدائم:', error);
+        }
         return false;
     }
 }
