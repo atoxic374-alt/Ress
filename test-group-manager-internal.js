@@ -177,6 +177,46 @@ async function testDepartedMemberAccessCleanup() {
   const failingGuild = { ...guild, channels: { cache: new Map([[failingVoice.id, failingVoice]]), fetch: async () => failingVoice } };
   await assert.rejects(removeManagedMemberOverwrites(failingGuild, { id: 1000, text_channel_id: null, voice_channel_id: failingVoice.id }, USER_A), /missing permissions/,
     'failed Discord overwrite removal is surfaced instead of silently reporting success');
+
+  const originalOverwrite = { id: USER_A, type: 1, allow: { bitfield: 1n }, deny: { bitfield: 4n } };
+  const restoredTextOverwrites = new Map([[USER_A, originalOverwrite]]);
+  const partialText = {
+    id: 'partial-text-channel',
+    permissionOverwrites: {
+      cache: restoredTextOverwrites,
+      delete: async id => { restoredTextOverwrites.delete(String(id)); },
+      edit: async (id, permissions) => {
+        restoredTextOverwrites.set(String(id), {
+          id: String(id), type: 1,
+          allow: { bitfield: BigInt(permissions.allow) },
+          deny: { bitfield: BigInt(permissions.deny) }
+        });
+      }
+    }
+  };
+  const partialVoice = {
+    id: 'partial-voice-channel',
+    permissionOverwrites: {
+      cache: new Map([[USER_A, { id: USER_A, type: 1, allow: { bitfield: 8n }, deny: { bitfield: 0n } }]]),
+      delete: async () => { throw new Error('voice overwrite delete failed'); }
+    }
+  };
+  const partialGuild = {
+    id: 'partial-overwrite-rollback-guild',
+    channels: {
+      cache: new Map([[partialText.id, partialText], [partialVoice.id, partialVoice]]),
+      fetch: async id => new Map([[partialText.id, partialText], [partialVoice.id, partialVoice]]).get(String(id)) || null
+    }
+  };
+  await assert.rejects(removeManagedMemberOverwrites(partialGuild, {
+    id: 1001,
+    text_channel_id: partialText.id,
+    voice_channel_id: partialVoice.id
+  }, USER_A), /voice overwrite delete failed/);
+  assert.equal(restoredTextOverwrites.get(USER_A)?.allow.bitfield, 1n,
+    'the successful text-overwrite deletion is rolled back when the voice deletion fails');
+  assert.equal(restoredTextOverwrites.get(USER_A)?.deny.bitfield, 4n,
+    'rollback restores both allow and deny permission masks');
 }
 
 async function testPeriodicUnlinkedAccessCleanup() {
@@ -266,7 +306,7 @@ async function testGroupCommandGuideAndMusicApi() {
   assert.doesNotMatch(setupHelp, /`:/, 'setup help does not hardcode colon command prefixes');
 }
 
-function testSetupValidation() {
+async function testSetupValidation() {
   const basePermissions = new Set(['ManageChannels', 'ManageRoles']);
   const textPermissions = new Set(['ViewChannel', 'ManageChannels', 'ManageThreads', 'SendMessages', 'SendMessagesInThreads']);
   const voicePermissions = new Set(['ViewChannel', 'ManageChannels']);
@@ -276,7 +316,7 @@ function testSetupValidation() {
     channels: { cache: new Map([['text-category', category(textPermissions)], ['voice-category', category(voicePermissions)]]) },
     roles: { cache: new Map() }
   };
-  const missing = gm.validateConfig(guild, {
+  const missing = await gm.validateConfig(guild, {
     ...gm.GROUP_DEFAULTS,
     chatMode: 'threads',
     textCategoryId: 'text-category',
@@ -318,7 +358,7 @@ async function testDashboardPublishers() {
 
   await groupCommand.sendAdminControlPanel(channel, guild);
   const adminComponents = JSON.stringify([...messages.values()][0]?.components || []);
-  assert.ok(adminComponents.includes('GROUP ADMINISTRATION'), 'admin dashboard title is English');
+  assert.ok(adminComponents.includes('GROUP ADMIN'), 'admin dashboard title is English');
   assert.ok(adminComponents.includes('Delete') && adminComponents.includes('Reset All'));
   assert.doesNotMatch(adminComponents, /استخدم الأزرار لإدارة القروبات/);
   assert.ok(adminComponents.includes('1465336647477493894') && adminComponents.includes('1465373714060415180'), 'admin action buttons reuse matching role-panel emojis');
@@ -353,6 +393,7 @@ async function testDashboardPublishers() {
 
 
   const topGuild = { ...guild, members: { cache: new Map(), fetch: async () => null }, iconURL: () => null, bannerURL: () => null };
+  await gm.saveSettings(topGuild.id, { topChannelId: '100000000000000301' }, OWNER);
   const topPayload = await groupCommand.buildTopGroupsPayload(topGuild, { viewerId: OWNER, channelId: 'dashboard-channel' });
   assert.equal(topPayload.files.length, 1, 'top groups is rendered as an attached image');
   assert.equal(topPayload.components.length, 1, 'top board has one compact navigation row');
@@ -371,7 +412,7 @@ async function testDashboardPublishers() {
   let topSends = 0, topEdits = 0, legacyDeleted = 0;
   const topMessages = new Map([['legacy-top', legacyMessage]]);
   const topChannel = {
-    id: 'top-dashboard-channel',
+    id: '100000000000000301',
     messages: { fetch: async () => new Map(topMessages) },
     send: async payload => {
       topSends += 1;
@@ -404,7 +445,7 @@ async function testDashboardPublishers() {
   };
   const oldV2Messages = new Map([['old-v2-top', oldV2TopMessage]]);
   const oldV2Channel = {
-    id: 'old-v2-top-channel',
+    id: '100000000000000302',
     messages: { fetch: async () => new Map(oldV2Messages) },
     send: async payload => {
       migratedBoardSends += 1;
@@ -417,6 +458,7 @@ async function testDashboardPublishers() {
     customId: 'groups_top:refresh', guild: topGuild, channel: oldV2Channel, channelId: oldV2Channel.id,
     message: oldV2TopMessage, user: { id: OWNER }, deferUpdate: async () => {}
   };
+  await gm.saveSettings(topGuild.id, { topChannelId: oldV2Channel.id }, OWNER);
   await groupCommand.handleInteraction(oldBoardRefresh);
   assert.equal(migratedBoardSends, 1, 'refresh replaces an old V2 top board instead of trying an invalid edit');
   assert.equal(oldBoardDeleteCount, 1);
@@ -444,7 +486,13 @@ async function testDashboardPublishers() {
 async function testSetupDashboardSerialization() {
   const botId = 'setup-dashboard-bot';
   const ownerId = '100000000000000021';
-  const botMember = { id: botId, permissions: { has: () => true }, roles: { highest: { position: 20 } } };
+  const extraPermissionNames = new Set(['ManageMessages', 'ModerateMembers', 'MoveMembers']);
+  let allowExtraPermissions = false;
+  const botMember = {
+    id: botId,
+    permissions: { has: permission => !extraPermissionNames.has(permission) || allowExtraPermissions },
+    roles: { highest: { position: 20 } }
+  };
   const guild = {
     id: 'setup-dashboard-guild',
     ownerId,
@@ -475,7 +523,7 @@ async function testSetupDashboardSerialization() {
   };
   const member = { id: ownerId, guild, roles: { cache: new Map() } };
   const message = { guild, channel, member, author: { id: ownerId } };
-  const context = { client: { user: { id: botId } } };
+  const context = { client: { user: { id: botId }, isBotOwner: id => String(id) === ownerId } };
   await groupCommand.execute(message, ['setup'], context);
   assert.equal(sends, 2, 'both setup pages serialize and publish');
 
@@ -485,6 +533,31 @@ async function testSetupDashboardSerialization() {
   await setupCommand.execute(message, ['groups'], context);
   assert.equal(sends, 4, 'each setup command invocation publishes two new panel messages');
   assert.equal(edits, 0, 'setup command leaves existing panel messages unchanged');
+
+  const setupComponentText = [...messages.values()].map(panel => JSON.stringify(panel.components)).join('\n');
+  assert.ok(setupComponentText.includes('Extra Permissions'), 'the setup button label is English');
+  assert.equal(setupComponentText.includes('الصلاحيات الإضافية'), false, 'the old Arabic button label is removed');
+  const clickExtraPermissions = async () => {
+    const interaction = {
+      customId: 'groups_setup:extra', guild, client: context.client, member, user: { id: ownerId },
+      channel, channelId: channel.id, message: messages.get('setup-panel-4'), deferred: false, replied: false,
+      deferReply: async () => { interaction.deferred = true; },
+      reply: async payload => { interaction.response = payload; interaction.replied = true; return payload; },
+      editReply: async payload => { interaction.response = payload; interaction.replied = true; return payload; }
+    };
+    await groupCommand.handleInteraction(interaction);
+    return interaction;
+  };
+  const blocked = await clickExtraPermissions();
+  assert.equal(blocked.replied, true, 'the missing-permission result responds instead of leaving the interaction pending');
+  assert.match(responseText(blocked.response), /Cannot enable Extra Permissions/);
+  assert.equal((await gm.getSettings(guild.id)).extraPermissions, false, 'settings stay disabled until all required permissions are available');
+
+  allowExtraPermissions = true;
+  const enabled = await clickExtraPermissions();
+  assert.equal(enabled.replied, true, 'the successful toggle receives a reply');
+  assert.ok(JSON.stringify(enabled.response).includes('Extra Permissions enabled'));
+  assert.equal((await gm.getSettings(guild.id)).extraPermissions, true, 'the toggle enables extra permissions after validation');
 }
 
 async function testDeleteCommandFlow() {
@@ -493,6 +566,7 @@ async function testDeleteCommandFlow() {
   const guild = { id: guildId, ownerId: OWNER, iconURL: () => 'https://cdn.example/guild.png', channels: { cache: new Map(), fetch: async () => null }, roles: { cache: new Map() } };
   const member = { id: OWNER, guild, roles: { cache: new Map() } };
   const client = new EventEmitter();
+  client.isBotOwner = id => String(id) === OWNER;
   interactionRouter.clear();
   groupCommand.registerInteractionHandler(client);
 
@@ -509,6 +583,11 @@ async function testDeleteCommandFlow() {
       isButton: () => type === 'button',
       isStringSelectMenu: () => type === 'stringSelect',
       isModalSubmit: () => type === 'modal',
+      deferReply: async () => { interaction.deferred = true; },
+      deferUpdate: async () => { interaction.deferred = true; },
+      editReply: async payload => { interaction.response = payload; interaction.replied = true; return payload; },
+      update: async payload => { interaction.response = payload; interaction.replied = true; return payload; },
+      followUp: async payload => { interaction.response = payload; interaction.replied = true; return payload; },
       showModal: async modal => { interaction.response = modal.toJSON(); return interaction.response; },
       reply: async payload => {
         for (const component of payload.components || []) componentJson(component);
@@ -522,7 +601,7 @@ async function testDeleteCommandFlow() {
 
   const openCreate = makeInteraction('groups_admin:create', 'button');
   assert.equal(await interactionRouter.route(openCreate), true);
-  assert.equal(openCreate.response.title, 'إنشاء قروب', 'create modal is built and serialized successfully');
+  assert.equal(openCreate.response.title, 'CREATE GROUP', 'create modal is built and serialized successfully');
 
   const openDelete = makeInteraction('groups_admin:delete', 'button');
   assert.equal(await interactionRouter.route(openDelete), true);
@@ -595,14 +674,14 @@ async function testDeleteCommandFlow() {
     reply: async content => { deniedReply = content; return content; }
   };
   await createCommand.execute(unauthorizedMessage, [], { client });
-  assert.match(responseText(deniedReply), /لا تملك الصلاحية\./, 'create is restricted to group-system managers');
+  assert.match(responseText(deniedReply), /لا تملك صلاحية إدارة القروبات/, 'create is restricted to group-system managers');
   await deleteCommand.execute(unauthorizedMessage, [], { client });
-  assert.match(responseText(deniedReply), /لا تملك الصلاحية\./, 'delete is restricted to group-system managers');
+  assert.match(responseText(deniedReply), /لا تملك صلاحية إدارة القروبات/, 'delete is restricted to group-system managers');
 
   const confirmDelete = makeInteraction(`groups_admin_confirm:delete:${groupId}`, 'button');
   assert.equal(await interactionRouter.route(confirmDelete), true);
   assert.equal((await gm.getGroup(guildId, groupId)).status, 'deleted');
-  assert.equal(responseText(confirmDelete.response), 'تم حذف القروب.');
+  assert.equal(responseText(confirmDelete.response), 'تم حذف القروب وجميع موارده المرتبطة بنجاح.');
   interactionRouter.clear();
 }
 
@@ -621,7 +700,7 @@ function makeParserGuild() {
     id: 'parser-guild',
     ownerId: OWNER,
     roles: { cache: new Map() },
-    channels: { cache: new Map() },
+    channels: { cache: new Map(), fetch: async () => null },
     members: {
       fetch: async userId => members.get(String(userId)) || null
     }
@@ -734,6 +813,10 @@ async function testPointsAndReset() {
   assert.equal(group.points, 0);
   assert.equal(Number(memberPoints[0].points), 0);
   assert.equal(Number(memberPoints[0].messages), 0);
+  await gm.removeMember(guildId, groupId, USER_A, OWNER);
+  await gm.addMember(guildId, groupId, USER_A, OWNER);
+  assert.deepEqual(await gm.listMemberPoints(guildId, groupId), [],
+    'removing and re-adding after a reset does not restore pre-reset counters');
 
   // Exercise the all-active-groups reset branch as well.
   const secondGroupId = await insertGroup({ guildId, name: 'Points Two', memberIds: [USER_B], points: 8 });
@@ -746,6 +829,31 @@ async function testPointsAndReset() {
   const resetRows = await gm.listMemberPoints(guildId, secondGroupId);
   assert.equal(Number(resetRows[0].points), 0);
   assert.equal(Number(resetRows[0].messages), 0);
+
+  const absentAtResetGuild = 'reset-while-member-absent-guild';
+  const absentAtResetGroup = await insertGroup({
+    guildId: absentAtResetGuild,
+    name: 'Reset while member absent',
+    memberIds: [USER_B],
+    textChannelId: 'reset-absent-channel'
+  });
+  await gm.saveSettings(absentAtResetGuild, { enabled: true }, OWNER);
+  await gm.setRule(absentAtResetGuild, 'messages', 1, 2, true, OWNER);
+  assert.equal(await gm.recordActivity(absentAtResetGuild, USER_B, 'messages', 1, {
+    channelId: 'reset-absent-channel', eventId: 'before-absent-reset'
+  }), 2);
+  await gm.removeMember(absentAtResetGuild, absentAtResetGroup, USER_B, OWNER);
+  await gm.resetPoints(absentAtResetGuild, absentAtResetGroup, OWNER);
+  await gm.addMember(absentAtResetGuild, absentAtResetGroup, USER_B, OWNER);
+  assert.deepEqual(await gm.listMemberPoints(absentAtResetGuild, absentAtResetGroup), [],
+    'a group-level reset marker excludes history even when the member was absent at reset time');
+  assert.equal(await gm.recordActivity(absentAtResetGuild, USER_B, 'messages', 1, {
+    channelId: 'reset-absent-channel', eventId: 'after-absent-reset'
+  }), 2);
+  const postResetPoints = await gm.listMemberPoints(absentAtResetGuild, absentAtResetGroup);
+  assert.equal(Number(postResetPoints[0].points), 2);
+  assert.equal(Number(postResetPoints[0].messages), 1,
+    'post-reset activity starts fresh instead of adding to the old message total');
 
   const retryGuildId = 'event-retry-guild';
   await insertGroup({ guildId: retryGuildId, name: 'Event retry', memberIds: [USER_C], textChannelId: 'retry-channel' });
@@ -785,8 +893,8 @@ async function testInternalCommandParser() {
 
   const bareOutsideGroup = parserMessage(guild, 'قروبي');
   bareOutsideGroup.message.channel.id = 'unlinked-channel';
-  assert.equal(await handleInternalMessage(bareOutsideGroup.message, { prefix: null }), false,
-    'bare command words outside group channels remain ordinary chat');
+  assert.equal(await handleInternalMessage(bareOutsideGroup.message, { prefix: null }), true,
+    'bare group commands outside linked group channels are consumed silently');
   assert.deepEqual(bareOutsideGroup.replies, []);
 
   const englishAdd = parserMessage(guild, `:add ${USER_A}`);
@@ -902,11 +1010,16 @@ function mockGroupInteraction({ customId, guild, userId = ACTOR, channelId = nul
 async function testTopBonusControls() {
   const guildId = 'top-bonus-workflow-guild';
   const groupId = await insertGroup({ guildId, name: 'Top bonus test', memberIds: [USER_A], points: 10 });
+  const groupRoleId = '100000000000000302';
+  await gm.updateGroup(guildId, groupId, { role_id: groupRoleId }, OWNER);
   await gm.saveSettings(guildId, { systemUsers: [ACTOR] });
+  const leavingMember = { id: USER_A, roles: { cache: { has: id => String(id) === groupRoleId }, add: async () => {}, remove: async () => {} } };
+  const groupRole = { id: groupRoleId };
   const guild = {
     id: guildId, name: 'Test guild', ownerId: '100000000000000099', iconURL: () => null,
     client: { user: { id: 'test-bot' } }, channels: { cache: new Map(), fetch: async () => null },
-    members: { cache: new Map(), fetch: async () => null }, roles: { cache: new Map(), fetch: async () => null }
+    members: { cache: new Map([[USER_A, leavingMember]]), fetch: async id => String(id) === USER_A ? leavingMember : null },
+    roles: { cache: new Map([[groupRoleId, groupRole]]), fetch: async id => String(id) === groupRoleId ? groupRole : null }
   };
   const denied = mockGroupInteraction({ customId: 'groups_bonus:group-add', guild, userId: USER_B });
   await groupCommand.handleInteraction(denied);
@@ -939,7 +1052,7 @@ async function testTopBonusControls() {
   await groupCommand.handleInteraction(selectRemove);
   const submitRemove = mockGroupInteraction({ customId: `groups_bonus_modal:group-remove:${groupId}`, guild, channelId: 'top-bonus-channel', amount: '5' });
   await groupCommand.handleInteraction(submitRemove);
-  assert.ok(JSON.stringify(submitRemove.state.reply?.components?.map(componentJson)).includes(`groups_bonus_confirm:group-remove:${groupId}:5`), 'group-point removals require a confirmation');
+  assert.ok(JSON.stringify(submitRemove.state.editReply?.components?.map(componentJson)).includes(`groups_bonus_confirm:group-remove:${groupId}:5`), 'group-point removals require a confirmation');
   const confirm = mockGroupInteraction({ customId: `groups_bonus_confirm:group-remove:${groupId}:5`, guild, channelId: 'top-bonus-channel', message: { id: 'top-bonus-confirm-once' } });
   await groupCommand.handleInteraction(confirm);
   assert.equal(Number((await gm.getGroup(guildId, groupId)).points), 30);
@@ -970,7 +1083,7 @@ async function testTopBonusControls() {
   await groupCommand.handleInteraction(selectMemberRemoveUser);
   const submitMemberRemove = mockGroupInteraction({ customId: `groups_bonus_modal:member-remove:${groupId}:${USER_A}`, guild, channelId: 'top-bonus-channel', amount: '2' });
   await groupCommand.handleInteraction(submitMemberRemove);
-  assert.ok(JSON.stringify(submitMemberRemove.state.reply?.components?.map(componentJson)).includes(`groups_bonus_confirm:member-remove:${groupId}:2:${USER_A}`));
+  assert.ok(JSON.stringify(submitMemberRemove.state.editReply?.components?.map(componentJson)).includes(`groups_bonus_confirm:member-remove:${groupId}:2:${USER_A}`));
   const confirmMemberRemove = mockGroupInteraction({ customId: `groups_bonus_confirm:member-remove:${groupId}:2:${USER_A}`, guild, channelId: 'top-bonus-channel', message: { id: 'top-bonus-member-confirm-once' } });
   await groupCommand.handleInteraction(confirmMemberRemove);
   assert.equal(Number((await gm.listMemberPoints(guildId, groupId, 10)).find(row => row.user_id === USER_A).points), 10);
@@ -987,7 +1100,7 @@ async function testTopBonusControls() {
   await groupCommand.handleInteraction(openAllRemove);
   const submitAllRemove = mockGroupInteraction({ customId: 'groups_bonus_modal:all-remove:all', guild, channelId: 'top-bonus-channel', amount: '5' });
   await groupCommand.handleInteraction(submitAllRemove);
-  assert.ok(JSON.stringify(submitAllRemove.state.reply?.components?.map(componentJson)).includes('groups_bonus_confirm:all-remove:5'));
+  assert.ok(JSON.stringify(submitAllRemove.state.editReply?.components?.map(componentJson)).includes('groups_bonus_confirm:all-remove:5'));
   const confirmAllRemove = mockGroupInteraction({ customId: 'groups_bonus_confirm:all-remove:5', guild, channelId: 'top-bonus-channel', message: { id: 'top-bonus-all-confirm-once' } });
   await groupCommand.handleInteraction(confirmAllRemove);
   assert.equal(Number((await gm.getGroup(guildId, groupId)).points), 42);
@@ -1016,9 +1129,7 @@ async function testTopBonusControls() {
 
   const leaveRequest = mockGroupInteraction({ customId: `groups_top:leave:${groupId}`, guild, userId: USER_A, channelId: 'top-bonus-channel' });
   await groupCommand.handleInteraction(leaveRequest);
-  assert.ok(JSON.stringify(leaveRequest.state.update).includes(`groups_top:leave-confirm:${groupId}`), 'Leave requires explicit confirmation');
-  const leavingMember = { id: USER_A, roles: { cache: { has: () => false }, add: async () => {}, remove: async () => {} } };
-  guild.members.fetch = async id => String(id) === USER_A ? leavingMember : null;
+  assert.ok(JSON.stringify(leaveRequest.state.reply).includes(`groups_top:leave-confirm:${groupId}`), 'Leave requires explicit confirmation');
   const leaveConfirm = mockGroupInteraction({ customId: `groups_top:leave-confirm:${groupId}`, guild, userId: USER_A, channelId: 'top-bonus-channel' });
   await groupCommand.handleInteraction(leaveConfirm);
   assert.equal((await gm.getGroup(guildId, groupId)).memberIds.includes(USER_A), false, 'confirmed Leave removes the member from the group');
@@ -1048,7 +1159,7 @@ async function testPartialDeleteCanBeRetried() {
 async function main() {
   await testDb.initialize();
   try {
-    testSetupValidation();
+    await testSetupValidation();
     await testGroupCommandGuideAndMusicApi();
     await testCreateGroupRoleDefaults();
     await testDepartedMemberAccessCleanup();

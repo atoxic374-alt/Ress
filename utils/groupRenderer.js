@@ -2,6 +2,7 @@ const { createCanvas, loadImage } = require('canvas');
 const { AttachmentBuilder } = require('discord.js');
 const colorManager = require('./colorManager');
 const { getGuildBannerHexFast } = require('./guildBannerColor');
+const { getGroupMemberCount } = require('./groupMetrics');
 require('./cairoFont').ensureCairoFontsRegistered();
 
 const avatarCache = new Map();
@@ -183,7 +184,7 @@ async function renderMembers({ guild, group, members, accentColor = null }) {
     return resolved ? { ...item, member: resolved } : item;
   }));
   const sorted = normalizeRows(rowsWithMembers).slice(0, 10);
-  const memberCount = group ? new Set([String(group.owner_id || ''), ...(group.memberIds || []).map(String), ...(group.managerIds || []).map(String)].filter(Boolean)).size : number(group?.memberCount ?? sorted.length);
+  const memberCount = getGroupMemberCount(group, sorted.length);
   roundRect(ctx, 62, 55, 265, 105, 18, 'rgba(255,255,255,.045)', `rgba(${r},${g},${b},.42)`);
   ctx.textAlign = 'center'; ctx.fillStyle = '#AAB4C5'; ctx.font = '23px Cairo, sans-serif'; ctx.fillText('عدد الأعضاء', 195, 91);
   ctx.fillStyle = '#FFF'; ctx.font = 'bold 42px Cairo, sans-serif'; ctx.fillText(memberCount.toLocaleString('ar-SA'), 195, 137);
@@ -259,7 +260,7 @@ async function renderInfo({ guild, group, owner, managers, accentColor = null })
   const managerNames = resolvedManagers.map(manager => memberName(manager, memberId(manager))).filter(Boolean);
   const managerValue = managerNames.length ? `${managerNames.slice(0, 4).join('، ')}${managerNames.length > 4 ? ` +${managerNames.length - 4}` : ''}` : 'لا يوجد مسؤولون';
   const ownerName = resolvedOwner ? memberName(resolvedOwner) : 'غير موجود';
-  const memberCount = group ? new Set([String(group.owner_id || ''), ...(group.memberIds || []).map(String), ...(group.managerIds || []).map(String)].filter(Boolean)).size : number(group?.memberCount);
+  const memberCount = getGroupMemberCount(group);
   const status = ({ active: 'نشط', orphaned: 'يتطلب تنظيفًا', deleted: 'محذوف' })[String(group?.status || '').toLowerCase()] || 'غير محدد';
   const chatName = thread?.name ? `#${thread.name}` : chatChannel?.name ? `#${chatChannel.name}` : 'غير متاح';
   const voiceName = voiceChannel?.name ? `#${voiceChannel.name}` : 'غير متاح';
@@ -303,7 +304,7 @@ async function renderTopGroups({ guild, groups = [], memberRowsByGroup = {}, gro
     ...group,
     id: String(group?.id ?? `group-${index}`),
     points: number(group?.points),
-    memberCount: group ? new Set([String(group.owner_id || ''), ...(group.memberIds || []).map(String), ...(group.managerIds || []).map(String)].filter(Boolean)).size : number(group?.memberCount)
+    memberCount: getGroupMemberCount(group)
   })).sort((a, b) => number(b.points) - number(a.points)
     || Number(a.id) - Number(b.id)
     || sortKey(a.name).localeCompare(sortKey(b.name), 'ar', { sensitivity: 'base' }));
@@ -380,7 +381,7 @@ async function renderMyRank({ guild, group, groupRank = 0, totalGroups = 0, memb
 
   const stats = [
     ['GROUP POINTS :', number(group?.points).toLocaleString('en-US')],
-    ['MEMBERS :', (group ? new Set([String(group.owner_id || ''), ...(group.memberIds || []).map(String), ...(group.managerIds || []).map(String)].filter(Boolean)).size : 0).toLocaleString('en-US')],
+    ['MEMBERS :', getGroupMemberCount(group).toLocaleString('en-US')],
     ['GROUP ID :', String(group?.id ?? '—')]
   ];
   stats.forEach(([label, value], index) => {

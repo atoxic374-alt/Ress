@@ -324,6 +324,12 @@ async function logGroupEvent(guild, event, details = {}, actorId = null) {
     return null;
   }
 }
+function hasCachedRole(member, predicate) {
+  const cache = member?.roles?.cache;
+  if (typeof cache?.some === 'function') return cache.some(predicate);
+  if (typeof cache?.values === 'function') return [...cache.values()].some(predicate);
+  return Array.isArray(cache) && cache.some(predicate);
+}
 function isOwner(client, member) { return Boolean(member && (member.id === member.guild?.ownerId || client?.isBotOwner?.(member.id) || global.isBotOwner?.(member.id) || (global.BOT_OWNERS || []).map(String).includes(String(member.id)))); }
 function isBotOwner(client, member) {
   const userId = String(member?.id || member?.user?.id || '');
@@ -331,9 +337,9 @@ function isBotOwner(client, member) {
   if (client?.isBotOwner?.(userId) || global.isBotOwner?.(member || userId)) return true;
   if ((global.BOT_OWNERS || []).map(String).includes(userId)) return true;
   const ownerRoles = new Set((global.BOT_OWNER_ROLES || []).map(String));
-  return Boolean(ownerRoles.size && member?.roles?.cache?.some(role => ownerRoles.has(String(role.id))));
+  return Boolean(ownerRoles.size && hasCachedRole(member, role => ownerRoles.has(String(role.id))));
 }
-function isSystemManager(settings, member) { if (!member) return false; return settings.systemUsers.includes(String(member.id)) || member.roles?.cache?.some(role => settings.systemRoles.includes(String(role.id))); }
+function isSystemManager(settings, member) { if (!member) return false; return settings.systemUsers.includes(String(member.id)) || hasCachedRole(member, role => settings.systemRoles.includes(String(role.id))); }
 function canManageGroupAdmin(client, settings, member) { return isBotOwner(client, member) || isSystemManager(settings, member); }
 function canManageSystem(client, settings, member) { return isOwner(client, member) || isSystemManager(settings, member); }
 function canManageGroup(client, settings, group, member) { if (!member || !group) return false; return canManageSystem(client, settings, member) || String(group.owner_id) === String(member.id) || group.managerIds.includes(String(member.id)); }
@@ -341,14 +347,24 @@ function channelBelongs(group, channelId) { return [group.text_channel_id, group
 async function validateConfig(guild, settings) {
   const missing = [];
   // Refresh the bot member before evaluating effective permissions; cached member
-  // permissions can be stale after role/overwrite changes.
-  const me = await guild.members.fetchMe().catch(() => guild.members?.me || null);
+  // permissions can be stale after role/overwrite changes. Keep the cached
+  // member as a safe fallback for partial guild mocks and transient API errors.
+  let me = guild.members?.me || null;
+  if (typeof guild.members?.fetchMe === 'function') {
+    try { me = await guild.members.fetchMe() || me; } catch {}
+  }
   const requiredPermissions = ['ManageChannels', 'ManageRoles'];
   if (settings.extraPermissions) requiredPermissions.push('ManageMessages', 'ModerateMembers', 'MoveMembers');
   if (!me?.permissions) missing.push('permission:BOT_MEMBER');
   else for (const permission of requiredPermissions) if (!me.permissions.has(permission)) missing.push(`permission:${permission}`);
   if (!settings.chatMode) missing.push('chatMode');
-  const fetchChannel = async id => id && (guild.channels.cache.get(String(id)) || await guild.channels.fetch(String(id)).catch(() => null));
+  const fetchChannel = async id => {
+    if (!id) return null;
+    const cached = guild.channels?.cache?.get(String(id));
+    if (cached) return cached;
+    if (typeof guild.channels?.fetch !== 'function') return null;
+    try { return await guild.channels.fetch(String(id)); } catch { return null; }
+  };
   const textCategory = await fetchChannel(settings.textCategoryId);
   const voiceCategory = await fetchChannel(settings.voiceCategoryId);
   if (!textCategory || textCategory.type !== ChannelType.GuildCategory) missing.push('textCategoryId');
@@ -365,8 +381,14 @@ async function validateConfig(guild, settings) {
     // reliably from the category alone. Check the complete set used by this flow
     // (private-thread creation and adding the owner) against that parent.
     let sharedText = null;
-    const allChannels = await guild.channels.fetch().catch(() => guild.channels.cache);
-    for (const channel of allChannels.values()) {
+    let allChannels = guild.channels?.cache;
+    if (typeof guild.channels?.fetch === 'function') {
+      try { allChannels = await guild.channels.fetch() || allChannels; } catch {}
+    }
+    const channelList = typeof allChannels?.values === 'function'
+      ? allChannels.values()
+      : Array.isArray(allChannels) ? allChannels : [];
+    for (const channel of channelList) {
       if (channel?.type === ChannelType.GuildText
         && String(channel.name || '').toLowerCase() === 'groups-chat'
         && (!settings.textCategoryId || String(channel.parentId || '') === String(settings.textCategoryId))) {
@@ -426,7 +448,7 @@ async function setSystemRole(guildId, targetId, enabled, actorId) {
   });
 }
 async function updateGroup(guildId, groupId, patch, actorId) { await schema(); const allowed = ['name','description','owner_id','color','emoji','avatar_url','role_id','text_channel_id','thread_id','voice_channel_id','manager_ids_json','member_ids_json','blocked_ids_json','points','status','sync_state','updated_at','archived_at']; const keys = Object.keys(patch).filter(key => allowed.includes(key)); if (!keys.length) return getGroup(guildId, groupId); const values = keys.map(key => patch[key]); values.push(String(guildId), Number(groupId)); await dbManager.run(`UPDATE managed_groups SET ${keys.map(key => `${key} = ?`).join(', ')} WHERE guild_id = ? AND id = ?`, values); await audit(guildId, actorId, groupId, 'group_update', { keys }); return getGroup(guildId, groupId); }
-async function addMember(guildId, groupId, userId, actorId) { return withLock(`members:${guildId}`, async () => {
+async function addMember(guildId, groupId, userId, actorId) { return withLock(`members:${guildId}`, async () => withLock(`points:${String(guildId)}`, async () => {
   const safeUserId = String(userId);
   if (!isSnowflake(safeUserId)) throw new Error('INVALID_USER_ID');
   const group = await getGroup(guildId, groupId);
@@ -436,16 +458,22 @@ async function addMember(guildId, groupId, userId, actorId) { return withLock(`m
   // independent per group; only the target group's blocked list is enforced.
   const members = new Set(group.memberIds); members.add(safeUserId);
   await updateGroup(guildId, groupId, { member_ids_json: JSON.stringify([...members]), updated_at: Date.now() }, actorId);
-  // Keep the current leaderboard clean while the member is away, but restore
-  // the historical counters from the immutable ledger when they rejoin.
+  // Restore only activity recorded after the most recent reset. The ledger is
+  // immutable, so the reset marker acts as a durable history boundary.
+  const resetMarker = await dbManager.get(`
+    SELECT COALESCE(MAX(id), 0) AS cutoff_id
+    FROM group_points_ledger
+    WHERE guild_id = ? AND group_id = ? AND reason = 'points_reset_marker'`,
+  [String(guildId), Number(groupId)]);
+  const cutoffId = Number(resetMarker?.cutoff_id) || 0;
   const historical = await dbManager.get(`
     SELECT COALESCE(SUM(points_delta), 0) AS points,
            COALESCE(SUM(CASE WHEN metric = 'messages' THEN activity_amount ELSE 0 END), 0) AS messages,
            COALESCE(SUM(CASE WHEN metric = 'voice_ms' THEN activity_amount ELSE 0 END), 0) AS voice_ms,
            COALESCE(SUM(CASE WHEN metric = 'reactions' THEN activity_amount ELSE 0 END), 0) AS reactions,
            COALESCE(MAX(created_at), 0) AS updated_at
-    FROM group_points_ledger WHERE guild_id = ? AND group_id = ? AND user_id = ?`,
-  [String(guildId), Number(groupId), safeUserId]);
+    FROM group_points_ledger WHERE guild_id = ? AND group_id = ? AND user_id = ? AND id > ?`,
+  [String(guildId), Number(groupId), safeUserId, cutoffId]);
   if (historical && [historical.points, historical.messages, historical.voice_ms, historical.reactions].some(value => Number(value) !== 0)) {
     await dbManager.run(`INSERT OR REPLACE INTO group_member_points(guild_id, group_id, user_id, points, messages, voice_ms, reactions, updated_at) VALUES(?,?,?,?,?,?,?,?)`, [
       String(guildId), Number(groupId), safeUserId, Number(historical.points) || 0, Number(historical.messages) || 0,
@@ -453,7 +481,7 @@ async function addMember(guildId, groupId, userId, actorId) { return withLock(`m
     ]);
   }
   return [...members];
-}); }
+})); }
 async function removeMember(guildId, groupId, userId, actorId) { return withLock(`members:${guildId}`, async () => {
   const safeUserId = String(userId);
   const group = await getGroup(guildId, groupId);
@@ -507,8 +535,8 @@ async function resetPoints(guildId, groupId, actorId = null) {
     const resetDetails = await dbManager.transaction(async tx => {
       const now = Date.now();
       const groups = groupId == null
-        ? await tx.all("SELECT id, points FROM managed_groups WHERE guild_id = ? AND status = 'active'", [String(guildId)])
-        : await tx.all("SELECT id, points FROM managed_groups WHERE guild_id = ? AND id = ?", [String(guildId), Number(groupId)]);
+        ? await tx.all("SELECT id, owner_id, points FROM managed_groups WHERE guild_id = ? AND status = 'active'", [String(guildId)])
+        : await tx.all("SELECT id, owner_id, points FROM managed_groups WHERE guild_id = ? AND id = ?", [String(guildId), Number(groupId)]);
       let memberRows = 0;
       let memberPointsBefore = 0;
       for (const group of groups) {
@@ -519,6 +547,10 @@ async function resetPoints(guildId, groupId, actorId = null) {
           await tx.run(`INSERT INTO group_points_ledger(guild_id,group_id,user_id,metric,activity_amount,points_delta,member_before,member_after,group_before,group_after,reason,event_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
             [String(guildId), Number(group.id), String(member.user_id), 'manual', 0, -Math.max(0, Number(member.points) || 0), Math.max(0, Number(member.points) || 0), 0, Math.max(0, Number(group.points) || 0), 0, 'points_reset', null, now]);
         }
+        // Write a group-level boundary even if no member has a leaderboard row,
+        // preventing pre-reset points or activity from returning after a rejoin.
+        await tx.run(`INSERT INTO group_points_ledger(guild_id,group_id,user_id,metric,activity_amount,points_delta,member_before,member_after,group_before,group_after,reason,event_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [String(guildId), Number(group.id), String(group.owner_id), 'manual', 0, 0, 0, 0, Math.max(0, Number(group.points) || 0), 0, 'points_reset_marker', null, now]);
       }
       if (groupId == null) {
         await tx.run("UPDATE managed_groups SET points = 0, updated_at = ? WHERE guild_id = ? AND status = 'active'", [now, String(guildId)]);

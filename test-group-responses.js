@@ -8,6 +8,8 @@ assert.equal(normalizeGroupText('القروب: الاسم'), 'القروب : ا�
 assert.equal(normalizeGroupText('الرتبة: <@&123>'), 'الرتبة : <@&123>');
 assert.equal(normalizeGroupText('تم الحفظ : بنجاح'), 'تم الحفظ : بنجاح');
 assert.equal(normalizeGroupText('رابط https://example.com/a:b'), 'رابط https://example.com/a:b');
+assert.equal(normalizeGroupText('رابط https://example.com/a:b والوصف: نعم'), 'رابط https://example.com/a:b والوصف : نعم');
+assert.equal(normalizeGroupText('https://example.com:8443/path?a=b:c'), 'https://example.com:8443/path?a=b:c');
 assert.equal(normalizeGroupText('سطر أول   \n\n\nسطر ثانٍ'), 'سطر أول\n\nسطر ثانٍ');
 
 const payload = responsePayload({ content: 'تم تحديث القروب.', ephemeral: true });

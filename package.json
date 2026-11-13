@@ -5,10 +5,10 @@
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
-    "test:syntax": "node --check bot.js && node --check commands/resp.js && node --check commands/ticket.js && node --check commands/down.js && node --check commands/setroom.js && node --check utils/ticketPanelDelivery.js && node --check utils/downManager.js && node --check utils/responsibilitiesStore.js && node --check utils/responsibilityRoleReconciler.js && node --check commands/groups.js && node --check utils/groupManager.js && node --check utils/groupInternal.js && node --check utils/groupRenderer.js && node --check utils/groupResponses.js && node --check utils/database.js && node --check utils/database-archiver.js && node --check utils/interactionRouter.js",
+    "test:syntax": "node --check bot.js && node --check commands/resp.js && node --check commands/ticket.js && node --check commands/down.js && node --check commands/setroom.js && node --check utils/ticketPanelDelivery.js && node --check utils/downManager.js && node --check utils/responsibilitiesStore.js && node --check utils/responsibilityRoleReconciler.js && node --check commands/groups.js && node --check utils/groupManager.js && node --check utils/groupInternal.js && node --check utils/groupRenderer.js && node --check utils/groupResponses.js && node --check utils/groupMetrics.js && node --check utils/database.js && node --check utils/database-archiver.js && node --check utils/interactionRouter.js",
     "test:bonus": "node test-bonus-system.js",
     "test:check": "node test-check-activity.js",
-    "test:groups": "node test-group-manager-internal.js && node test-group-responses.js",
+    "test:groups": "node test-group-manager-internal.js && node test-group-responses.js && node test-group-renderer.js",
     "test:responsibility-roles": "node test-responsibility-role-reconciler.js",
     "test:ticket-panel-delivery": "node test-ticket-panel-delivery.js && node test-ticket-online.js",
     "test:down-menu": "node test-down-menu.js"

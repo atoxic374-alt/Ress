@@ -5,9 +5,19 @@ const colorManager = require('./colorManager');
 
 function normalizeGroupText(value) {
   if (typeof value !== 'string') return value;
-  return value
-    // Keep prose punctuation readable: "القروب : الاسم" rather than "القروب: الاسم".
-    .replace(/([\p{L}_])\s*:\s*(?=[\p{L}\p{N}@<#*])/gu, '$1 : ')
+  // Format prose punctuation without changing colons inside URLs (including
+  // credentials, ports, query strings, and path segments).
+  const normalizeProse = text => text.replace(/([\p{L}_])\s*:\s*(?=[\p{L}\p{N}@<#*])/gu, '$1 : ');
+  const urlPattern = /\bhttps?:\/\/[^\s<>()]+/giu;
+  let normalized = '';
+  let lastIndex = 0;
+  for (const match of value.matchAll(urlPattern)) {
+    normalized += normalizeProse(value.slice(lastIndex, match.index));
+    normalized += match[0];
+    lastIndex = match.index + match[0].length;
+  }
+  normalized += normalizeProse(value.slice(lastIndex));
+  return normalized
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();

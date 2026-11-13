@@ -157,15 +157,15 @@ function setupIssueLabel(issue) {
   return `راجع الإعداد: ${issue}.`;
 }
 
-function setupPayloads(guild, settings) {
+async function setupPayloads(guild, settings) {
   const status = settings.enabled ? 'مفعل' : 'متوقف';
   const roleMention = id => id ? `<@&${id}>` : 'غير محدد';
   const channelMention = id => id ? `<#${id}>` : 'غير محدد';
   const managerCount = Number(settings.systemUsers?.length || 0) + Number(settings.systemRoles?.length || 0);
   const chatMode = settings.chatMode === 'threads' ? 'ثريدات' : settings.chatMode === 'channels' ? 'رومات مستقلة' : 'غير محدد';
-  const issues = gm.validateConfig(guild, settings);
+  const issues = await gm.validateConfig(guild, settings);
   const readiness = issues.length ? `الإعداد غير مكتمل (${issues.length}):\n${issues.slice(0, 6).map(setupIssueLabel).join('\n')}${issues.length > 6 ? '\n... استخدم Info لعرض الباقي.' : ''}` : 'الإعداد جاهز لإنشاء القروبات.';
-  const summary = `الحالة : ${status}\nجاهزية النظام : ${readiness}\nمسؤولو النظام : ${managerCount} عضو/رتبة\nنمط المحادثة : ${chatMode}\nكاتاقوري النص : ${channelMention(settings.textCategoryId)}\nكاتاقوري الصوت : ${channelMention(settings.voiceCategoryId)}\nقناة الترتيب : ${channelMention(settings.topChannelId)}\nقناة تحكم الإدارة : ${channelMention(settings.adminControlChannelId)}\nقناة تحكم الأعضاء : ${channelMention(settings.memberControlChannelId)}\nالرتبة الرئيسية : ${roleMention(settings.mainRoleId)}\nرتبة المالك : ${roleMention(settings.leaderRoleId)}\nرتبة المسؤول : ${roleMention(settings.managerRoleId)}\nقناة مصدر الموسيقى : ${channelMention(settings.musicChannelId)}\nقناة السجلات : ${channelMention(settings.logChannelId)}\nنطاق احتساب النقاط : ${settings.countAllChannels ? 'كل الرومات' : 'رومات القروبات فقط'}\nالصلاحيات الإضافية : ${settings.extraPermissions ? 'مفعلة' : 'متوقفة'}\nقواعد النقاط : اضغط على زر القواعد للتفاصيل`;
+  const summary = `الحالة : ${status}\nجاهزية النظام : ${readiness}\nمسؤولو النظام : ${managerCount} عضو/رتبة\nنمط المحادثة : ${chatMode}\nكاتاقوري النص : ${channelMention(settings.textCategoryId)}\nكاتاقوري الصوت : ${channelMention(settings.voiceCategoryId)}\nقناة الترتيب : ${channelMention(settings.topChannelId)}\nقناة تحكم الإدارة : ${channelMention(settings.adminControlChannelId)}\nقناة تحكم الأعضاء : ${channelMention(settings.memberControlChannelId)}\nالرتبة الرئيسية : ${roleMention(settings.mainRoleId)}\nرتبة المالك : ${roleMention(settings.leaderRoleId)}\nرتبة المسؤول : ${roleMention(settings.managerRoleId)}\nقناة مصدر الموسيقى : ${channelMention(settings.musicChannelId)}\nقناة السجلات : ${channelMention(settings.logChannelId)}\nنطاق احتساب النقاط : ${settings.countAllChannels ? 'كل الرومات' : 'رومات القروبات فقط'}\nExtra Permissions : ${settings.extraPermissions ? 'Enabled' : 'Disabled'}\nقواعد النقاط : اضغط على زر القواعد للتفاصيل`;
   const sections = [
     ['حالة نظام القروبات', 'تشغيل أو إيقاف نظام القروبات', 'groups_setup:toggle'],
     ['SYSTEM MANAGERS', 'إضافة أو إزالة مسؤولي النظام', 'groups_setup:managers'],
@@ -181,7 +181,7 @@ function setupPayloads(guild, settings) {
     ['Leader Role', 'الرول الذي يأخذه مالك القروب', 'groups_setup:leaderrole'],
     ['Manager Role', 'الرول الذي يأخذه مسؤول القروب', 'groups_setup:managerrole'],
     ['Points Scope', 'كل الرومات أو رومات القروبات', 'groups_setup:scope'],
-    ['الصلاحيات الإضافية', 'تفعيل المسح وأدوات الإدارة', 'groups_setup:extra'],
+    ['Extra Permissions', 'Enable message cleanup, moderation, and voice controls', 'groups_setup:extra'],
     ['Point Rules', 'تخصيص قواعد نقاط القروبات', 'groups_setup:rules']
   ];
   const make = (title, items, includeSummary, includeTools = false) => {
@@ -259,7 +259,7 @@ async function refreshSetupPanel(interaction, settings) {
   const entry = findSetupPanel(interaction.message, interaction.guild.id, interaction.channelId)
     || await recoverSetupPanel(interaction.channel, interaction.guild);
   if (!entry) return;
-  const payloads = setupPayloads(interaction.guild, settings);
+  const payloads = await setupPayloads(interaction.guild, settings);
   await entry.first?.edit(payloads[0]).catch(() => {});
   await entry.second?.edit(payloads[1]).catch(() => {});
   entry.touchedAt = Date.now();
@@ -269,7 +269,7 @@ async function sendSetupPanel(channel, guild, settings) {
   if (setupPanelLocks.has(key)) return setupPanelLocks.get(key);
   const work = (async () => {
     await hydrateSetupReferences(guild, settings);
-    const payloads = setupPayloads(guild, settings);
+    const payloads = await setupPayloads(guild, settings);
     const first = await channel.send(payloads[0]);
     const second = await channel.send(payloads[1]);
     rememberSetupPanel(guild.id, channel.id, first, second);
@@ -317,7 +317,10 @@ function replyMessage(message, payload) { return message.reply(responsePayload(t
 async function reply(interaction, payload, ephemeral=true) { const data=responsePayload({...payload,allowedMentions:{parse:[]}}); if(interaction.deferred&&!interaction.replied)return interaction.editReply(data); if(interaction.replied)return interaction.followUp({...data,ephemeral}); return interaction.reply({...data,ephemeral}); }
 async function notifyGroupDM(guild, userId, title, content) {
   if (!userId) return false;
-  const member = await guild.members.fetch(String(userId)).catch(() => null);
+  const fetchMember = guild?.members?.fetch;
+  if (typeof fetchMember !== 'function') return false;
+  let member = null;
+  try { member = await fetchMember.call(guild.members, String(userId)); } catch { return false; }
   if (!member?.send) return false;
   const payload = responsePayload({
     title: safe(title, 80) || 'GROUP UPDATE',
@@ -843,7 +846,7 @@ async function sendTopGroupsPanel(channel, guild, options = {}) {
         .filter(message => (!botId || message.author?.id === botId) && messageContainsMarker(message, 'groups_top:'))
         .sort((a, b) => Number(a.createdTimestamp || 0) - Number(b.createdTimestamp || 0)).pop();
     }
-    if (existing?.edit) {
+    if (existing?.edit && !isComponentsV2Message(existing)) {
       const edited = await existing.edit(payload).catch(() => null);
       if (edited) {
         if (edited.id) topPanelMessageIds.set(key, String(edited.id));
@@ -1529,7 +1532,7 @@ async function handleSetup(interaction, action) {
   if (action === 'toggle') {
     if (!settings.enabled) {
       await hydrateSetupReferences(interaction.guild, settings);
-      const missing = gm.validateConfig(interaction.guild, settings);
+      const missing = await gm.validateConfig(interaction.guild, settings);
       if (missing.length) return reply(interaction, { content: `لا يمكن تفعيل نظام القروبات قبل إصلاح الإعدادات التالية:\n${missing.map(setupIssueLabel).join('\n')}` });
     }
     const updated = await saveGroupSettings(interaction.guild.id, { enabled: !settings.enabled }, interaction.user.id);
@@ -1538,7 +1541,7 @@ async function handleSetup(interaction, action) {
   }
   if (action === 'audit') {
     await hydrateSetupReferences(interaction.guild, settings);
-    const missing = gm.validateConfig(interaction.guild, settings);
+    const missing = await gm.validateConfig(interaction.guild, settings);
     const content = missing.length
       ? `يوجد ${missing.length} نقصًا في الإعداد:\n${missing.map(setupIssueLabel).join('\n')}`
       : `الإعداد مكتمل. النظام ${settings.enabled ? 'مفعل' : 'جاهز لكنه متوقف'}.`;
@@ -1557,13 +1560,16 @@ async function handleSetup(interaction, action) {
     if (!settings.extraPermissions) {
       await hydrateSetupReferences(interaction.guild, settings);
       const extraPermissions = ['ManageMessages', 'ModerateMembers', 'MoveMembers'];
-      const missing = gm.validateConfig(interaction.guild, { ...settings, extraPermissions: true })
+      const missing = (await gm.validateConfig(interaction.guild, { ...settings, extraPermissions: true }))
         .filter(issue => issue.startsWith('permission:') && extraPermissions.includes(issue.slice('permission:'.length)));
-      if (missing.length) return reply(interaction, { content: `لا يمكن تفعيل الأدوات الإضافية قبل منح البوت:\n${missing.map(setupIssueLabel).join('\n')}` });
+      if (missing.length) {
+        const names = { ManageMessages: 'Manage Messages', ModerateMembers: 'Moderate Members', MoveMembers: 'Move Members' };
+        return reply(interaction, { content: `Cannot enable Extra Permissions until the bot has:\n${missing.map(issue => `• ${names[issue.slice('permission:'.length)]}`).join('\n')}` });
+      }
     }
     const updated = await saveGroupSettings(interaction.guild.id, { extraPermissions: !settings.extraPermissions }, interaction.user.id);
     await refreshSetupPanel(interaction, updated);
-    return reply(interaction, setupConfirmation(interaction, 'الصلاحيات الإضافية', `تم ${!settings.extraPermissions ? 'تفعيل' : 'تعطيل'} الصلاحيات الإضافية.`));
+    return reply(interaction, setupConfirmation(interaction, 'EXTRA PERMISSIONS', `Extra Permissions ${!settings.extraPermissions ? 'enabled' : 'disabled'}.`));
   }
   if (action === 'scope') return reply(interaction, selectPayload(interaction.guild, 'POINTS SCOPE', 'اختر أين يتم احتساب تفاعل القروبات.', 'groups_setup_select:scope', [
     { label: 'رومات القروبات فقط', value: 'group', description: 'رومات نص وفويس القروبات فقط' },

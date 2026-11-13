@@ -206,12 +206,38 @@ async function removeManagedMemberOverwrites(guild, group, userId) {
   const voice = await fetchGroupChannel(guild, group.voice_channel_id);
   const cleanup = [];
   if (text?.permissionOverwrites?.cache?.has?.(id) && !otherSharedTextMembership) {
-    cleanup.push(text.permissionOverwrites.delete(id, 'Remove managed group member text permissions'));
+    const overwrite = text.permissionOverwrites.cache.get(id);
+    cleanup.push({ channel: text, overwrite });
   }
   if (voice?.permissionOverwrites?.cache?.has?.(id)) {
-    cleanup.push(voice.permissionOverwrites.delete(id, 'Remove managed group member voice permissions'));
+    const overwrite = voice.permissionOverwrites.cache.get(id);
+    cleanup.push({ channel: voice, overwrite });
   }
-  await Promise.all(cleanup);
+
+  const removed = [];
+  try {
+    for (const entry of cleanup) {
+      await entry.channel.permissionOverwrites.delete(id, 'Remove managed group member permissions');
+      removed.push(entry);
+    }
+  } catch (error) {
+    const rollbackFailures = [];
+    for (const entry of removed.reverse()) {
+      try {
+        await entry.channel.permissionOverwrites.edit(id, {
+          allow: entry.overwrite?.allow?.bitfield ?? entry.overwrite?.allow ?? 0n,
+          deny: entry.overwrite?.deny?.bitfield ?? entry.overwrite?.deny ?? 0n
+        }, 'Rollback partially removed managed group member permissions');
+      } catch (rollbackError) {
+        rollbackFailures.push(rollbackError);
+      }
+    }
+    if (rollbackFailures.length) {
+      error.groupOverwriteRollbackFailed = true;
+      error.groupOverwriteRollbackErrors = rollbackFailures;
+    }
+    throw error;
+  }
 }
 async function cleanupDepartedMemberAccess(guild, group, userId, { preserveThreadMembership = false } = {}) {
   const id = String(userId);
