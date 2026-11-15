@@ -18,6 +18,7 @@ const GROUP_DEFAULTS = Object.freeze({
   mainRoleId: null,
   leaderRoleId: null,
   managerRoleId: null,
+  protectionRoleEnabled: true,
   systemUsers: [],
   systemRoles: [],
   extraPermissions: false,
@@ -29,7 +30,7 @@ const GROUP_DEFAULTS = Object.freeze({
 const GROUP_SETTING_KEYS = new Set([
   'enabled', 'chatMode', 'textCategoryId', 'voiceCategoryId', 'musicChannelId',
   'logChannelId', 'topChannelId', 'adminControlChannelId', 'memberControlChannelId', 'mainRoleId', 'leaderRoleId', 'managerRoleId', 'systemUsers', 'systemRoles',
-  'extraPermissions', 'countAllChannels', 'minMessageLength', 'maxMembers'
+  'extraPermissions', 'protectionRoleEnabled', 'countAllChannels', 'minMessageLength', 'maxMembers'
 ]);
 const GROUP_METRICS = new Set(['messages', 'voice_ms', 'reactions']);
 const MAX_ACTIVITY_AMOUNT = 1000000000000;
@@ -72,6 +73,7 @@ function normalizeSettings(row) {
     systemUsers: ids(valueOf('systemUsers', 'system_users')),
     systemRoles: ids(valueOf('systemRoles', 'system_roles')),
     extraPermissions: valueOf('extraPermissions', 'extra_permissions') === true || valueOf('extraPermissions', 'extra_permissions') === 1,
+    protectionRoleEnabled: ![false, 0, '0', 'false'].includes(valueOf('protectionRoleEnabled', 'protection_role_enabled')),
     countAllChannels: valueOf('countAllChannels', 'count_all_channels') === true || valueOf('countAllChannels', 'count_all_channels') === 1,
     minMessageLength: Number.isInteger(Number(valueOf('minMessageLength', 'min_message_length'))) && Number(valueOf('minMessageLength', 'min_message_length')) >= 0 && Number(valueOf('minMessageLength', 'min_message_length')) <= 2000 ? Number(valueOf('minMessageLength', 'min_message_length')) : GROUP_DEFAULTS.minMessageLength,
     maxMembers: Number.isInteger(maxMembers) && maxMembers >= 1 && maxMembers <= 1000 ? maxMembers : GROUP_DEFAULTS.maxMembers,
@@ -107,7 +109,7 @@ function validateSettingsPatch(patch = {}) {
       next[key] = ids(patch[key]);
     }
   }
-  for (const key of ['extraPermissions', 'countAllChannels']) if (key in patch) next[key] = booleanSetting(patch[key], key);
+  for (const key of ['extraPermissions', 'protectionRoleEnabled', 'countAllChannels']) if (key in patch) next[key] = booleanSetting(patch[key], key);
   if ('minMessageLength' in patch) {
     const minMessageLength = Number(patch.minMessageLength);
     if (!Number.isInteger(minMessageLength) || minMessageLength < 0 || minMessageLength > 2000) throw new Error('INVALID_SETTING:minMessageLength');

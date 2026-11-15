@@ -5,7 +5,7 @@ const colorManager = require('../utils/colorManager');
 const tempVoice = require('./temp');
 const { componentsV2Payload, colorToNumber } = require('../utils/structuredContainer');
 const { renderMembers, renderInfo, renderTopGroups, renderMyRank } = require('../utils/groupRenderer');
-const { handleInternalMessage, handleMemberPickerInteraction, leaveGroupMember, cleanupDepartedMemberAccess, syncManagerRole, buildOurMembersPayload } = require('../utils/groupInternal');
+const { handleInternalMessage, handleMemberPickerInteraction, handleOutsideGroupPickerInteraction, leaveGroupMember, cleanupDepartedMemberAccess, syncManagerRole, buildOurMembersPayload } = require('../utils/groupInternal');
 const { parseCustomEmoji, parseEmojiId, parseUnicodeEmoji, extractFirstEmoji, resolveIconBuffer, applyRoleIcon } = require('../utils/roleIconUtils');
 const name = 'groups';
 const aliases = ['group', 'قروب', 'قروبات'];
@@ -165,7 +165,7 @@ async function setupPayloads(guild, settings) {
   const chatMode = settings.chatMode === 'threads' ? 'ثريدات' : settings.chatMode === 'channels' ? 'رومات مستقلة' : 'غير محدد';
   const issues = await gm.validateConfig(guild, settings);
   const readiness = issues.length ? `الإعداد غير مكتمل (${issues.length}):\n${issues.slice(0, 6).map(setupIssueLabel).join('\n')}${issues.length > 6 ? '\n... استخدم Info لعرض الباقي.' : ''}` : 'الإعداد جاهز لإنشاء القروبات.';
-  const summary = `الحالة : ${status}\nجاهزية النظام : ${readiness}\nمسؤولو النظام : ${managerCount} عضو/رتبة\nنمط المحادثة : ${chatMode}\nكاتاقوري النص : ${channelMention(settings.textCategoryId)}\nكاتاقوري الصوت : ${channelMention(settings.voiceCategoryId)}\nقناة الترتيب : ${channelMention(settings.topChannelId)}\nقناة تحكم الإدارة : ${channelMention(settings.adminControlChannelId)}\nقناة تحكم الأعضاء : ${channelMention(settings.memberControlChannelId)}\nالرتبة الرئيسية : ${roleMention(settings.mainRoleId)}\nرتبة المالك : ${roleMention(settings.leaderRoleId)}\nرتبة المسؤول : ${roleMention(settings.managerRoleId)}\nقناة مصدر الموسيقى : ${channelMention(settings.musicChannelId)}\nقناة السجلات : ${channelMention(settings.logChannelId)}\nنطاق احتساب النقاط : ${settings.countAllChannels ? 'كل الرومات' : 'رومات القروبات فقط'}\nExtra Permissions : ${settings.extraPermissions ? 'Enabled' : 'Disabled'}\nقواعد النقاط : اضغط على زر القواعد للتفاصيل`;
+  const summary = `الحالة : ${status}\nجاهزية النظام : ${readiness}\nمسؤولو النظام : ${managerCount} عضو/رتبة\nنمط المحادثة : ${chatMode}\nكاتاقوري النص : ${channelMention(settings.textCategoryId)}\nكاتاقوري الصوت : ${channelMention(settings.voiceCategoryId)}\nقناة الترتيب : ${channelMention(settings.topChannelId)}\nقناة تحكم الإدارة : ${channelMention(settings.adminControlChannelId)}\nقناة تحكم الأعضاء : ${channelMention(settings.memberControlChannelId)}\nالرتبة الرئيسية : ${roleMention(settings.mainRoleId)}\nرتبة المالك : ${roleMention(settings.leaderRoleId)}\nرتبة المسؤول : ${roleMention(settings.managerRoleId)}\nProtection Role : ${settings.protectionRoleEnabled ? 'Enabled' : 'Disabled'}\nقناة مصدر الموسيقى : ${channelMention(settings.musicChannelId)}\nقناة السجلات : ${channelMention(settings.logChannelId)}\nنطاق احتساب النقاط : ${settings.countAllChannels ? 'كل الرومات' : 'رومات القروبات فقط'}\nExtra Permissions : ${settings.extraPermissions ? 'Enabled' : 'Disabled'}\nقواعد النقاط : اضغط على زر القواعد للتفاصيل`;
   const sections = [
     ['حالة نظام القروبات', 'تشغيل أو إيقاف نظام القروبات', 'groups_setup:toggle'],
     ['SYSTEM MANAGERS', 'إضافة أو إزالة مسؤولي النظام', 'groups_setup:managers'],
@@ -180,6 +180,7 @@ async function setupPayloads(guild, settings) {
     ['Log Channel', 'إرسال لوقات القروبات هنا', 'groups_setup:log'],
     ['Leader Role', 'الرول الذي يأخذه مالك القروب', 'groups_setup:leaderrole'],
     ['Manager Role', 'الرول الذي يأخذه مسؤول القروب', 'groups_setup:managerrole'],
+    ['Protection Role', 'Restore linked group roles automatically and remove unapproved role assignments', 'groups_setup:protection'],
     ['Points Scope', 'كل الرومات أو رومات القروبات', 'groups_setup:scope'],
     ['Extra Permissions', 'Enable message cleanup, moderation, and voice controls', 'groups_setup:extra'],
     ['Point Rules', 'تخصيص قواعد نقاط القروبات', 'groups_setup:rules']
@@ -1315,15 +1316,16 @@ function groupCommandGuideText(group, settings) {
     '`صلاحية` : إدارة صلاحيات الرول أو عضو.',
     '',
     '**MEMBERS**',
-    '`إضافة @عضو` : إضافة عضو للقروب.', '',
-    '`إزالة @عضو` : إزالة عضو من القروب.', '',
+    '`إضافة @عضو` : إضافة عضو للقروب، وتعمل خارج قنوات القروبات.', '',
+    '`إزالة @عضو` : إزالة عضو من القروب، وتعمل خارج قنوات القروبات.', '',
     '`منع @عضو` : منع عضو من الوصول.', '',
     '`سماح @عضو` : إعادة وصول عضو ممنوع.',
     '',
     '**VIEW**',
     '`قروبي` : معلومات القروب.', '',
     '`أعضاء` : ترتيب الأعضاء وPoints.', '',
-    '`أعضاؤنا` : قائمة الأعضاء، 10 في كل صفحة.', '',
+    '`أعضاؤنا` : قائمة الأعضاء، وتعمل خارج قنوات القروبات.', '',
+    'خارج قنوات القروبات، يختار البوت قروبك الوحيد تلقائيًا؛ وإذا توفر أكثر من قروب، اختر المطلوب من المنيو.', '',
     '`أوامر` : عرض هذا الدليل.',
     '',
     '**MANAGERS**',
@@ -1570,6 +1572,23 @@ async function handleSetup(interaction, action) {
     const updated = await saveGroupSettings(interaction.guild.id, { extraPermissions: !settings.extraPermissions }, interaction.user.id);
     await refreshSetupPanel(interaction, updated);
     return reply(interaction, setupConfirmation(interaction, 'EXTRA PERMISSIONS', `Extra Permissions ${!settings.extraPermissions ? 'enabled' : 'disabled'}.`));
+  }
+  if (action === 'protection') {
+    const enabled = !settings.protectionRoleEnabled;
+    const updated = await saveGroupSettings(interaction.guild.id, { protectionRoleEnabled: enabled }, interaction.user.id);
+    if (!enabled) {
+      for (const [key, timer] of pendingRoleGuardChecks) {
+        if (key.startsWith(`${String(interaction.guild.id)}:`)) {
+          clearTimeout(timer);
+          pendingRoleGuardChecks.delete(key);
+        }
+      }
+    }
+    await refreshSetupPanel(interaction, updated);
+    const explanation = enabled
+      ? 'Protection Role enabled. Group roles will be restored for linked members and unapproved assignments removed.'
+      : 'Protection Role disabled. Group roles can be added or removed manually without automatic restoration or removal.';
+    return reply(interaction, setupConfirmation(interaction, 'PROTECTION ROLE', explanation));
   }
   if (action === 'scope') return reply(interaction, selectPayload(interaction.guild, 'POINTS SCOPE', 'اختر أين يتم احتساب تفاعل القروبات.', 'groups_setup_select:scope', [
     { label: 'رومات القروبات فقط', value: 'group', description: 'رومات نص وفويس القروبات فقط' },
@@ -1912,7 +1931,7 @@ function beginGroupEmojiInput(interaction, groupId) {
   pendingGroupEmoji.set(key, { guildId: interaction.guild.id, channelId: interaction.channelId, groupId, userId: interaction.user.id, timer });
   return reply(interaction, { content: 'أرسل إيموجي القروب هنا الآن، أو أرسل `cancel` للإلغاء. يمكنك إرسال الإيموجي المخصص مباشرة بدون Modal.' });
 }
-async function handleInteraction(interaction) { const extended=await handleGroupExtensions(interaction); if(extended!==false)return extended; if(String(interaction.customId||'').startsWith('groups_member_picker:')) return handleMemberPickerInteraction(interaction); const [prefix,action,...parts]=String(interaction.customId||'').split(':'); if(prefix==='groups_our_members'){
+async function handleInteraction(interaction) { const extended=await handleGroupExtensions(interaction); if(extended!==false)return extended; if(String(interaction.customId||'').startsWith('groups_outside_picker:')) return handleOutsideGroupPickerInteraction(interaction); if(String(interaction.customId||'').startsWith('groups_member_picker:')) return handleMemberPickerInteraction(interaction); const [prefix,action,...parts]=String(interaction.customId||'').split(':'); if(prefix==='groups_our_members'){
   const groupId=Number(parts[0]); const currentPage=Number(parts[1])||0; const group=await gm.getGroup(interaction.guild.id,groupId);
   const settings=await gm.getSettings(interaction.guild.id); const member=interaction.member;
   if(!group||(!group.memberIds.includes(String(interaction.user.id))&&!group.managerIds.includes(String(interaction.user.id))&&String(group.owner_id)!==String(interaction.user.id)&&!gm.canManageSystem(interaction.client,settings,member))) return interaction.reply(responsePayload({content:'عرض الأعضاء متاح لأعضاء القروب فقط.',allowedMentions:{parse:[]},ephemeral:true}));
@@ -2852,6 +2871,8 @@ function registerInteractionHandler(client) {
     if (groupRoleSyncLocks.has(syncKey)) return;
     groupRoleSyncLocks.add(syncKey);
     try {
+    const settings = await gm.getSettings(newMember.guild.id);
+    if (!settings.protectionRoleEnabled) return;
     const groups = await gm.listGroups(newMember.guild.id);
     for (const group of groups) {
       if (!group.role_id) continue;
@@ -2865,6 +2886,8 @@ function registerInteractionHandler(client) {
         if (!pendingRoleGuardChecks.has(pendingKey)) {
           const timer = setTimeout(async () => {
             pendingRoleGuardChecks.delete(pendingKey);
+            const currentSettings = await gm.getSettings(newMember.guild.id).catch(() => null);
+            if (!currentSettings?.protectionRoleEnabled) return;
             const latest = await gm.getGroup(newMember.guild.id, group.id).catch(() => null);
             const stillLinked = latest && (latest.memberIds.includes(String(newMember.id)) || String(latest.owner_id) === String(newMember.id) || latest.managerIds.includes(String(newMember.id)));
             if (stillLinked) return;

@@ -9,7 +9,7 @@ const testDb = new DatabaseManager(':memory:');
 databaseModule.dbManager = testDb;
 
 const gm = require('./utils/groupManager');
-const { handleInternalMessage, cleanupDepartedMemberAccess, removeManagedMemberOverwrites } = require('./utils/groupInternal');
+const { handleInternalMessage, handleOutsideGroupPickerInteraction, cleanupDepartedMemberAccess, removeManagedMemberOverwrites } = require('./utils/groupInternal');
 const groupCommand = require('./commands/groups');
 const interactionRouter = require('./utils/interactionRouter');
 
@@ -536,6 +536,8 @@ async function testSetupDashboardSerialization() {
 
   const setupComponentText = [...messages.values()].map(panel => JSON.stringify(panel.components)).join('\n');
   assert.ok(setupComponentText.includes('Extra Permissions'), 'the setup button label is English');
+  assert.ok(setupComponentText.includes('Protection Role'), 'the protection setting is exposed in the setup dashboard');
+  assert.ok(setupComponentText.includes('groups_setup:protection'), 'the protection toggle has a registered setup action');
   assert.equal(setupComponentText.includes('الصلاحيات الإضافية'), false, 'the old Arabic button label is removed');
   const clickExtraPermissions = async () => {
     const interaction = {
@@ -558,6 +560,18 @@ async function testSetupDashboardSerialization() {
   assert.equal(enabled.replied, true, 'the successful toggle receives a reply');
   assert.ok(JSON.stringify(enabled.response).includes('Extra Permissions enabled'));
   assert.equal((await gm.getSettings(guild.id)).extraPermissions, true, 'the toggle enables extra permissions after validation');
+
+  const protectionInteraction = {
+    customId: 'groups_setup:protection', guild, client: context.client, member, user: { id: ownerId },
+    channel, channelId: channel.id, message: messages.get('setup-panel-4'), deferred: false, replied: false,
+    deferReply: async () => { protectionInteraction.deferred = true; },
+    reply: async payload => { protectionInteraction.response = payload; protectionInteraction.replied = true; return payload; },
+    editReply: async payload => { protectionInteraction.response = payload; protectionInteraction.replied = true; return payload; }
+  };
+  await groupCommand.handleInteraction(protectionInteraction);
+  assert.equal(protectionInteraction.replied, true, 'the Protection Role toggle acknowledges its interaction');
+  assert.ok(JSON.stringify(protectionInteraction.response).includes('Protection Role disabled'));
+  assert.equal((await gm.getSettings(guild.id)).protectionRoleEnabled, false, 'Protection Role can be disabled and persists');
 }
 
 async function testDeleteCommandFlow() {
@@ -691,11 +705,12 @@ function makeParserGuild() {
     id: OWNER,
     roles: { cache: roleCache, add: async () => {}, remove: async () => {} }
   };
-  const targetMember = {
-    id: USER_A,
+  const members = new Map([OWNER, USER_A, USER_B, USER_C].map(id => [id, {
+    id,
+    user: { id, bot: false },
     roles: { cache: roleCache, add: async () => {}, remove: async () => {} }
-  };
-  const members = new Map([[OWNER, ownerMember], [USER_A, targetMember]]);
+  }]));
+  members.set(OWNER, ownerMember);
   return {
     id: 'parser-guild',
     ownerId: OWNER,
@@ -723,6 +738,7 @@ function responseText(value) {
 
 function parserMessage(guild, content) {
   const replies = [];
+  const reactions = [];
   const message = {
     guild,
     channel: { id: 'parser-channel' },
@@ -734,9 +750,10 @@ function parserMessage(guild, content) {
     reply: async value => {
       replies.push(value);
       return { delete: async () => {} };
-    }
+    },
+    react: async emoji => { reactions.push(String(emoji)); return { emoji }; }
   };
-  return { message, replies };
+  return { message, replies, reactions };
 }
 
 async function testMembershipLimitsAndBlockedUsers() {
@@ -896,6 +913,83 @@ async function testInternalCommandParser() {
   assert.equal(await handleInternalMessage(bareOutsideGroup.message, { prefix: null }), true,
     'bare group commands outside linked group channels are consumed silently');
   assert.deepEqual(bareOutsideGroup.replies, []);
+  assert.deepEqual(bareOutsideGroup.reactions, [], 'other commands stay inactive outside group channels');
+  const outsideBlock = parserMessage(guild, `منع ${USER_A}`);
+  outsideBlock.message.channel.id = 'unlinked-channel';
+  assert.equal(await handleInternalMessage(outsideBlock.message, { prefix: null }), true);
+  assert.deepEqual(outsideBlock.replies, []);
+  assert.deepEqual(outsideBlock.reactions, [], 'commands other than add/remove/our-members remain group-channel-only');
+  assert.deepEqual((await gm.getGroup(guildId, groupId)).blockedIds, []);
+
+  const outsideAdd = parserMessage(guild, `إضافة ${USER_C}`);
+  outsideAdd.message.channel.id = 'unlinked-channel';
+  assert.equal(await handleInternalMessage(outsideAdd.message, { prefix: null }), true);
+  assert.deepEqual(outsideAdd.replies, [], 'outside-group member changes use reactions instead of chat replies');
+  assert.deepEqual(outsideAdd.reactions, ['✅']);
+  assert.ok((await gm.getGroup(guildId, groupId)).memberIds.includes(USER_C));
+
+  const outsideRemove = parserMessage(guild, `إزالة ${USER_C}`);
+  outsideRemove.message.channel.id = 'unlinked-channel';
+  assert.equal(await handleInternalMessage(outsideRemove.message, { prefix: null }), true);
+  assert.deepEqual(outsideRemove.replies, []);
+  assert.deepEqual(outsideRemove.reactions, ['✅']);
+  assert.equal((await gm.getGroup(guildId, groupId)).memberIds.includes(USER_C), false);
+
+  const outsideOurMembers = parserMessage(guild, 'أعضاؤنا');
+  outsideOurMembers.message.channel.id = 'unlinked-channel';
+  assert.equal(await handleInternalMessage(outsideOurMembers.message, { prefix: null }), true);
+  assert.equal(outsideOurMembers.replies.length, 1, 'أعضاؤنا still returns the member list outside group channels');
+  assert.deepEqual(outsideOurMembers.reactions, ['✅']);
+
+  await insertGroup({ guildId, name: 'Second owner group', ownerId: OWNER, memberIds: [OWNER] });
+  const ambiguousOutsideAdd = parserMessage(guild, `إضافة ${USER_C}`);
+  ambiguousOutsideAdd.message.channel.id = 'unlinked-channel';
+  assert.equal(await handleInternalMessage(ambiguousOutsideAdd.message, { prefix: null }), true);
+  assert.deepEqual(ambiguousOutsideAdd.reactions, [], 'multiple eligible groups show a selection menu instead of failing');
+  assert.equal(ambiguousOutsideAdd.replies.length, 1);
+  const findSelect = node => {
+    if (!node || typeof node !== 'object') return null;
+    if (node.type === 3 && node.custom_id) return node;
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) { for (const item of value) { const found = findSelect(item); if (found) return found; } }
+      else { const found = findSelect(value); if (found) return found; }
+    }
+    return null;
+  };
+  const groupMenu = findSelect(ambiguousOutsideAdd.replies[0]);
+  assert.ok(groupMenu, 'outside-group ambiguity displays a select menu');
+  assert.equal((await gm.getGroup(guildId, groupId)).memberIds.includes(USER_C), false);
+  const menuGuildId = await gm.listGroups(guildId).then(groups => groups.find(group => group.name === 'Second owner group').id);
+  let deferUpdateCalled = false;
+  assert.equal(await handleOutsideGroupPickerInteraction({
+    customId: groupMenu.custom_id, guild, user: { id: OWNER }, values: [String(menuGuildId)],
+    isStringSelectMenu: () => true,
+    deferUpdate: async () => { deferUpdateCalled = true; },
+    message: { delete: async () => {} }
+  }), true);
+  assert.equal(deferUpdateCalled, true, 'the group selection interaction is acknowledged');
+  assert.deepEqual(ambiguousOutsideAdd.reactions, ['✅']);
+  assert.ok((await gm.getGroup(guildId, menuGuildId)).memberIds.includes(USER_C), 'the selected group receives the member');
+
+  const outsideRemoveSecondGroup = parserMessage(guild, `إزالة ${USER_C}`);
+  outsideRemoveSecondGroup.message.channel.id = 'unlinked-channel';
+  assert.equal(await handleInternalMessage(outsideRemoveSecondGroup.message, { prefix: null }), true);
+  const removeMenu = findSelect(outsideRemoveSecondGroup.replies[0]);
+  assert.ok(removeMenu, 'remove command also prompts when multiple groups are available');
+  await handleOutsideGroupPickerInteraction({
+    customId: removeMenu.custom_id, guild, user: { id: OWNER }, values: [String(menuGuildId)],
+    isStringSelectMenu: () => true, deferUpdate: async () => {}, message: { delete: async () => {} }
+  });
+  assert.deepEqual(outsideRemoveSecondGroup.reactions, ['✅']);
+  assert.equal((await gm.getGroup(guildId, menuGuildId)).memberIds.includes(USER_C), false);
+
+  const unauthorizedOutside = parserMessage(guild, `إضافة ${USER_C}`);
+  unauthorizedOutside.message.channel.id = 'unlinked-channel';
+  unauthorizedOutside.message.author.id = USER_B;
+  unauthorizedOutside.message.member.id = USER_B;
+  assert.equal(await handleInternalMessage(unauthorizedOutside.message, { prefix: null }), true);
+  assert.deepEqual(unauthorizedOutside.replies, []);
+  assert.deepEqual(unauthorizedOutside.reactions, ['❌'], 'unauthorized outside-group commands receive a failure reaction');
 
   const englishAdd = parserMessage(guild, `:add ${USER_A}`);
   assert.equal(await handleInternalMessage(englishAdd.message), true);

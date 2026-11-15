@@ -1,12 +1,13 @@
 const gm = require('./groupManager');
 const { renderMembers, renderInfo } = require('./groupRenderer');
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionsBitField, UserSelectMenuBuilder } = require('discord.js');
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionsBitField, StringSelectMenuBuilder, UserSelectMenuBuilder } = require('discord.js');
 const { randomBytes } = require('node:crypto');
 const { responsePayload } = require('./groupResponses');
 const colorManager = require('./colorManager');
 
 const COMMANDS = new Set(['تحكم', 'control', 'تعديل', 'edit', 'عقوبه', 'عقوبة', 'punish', 'صلاحية', 'permission', 'مسح', 'clear', 'اعضاء', 'أعضاء', 'members', 'اعضائنا', 'أعضاؤنا', 'our-members', 'ourmembers', 'اضافة', 'إضافة', 'اضف', 'أضف', 'ضيف', 'ضم', 'ادخل', 'add', 'invite', 'join', 'add-member', 'addmember', 'ازالة', 'إزالة', 'ازاله', 'إزاله', 'احذف', 'حذف', 'شيل', 'شطب', 'remove', 'remove-member', 'removemember', 'منع', 'block', 'سماح', 'allow', 'قروبي', 'قربي', 'my-group', 'مسؤول', 'manager', 'أوامر', 'اوامر', 'commands', 'help']);
 const memberPickerFlows = new Map();
+const outsideGroupPickerFlows = new Map();
 const MEMBER_PICKER_TTL = 10 * 60 * 1000;
 
 function ids(message) {
@@ -90,6 +91,61 @@ function memberPickerAction(command) {
   if (['اضافة', 'إضافة', 'اضف', 'أضف', 'ضيف', 'ضم', 'ادخل', 'add', 'invite', 'join', 'add-member', 'addmember'].includes(command)) return 'add';
   if (['ازالة', 'إزالة', 'ازاله', 'إزاله', 'احذف', 'حذف', 'شيل', 'شطب', 'remove', 'remove-member', 'removemember'].includes(command)) return 'remove';
   return null;
+}
+const OUR_MEMBERS_COMMANDS = new Set(['اعضائنا', 'أعضاؤنا', 'our-members', 'ourmembers']);
+async function reactOutsideGroup(message, success) {
+  if (typeof message?.react !== 'function') return false;
+  try { await message.react(success ? '✅' : '❌'); return true; }
+  catch { return false; }
+}
+async function openOutsideGroupPicker(message, groups, command) {
+  for (const [token, flow] of outsideGroupPickerFlows) if (flow.expires <= Date.now()) outsideGroupPickerFlows.delete(token);
+  const token = randomBytes(12).toString('hex');
+  const eligibleGroups = groups.slice(0, 25);
+  outsideGroupPickerFlows.set(token, {
+    guildId: String(message.guild.id), actorId: String(message.author.id),
+    groupIds: eligibleGroups.map(group => String(group.id)), message, command,
+    expires: Date.now() + MEMBER_PICKER_TTL
+  });
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`groups_outside_picker:${token}`)
+    .setPlaceholder('اختر القروب المطلوب')
+    .setMinValues(1).setMaxValues(1)
+    .addOptions(eligibleGroups.map(group => ({
+      label: String(group.name || `Group ${group.id}`).slice(0, 100),
+      description: `ID: ${group.id}`.slice(0, 100), value: String(group.id)
+    })));
+  return reply(message, responsePayload({
+    title: 'SELECT A GROUP',
+    content: `لديك أكثر من قروب متاح لهذا الأمر (${command}). اختر القروب للمتابعة.`,
+    thumbnail: groupThumbnail(message.guild),
+    components: [new ActionRowBuilder().addComponents(menu)]
+  }));
+}
+async function handleOutsideGroupPickerInteraction(interaction) {
+  const parts = String(interaction.customId || '').split(':');
+  if (parts[0] !== 'groups_outside_picker') return false;
+  const flow = outsideGroupPickerFlows.get(parts[1]);
+  if (!flow || flow.expires <= Date.now() || flow.guildId !== String(interaction.guild?.id)) {
+    outsideGroupPickerFlows.delete(parts[1]);
+    await interaction.reply(responsePayload({ title: 'PICKER EXPIRED', content: 'انتهت صلاحية القائمة؛ أعد كتابة الأمر لفتحها مجددًا.', thumbnail: groupThumbnail(interaction.guild) })).catch(() => {});
+    return true;
+  }
+  if (flow.actorId !== String(interaction.user?.id)) {
+    await interaction.reply(responsePayload({ title: 'ACCESS DENIED', content: 'هذه القائمة مخصصة للشخص الذي فتحها.', thumbnail: groupThumbnail(interaction.guild) })).catch(() => {});
+    return true;
+  }
+  if (!interaction.isStringSelectMenu?.()) return true;
+  const groupId = String(interaction.values?.[0] || '');
+  if (!flow.groupIds.includes(groupId)) {
+    await interaction.reply(responsePayload({ title: 'INVALID GROUP', content: 'اختيار القروب غير صالح؛ أعد كتابة الأمر.', thumbnail: groupThumbnail(interaction.guild) })).catch(() => {});
+    return true;
+  }
+  outsideGroupPickerFlows.delete(parts[1]);
+  await interaction.deferUpdate().catch(() => {});
+  await handleInternalMessage(flow.message, { prefix: null, selectedGroupId: groupId, outsideSelection: true });
+  await interaction.message?.delete?.().catch(() => {});
+  return true;
 }
 async function openMemberPicker(message, group, action) {
   for (const [token, flow] of memberPickerFlows) if (flow.expires <= Date.now()) memberPickerFlows.delete(token);
@@ -278,7 +334,7 @@ async function leaveGroupMember(guild, settings, group, userId, actorId = userId
   await gm.logGroupEvent(guild, 'member_remove', { groupId: group.id, userId: id, reason: 'left' }, actorId).catch(() => null);
   return true;
 }
-async function handleInternalMessage(message, { prefix = ':', sendPanel = null } = {}) {
+async function handleInternalMessage(message, { prefix = ':', sendPanel = null, selectedGroupId = null, outsideSelection = false } = {}) {
   if (!message?.guild || message.author?.bot) return false;
   const content = String(message.content || '').trim();
   const hasPrefix = typeof prefix === 'string' && prefix.length > 0 && content.startsWith(prefix);
@@ -287,10 +343,31 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
   let command = String(words.shift() || '').toLowerCase();
   if (command === 'تعديل' && String(words[0] || '') === 'القروب') { command = 'تعديل'; words.shift(); }
   if (!COMMANDS.has(command)) return false;
-  // Commands are prefix-free; destructive actions remain protected by the
-  // existing role, group-membership, and bot-permission checks.
+  // Only member addition/removal and the member leaderboard may run outside a
+  // linked group channel. All other commands remain channel-scoped.
+  const memberAction = memberPickerAction(command);
+  const isOurMembersCommand = OUR_MEMBERS_COMMANDS.has(command);
+  const mayRunOutsideGroup = Boolean(memberAction || isOurMembersCommand);
   let group = await gm.getGroupForChannel(message.guild.id, message.channel.id);
-  if (!group || group.status !== 'active') {
+  const outsideGroup = Boolean(outsideSelection) || !group || group.status !== 'active';
+  if (outsideGroup && mayRunOutsideGroup) {
+    const outsideSettings = await gm.getSettings(message.guild.id);
+    const system = gm.canManageSystem(message.client, outsideSettings, message.member);
+    const groups = await gm.listGroups(message.guild.id);
+    const available = groups.filter(candidate => candidate.status === 'active' && (isOurMembersCommand
+      ? system || groupHasUser(candidate, message.author.id)
+      : system || gm.canManageGroup(message.client, outsideSettings, candidate, message.member)));
+    if (selectedGroupId) group = available.find(candidate => String(candidate.id) === String(selectedGroupId)) || null;
+    else if (available.length === 1) group = available[0];
+    else if (available.length > 1) {
+      await openOutsideGroupPicker(message, available, memberAction ? (memberAction === 'add' ? 'إضافة' : 'إزالة') : 'أعضاؤنا');
+      return true;
+    } else group = null;
+    if (!group) {
+      await reactOutsideGroup(message, false);
+      return true;
+    }
+  } else if (outsideGroup) {
     // Group commands are intentionally scoped to a linked group channel/thread.
     // Consume them silently elsewhere so ordinary channels never receive a
     // confusing "open a group thread" response.
@@ -325,9 +402,14 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       await message.reply({ files: [await renderMembers({ guild: message.guild, group, members, accentColor: null })], allowedMentions: { parse: [] } }).catch(() => {});
       return true;
     }
-    if (['اعضائنا', 'أعضاؤنا', 'our-members', 'ourmembers'].includes(command)) {
-      if (!groupHasUser(group, message.author.id) && !system) return Boolean(await reply(message, 'عرض الأعضاء متاح لأعضاء القروب فقط.'));
-      await reply(message, await buildOurMembersPayload(message.guild, group, 0));
+    if (isOurMembersCommand) {
+      if (!groupHasUser(group, message.author.id) && !system) {
+        if (outsideGroup) await reactOutsideGroup(message, false);
+        else await reply(message, 'عرض الأعضاء متاح لأعضاء القروب فقط.');
+        return true;
+      }
+      const sent = await reply(message, await buildOurMembersPayload(message.guild, group, 0));
+      if (outsideGroup) await reactOutsideGroup(message, Boolean(sent));
       return true;
     }
     if (['أوامر', 'اوامر', 'commands', 'help'].includes(command)) {
@@ -338,25 +420,43 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
     }
     if (!privileged && !system) { await reply(message, 'لا تملك الصلاحية.'); return true; }
     if (memberPickerAction(command) === 'add') {
-      if (!targetId) return Boolean(await openMemberPicker(message, group, 'add'));
+      if (!targetId) {
+        if (outsideGroup) await reactOutsideGroup(message, false);
+        else return Boolean(await openMemberPicker(message, group, 'add'));
+        return true;
+      }
       const target = await message.guild.members.fetch(targetId).catch(() => null);
       if (!target) throw new Error('MEMBER_NOT_FOUND');
       if (target.user?.bot) throw new Error('BOT_NOT_ALLOWED');
       const wasMember = groupHasUser(group, targetId);
-      if (wasMember) { await reply(message, 'العضو موجود بالفعل في القروب.'); return true; }
+      if (wasMember) {
+        if (outsideGroup) await reactOutsideGroup(message, false);
+        else await reply(message, 'العضو موجود بالفعل في القروب.');
+        return true;
+      }
       await gm.addMember(message.guild.id, group.id, targetId, message.author.id);
       try { await syncMember(group, message.guild, targetId, true); }
       catch (error) { if (!wasMember) await gm.removeMember(message.guild.id, group.id, targetId, message.author.id).catch(() => { error.groupRollbackFailed = true; }); throw error; }
       await gm.logGroupEvent(message.guild, 'member_add', { groupId: group.id, userId: targetId }, message.author.id);
-      await reply(message, 'تمت إضافة العضو.'); return true;
+      if (outsideGroup) await reactOutsideGroup(message, true);
+      else await reply(message, 'تمت إضافة العضو.');
+      return true;
     }
     if (memberPickerAction(command) === 'remove') {
-      if (!targetId) return Boolean(await openMemberPicker(message, group, 'remove'));
+      if (!targetId) {
+        if (outsideGroup) await reactOutsideGroup(message, false);
+        else return Boolean(await openMemberPicker(message, group, 'remove'));
+        return true;
+      }
       if (String(group.owner_id) === String(targetId)) throw new Error('OWNER_PROTECTED');
       const wasManager = group.managerIds.includes(String(targetId));
       if (wasManager && String(group.owner_id) !== String(message.author.id) && !system) throw new Error('MANAGER_PROTECTED');
       const wasMember = groupHasUser(group, targetId);
-      if (!wasMember) { await reply(message, 'العضو ليس ضمن هذا القروب.'); return true; }
+      if (!wasMember) {
+        if (outsideGroup) await reactOutsideGroup(message, false);
+        else await reply(message, 'العضو ليس ضمن هذا القروب.');
+        return true;
+      }
       await gm.removeMember(message.guild.id, group.id, targetId, message.author.id);
       try { await syncMember(group, message.guild, targetId, false); await syncManagerRole(message.guild, settings, targetId); }
       catch (error) {
@@ -368,7 +468,9 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
         throw error;
       }
       await gm.logGroupEvent(message.guild, 'member_remove', { groupId: group.id, userId: targetId }, message.author.id);
-      await reply(message, 'تمت إزالة العضو.'); return true;
+      if (outsideGroup) await reactOutsideGroup(message, true);
+      else await reply(message, 'تمت إزالة العضو.');
+      return true;
     }
     if (command === 'منع' || command === 'block') {
       if (!targetId) throw new Error('MENTION_REQUIRED');
@@ -466,9 +568,10 @@ async function handleInternalMessage(message, { prefix = ':', sendPanel = null }
       TARGET_NOT_IN_GROUP: 'يمكن معاقبة أعضاء القروب فقط.', MISSING_MODERATE_MEMBERS: 'البوت لا يملك صلاحية Moderate Members.',
       TARGET_HIERARCHY: 'رتبة العضو أعلى من رتبة البوت أو مساوية لها.'
     };
-    await reply(message, messages[error.message] || 'فشلت عملية القروب.');
+    if (outsideGroup) await reactOutsideGroup(message, false);
+    else await reply(message, messages[error.message] || 'فشلت عملية القروب.');
     return true;
   }
   return true;
 }
-module.exports = { handleInternalMessage, handleMemberPickerInteraction, leaveGroupMember, cleanupDepartedMemberAccess, removeManagedMemberOverwrites, syncManagerRole, buildOurMembersPayload };
+module.exports = { handleInternalMessage, handleMemberPickerInteraction, handleOutsideGroupPickerInteraction, leaveGroupMember, cleanupDepartedMemberAccess, removeManagedMemberOverwrites, syncManagerRole, buildOurMembersPayload };
